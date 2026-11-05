@@ -53,6 +53,15 @@ function runtimeDependencies(workspaceRoots, extraNames = [], bundledNames = [],
 
 const bundledControlPlaneDependencies = ["@fastify/compress"];
 
+export function resolveControlledInstanceImplementation(environment = process.env) {
+  const implementation = environment.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION
+    ?? runtimePackages["controlled-instance"].implementation;
+  if (!["node", "rust"].includes(implementation)) {
+    throw new Error("TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION must be rust or node.");
+  }
+  return implementation;
+}
+
 export const runtimePackages = {
   server: {
     packageName: "@task-handoff/server",
@@ -99,6 +108,11 @@ export const runtimePackages = {
     updateWorkerInput: "scripts/node-update-worker.cts",
     updateWorkerEntryFile: "node-update-worker.js",
     binName: "task-handoff-node-agent",
+    standaloneInputs: [{
+      input: "apps/cli/src/runtime/git-provisioning-helper.ts",
+      entryFile: "git-provisioning-helper.js",
+      implementation: "node",
+    }],
     // Docker execution streams through the PTY command runner, so node-pty is
     // part of the runtime payload rather than a separately installed package.
     bundledNativeDependencies: ["node-pty"],
@@ -127,10 +141,10 @@ export const runtimePackages = {
     packageName: "@task-handoff/controlled-instance",
     description: "Prebuilt TaskHandoff controlled instance runtime.",
     keywords: ["task-handoff", "controlled-instance", "sandbox", "runtime", "ai-agents", "agent-orchestration"],
-    // The deployable runtime is Rust. The Node inputs below remain buildable
-    // with TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION=node for the v0.0.46
-    // rollback artifact and source parity checks.
-    implementation: "rust",
+    // Node remains the deployable runtime by default. Set
+    // TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION=rust to select the Rust
+    // implementation for runtime builds and packages.
+    implementation: "node",
     rustPackageDir: "release/rust-controlled-instance",
     input: "apps/controlled-instance-image/src/cli.ts",
     entryFile: "controlled-instance-cli.js",

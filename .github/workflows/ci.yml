@@ -193,6 +193,12 @@ jobs:
 
   runtime-packages:
     needs: [node-pty-prebuilds, controlled-instance-rust-binaries]
+    strategy:
+      fail-fast: false
+      matrix:
+        implementation: [node, rust]
+    env:
+      TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: ${{ matrix.implementation }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -218,24 +224,22 @@ jobs:
           merge-multiple: true
 
       - uses: actions/download-artifact@v7
+        if: matrix.implementation == 'rust'
         with:
           pattern: ci-rust-controlled-instance-linux-*
           path: release/rust-controlled-instance-binaries
           merge-multiple: true
 
-      - name: Build and verify Linux Node rollback artifact
+      - name: Build and verify selected Linux artifact
         shell: bash
-        env:
-          TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: node
         run: |
           version="$(node -p 'require("./package.json").version')"
           pnpm runtime:build -- --target controlled-instance
           pnpm runtime:artifact -- --version "$version" --prebuilds-dir release/node-pty-prebuilds
           node -e 'import("./scripts/controlled-instance-artifact-check.mjs").then(async ({ checkControlledInstanceArtifact }) => console.log(JSON.stringify(await checkControlledInstanceArtifact("release/runtime-artifacts"))))'
-          mv release/runtime-artifacts release/node-rollback-artifacts
 
-      - name: Build and pack runtime packages with Rust controlled instance
+      - name: Build and pack selected runtime packages
         run: pnpm runtime:pack
 
-      - name: Verify Rust controlled instance artifact
+      - name: Verify selected controlled instance artifact
         run: node -e 'import("./scripts/controlled-instance-artifact-check.mjs").then(async ({ checkControlledInstanceArtifact }) => console.log(JSON.stringify(await checkControlledInstanceArtifact("release/runtime-artifacts"))))'

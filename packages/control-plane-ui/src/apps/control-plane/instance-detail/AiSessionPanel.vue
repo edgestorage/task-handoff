@@ -1352,7 +1352,7 @@ import AiSessionStickyContext from "../../../components/ai-session/AiSessionStic
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { bindAiSessionTrigger, checkoutAiSessionWorkspaceBranch, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, checkoutAiSessionWorkspaceBranch, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, listNodeLocalFolders, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
 import { createRepositoryWorkspaceWorktree, getRepositoryContext } from "../../../api/repository";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
@@ -1405,6 +1405,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import { nativeNodeFolderSelectionResult, nodeLocalFolderDisplayName, nodePathName, relativeNodePathSegments, type NativeNodeFolderPicker } from "../nodePath";
 import { filterInstanceCwdFolders, findInstanceCwdFolderByPath, partitionInstanceCwdFolders, selectableInstanceCwdFolders } from "../shared/instanceCwdFolders";
+import { createOrReuseNodeLocalFolder } from "../shared/nodeLocalFolderConflict";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import InstanceActionMenuContent from "../shared/InstanceActionMenuContent.vue";
@@ -2081,8 +2082,9 @@ const canSubmitPathGroupRename = computed(() => Boolean(
 ));
 const INSTANCE_WORKSPACE_FOLDER_ID = "__instance_workspace__";
 type NewSessionFolderOption = Pick<NodeLocalFolder, "id" | "name" | "path" | "origin" | "localizedNames"> & { cwdFolderId?: string };
+const knownNewSessionFolders = computed(() => [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value]);
 const newSessionFolders = computed<NewSessionFolderOption[]>(() => {
-  const folders = [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value];
+  const folders = knownNewSessionFolders.value;
   if (props.instance.source.type !== "local-folder") {
     const workspacePath = props.instance.runtime?.workspacePath || props.instance.workspace.path || "/workspace";
     return [{
@@ -2106,8 +2108,16 @@ watch(newSessionFolderId, (folderId) => {
   if (folder) newSessionFolderPathsByInstance.set(props.instance.id, folder.path);
 }, { immediate: true, flush: "sync" });
 async function registerNewSessionFolder(nodeId: string, input: { name: string; path: string }) {
-  const folder = await createNodeLocalFolder(nodeId, input);
-  createdNewSessionFolders.value = [...createdNewSessionFolders.value, folder];
+  const folder = await createOrReuseNodeLocalFolder({
+    createFolder: () => createNodeLocalFolder(nodeId, input),
+    knownFolders: knownNewSessionFolders.value,
+    loadFolders: listNodeLocalFolders,
+    nodeId,
+    path: input.path,
+  });
+  if (!(props.nodeLocalFolders || []).some((candidate) => candidate.id === folder.id)) {
+    createdNewSessionFolders.value = [...createdNewSessionFolders.value.filter((candidate) => candidate.id !== folder.id), folder];
+  }
   newSessionFolderId.value = folder.id;
   return folder;
 }

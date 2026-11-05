@@ -8,7 +8,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, Option } from "commander";
 import { list } from "tar";
-import { runtimePackages } from "../runtime-packages.config.mjs";
+import { gitHelperAssets } from "./runtime-git-helper.mjs";
+import { runtimePackages, resolveControlledInstanceImplementation } from "../runtime-packages.config.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { resolveFeatureFlags } = createRequire(import.meta.url)("../shared/feature-flags.cjs");
@@ -26,17 +27,11 @@ const options = new Command()
 const target = options.target;
 const shouldPack = options.pack;
 const selected = target ? Object.keys(runtimePackages).filter((name) => name === target) : Object.keys(runtimePackages);
-const controlledInstanceImplementation = process.env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION
-  ?? runtimePackages["controlled-instance"].implementation
-  ?? "rust";
-if (!["rust", "node"].includes(controlledInstanceImplementation)) {
-  throw new Error("TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION must be rust or node.");
-}
+const controlledInstanceImplementation = resolveControlledInstanceImplementation();
 const buildEnvironment = {
   ...process.env,
   TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: controlledInstanceImplementation,
 };
-const rustGitProvisioningHelperPaths = ["x64", "arm64"].map((arch) => `docker/controlled-instance-linux-${arch}`);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, stdio: "inherit", env: buildEnvironment, ...options });
@@ -68,7 +63,7 @@ function requiredExecutablePaths(name, definition) {
       "docker/private-config.mjs",
       "docker/runtime-installer.mjs",
       "docker/git-provision.sh",
-      ...rustGitProvisioningHelperPaths,
+      ...gitHelperAssets(controlledInstanceImplementation).map((asset) => `docker/${asset}`),
     ] : []),
   ];
 }

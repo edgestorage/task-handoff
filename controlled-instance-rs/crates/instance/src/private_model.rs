@@ -370,11 +370,21 @@ impl ControlledModelConfig {
     }
 
     pub fn sync_app_environment(&self, runtime: &AppRuntime) {
+        self.sync_app_environment_with_overrides(runtime, BTreeMap::new());
+    }
+
+    pub fn sync_app_environment_with_overrides(
+        &self,
+        runtime: &AppRuntime,
+        overrides: BTreeMap<String, String>,
+    ) {
         let environment = self.runtime_environment();
         let unset = CLAUDE_SHADOWED_ENV
             .into_iter()
             .map(ToString::to_string)
             .collect::<BTreeSet<_>>();
+        let mut environment = environment;
+        environment.extend(overrides);
         runtime.set_managed_environment_with_unset(environment, unset);
     }
 

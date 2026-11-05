@@ -7,8 +7,8 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Argument, Command } from "commander";
-import { list as listTar } from "tar";
-import { runtimePackages } from "../runtime-packages.config.mjs";
+import { checkGitHelper } from "./runtime-git-helper.mjs";
+import { runtimePackages, resolveControlledInstanceImplementation } from "../runtime-packages.config.mjs";
 import { installedDependencyManifests, materializeInstalledDependencies } from "./runtime-dependency-versions.mjs";
 import { checkControlledInstanceArtifact } from "./controlled-instance-artifact-check.mjs";
 
@@ -73,29 +73,16 @@ function assertNodeAgentDatabaseBoundary(packageDir, manifest, outputs) {
 }
 
 function assertNodeAgentGitProvisioningBoundary(packageDir) {
-  const dockerDir = path.join(packageDir, "docker");
-  for (const arch of ["x64", "arm64"]) {
-    const helper = path.join(dockerDir, `controlled-instance-linux-${arch}`);
-    const stats = fs.statSync(helper, { throwIfNoEntry: false });
-    if (!stats?.isFile() || (stats.mode & 0o111) === 0) {
-      throw new Error(`node-agent runtime package is missing executable Rust Git provisioning helper controlled-instance-linux-${arch}.`);
-    }
-  }
-  const script = fs.readFileSync(path.join(dockerDir, "git-provision.sh"), "utf8");
-  if (/git-provisioning-helper\.js|\bjs-runtime\.sh\b/.test(script)) {
-    throw new Error("node-agent Git provisioning still invokes the retired JavaScript helper.");
-  }
-  if (!script.includes("git-provisioning-helper credential") || !script.includes("git-provisioning-helper ssh")) {
-    throw new Error("node-agent Git provisioning does not invoke the Rust credential and SSH helper commands.");
-  }
-  if (fs.existsSync(path.join(packageDir, "dist", "git-provisioning-helper.js"))) {
-    throw new Error("node-agent runtime package still contains the retired JavaScript Git provisioning helper.");
-  }
+  checkGitHelper(path.join(packageDir, "docker"), resolveControlledInstanceImplementation());
 }
 
 async function checkEmbeddedControlledInstance(packageDir, name) {
   if (name !== "node-agent") return;
-  await checkControlledInstanceArtifact(path.join(packageDir, "runtime-artifacts"));
+  const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8"));
+  await checkControlledInstanceArtifact(path.join(packageDir, "runtime-artifacts"), {
+    version: manifest.version,
+    implementation: resolveControlledInstanceImplementation(),
+  });
 }
 
 async function availablePort() {
@@ -191,6 +178,10 @@ for (const [name, definition] of selected) {
   const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8"));
   const isRustControlledInstance = name === "controlled-instance"
     && manifest.taskHandoffRuntime?.implementation === "rust";
+  if (name === "controlled-instance"
+    && isRustControlledInstance !== (resolveControlledInstanceImplementation() === "rust")) {
+    throw new Error("Controlled-instance npm package does not match the selected implementation.");
+  }
   if (manifest.name !== definition.packageName) {
     throw new Error(`${name} package name does not match its runtime definition.`);
   }

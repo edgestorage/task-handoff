@@ -14,7 +14,7 @@ import type { AgentOrchestrationCreateInput, AgentOrchestrationUpdateInput } fro
 import type { AgentRunManualCreateInput } from "@task-handoff/protocol/agent-runs";
 import type { AiSessionQueueEditInput } from "@task-handoff/protocol/ai-sessions";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
-import type { AiSessionAttachmentRef, AiSessionHistoryDetail, AiSessionHistoryList, AiSessionMentionCatalog, AiSessionMentionFileSearch, AiSessionReference, AiSessionResumeResult, AiSessionUploadedAttachment, AppManagementJobResponse, AppManagementSnapshot, AppManagementUpdateCheckResponse, AppSession, ApplyUpdateRequest, AuthSession, CancelProxyClaimResult, ChatBridgeConfig, ChatChannel, ChatGatewayStatus, ClaimProxyNodeResult, CloudBindingChallenge, CloudConnectivity, ControlPlaneAiSessions, ControlPlaneAppSessions, ControlPlaneProxyDiagnostic, ControlPlaneSettings, ControlPlaneStatusResponse, ControlPlaneTriggerMutationResult, ControlPlaneTriggers, CopyModelInput, CreateChatBridgeInput, CreateControlPlaneTriggerInput, CreateControlledInstanceInput, CreateControlledInstanceResult, CreateImageInput, CreateModelInput, CreateNodeControlPlaneConnectionInput, CreateNodeInput, CreateNodeLocalFolderInput, CreateNodeRuntimeInput, CreateProjectInput, CreateProxyInviteResult, DeleteNodeResult, FederatedModelRegistry, HealthResponse, ImageProfile, InstanceBoardItem, InstanceBoardPayload, InstanceResourceMetrics, InstanceTriggerIndex, InstanceTriggerMutationResult, LaunchAppSessionInput, LocalDockerImage, MarketCatalog, ModelConfig, ModelDiscoveryResult, ModelEndpointDraft, ModelMergeResult, ModelMutationResult, ModelTestResult, Node, NodeAgentExternalListener, NodeAgentModelRelay, NodeControlPlaneConnection, NodeControlPlaneConnectionCreateResult, NodeControlPlanePairing, NodeFolderTreeEntry, NodeImageAvailability, NodeJoinInvite, NodeLocalFolder, NodePairingInvite, NodeRuntime, NodeRuntimesPayload, NodeStatus, Project, PublicPendingProxyClaim, PublicProxyBinding, PublicProxyInvite, SelectableImage, UpdateChannel, UpdateChatBridgeInput, UpdateCheckResult, UpdateControlledInstanceInput, UpdateJob, UpdateModelInput, UpdateNodeAgentExternalListener, UpdateNodeAgentModelRelay, UpdateNodeInput, UpdateNodeLocalFolderInput, UpdateProjectInput } from "./types";
+import type { AiSessionAttachmentRef, AiSessionHistoryDetail, AiSessionHistoryList, AiSessionMentionCatalog, AiSessionMentionFileSearch, AiSessionReference, AiSessionResumeResult, AiSessionUploadedAttachment, AppInstallEnvironment, AppInstallEnvironmentTestResponse, AppInstallEnvironmentUpdateResponse, AppInstallSourceUpdate, AppManagementJobResponse, AppManagementSnapshot, AppManagementUpdateCheckResponse, AppSession, ApplyUpdateRequest, AuthSession, CancelProxyClaimResult, ChatBridgeConfig, ChatChannel, ChatGatewayStatus, ClaimProxyNodeResult, CloudBindingChallenge, CloudConnectivity, ControlPlaneAiSessions, ControlPlaneAppSessions, ControlPlaneProxyDiagnostic, ControlPlaneSettings, ControlPlaneStatusResponse, ControlPlaneTriggerMutationResult, ControlPlaneTriggers, CopyModelInput, CreateChatBridgeInput, CreateControlPlaneTriggerInput, CreateControlledInstanceInput, CreateControlledInstanceResult, CreateImageInput, CreateModelInput, CreateNodeControlPlaneConnectionInput, CreateNodeInput, CreateNodeLocalFolderInput, CreateNodeRuntimeInput, CreateProjectInput, CreateProxyInviteResult, DeleteNodeResult, FederatedModelRegistry, HealthResponse, ImageProfile, InstanceBoardItem, InstanceBoardPayload, InstanceResourceMetrics, InstanceTriggerIndex, InstanceTriggerMutationResult, LaunchAppSessionInput, LocalDockerImage, MarketCatalog, ModelConfig, ModelDiscoveryResult, ModelEndpointDraft, ModelMergeResult, ModelMutationResult, ModelTestResult, Node, NodeAgentExternalListener, NodeAgentModelRelay, NodeControlPlaneConnection, NodeControlPlaneConnectionCreateResult, NodeControlPlanePairing, NodeFolderTreeEntry, NodeImageAvailability, NodeJoinInvite, NodeLocalFolder, NodePairingInvite, NodeRuntime, NodeRuntimesPayload, NodeStatus, Project, PublicPendingProxyClaim, PublicProxyBinding, PublicProxyInvite, SelectableImage, UpdateChannel, UpdateChatBridgeInput, UpdateCheckResult, UpdateControlledInstanceInput, UpdateJob, UpdateModelInput, UpdateNodeAgentExternalListener, UpdateNodeAgentModelRelay, UpdateNodeInput, UpdateNodeLocalFolderInput, UpdateProjectInput } from "./types";
 
 /**
  * Several control plane UI view models in `./types.ts` stay looser than the
@@ -533,6 +533,10 @@ export function useNodeLocalFoldersQuery(nodeId: MaybeRefOrGetter<string>, enabl
   return useQuery(computed(() => nodeLocalFoldersQueryOptions(resolvedNodeId.value, resolvedEnabled.value)));
 }
 
+export function listNodeLocalFolders(nodeId: string) {
+  return sharedControlPlaneClient.nodeAdmin.listFolders(nodeId);
+}
+
 export function listNodeFolderTree(nodeId: string, input: { path?: string; depth?: number } = {}) {
   const params = new URLSearchParams();
   if (input.path) {
@@ -961,6 +965,22 @@ export function renameAiSession(instanceId: string, sessionId: string, input: im
 
 export function getInstanceAppManagement(instanceId: string) {
   return getApiData<AppManagementSnapshot>(`controlled-instances/${instanceId}/apps/management`);
+}
+
+export function getInstanceInstallEnvironment(instanceId: string) {
+  return getApiData<AppInstallEnvironment>(`controlled-instances/${instanceId}/apps/install-environment`);
+}
+
+export function updateInstanceInstallEnvironment(instanceId: string, input: AppInstallSourceUpdate) {
+  return putApiData<AppInstallEnvironmentUpdateResponse>(`controlled-instances/${instanceId}/apps/install-environment`, input);
+}
+
+export function testInstanceInstallEnvironment(instanceId: string) {
+  return postApiData<AppInstallEnvironmentTestResponse>(`controlled-instances/${instanceId}/apps/install-environment/test`, {});
+}
+
+export function prepareInstanceInstallEnvironment(instanceId: string) {
+  return postApiData<AppInstallEnvironmentUpdateResponse>(`controlled-instances/${instanceId}/apps/install-environment/prepare`, {});
 }
 
 export function installInstanceApp(instanceId: string, appId: string, requestId?: string) {

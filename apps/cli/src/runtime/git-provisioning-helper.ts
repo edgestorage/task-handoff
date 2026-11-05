@@ -1,7 +1,7 @@
 import {
   runProvisioningGitCredentialHelper,
   runProvisioningGitSsh,
-} from "@task-handoff/controlled-instance/web/git-provisioning-credentials";
+} from "../../../../packages/controlled-instance/src/web/git-provisioning-credentials.ts";
 
 async function main() {
   const [command, ...args] = process.argv.slice(2);

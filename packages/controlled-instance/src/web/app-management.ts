@@ -27,6 +27,7 @@ import type { InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult } f
 import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
 import { AppRecipeExecutionError, createAppRecipeExecutor, type AppRecipeExecutionContext } from "./app-recipe-executor";
 import { createAppUpdateChecker, type AppUpdateCheckContext, type AppUpdateCheckResult } from "./app-update-check";
+import type { AppInstallEnvironmentManager, AppInstallExecutionPolicy } from "./app-install-environment";
 
 const ACTIVE_STATES = new Set<AppManagementJob["state"]>(["queued", "running"]);
 const JOB_LOG_LIMIT = 32_768;
@@ -146,12 +147,13 @@ export class AppManagementJobStore {
 export type AppManagementManagerOptions = {
   stateDir: string;
   installBaseDir: string;
+  installEnvironment?: AppInstallEnvironmentManager;
   definitions?: () => ManagedAppDefinition[];
   capabilities?: () => FinalComputerCapabilities;
   detection?: (definition: ManagedAppDefinition) => ManagedAppDetectionResult;
   managementSource?: (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => ManagedAppManagementSource | Promise<ManagedAppManagementSource>;
   ownership?: (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => ManagedAppOwnershipResult | Promise<ManagedAppOwnershipResult>;
-  execute?: (operation: AppManagementOperation, recipe: InstallRecipe, context: AppRecipeExecutionContext) => Promise<unknown>;
+  execute?: (operation: AppManagementOperation, recipe: InstallRecipe, context: AppRecipeExecutionContext, policy?: AppInstallExecutionPolicy) => Promise<unknown>;
   updateCheck?: (recipe: InstallRecipe, context: AppUpdateCheckContext) => Promise<AppUpdateCheckResult>;
   stopAppRuntime?: (appId: string) => void | Promise<void>;
   sessions?: () => Array<{ id: string; appId: string; status: string }>;
@@ -180,6 +182,7 @@ export class AppManagementManager {
   private readonly onTerminal: NonNullable<AppManagementManagerOptions["onTerminal"]>;
   private readonly warn: NonNullable<AppManagementManagerOptions["warn"]>;
   private readonly installBaseDir: string;
+  private readonly installEnvironment?: AppInstallEnvironmentManager;
   private readonly ownershipByApp = new Map<string, { fingerprint: string; source: ManagedAppManagementSource; recipe?: InstallRecipe }>();
   private readonly updateChecks = new Map<string, ManagedAppUpdateState>();
   private ownershipRefresh?: Promise<void>;
@@ -190,11 +193,15 @@ export class AppManagementManager {
   constructor(options: AppManagementManagerOptions) {
     this.store = new AppManagementJobStore(path.join(options.stateDir, "jobs.json"), options.warn);
     this.installBaseDir = options.installBaseDir;
+    this.installEnvironment = options.installEnvironment;
     this.definitions = options.definitions || (() => builtinManagedAppDefinitions());
-    this.capabilities = options.capabilities || (() => this.capabilitiesSnapshot || (this.capabilitiesSnapshot = detectFinalComputerCapabilities()));
+    const withInstallEnvironment = (capabilities: FinalComputerCapabilities) => this.installEnvironment?.capabilities(capabilities) || capabilities;
+    this.capabilities = options.capabilities
+      ? () => withInstallEnvironment(options.capabilities!())
+      : () => this.capabilitiesSnapshot || (this.capabilitiesSnapshot = withInstallEnvironment(detectFinalComputerCapabilities()));
     this.refreshCapabilities = options.capabilities
-      ? async () => options.capabilities!()
-      : () => detectFinalComputerCapabilitiesAsync();
+      ? async () => withInstallEnvironment(options.capabilities!())
+      : async () => withInstallEnvironment(await detectFinalComputerCapabilitiesAsync());
     this.detection = options.detection || ((definition) => detectManagedApp(definitionWithManagedLauncher(definition, options.installBaseDir)));
     const defaultOwnership = (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => {
       const managedRecipe = managedNodePackageRecipe(definition);
@@ -223,8 +230,15 @@ export class AppManagementManager {
     this.ownership = options.ownership || (options.managementSource
       ? async (definition, detection, capabilities) => ({ source: await options.managementSource!(definition, detection, capabilities) })
       : defaultOwnership);
-    this.execute = options.execute || createAppRecipeExecutor({ installBaseDir: options.installBaseDir, stateDir: options.stateDir });
-    this.updateCheck = options.updateCheck || createAppUpdateChecker();
+    this.execute = options.execute || createAppRecipeExecutor({
+      installBaseDir: options.installBaseDir,
+      stateDir: options.stateDir,
+      ...(options.installEnvironment ? { installEnvironment: options.installEnvironment } : {}),
+    });
+    this.updateCheck = options.updateCheck || createAppUpdateChecker({
+      stateDir: options.stateDir,
+      ...(options.installEnvironment ? { installEnvironment: options.installEnvironment } : {}),
+    });
     this.stopAppRuntime = options.stopAppRuntime || (() => undefined);
     this.sessions = options.sessions || (() => []);
     this.publishEvent = options.publish || (() => undefined);
@@ -268,6 +282,7 @@ export class AppManagementManager {
       apps,
       activeJobs,
       recentJobs: jobs.filter((job) => !ACTIVE_STATES.has(job.state)).slice(0, 50),
+      ...(this.installEnvironment ? { installEnvironment: this.installEnvironment.snapshot() } : {}),
       observedAt: this.now(),
     });
   }
@@ -371,10 +386,12 @@ export class AppManagementManager {
       const reason = availability.reason;
       throw new AppManagementRequestError("app_operation_unavailable", reason?.message || "The requested app operation is unavailable.", 409, { reason });
     }
+    const installPolicy = this.installEnvironment?.createExecutionPolicy();
     const timestamp = this.now();
     const job = this.store.save({
       id: `appjob_${crypto.randomUUID().replaceAll("-", "")}`,
       ...(requestId ? { requestId } : {}),
+      ...(installPolicy ? { installSourceRevision: installPolicy.revision } : {}),
       appId,
       operation,
       state: "queued",
@@ -382,7 +399,7 @@ export class AppManagementManager {
       updatedAt: timestamp,
     });
     this.emit(job, true);
-    this.queue = this.queue.then(() => this.run(job.id, definition, operationRecipe)).catch(() => undefined);
+    this.queue = this.queue.then(() => this.run(job.id, definition, operationRecipe, installPolicy)).catch(() => undefined);
     return job;
   }
 
@@ -435,7 +452,7 @@ export class AppManagementManager {
     }
   }
 
-  private async run(jobId: string, definition: ManagedAppDefinition, recipe: InstallRecipe) {
+  private async run(jobId: string, definition: ManagedAppDefinition, recipe: InstallRecipe, installPolicy?: AppInstallExecutionPolicy) {
     let job = this.getJob(jobId);
     let pendingOutput = "";
     let outputTimer: ReturnType<typeof setTimeout> | undefined;
@@ -487,7 +504,7 @@ export class AppManagementManager {
           pendingOutput += chunk;
           scheduleOutputFlush();
         },
-      });
+      }, installPolicy);
       flushOutput();
       const detection = this.detection(definition);
       const satisfied = job.operation === "uninstall" ? detection.state === "not-installed" : detection.state === "installed";

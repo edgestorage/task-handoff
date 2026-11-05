@@ -49,6 +49,7 @@ async function writeRustFixture({ extraEntries = {} } = {}) {
   const archivePath = path.join(output, "controlled-instance-runtime-9.9.9-linux-x64.tar.gz");
   await tar.create({ cwd: payload, file: archivePath, gzip: true, portable: true, noMtime: true }, Object.keys(files).concat("runtime-manifest.json"));
   return {
+    payload,
     output,
     async cleanup() {
       await fs.rm(payload, { recursive: true, force: true });
@@ -68,5 +69,40 @@ test("artifact checker accepts the frozen UI and rejects Rust payload business J
   } finally {
     await valid.cleanup();
     await invalid.cleanup();
+  }
+});
+
+test("selected artifact verification rejects the other implementation and mixed Node payloads", async () => {
+  const rust = await writeRustFixture();
+  const mixed = await writeRustFixture({ extraEntries: {
+    "package.json": JSON.stringify({ name: "@task-handoff/controlled-instance", version: "9.9.9" }),
+  } });
+  try {
+    const { checkControlledInstanceArtifact } = await import("../scripts/controlled-instance-artifact-check.mjs");
+    await assert.rejects(checkControlledInstanceArtifact(rust.output, { implementation: "node" }), /expected node/);
+    await assert.rejects(checkControlledInstanceArtifact(mixed.output), /must not contain Rust runtime binaries/);
+  } finally {
+    await rust.cleanup();
+    await mixed.cleanup();
+  }
+});
+
+test("generic artifact build preserves Rust payload without requiring or injecting node-pty", async () => {
+  const fixture = await writeRustFixture();
+  const output = await fs.mkdtemp(path.join(os.tmpdir(), "selected-rust-artifact-"));
+  try {
+    const { buildRuntimeArtifact } = await import("../scripts/runtime-artifact.mjs");
+    const { checkControlledInstanceArtifact } = await import("../scripts/controlled-instance-artifact-check.mjs");
+    await buildRuntimeArtifact({
+      version: "9.9.9",
+      packageDir: fixture.payload,
+      prebuildsDir: path.join(output, "absent-node-pty"),
+      output,
+    });
+    const result = await checkControlledInstanceArtifact(output, { version: "9.9.9", implementation: "rust" });
+    assert.equal(result.implementation, "rust");
+  } finally {
+    await fixture.cleanup();
+    await fs.rm(output, { recursive: true, force: true });
   }
 });

@@ -1,8 +1,17 @@
+import { readonly, ref } from "vue";
+
 export type ThemePreference = "light" | "dark";
 
 const THEME_STORAGE_KEY = "task-handoff.theme";
 const DEFAULT_THEME: ThemePreference = "dark";
+const appliedTheme = ref<ThemePreference>(DEFAULT_THEME);
 let themeStorageSyncInitialized = false;
+
+// Renderers that bake colors into SVG/canvas must consume the same applied
+// preference as CSS, including changes received from another window.
+export function useThemePreference() {
+  return readonly(appliedTheme);
+}
 
 function isThemePreference(value: unknown): value is ThemePreference {
   return value === "light" || value === "dark";
@@ -23,6 +32,7 @@ export function getThemePreference(): ThemePreference {
 export function applyThemePreference(theme: ThemePreference) {
   document.documentElement.dataset.theme = theme;
   document.documentElement.classList.toggle("dark", theme === "dark");
+  appliedTheme.value = theme;
   const desktopBridge = (window as Window & {
     taskHandoffDesktop?: { setWindowChromeTheme?: (theme: ThemePreference) => Promise<{ ok: boolean }> };
   }).taskHandoffDesktop;

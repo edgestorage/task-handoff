@@ -36,6 +36,8 @@ const ACCOUNT_REQUEST_SCOPES = ["account:read", "control-plane:manage"];
 const DEFAULT_CONTROL_REGISTRATION_TIMEOUT_MS = 15_000;
 const DEFAULT_CONTROL_REQUEST_TIMEOUT_MS = 30_000;
 const CONTROL_HEARTBEAT_MAX_INTERVAL_MS = 30_000;
+const NODE_RELAY_RECONCILE_INTERVAL_MS = 30_000;
+const NODE_RELAY_STALE_CLAIM_GRACE_MS = 60_000;
 // Check often, but refresh only after the cached access token enters its expiry window. A remote
 // revocation therefore surfaces within one access-token lifetime instead of waiting half a day.
 const ACCOUNT_RENEWAL_INTERVAL_MS = 60_000;
@@ -106,6 +108,7 @@ export class CloudConnectivityBackgroundRuntime {
   private readonly events: CloudAuthorityEventConsumer;
   private timer?: ReturnType<typeof setTimeout>;
   private accountRenewalTimer?: ReturnType<typeof setInterval>;
+  private nodeRelayReconcileTimer?: ReturnType<typeof setInterval>;
   private running = false;
   private connecting?: Promise<unknown>;
   private reconciling?: Promise<void>;
@@ -114,6 +117,7 @@ export class CloudConnectivityBackgroundRuntime {
   private catalogPublishLoop?: Promise<void>;
   private catalogPublishQueued = false;
   private nodeRelayRestore?: Promise<void>;
+  private nodeRelayReconciling?: Promise<void>;
   private readonly nodeRelayClaimQueues = new Map<string, Promise<unknown>>();
   private readonly nodeRelayRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly nodeRelayRecoveryAttempts = new Map<string, number>();
@@ -308,6 +312,12 @@ export class CloudConnectivityBackgroundRuntime {
       this.accountRenewalTimer = setInterval(() => { void this.renewAccountCredential().catch(() => undefined); }, this.options.accountRenewalIntervalMs ?? ACCOUNT_RENEWAL_INTERVAL_MS);
       this.accountRenewalTimer.unref();
     }
+    if (this.nodeRelayChannels && !this.nodeRelayReconcileTimer) {
+      this.nodeRelayReconcileTimer = setInterval(() => {
+        void this.reconcileNodeRelayClaims().catch(() => undefined);
+      }, positiveDuration(this.options.nodeRelayReconcileIntervalMs, NODE_RELAY_RECONCILE_INTERVAL_MS));
+      this.nodeRelayReconcileTimer.unref();
+    }
     // The stored access token is normally stale after a restart, so rotating once at boot keeps
     // the sliding expiry fresh and surfaces a remote revocation without waiting for the interval.
     void this.renewAccountCredential().catch(() => undefined);
@@ -321,6 +331,8 @@ export class CloudConnectivityBackgroundRuntime {
     if (this.timer) clearTimeout(this.timer);
     if (this.accountRenewalTimer) clearInterval(this.accountRenewalTimer);
     this.accountRenewalTimer = undefined;
+    if (this.nodeRelayReconcileTimer) clearInterval(this.nodeRelayReconcileTimer);
+    this.nodeRelayReconcileTimer = undefined;
     for (const timer of this.nodeRelayRecoveryTimers.values()) clearTimeout(timer);
     this.nodeRelayRecoveryTimers.clear();
     this.nodeRelayRecoveryAttempts.clear();
@@ -686,6 +698,48 @@ export class CloudConnectivityBackgroundRuntime {
     })().catch(() => undefined).finally(() => { this.nodeRelayRestore = undefined; });
   }
 
+  /**
+   * A Coordinator claim is only a request; the usable state is an attached
+   * channel. Close callbacks normally repair a missing channel immediately,
+   * but a suspended process or a missed callback must not leave one node
+   * permanently unreachable while the control connection is reused.
+   */
+  private async reconcileNodeRelayClaims() {
+    if (!this.running || !this.nodeRelayChannels || !this.options.nodeRelay?.nodes.listForClaim || this.nodeRelayRestore) return;
+    if (this.nodeRelayReconciling) return this.nodeRelayReconciling;
+    const snapshot = this.options.state.snapshot();
+    if (snapshot.status !== "active" || !snapshot.bindingId) return;
+    const bindingId = snapshot.bindingId;
+    this.nodeRelayReconciling = (async () => {
+      const nodes = await Promise.resolve(this.options.nodeRelay!.nodes.listForClaim!());
+      const claimGraceMs = positiveDuration(this.options.nodeRelayClaimGraceMs, NODE_RELAY_STALE_CLAIM_GRACE_MS);
+      for (const node of nodes) {
+        if (!this.running) return;
+        const current = this.options.state.snapshot();
+        if (current.status !== "active" || current.bindingId !== bindingId) return;
+        if (this.revokedNodeRelayClaims.has(node.nodeHandle)) continue;
+        if (this.nodeRelayAttaches.has(node.nodeHandle)
+          || this.nodeRelayRecoveryInFlight.has(node.nodeHandle)
+          || this.nodeRelayClaimQueues.has(node.nodeHandle)) continue;
+        const channelState = this.nodeRelayChannels?.channelState(node.nodeHandle);
+        if (channelState === "live") {
+          this.resetNodeRelayRecovery(node.nodeHandle);
+          continue;
+        }
+        if (channelState === "disconnected") {
+          this.nodeRelayChannels?.closeNode(node.nodeHandle, "node-relay-channel-liveness-lost");
+          this.scheduleNodeRelayRecovery(node.nodeHandle);
+          continue;
+        }
+        const claimAgeMs = this.nodeRelayChannels?.claimAgeMs(node.nodeHandle, this.clock());
+        if (claimAgeMs !== undefined && claimAgeMs < claimGraceMs) continue;
+        if (claimAgeMs !== undefined) this.nodeRelayChannels?.forgetClaim(node.nodeHandle);
+        this.scheduleNodeRelayRecovery(node.nodeHandle);
+      }
+    })().catch(() => undefined).finally(() => { this.nodeRelayReconciling = undefined; });
+    await this.nodeRelayReconciling;
+  }
+
   private scheduleNodeRelayRecovery(nodeHandle: string, failedRelayId?: string) {
     if (failedRelayId) this.nodeRelayRecoveryFailedRelayIds.set(nodeHandle, failedRelayId);
     else this.nodeRelayRecoveryFailedRelayIds.delete(nodeHandle);
@@ -1014,6 +1068,8 @@ type CloudRuntimeOptions = {
   relayLinks?: RelayLinkProbeLoop;
   relayLinkProbeIntervalMs?: number;
   accountRenewalIntervalMs?: number;
+  nodeRelayReconcileIntervalMs?: number;
+  nodeRelayClaimGraceMs?: number;
   verifyAllocation?: (allocation: unknown) => any;
   verifyRelaySessionGrant?: (grant: unknown) => any;
   cloudRelaySessionsPath?: string;

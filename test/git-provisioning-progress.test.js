@@ -44,9 +44,9 @@ test("git-provision.sh emits the machine-readable progress contract", () => {
   }
   // Git only prints transfer progress without a TTY when asked.
   assert.match(script, /clone --progress/);
-  assert.match(script, /controlled-instance-linux-\$\{helper_arch\}/);
-  assert.match(script, /git-provisioning-helper credential/);
-  assert.match(script, /git-provisioning-helper ssh/);
+  assert.match(script, /git_helper="\$\{bootstrap_dir\}\/git-provisioning-helper"/);
+  assert.match(script, /\$\{git_helper\} credential/);
+  assert.match(script, /\$\{git_helper\} ssh/);
   assert.doesNotMatch(script, /git-provisioning-helper\.js|\bjs-runtime\.sh\b/);
 });
 

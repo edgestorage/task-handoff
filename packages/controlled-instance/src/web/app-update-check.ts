@@ -1,9 +1,11 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { resolveExecutable } from "@task-handoff/app-runtime";
 import type { FinalComputerCapabilities, ManagedAppUpdateStatus } from "@task-handoff/protocol/control-plane";
 import type { InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
 import { runAppRecipeCommand, type AppRecipeCommand, type AppRecipeCommandResult } from "./app-recipe-executor";
+import type { AppInstallEnvironmentManager, AppInstallExecutionPolicy } from "./app-install-environment";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MAX_VERSION_CHARS = 120;
@@ -26,6 +28,8 @@ export type AppUpdateCheckContext = {
 
 export type AppUpdateCheckerOptions = {
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+  installEnvironment?: Pick<AppInstallEnvironmentManager, "createExecutionPolicy">;
   commandRunner?: (command: AppRecipeCommand) => Promise<AppRecipeCommandResult>;
   timeoutMs?: number;
 };
@@ -111,15 +115,21 @@ function parseNpmOutdated(stdout: string): AppUpdateCheckResult {
 
 export function createAppUpdateChecker(options: AppUpdateCheckerOptions = {}) {
   const env = { ...(options.env || process.env), LC_ALL: "C", LANG: "C" };
+  const npmCacheDir = path.join(options.stateDir || path.join(os.tmpdir(), "task-handoff-app-management"), "npm-cache");
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const runner = options.commandRunner || ((command: AppRecipeCommand) => runAppRecipeCommand(command));
 
-  const run = async (executable: string, args: string[], capabilities: FinalComputerCapabilities, elevate: boolean) => {
-    const resolution = resolveExecutable(executable, { env, platform: capabilities.platform as NodeJS.Platform });
+  const run = async (executable: string, args: string[], capabilities: FinalComputerCapabilities, elevate: boolean, extraEnv: NodeJS.ProcessEnv = {}) => {
+    const commandEnv = { ...env, ...extraEnv };
+    const resolution = resolveExecutable(executable, { env: commandEnv, platform: capabilities.platform as NodeJS.Platform });
     const resolvedExecutable = resolution?.executable || executable;
+    const resolvedEnv = { ...commandEnv, ...resolution?.env };
+    const sudoEnvironment = Object.entries(extraEnv)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+      .map(([name, value]) => `${name}=${value}`);
     const command: AppRecipeCommand = elevate
-      ? { executable: "sudo", args: ["-n", resolvedExecutable, ...args], timeoutMs }
-      : { executable: resolvedExecutable, args, timeoutMs, env: { ...env, ...resolution?.env } };
+      ? { executable: "sudo", args: ["-n", ...(sudoEnvironment.length ? ["env", ...sudoEnvironment] : []), resolvedExecutable, ...args], timeoutMs }
+      : { executable: resolvedExecutable, args, timeoutMs, env: resolvedEnv };
     try {
       return await runner(command);
     } catch (error) {
@@ -127,13 +137,21 @@ export function createAppUpdateChecker(options: AppUpdateCheckerOptions = {}) {
     }
   };
 
-  const checkSystemPackage = async (recipe: SystemPackageInstallRecipe, capabilities: FinalComputerCapabilities): Promise<AppUpdateCheckResult> => {
+  const checkSystemPackage = async (recipe: SystemPackageInstallRecipe, capabilities: FinalComputerCapabilities, policy: AppInstallExecutionPolicy | undefined): Promise<AppUpdateCheckResult> => {
     if (!recipe.packages.length || recipe.packages.some((item) => !PACKAGE_NAME.test(item))) {
       return result("unknown", { reason: "The built-in system package recipe contains an invalid package name." });
     }
     if (!capabilities.installers.includes(recipe.installer)) return result("unknown", { reason: `The ${recipe.installer} installer is unavailable.` });
     if (recipe.installer === "apt") {
-      const response = await run("apt-cache", ["policy", ...recipe.packages], capabilities, false);
+      let aptOptions: string[] = [];
+      if (policy) {
+        try {
+          aptOptions = policy.aptSourceConfiguration()?.options || [];
+        } catch (error) {
+          return result("unknown", { reason: firstLine(error instanceof Error ? error.message : String(error)) || "apt sources are unavailable." });
+        }
+      }
+      const response = await run("apt-cache", [...aptOptions, "policy", ...recipe.packages], capabilities, false);
       if (response.exitCode !== 0) return result("unknown", { reason: firstLine(response.stderr) || "apt-cache failed." });
       return parseAptPolicy(response.stdout);
     }
@@ -148,7 +166,7 @@ export function createAppUpdateChecker(options: AppUpdateCheckerOptions = {}) {
     return parseBrewOutdated(response.stdout);
   };
 
-  const checkNodePackage = async (recipe: NodePackageInstallRecipe, capabilities: FinalComputerCapabilities, context: AppUpdateCheckContext): Promise<AppUpdateCheckResult> => {
+  const checkNodePackage = async (recipe: NodePackageInstallRecipe, capabilities: FinalComputerCapabilities, context: AppUpdateCheckContext, policy: AppInstallExecutionPolicy | undefined): Promise<AppUpdateCheckResult> => {
     if (!recipe.packages.length || recipe.packages.some((item) => !NODE_PACKAGE_NAME.test(item))) {
       return result("unknown", { reason: "The built-in Node package recipe contains an invalid package name." });
     }
@@ -178,7 +196,11 @@ export function createAppUpdateChecker(options: AppUpdateCheckerOptions = {}) {
       });
     }
     const elevate = capabilities.privilege === "passwordless-sudo" && recipe.privilege !== "user";
-    const response = await run("npm", ["outdated", "--global", "--json", "--depth=0", ...recipe.packages], capabilities, elevate);
+    const npmEnvironment = {
+      ...(policy?.nodeEnvironment(env) || {}),
+      npm_config_cache: npmCacheDir,
+    };
+    const response = await run("npm", ["outdated", "--global", "--json", "--depth=0", ...recipe.packages], capabilities, elevate, npmEnvironment);
     if (!response.stdout.trim()) {
       if (response.exitCode === 0 || response.exitCode === 1) return result("up-to-date");
       return result("unknown", { reason: firstLine(response.stderr) || "npm outdated failed." });
@@ -189,6 +211,9 @@ export function createAppUpdateChecker(options: AppUpdateCheckerOptions = {}) {
   return async (recipe: InstallRecipe, context: AppUpdateCheckContext): Promise<AppUpdateCheckResult> => {
     if (recipe.type === "bundled") return result("unsupported", { reason: "Bundled apps ship with the controlled computer and have no update source." });
     if (recipe.type === "archive") return result("unsupported", { reason: "Archive updates are delivered with the built-in app definition." });
-    return recipe.type === "system-package" ? checkSystemPackage(recipe, context.capabilities) : checkNodePackage(recipe, context.capabilities, context);
+    const policy = options.installEnvironment?.createExecutionPolicy();
+    return recipe.type === "system-package"
+      ? checkSystemPackage(recipe, context.capabilities, policy)
+      : checkNodePackage(recipe, context.capabilities, context, policy);
   };
 }

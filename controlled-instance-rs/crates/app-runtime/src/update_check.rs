@@ -8,6 +8,9 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::{
+    install_environment::{
+        AppInstallEnvironmentManager, AppInstallExecutionPolicy,
+    },
     run_app_recipe_command, AppRecipeCommand, AppRecipeCommandResult, AppRecipeHooks, InstallRecipe,
 };
 
@@ -212,6 +215,8 @@ fn parse_npm_outdated(stdout: &str) -> AppUpdateCheckResult {
 pub struct AppUpdateChecker {
     env: BTreeMap<String, String>,
     timeout: Duration,
+    state_dir: Option<PathBuf>,
+    install_environment: Option<AppInstallEnvironmentManager>,
 }
 
 impl Default for AppUpdateChecker {
@@ -228,7 +233,19 @@ impl AppUpdateChecker {
         Self {
             env,
             timeout: DEFAULT_TIMEOUT,
+            state_dir: None,
+            install_environment: None,
         }
+    }
+
+    pub fn with_install_environment(
+        mut self,
+        state_dir: impl Into<PathBuf>,
+        install_environment: AppInstallEnvironmentManager,
+    ) -> Self {
+        self.state_dir = Some(state_dir.into());
+        self.install_environment = Some(install_environment);
+        self
     }
 
     pub async fn check(
@@ -246,6 +263,26 @@ impl AppUpdateChecker {
         capabilities: &FinalComputerCapabilities,
         managed_context: Option<(&str, &std::path::Path)>,
     ) -> AppUpdateCheckResult {
+        let policy = self
+            .install_environment
+            .as_ref()
+            .map(|environment| environment.create_execution_policy());
+        self.check_with_install_root_and_policy(
+            recipe,
+            capabilities,
+            managed_context,
+            policy.as_ref(),
+        )
+        .await
+    }
+
+    async fn check_with_install_root_and_policy(
+        &self,
+        recipe: &InstallRecipe,
+        capabilities: &FinalComputerCapabilities,
+        managed_context: Option<(&str, &std::path::Path)>,
+        source_policy: Option<&AppInstallExecutionPolicy>,
+    ) -> AppUpdateCheckResult {
         match recipe {
             InstallRecipe::Bundled { .. } => AppUpdateCheckResult::new(
                 ManagedAppUpdateStatus::Unsupported,
@@ -259,7 +296,10 @@ impl AppUpdateChecker {
                 installer,
                 packages,
                 ..
-            } => self.check_system(*installer, packages, capabilities).await,
+            } => {
+                self.check_system(*installer, packages, capabilities, source_policy)
+                    .await
+            }
             InstallRecipe::NodePackage {
                 installer,
                 packages,
@@ -278,6 +318,7 @@ impl AppUpdateChecker {
                         managed_context,
                     },
                     capabilities,
+                    source_policy,
                 )
                 .await
             }
@@ -289,6 +330,7 @@ impl AppUpdateChecker {
         installer: AppInstaller,
         packages: &[String],
         capabilities: &FinalComputerCapabilities,
+        source_policy: Option<&AppInstallExecutionPolicy>,
     ) -> AppUpdateCheckResult {
         if packages.is_empty() || packages.iter().any(|package| !package_name_valid(package)) {
             return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
@@ -302,13 +344,29 @@ impl AppUpdateChecker {
         }
         match installer {
             AppInstaller::Apt => {
+                let apt_options = match source_policy
+                    .map(AppInstallExecutionPolicy::apt_source_configuration)
+                    .transpose()
+                {
+                    Ok(configuration) => configuration
+                        .flatten()
+                        .map(|configuration| configuration.options)
+                        .unwrap_or_default(),
+                    Err(error) => {
+                        return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
+                            .reason(error.message)
+                    }
+                };
+                let mut args = apt_options;
+                args.push("policy".to_string());
                 let response = self
                     .run(
                         "apt-cache",
-                        &["policy"],
+                        &args,
                         packages,
                         false,
                         capabilities.platform,
+                        &self.env,
                     )
                     .await;
                 if response.exit_code != 0 {
@@ -325,6 +383,7 @@ impl AppUpdateChecker {
                         packages,
                         false,
                         capabilities.platform,
+                        &self.env,
                     )
                     .await;
                 if response.exit_code == 100 {
@@ -345,6 +404,7 @@ impl AppUpdateChecker {
                         packages,
                         false,
                         capabilities.platform,
+                        &self.env,
                     )
                     .await;
                 if response.exit_code != 0 && response.stdout.trim().is_empty() {
@@ -363,6 +423,7 @@ impl AppUpdateChecker {
         packages: &[String],
         options: NodeUpdateCheckOptions<'_>,
         capabilities: &FinalComputerCapabilities,
+        source_policy: Option<&AppInstallExecutionPolicy>,
     ) -> AppUpdateCheckResult {
         let NodeUpdateCheckOptions {
             managed,
@@ -427,13 +488,33 @@ impl AppUpdateChecker {
         }
         let elevate = capabilities.privilege == AppInstallPrivilege::PasswordlessSudo
             && recipe_privilege != AppInstallPrivilege::User;
+        let mut env = self.env.clone();
+        if let Some(policy) = source_policy {
+            if let Err(error) = policy.prepare_node_runtime().await {
+                return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
+                    .reason(error.message);
+            }
+            env = policy.node_environment(&env);
+        }
+        if let Some(state_dir) = self.state_dir.as_ref() {
+            env.insert(
+                "npm_config_cache".to_string(),
+                state_dir.join("npm-cache").display().to_string(),
+            );
+        }
         let response = self
             .run(
                 "npm",
-                &["outdated", "--global", "--json", "--depth=0"],
+                &[
+                    "outdated".to_string(),
+                    "--global".to_string(),
+                    "--json".to_string(),
+                    "--depth=0".to_string(),
+                ],
                 packages,
                 elevate,
                 capabilities.platform,
+                &env,
             )
             .await;
         if response.stdout.trim().is_empty() {
@@ -446,13 +527,14 @@ impl AppUpdateChecker {
         parse_npm_outdated(&response.stdout)
     }
 
-    async fn run(
+    async fn run<S: AsRef<str>>(
         &self,
         executable: &str,
-        prefix_args: &[&str],
+        prefix_args: &[S],
         packages: &[String],
         elevate: bool,
         platform: controlled_instance_protocol::FinalComputerPlatform,
+        env: &BTreeMap<String, String>,
     ) -> AppRecipeCommandResult {
         let platform = match platform {
             controlled_instance_protocol::FinalComputerPlatform::Linux => {
@@ -467,11 +549,11 @@ impl AppUpdateChecker {
             _ => crate::executable_resolver::Platform::OtherUnix,
         };
         let defaults = crate::executable_resolver::ExecutableResolverOptions::default();
-        let mut env = defaults.env.clone();
-        env.extend(self.env.clone());
+        let mut resolver_env = defaults.env.clone();
+        resolver_env.extend(env.clone());
         let resolver_options = crate::executable_resolver::ExecutableResolverOptions {
             platform,
-            env,
+            env: resolver_env,
             ..defaults
         };
         let resolution_path =
@@ -480,14 +562,25 @@ impl AppUpdateChecker {
                 .unwrap_or_else(|| PathBuf::from(executable));
         let args = prefix_args
             .iter()
-            .map(ToString::to_string)
+            .map(|value| value.as_ref().to_string())
             .chain(packages.iter().cloned())
             .collect::<Vec<_>>();
         let command = if elevate {
+            let mut forwarded = Vec::new();
+            for key in ["PATH", "npm_config_registry", "NPM_CONFIG_REGISTRY", "npm_config_cache"] {
+                if let Some((name, value)) = env
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                {
+                    forwarded.push(format!("{name}={value}"));
+                }
+            }
             AppRecipeCommand {
                 executable: "sudo".to_string(),
-                args: ["-n".to_string(), resolution_path.display().to_string()]
+                args: ["-n".to_string(), "env".to_string()]
                     .into_iter()
+                    .chain(forwarded)
+                    .chain(std::iter::once(resolution_path.display().to_string()))
                     .chain(args)
                     .collect(),
                 env: BTreeMap::new(),
@@ -498,7 +591,7 @@ impl AppUpdateChecker {
             AppRecipeCommand {
                 executable: resolution_path.display().to_string(),
                 args,
-                env: self.env.clone(),
+                env: env.clone(),
                 timeout: self.timeout,
                 termination_grace: Duration::from_secs(5),
             }

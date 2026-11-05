@@ -82,6 +82,7 @@ export const errors = {
   NODE_JOIN_TOKEN_INVALID: "The node join token is invalid or expired.",
   NODE_JOIN_NODE_ALREADY_EXISTS: "This node is already registered.",
   NODE_RUNTIME_NOT_FOUND: "The selected runtime was not found on the node.",
+  NODE_LOCAL_FOLDER_ALREADY_EXISTS: "This project already exists on the node. Select the existing project instead.",
   NODE_LOCAL_FOLDER_NOT_FOUND: "The selected local folder was not found on the node.",
   NODE_FOLDER_PATH_NOT_FOUND: "The folder path does not exist on the node.",
   NODE_FOLDER_PATH_NOT_DIRECTORY: "The selected path is not a folder.",

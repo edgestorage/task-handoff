@@ -5,28 +5,16 @@ const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
 
-test("CI assembles Rust runtime packages and the Node rollback artifact from both Linux architectures", () => {
+test("CI packs and verifies both implementations independently", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
-
-  for (const identity of ["linux-x64", "linux-arm64"]) {
-    const [platform, arch] = identity.split("-");
-    assert.match(workflow, new RegExp(`platform: ${platform}\\n\\s+arch: ${arch}`));
-  }
-  assert.match(workflow, /node:24-bullseye/);
-  assert.match(workflow, /runtime-packages:\n\s+needs: \[node-pty-prebuilds, controlled-instance-rust-binaries\]/);
-  assert.match(workflow, /pattern: ci-node-pty-prebuild-\*/);
-  assert.match(workflow, /path: release\/node-pty-prebuilds[\s\S]*merge-multiple: true/);
-  assert.match(workflow, /pnpm runtime:artifact -- --version "\$version" --prebuilds-dir release\/node-pty-prebuilds/);
-  assert.equal((workflow.match(/pnpm runtime:pack/g) || []).length, 1);
-  assert.ok(workflow.indexOf("pattern: ci-node-pty-prebuild-*") < workflow.indexOf("pnpm runtime:artifact"));
-  assert.ok(workflow.indexOf("pnpm runtime:artifact") < workflow.indexOf("run: pnpm runtime:pack"));
-  assert.match(workflow, /cargo build --locked --release -p controlled-instance-cli/);
-  assert.match(workflow, /pattern: ci-rust-controlled-instance-linux-\*/);
-  assert.match(workflow, /path: release\/rust-controlled-instance-binaries[\s\S]*merge-multiple: true/);
-  assert.match(workflow, /Build and verify Linux Node rollback artifact[\s\S]*?TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: node/);
-  assert.match(workflow, /mv release\/runtime-artifacts release\/node-rollback-artifacts/);
-  assert.ok(workflow.indexOf("pattern: ci-rust-controlled-instance-linux-*") < workflow.indexOf("run: pnpm runtime:pack"));
-  assert.match(workflow, /Verify Rust controlled instance artifact/);
+  assert.match(workflow, /implementation: \[node, rust\]/);
+  assert.match(workflow, /TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: \$\{\{ matrix\.implementation \}\}/);
+  assert.match(workflow, /if: matrix\.implementation == 'rust'/);
+  assert.match(workflow, /pnpm runtime:build -- --target controlled-instance/);
+  assert.match(workflow, /pnpm runtime:artifact -- --version/);
+  assert.match(workflow, /run: pnpm runtime:pack/);
+  assert.match(workflow, /Verify selected controlled instance artifact/);
+  assert.doesNotMatch(workflow, /rust-controlled-instance-artifacts|node-rollback-artifacts/);
 });
 
 test("CI uses the installed Rust toolchain for cross-target checks and linting", () => {

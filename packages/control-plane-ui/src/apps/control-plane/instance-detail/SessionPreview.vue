@@ -389,6 +389,7 @@
       />
     </ContextMenu>
     <ProjectFolderPicker
+      :folders="projectFolders"
       :node-id="instance.nodeId"
       :node-name="instance.nodeId"
       :open="projectPickerOpen"

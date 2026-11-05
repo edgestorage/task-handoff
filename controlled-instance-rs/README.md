@@ -1,6 +1,6 @@
 # Controlled Instance Rust Runtime
 
-This workspace is the Rust implementation of the TaskHandoff controlled-instance runtime. The existing Node packages remain in the repository as the `v0.0.46` compatibility baseline, differential reference, and rollback implementation; this workspace does not move, delete, or silently fall back to them.
+This workspace is the Rust implementation of the TaskHandoff controlled-instance runtime. Node remains the repository's default runtime and the `v0.0.46` compatibility baseline; select Rust explicitly with `TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION=rust`. This workspace does not move, delete, or silently fall back to the Node implementation.
 
 The only approved exceptions are:
 

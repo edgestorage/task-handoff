@@ -159,7 +159,9 @@ export async function buildRuntimeArtifact(options) {
   const outputDir = path.resolve(options.output ?? path.join(root, "release", "runtime-artifacts"));
   try {
     await fs.cp(builtPackage, payloadDir, { recursive: true });
-    await copyNodePtyRuntime(payloadDir, undefined, options.prebuildsDir);
+    if (packageManifest.taskHandoffRuntime?.implementation !== "rust") {
+      await copyNodePtyRuntime(payloadDir, undefined, options.prebuildsDir);
+    }
     const manifest = {
       packageName,
       version,

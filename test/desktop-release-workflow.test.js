@@ -170,10 +170,10 @@ test("desktop builds embed one Linux-container controlled-instance artifact asse
   assert.match(workflow, /node:24-bullseye/);
   assert.match(workflow, /npm_config_nodedir=\/usr\/local/);
   assert.match(workflow, /pattern: desktop-node-pty-prebuild-\*/);
-  assert.match(workflow, /controlled-instance-artifact:\n\s+name: Linux controlled instance artifact\n\s+needs: node-pty-prebuilds/);
+  assert.match(workflow, /controlled-instance-artifact:\n\s+name: Linux controlled instance artifact\n\s+needs: \[runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries\]/);
   assert.equal((workflow.match(/pnpm runtime:artifact -- --version/g) || []).length, 1);
   assert.match(workflow, /--prebuilds-dir release\/node-pty-prebuilds/);
-  assert.match(workflow, /build:\n\s+name: Build \$\{\{ matrix\.platform \}\}\n\s+needs: controlled-instance-artifact/);
+  assert.match(workflow, /build:\n\s+name: Build \$\{\{ matrix\.platform \}\}\n\s+needs: \[runtime-selection, controlled-instance-artifact\]/);
   const download = workflow.indexOf("name: desktop-controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}");
   const prepare = workflow.indexOf("run: pnpm desktop:prepare");
   assert.ok(download >= 0 && download < prepare, "desktop build must download the runtime artifact before packaging");

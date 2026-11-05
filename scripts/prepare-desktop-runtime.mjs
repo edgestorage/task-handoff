@@ -5,6 +5,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolveControlledInstanceImplementation } from "../runtime-packages.config.mjs";
+import { checkControlledInstanceArtifact } from "./controlled-instance-artifact-check.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -29,7 +31,7 @@ function artifactFiles() {
   ];
 }
 
-function verifyArtifact() {
+async function verifyArtifact() {
   const [archive, manifest, checksum] = artifactFiles();
   for (const file of [archive, manifest, checksum]) {
     if (!fs.existsSync(file)) throw new Error(`Desktop runtime artifact is missing: ${path.relative(root, file)}`);
@@ -39,6 +41,10 @@ function verifyArtifact() {
     throw new Error(`Desktop runtime artifact must be controlled-instance ${version}-linux-universal.`);
   }
   run(process.execPath, ["scripts/runtime-artifact.mjs", "verify", "--archive", archive, "--sha256", checksum, "--version", version, "--platform", "linux", "--arch", "universal"]);
+  await checkControlledInstanceArtifact(artifactsDir, {
+    version,
+    implementation: resolveControlledInstanceImplementation(),
+  });
 }
 
 function hasLinuxPrebuild(arch) {
@@ -65,7 +71,15 @@ function buildLinuxPrebuild(arch) {
   ]);
 }
 
-function prepareArtifact() {
+async function prepareArtifact() {
+  if (resolveControlledInstanceImplementation() === "rust") {
+    run("bash", ["scripts/build-rust-controlled-instance-linux.sh"]);
+    run("pnpm", ["runtime:build", "--", "--target", "controlled-instance"], {
+      env: { ...process.env, TASK_HANDOFF_VERSION: version },
+    });
+    await verifyArtifact();
+    return;
+  }
   const cachedNodePtyVersion = fs.existsSync(prebuildVersionFile) ? fs.readFileSync(prebuildVersionFile, "utf8").trim() : "";
   if (cachedNodePtyVersion !== nodePtyPackage.version) {
     fs.rmSync(prebuildsDir, { recursive: true, force: true });
@@ -78,10 +92,10 @@ function prepareArtifact() {
     env: { ...process.env, TASK_HANDOFF_VERSION: version },
   });
   run("pnpm", ["runtime:artifact", "--", "--version", version, "--prebuilds-dir", prebuildsDir]);
-  verifyArtifact();
+  await verifyArtifact();
 }
 
 const command = process.argv[2] || "prepare";
-if (command === "prepare") prepareArtifact();
-else if (command === "verify") verifyArtifact();
+if (command === "prepare") await prepareArtifact();
+else if (command === "verify") await verifyArtifact();
 else throw new Error(`Unknown desktop runtime command: ${command}`);

@@ -10,6 +10,11 @@ on:
         description: "Release version without the v prefix"
         required: true
         type: string
+      implementation:
+        description: "Controlled instance implementation (auto uses repository config)"
+        type: choice
+        default: auto
+        options: [auto, node, rust]
       publish_npm:
         description: "Publish packages to npm"
         required: true
@@ -35,6 +40,25 @@ env:
   TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN: https://cloud.thandoff.com
 
 jobs:
+  runtime-selection:
+    runs-on: ubuntu-latest
+    outputs:
+      implementation: ${{ steps.runtime.outputs.implementation }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Resolve controlled instance implementation
+        id: runtime
+        shell: bash
+        env:
+          REQUESTED_IMPLEMENTATION: ${{ inputs.implementation != 'auto' && inputs.implementation || vars.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION }}
+        run: |
+          if [[ -n "$REQUESTED_IMPLEMENTATION" && "$REQUESTED_IMPLEMENTATION" != auto ]]; then
+            export TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION="$REQUESTED_IMPLEMENTATION"
+          fi
+          node --input-type=module -e 'import { resolveControlledInstanceImplementation } from "./runtime-packages.config.mjs"; console.log(`implementation=${resolveControlledInstanceImplementation()}`)' >> "$GITHUB_OUTPUT"
+
   node-pty-prebuilds:
     name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})
     strategy:
@@ -81,6 +105,8 @@ jobs:
           if-no-files-found: error
 
   controlled-instance-rust-binaries:
+    needs: runtime-selection
+    if: needs.runtime-selection.outputs.implementation == 'rust'
     name: Rust controlled instance binary (linux-${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -124,74 +150,15 @@ jobs:
           if-no-files-found: error
 
   controlled-instance-artifact:
-    name: Linux controlled instance artifact
-    needs: controlled-instance-rust-binaries
+    name: Selected Linux controlled instance artifact
+    needs: [runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries]
+    if: ${{ !cancelled() && needs.runtime-selection.result == 'success' && needs.node-pty-prebuilds.result == 'success' && (needs.controlled-instance-rust-binaries.result == 'success' || needs.controlled-instance-rust-binaries.result == 'skipped') }}
+    env:
+      TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: ${{ needs.runtime-selection.outputs.implementation }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
-      version: ${{ steps.version.outputs.value }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 9.15.3
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .node-version
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Resolve version
-        id: version
-        shell: bash
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            version="${{ inputs.version }}"
-          else
-            version="${GITHUB_REF_NAME#v}"
-          fi
-          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
-          echo "value=$version" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/download-artifact@v7
-        with:
-          pattern: rust-controlled-instance-linux-*
-          path: release/rust-controlled-instance-binaries
-          merge-multiple: true
-
-      - name: Assemble Linux Rust controlled instance production runtime
-        shell: bash
-        env:
-          TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          pnpm controlled-instance-ui:build
-          pnpm build:controlled-instance
-          node scripts/rust-controlled-instance-artifact.mjs build \
-            --version "$TASK_HANDOFF_VERSION" \
-            --platform linux \
-            --archs x64,arm64 \
-            --plugin dist/opencode-story-plugin.mjs \
-            --binaries-dir release/rust-controlled-instance-binaries \
-            --static-dir packages/controlled-instance-ui/dist
-          node -e 'import("./scripts/controlled-instance-artifact-check.mjs").then(async ({ checkControlledInstanceArtifact }) => console.log(JSON.stringify(await checkControlledInstanceArtifact("release/runtime-artifacts"))))'
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: controlled-instance-runtime-${{ steps.version.outputs.value }}
-          path: release/runtime-artifacts/controlled-instance-runtime-${{ steps.version.outputs.value }}-linux-universal.*
-          if-no-files-found: error
-
-  controlled-instance-node-rollback-artifact:
-    name: Linux Node controlled instance rollback artifact
-    needs: node-pty-prebuilds
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    outputs:
+      implementation: ${{ needs.runtime-selection.outputs.implementation }}
       version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v7
@@ -227,28 +194,35 @@ jobs:
           path: release/node-pty-prebuilds
           merge-multiple: true
 
-      - name: Build v0.0.46-compatible Node rollback artifact
+      - uses: actions/download-artifact@v7
+        if: env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION == 'rust'
+        with:
+          pattern: rust-controlled-instance-linux-*
+          path: release/rust-controlled-instance-binaries
+          merge-multiple: true
+
+      - name: Assemble selected Linux controlled instance runtime
         shell: bash
         env:
           TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
-          TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: node
         run: |
           pnpm runtime:build -- --target controlled-instance
-          pnpm runtime:artifact -- --version "$TASK_HANDOFF_VERSION" --prebuilds-dir release/node-pty-prebuilds
-          stem="controlled-instance-runtime-$TASK_HANDOFF_VERSION-linux-universal"
-          install -d -m 0755 release/node-rollback-artifacts
-          mv "release/runtime-artifacts/$stem.tar.gz" "release/node-rollback-artifacts/$stem-node.tar.gz"
-          mv "release/runtime-artifacts/$stem.manifest.json" "release/node-rollback-artifacts/$stem-node.manifest.json"
-          (cd release/node-rollback-artifacts && sha256sum "$stem-node.tar.gz" > "$stem-node.tar.gz.sha256")
+          pnpm runtime:artifact -- \
+            --version "$TASK_HANDOFF_VERSION" \
+            --prebuilds-dir release/node-pty-prebuilds
+          node -e 'import("./scripts/controlled-instance-artifact-check.mjs").then(async ({ checkControlledInstanceArtifact }) => console.log(JSON.stringify(await checkControlledInstanceArtifact("release/runtime-artifacts"))))'
 
       - uses: actions/upload-artifact@v7
         with:
-          name: controlled-instance-node-rollback-${{ steps.version.outputs.value }}
-          path: release/node-rollback-artifacts/*
+          name: controlled-instance-runtime-${{ steps.version.outputs.value }}
+          path: release/runtime-artifacts/controlled-instance-runtime-${{ steps.version.outputs.value }}-linux-universal.*
           if-no-files-found: error
 
   runtime-packages:
-    needs: [controlled-instance-artifact, controlled-instance-rust-binaries]
+    needs: controlled-instance-artifact
+    if: ${{ !cancelled() && needs.controlled-instance-artifact.result == 'success' }}
+    env:
+      TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: ${{ needs.controlled-instance-artifact.outputs.implementation }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
@@ -299,6 +273,7 @@ jobs:
           path: release/runtime-artifacts
 
       - uses: actions/download-artifact@v7
+        if: env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION == 'rust'
         with:
           pattern: rust-controlled-instance-linux-*
           path: release/rust-controlled-instance-binaries
@@ -330,6 +305,7 @@ jobs:
   wsl-base-template:
     name: WSL base template (linux-x64)
     needs: runtime-packages
+    if: ${{ !cancelled() && needs.runtime-packages.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -397,8 +373,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [controlled-instance-artifact, controlled-instance-node-rollback-artifact, runtime-packages, wsl-base-template]
-    if: github.event_name == 'push' || inputs.publish_npm
+    needs: [controlled-instance-artifact, runtime-packages, wsl-base-template]
+    if: ${{ !cancelled() && needs.controlled-instance-artifact.result == 'success' && needs.runtime-packages.result == 'success' && needs.wsl-base-template.result == 'success' && (github.event_name == 'push' || inputs.publish_npm) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -421,11 +397,6 @@ jobs:
 
       - uses: actions/download-artifact@v7
         with:
-          name: controlled-instance-node-rollback-${{ needs.runtime-packages.outputs.version }}
-          path: release/node-rollback-artifacts
-
-      - uses: actions/download-artifact@v7
-        with:
           name: wsl-base-template-${{ needs.runtime-packages.outputs.version }}
           path: release/runtime-artifacts
 
@@ -445,10 +416,10 @@ jobs:
         run: |
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes --title "TaskHandoff $GITHUB_REF_NAME" \
-              release/runtime-artifacts/* release/node-rollback-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh
+              release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh
           elif [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" == "true" ]]; then
             published_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
-            for asset in release/runtime-artifacts/* release/node-rollback-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
+            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
               name="$(basename "$asset")"
               if ! grep -Fxq "$name" <<<"$published_assets"; then
                 gh release upload "$GITHUB_REF_NAME" "$asset"
@@ -456,7 +427,7 @@ jobs:
             done
           else
             published_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
-            for asset in release/runtime-artifacts/* release/node-rollback-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
+            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
               name="$(basename "$asset")"
               if ! grep -Fxq "$name" <<<"$published_assets"; then
                 echo "Public release $GITHUB_REF_NAME is missing immutable asset $name." >&2
@@ -532,7 +503,7 @@ jobs:
   sync-npmmirror:
     name: Sync npmmirror (best effort)
     needs: [publish, runtime-packages]
-    if: needs.publish.result == 'success'
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The npm registry remains the authoritative source. A mirror delay or outage

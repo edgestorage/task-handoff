@@ -97,6 +97,7 @@ test("system package updates refresh the apt index and use --only-upgrade", asyn
   const execute = createAppRecipeExecutor({
     installBaseDir: "/managed",
     stateDir: "/state",
+    env: {},
     commandRunner: async (command) => { commands.push(command); return { exitCode: 0, stdout: "ok", stderr: "" }; },
   });
   const recipe = { type: "system-package", platforms: ["linux"], installer: "apt", packages: ["chromium"], privilege: "passwordless-sudo" };
@@ -113,6 +114,7 @@ test("Codex npm recipes provide privilege-aware install and uninstall commands",
   const execute = createAppRecipeExecutor({
     installBaseDir: "/managed",
     stateDir: "/state",
+    env: {},
     commandRunner: async (command) => { commands.push(command); return { exitCode: 0, stdout: "ok", stderr: "" }; },
   });
   const recipe = { type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex"], privilege: "passwordless-sudo" };
@@ -122,11 +124,18 @@ test("Codex npm recipes provide privilege-aware install and uninstall commands",
   await execute("uninstall", recipe, context);
   await execute("update", recipe, context);
 
-  assert.deepEqual(commands.map(({ executable, args }) => ({ executable, args })), [
-    { executable: "sudo", args: ["-n", "npm", "install", "--global", "--include=optional", "--no-audit", "--no-fund", "@openai/codex"] },
-    { executable: "sudo", args: ["-n", "npm", "uninstall", "--global", "@openai/codex"] },
-    { executable: "sudo", args: ["-n", "npm", "install", "--global", "--include=optional", "--no-audit", "--no-fund", "@openai/codex"] },
-  ]);
+  const expected = [
+    ["install", "--global", "--include=optional", "--no-audit", "--no-fund", "@openai/codex"],
+    ["uninstall", "--global", "@openai/codex"],
+    ["install", "--global", "--include=optional", "--no-audit", "--no-fund", "@openai/codex"],
+  ];
+  assert.equal(commands.length, expected.length);
+  for (const [index, command] of commands.entries()) {
+    assert.equal(command.executable, "sudo");
+    assert.deepEqual(command.args.slice(0, 3), ["-n", "env", "npm_config_cache=/state/npm-cache"]);
+    assert.match(command.args[3], /npm$/);
+    assert.deepEqual(command.args.slice(4), expected[index]);
+  }
 });
 
 test("NVM npm recipes execute with the resolved Node bin environment", async (context) => {
@@ -211,6 +220,7 @@ test("Codex npm uninstall removes only a validated stale retirement directory be
   const execute = createAppRecipeExecutor({
     installBaseDir: "/managed",
     stateDir: "/state",
+    env: {},
     commandRunner: async (command) => {
       commands.push(command);
       if (command.args.includes("uninstall") && uninstallAttempts++ === 0) {
@@ -230,11 +240,18 @@ test("Codex npm uninstall removes only a validated stale retirement directory be
     capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "passwordless-sudo" },
   });
 
-  assert.deepEqual(commands.map(({ executable, args }) => ({ executable, args })), [
-    { executable: "sudo", args: ["-n", "npm", "uninstall", "--global", "@openai/codex"] },
-    { executable: "sudo", args: ["-n", "rm", "-rf", "--", "/usr/local/lib/node_modules/@openai/.codex-vdnmINeK"] },
-    { executable: "sudo", args: ["-n", "npm", "uninstall", "--global", "@openai/codex"] },
-  ]);
+  assert.equal(commands.length, 3);
+  for (const command of [commands[0], commands[2]]) {
+    assert.equal(command.executable, "sudo");
+    assert.deepEqual(command.args.slice(0, 3), ["-n", "env", "npm_config_cache=/state/npm-cache"]);
+    assert.match(command.args[3], /npm$/);
+    assert.deepEqual(command.args.slice(4), ["uninstall", "--global", "@openai/codex"]);
+  }
+  assert.deepEqual(commands[1], {
+    executable: "sudo",
+    args: ["-n", "rm", "-rf", "--", "/usr/local/lib/node_modules/@openai/.codex-vdnmINeK"],
+    timeoutMs: 60_000,
+  });
 });
 
 test("Node package recovery rejects unrelated ENOTEMPTY destinations", async () => {

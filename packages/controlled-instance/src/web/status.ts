@@ -3,10 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { AppCatalogRepository, executablePath } from "@task-handoff/app-runtime/catalog";
 import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
+import type { AppInstallEnvironmentManager } from "./app-install-environment";
 import { createAiSessionRegistry } from "@task-handoff/ai-session-runtime";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import { controlledInstancePackageVersionResolver } from "@task-handoff/core/core/package-version";
 import {
+  APP_INSTALL_ENVIRONMENT_PROTOCOL_VERSION,
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceCapabilitiesSchema,
   type AiSessionTimelineCapabilities,
@@ -197,6 +199,7 @@ export function controlledInstanceCapabilities(
   aiSessionTimeline: AiSessionTimelineCapabilities,
   aiSessionProviders: AiSessionProviderCapability[] = [],
   gitCredentialBrokerInstalled = false,
+  installEnvironment?: AppInstallEnvironmentManager,
 ): ControlledInstanceCapabilities {
   const inventory = appRuntime.appInventory();
   const available = inventory.items.filter((item) => item.availability === "available");
@@ -224,6 +227,13 @@ export function controlledInstanceCapabilities(
       // The running instance accepts the structured OpenCode provider config on
       // the managed model environment route; see status.ts capability tests.
       managedModelEnvironment: { openCodeConfig: true },
+      appInstallEnvironment: {
+        protocolVersion: APP_INSTALL_ENVIRONMENT_PROTOCOL_VERSION,
+        sourceProfiles: ["environment", "official", "china", "custom"],
+        nodeToolchain: installEnvironment?.supportsNodeToolchain() === true,
+        npmSources: true,
+        aptSources: installEnvironment?.supportsAptSources() === true,
+      },
       codexManagedSettings: true,
       nodeAgentConnectionUpdate: true,
       gitCliCredentialBroker: gitCredentialBrokerInstalled,
@@ -275,6 +285,7 @@ export async function controlledInstanceSnapshot(
   aiSessionTimeline: AiSessionTimelineCapabilities,
   aiSessionProviders: AiSessionProviderCapability[] = [],
   gitCredentialBrokerInstalled = false,
+  installEnvironment?: AppInstallEnvironmentManager,
 ) {
   const appSessions = appRuntime.listSessions();
   return {
@@ -284,7 +295,7 @@ export async function controlledInstanceSnapshot(
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
     build: buildInfo(),
     controlMode: (controlledMode() ? "controlled" : "standalone") as "standalone" | "controlled",
-    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline, aiSessionProviders, gitCredentialBrokerInstalled),
+    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline, aiSessionProviders, gitCredentialBrokerInstalled, installEnvironment),
     appInventory: appRuntime.appInventory(),
     apps: {
       runningCount: appRuntime.runningSessionCount(),

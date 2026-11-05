@@ -23,16 +23,9 @@ TASK_HANDOFF_AGENT_RUNS_ENABLED=${TASK_HANDOFF_AGENT_RUNS_ENABLED:-1}
 # 云服务（Thandoff 账户绑定）入口同样在构建期烧进 Control Plane UI；测试环境默认开启，
 # 否则设置面板里不会出现云连接分区。
 TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED=${TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED:-1}
-# The production artifact is Rust. Keep the Node implementation as an explicit
-# rollback build instead of silently falling back when the Rust build fails.
-CONTROLLED_INSTANCE_IMPLEMENTATION=${TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION:-rust}
-case "$CONTROLLED_INSTANCE_IMPLEMENTATION" in
-  rust|node) ;;
-  *)
-    printf 'TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION must be rust or node.\n' >&2
-    exit 1
-    ;;
-esac
+# Use the same build selection as npm and desktop packaging.
+CONTROLLED_INSTANCE_IMPLEMENTATION=$(node --input-type=module -e 'import { resolveControlledInstanceImplementation } from "./runtime-packages.config.mjs"; console.log(resolveControlledInstanceImplementation())')
+TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION=$CONTROLLED_INSTANCE_IMPLEMENTATION
 export TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION
 export TASK_HANDOFF_AGENT_RUNS_ENABLED TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED
 # Cloud identity is deployment input, not repository configuration. Require the caller to
@@ -158,9 +151,9 @@ else
   pnpm run typecheck:legacy
   pnpm run typecheck:controlled-instance
   pnpm run control-plane-ui:typecheck
-  # The node-agent Docker bootstrap always carries the Rust Git provisioning
-  # helpers, including for an explicit Node runtime rollback build.
-  "$ROOT/scripts/build-rust-controlled-instance-linux.sh"
+  if [ "$CONTROLLED_INSTANCE_IMPLEMENTATION" = "rust" ]; then
+    "$ROOT/scripts/build-rust-controlled-instance-linux.sh"
+  fi
   TASK_HANDOFF_VERSION="$VERSION" pnpm run runtime:pack --target controlled-instance
   if [ "$CONTROLLED_INSTANCE_IMPLEMENTATION" = "node" ]; then
     TASK_HANDOFF_VERSION="$VERSION" pnpm run runtime:artifact -- --version "$VERSION" --prebuilds-dir release/node-pty-prebuilds

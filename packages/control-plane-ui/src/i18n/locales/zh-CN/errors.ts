@@ -85,6 +85,7 @@ export const errors = {
   NODE_JOIN_TOKEN_INVALID: "节点加入令牌无效或已过期。",
   NODE_JOIN_NODE_ALREADY_EXISTS: "此节点已注册。",
   NODE_RUNTIME_NOT_FOUND: "节点上不存在所选运行环境。",
+  NODE_LOCAL_FOLDER_ALREADY_EXISTS: "节点上已存在该项目，请直接选择已有项目。",
   NODE_LOCAL_FOLDER_NOT_FOUND: "节点上不存在所选本地文件夹。",
   NODE_FOLDER_PATH_NOT_FOUND: "节点上不存在该文件夹路径。",
   NODE_FOLDER_PATH_NOT_DIRECTORY: "所选路径不是文件夹。",

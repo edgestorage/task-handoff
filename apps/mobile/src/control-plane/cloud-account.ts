@@ -4,6 +4,7 @@ import type { SecureValueStore } from '../platform/secure-storage';
 import { isMobileTestMode, isTrustedMobileCloudServiceOrigin, mobileCloudEnvironment } from '../platform/build-variant';
 import { markCloudAccountReauthenticationRequired } from './account-reauthentication';
 import type { CloudEndpointResolver } from '../cloud-discovery/resolver';
+import type { NativeAppleAuthentication } from '../platform/apple-authentication';
 
 type PendingRefresh = Readonly<{ previousRefreshCredential: string; nextRefreshCredential: string; rotationId: string }>;
 type TokenSet = Omit<MobileTokenResponse, 'tokenType'> & { pendingRefresh?: PendingRefresh };
@@ -19,8 +20,9 @@ const refreshFlights = new WeakMap<SecureValueStore, Map<string, Promise<TokenSe
 export class MobileCloudAccountSession {
   private tokenSet?: TokenSet;
   private refreshing?: Promise<string>;
-  private readonly pending = new Map<string, { verifier: string; createdAt: number }>();
+  private readonly pending = new Map<string, { verifier: string; expiresAt: number }>();
   private pendingEmailSecondFactor?: PendingEmailSecondFactor;
+  private pendingProviderConfirmation?: { flow: string; termsVersion: string; state: string; redirectUri: string; expiresAt: string };
   private readonly baseOrigin: string;
   private readonly endpointResolver?: CloudEndpointResolver;
   readonly client: CloudMobileAccountClient;
@@ -88,15 +90,67 @@ export class MobileCloudAccountSession {
   }
 
   private async authorize(input: { providerId: string; redirectUri: string; email?: string; password?: string; totpCode?: string; recoveryCode?: string }) {
+    return this.client.login({ ...input, ...await this.authorizationRequest(input.redirectUri), kind: 'mobile' });
+  }
+
+  private async authorizationRequest(redirectUri: string) {
     const state = randomUrlSafe(24); const verifier = randomUrlSafe(48);
     const challenge = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier, { encoding: Crypto.CryptoEncoding.BASE64 });
-    this.prunePending(); this.pending.set(state, { verifier, createdAt: Date.now() });
-    return this.client.login({ ...input, clientId: 'mobile', kind: 'mobile', scopes: ['account:read', 'relay:access'], state, codeChallenge: challenge.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''), codeChallengeMethod: 'S256' });
+    this.prunePending(); this.pending.set(state, { verifier, expiresAt: Date.now() + 5 * 60_000 });
+    return { redirectUri, clientId: 'mobile' as const, scopes: ['account:read', 'relay:access'], state, codeChallenge: challenge.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''), codeChallengeMethod: 'S256' as const };
+  }
+
+  async loginWithApple(native: NativeAppleAuthentication, redirectUri: string): Promise<'unavailable' | 'cancelled' | 'completed' | 'confirmation-required'> {
+    this.cancelProviderConfirmation();
+    const request = await this.authorizationRequest(redirectUri);
+    try {
+      let challenge;
+      try {
+        challenge = await this.client.beginAppleNative({ ...request, bundleId: native.bundleId });
+      } catch (error) {
+        // Compatibility for cloud v0.1.13: only an absent route or an explicitly
+        // unconfigured native audience can use the existing web authorization.
+        if (Number((error as { status?: number })?.status) === 404 || cloudErrorCode(error) === 'APPLE_NATIVE_CLIENT_UNAVAILABLE') return 'unavailable';
+        throw error;
+      }
+      const credential = await native.signIn(challenge);
+      if (!credential) return 'cancelled';
+      if (credential.state !== challenge.state || !credential.identityToken) throw cloudError('CLOUD_LOGIN_STATE_INVALID');
+      const result = await this.client.completeAppleNative({ state: challenge.state, identityToken: credential.identityToken });
+      if ('confirmationRequired' in result) {
+        const pending = this.pending.get(request.state)!;
+        pending.expiresAt = Date.parse(result.expiresAt);
+        this.pendingProviderConfirmation = { ...result, state: request.state, redirectUri };
+        return 'confirmation-required';
+      }
+      if (result.state !== request.state || result.redirectUri !== redirectUri) throw cloudError('CLOUD_LOGIN_STATE_INVALID');
+      await this.completeLogin({ code: result.code, state: result.state, redirectUri });
+      return 'completed';
+    } finally {
+      if (this.pendingProviderConfirmation?.state !== request.state) this.pending.delete(request.state);
+    }
+  }
+
+  async confirmProviderAccount() {
+    const pending = this.pendingProviderConfirmation;
+    if (!pending || Date.parse(pending.expiresAt) <= Date.now()) {
+      this.cancelProviderConfirmation();
+      throw cloudError('CLOUD_LOGIN_CHALLENGE_EXPIRED');
+    }
+    const result = await this.client.confirmProviderAccount({ flow: pending.flow, termsVersion: pending.termsVersion, acceptTerms: true });
+    if ('confirmationRequired' in result || result.state !== pending.state || result.redirectUri !== pending.redirectUri) throw cloudError('CLOUD_LOGIN_STATE_INVALID');
+    this.pendingProviderConfirmation = undefined;
+    return this.completeLogin({ code: result.code, state: result.state, redirectUri: pending.redirectUri });
+  }
+
+  cancelProviderConfirmation() {
+    if (this.pendingProviderConfirmation) this.pending.delete(this.pendingProviderConfirmation.state);
+    this.pendingProviderConfirmation = undefined;
   }
 
   async completeLogin(input: { code: string; state: string; redirectUri: string }) {
     const pending = this.pending.get(input.state); this.pending.delete(input.state);
-    if (!pending || pending.createdAt + 5 * 60_000 <= Date.now()) throw cloudError('CLOUD_LOGIN_STATE_INVALID');
+    if (!pending || pending.expiresAt <= Date.now()) throw cloudError('CLOUD_LOGIN_STATE_INVALID');
     const result = await this.client.exchangeAuthorizationCode({ ...input, clientId: 'mobile', kind: 'mobile', deviceName: 'TaskHandoff Mobile', codeVerifier: pending.verifier });
     await this.install(result); return this.reference();
   }
@@ -229,7 +283,7 @@ export class MobileCloudAccountSession {
     return { ...cached, refreshCredential: stored.refreshCredential, pendingRefresh: stored.pendingRefresh };
   }
 
-  private prunePending() { for (const [state, entry] of this.pending) if (entry.createdAt + 5 * 60_000 <= Date.now()) this.pending.delete(state); }
+  private prunePending() { for (const [state, entry] of this.pending) if (entry.expiresAt <= Date.now()) this.pending.delete(state); }
   private currentEmailSecondFactor() {
     const challenge = this.pendingEmailSecondFactor;
     if (!challenge) return undefined;

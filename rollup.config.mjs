@@ -5,7 +5,7 @@ import typescript from "@rollup/plugin-typescript";
 import { rmSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { runtimePackages } from "./runtime-packages.config.mjs";
+import { runtimePackages, resolveControlledInstanceImplementation } from "./runtime-packages.config.mjs";
 import { cloudEnvironmentBuildPlugin } from "./scripts/rollup-cloud-environment.mjs";
 
 const require = createRequire(import.meta.url);
@@ -93,6 +93,16 @@ const legacyBuild = [
   },
 ];
 
+const controlledInstanceImplementation = resolveControlledInstanceImplementation();
+if (controlledInstanceImplementation === "node") {
+  legacyBuild.push({
+    input: "apps/cli/src/runtime/git-provisioning-helper.ts",
+    output: { file: "dist/git-provisioning-helper.js", format: "cjs", inlineDynamicImports: true },
+    external: isNodeBuiltin,
+    plugins: [...plugins, terser()],
+  });
+}
+
 const controlledInstanceBuild = [
   {
     input: {
@@ -158,7 +168,7 @@ function runtimeBuild(name, definition) {
     }
     warn(warning);
   };
-  const builds = [
+  const builds = name === "controlled-instance" && controlledInstanceImplementation === "rust" ? [] : [
     {
       input: definition.input,
       output: {
@@ -187,6 +197,7 @@ function runtimeBuild(name, definition) {
     });
   }
   for (const standalone of definition.standaloneInputs || []) {
+    if (standalone.implementation && standalone.implementation !== controlledInstanceImplementation) continue;
     builds.push({
       input: standalone.input,
       output: {

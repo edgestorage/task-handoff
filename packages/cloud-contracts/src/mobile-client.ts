@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   AccountPublicProfileSchema,
+  AppleNativeChallengeRequestSchema, AppleNativeChallengeResponseSchema, AppleNativeCompleteRequestSchema, AppleNativeAuthorizationResponseSchema, ProviderAccountConfirmationRequestSchema,
+  type AppleNativeChallengeRequest, type AppleNativeChallengeResponse, type AppleNativeCompleteRequest, type AppleNativeAuthorizationResponse, type ProviderAccountConfirmationRequest,
   DeviceSessionSchema,
   MobileAuthorizationResponseSchema,
   MobileRefreshRecoveryRequestSchema,
@@ -34,6 +36,15 @@ export type OfficialProviderSummary = z.infer<typeof OfficialProviderSummarySche
 export class OfficialMobileAccountClient extends OfficialAccountClient {
   register(input: OfficialApiInput): Promise<unknown> { return this.publicCall("/api/v1/auth/register", input, z.unknown()); }
   login(input: OfficialApiInput): Promise<MobileAuthorizationResponse> { return this.publicCall("/api/v1/auth/authorize", input, MobileAuthorizationResponseSchema); }
+  beginAppleNative(input: AppleNativeChallengeRequest): Promise<AppleNativeChallengeResponse> {
+    return this.publicCall("/api/v1/auth/providers/apple/native/challenge", AppleNativeChallengeRequestSchema.parse(input), AppleNativeChallengeResponseSchema);
+  }
+  completeAppleNative(input: AppleNativeCompleteRequest): Promise<AppleNativeAuthorizationResponse> {
+    return this.publicCall("/api/v1/auth/providers/apple/native/complete", AppleNativeCompleteRequestSchema.parse(input), AppleNativeAuthorizationResponseSchema);
+  }
+  confirmProviderAccount(input: ProviderAccountConfirmationRequest): Promise<AppleNativeAuthorizationResponse> {
+    return this.publicCall("/api/v1/auth/providers/confirm", ProviderAccountConfirmationRequestSchema.parse(input), AppleNativeAuthorizationResponseSchema);
+  }
   exchangeAuthorizationCode(input: OfficialApiInput): Promise<MobileTokenResponse> { return this.publicCall("/api/v1/auth/token", input, MobileTokenResponseSchema); }
   refresh(input: OfficialApiInput): Promise<MobileTokenResponse> { return this.publicCall("/api/v1/auth/refresh", input, MobileTokenResponseSchema); }
   refreshWithRecovery(input: OfficialApiInput): Promise<MobileTokenResponse> {

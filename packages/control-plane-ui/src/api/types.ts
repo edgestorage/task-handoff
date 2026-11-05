@@ -917,6 +917,16 @@ export type ModelSelection = {
 };
 
 export type {
+  AppInstallEffectiveSources,
+  AppInstallEnvironment,
+  AppInstallEnvironmentTestCheck,
+  AppInstallEnvironmentTestResponse,
+  AppInstallEnvironmentUpdateResponse,
+  AppInstallNodeToolchain,
+  AppInstallSourceCustom,
+  AppInstallSourceProfile,
+  AppInstallSourceSettings,
+  AppInstallSourceUpdate,
   AppManagementError,
   AppManagementEvent,
   AppManagementJob,

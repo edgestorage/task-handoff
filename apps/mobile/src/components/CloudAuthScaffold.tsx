@@ -1,5 +1,6 @@
 import type { PropsWithChildren, ReactNode } from 'react';
 import { Image, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Screen } from './Screen';
 import { Icon } from './Icon';
@@ -8,26 +9,31 @@ import { useMobileTheme } from './theme';
 export function CloudAuthScaffold({ children, description, error, title }: PropsWithChildren<{ description: string; error?: string; title: string }>) {
   const { colors } = useMobileTheme();
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.fill} testID="cloud-auth-keyboard-area">
-      <Screen alwaysBounceVertical={false} automaticallyAdjustKeyboardInsets={false} contentContainerStyle={styles.screen} testID="cloud-auth-scroll">
-        <View style={styles.content}>
-        <View style={styles.hero}>
-          <Image accessibilityIgnoresInvertColors source={require('../../assets/icon.png')} style={styles.brandIcon} />
-          <View style={styles.heroCopy}>
-            <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{title}</Text>
-            <Text style={[styles.description, { color: colors.textMuted }]}>{description}</Text>
+    // The opaque stack header owns the top inset. Keep the bottom safe area
+    // outside the scroll viewport: automatic insets plus flexGrow would make
+    // even short, vertically centered forms scroll by the bottom inset.
+    <SafeAreaView edges={['bottom']} style={[styles.fill, { backgroundColor: colors.background }]}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.fill} testID="cloud-auth-keyboard-area">
+        <Screen alwaysBounceVertical={false} automaticallyAdjustKeyboardInsets={false} contentInsetAdjustmentBehavior="never" contentContainerStyle={styles.screen} testID="cloud-auth-scroll">
+          <View style={styles.content}>
+            <View style={styles.hero}>
+              <Image accessibilityIgnoresInvertColors source={require('../../assets/icon.png')} style={styles.brandIcon} />
+              <View style={styles.heroCopy}>
+                <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{title}</Text>
+                <Text style={[styles.description, { color: colors.textMuted }]}>{description}</Text>
+              </View>
+            </View>
+            {error ? (
+              <View accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, borderColor: colors.error }]}>
+                <Icon color={colors.error} name="alert-circle" size={18} />
+                <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
+              </View>
+            ) : null}
+            {children}
           </View>
-        </View>
-        {error ? (
-          <View accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, borderColor: colors.error }]}>
-            <Icon color={colors.error} name="alert-circle" size={18} />
-            <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
-          </View>
-        ) : null}
-          {children}
-        </View>
-      </Screen>
-    </KeyboardAvoidingView>
+        </Screen>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 

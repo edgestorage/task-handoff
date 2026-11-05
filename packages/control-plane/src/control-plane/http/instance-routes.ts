@@ -6,7 +6,7 @@ import type { OperationApprovals } from "../approvals/operation-approvals.ts";
 import type { ControlPlaneAuth } from "../auth/service.ts";
 import { executeApprovedOperation } from "./operation-approval-routes.ts";
 import { IdParamsSchema } from "./route-params.ts";
-import { AppManagementOperationRequestSchema, InstanceDeleteInputSchema } from "@task-handoff/protocol/control-plane";
+import { AppInstallSourceUpdateSchema, AppManagementOperationRequestSchema, InstanceDeleteInputSchema } from "@task-handoff/protocol/control-plane";
 import { CustomAppCatalogUpdateInputSchema } from "@task-handoff/protocol/app-catalog";
 import { withRequestSignal } from "./request-signal.ts";
 import { publicInstanceDirectory } from "../public-records.ts";
@@ -87,6 +87,20 @@ export function registerInstanceRoutes({ app, service, events, onInstanceDeleted
     return { data: await service.listRepositoryWorkspaceBranches(params.id, query.cwdFolderId) };
   });
   app.get("/api/controlled-instances/:id/apps/management", async (request) => ({ data: await service.instanceAppManagement(IdParamsSchema.parse(request.params).id) }));
+  app.get("/api/controlled-instances/:id/apps/install-environment", async (request) => ({
+    data: await service.instanceInstallEnvironment(IdParamsSchema.parse(request.params).id),
+  }));
+  app.put("/api/controlled-instances/:id/apps/install-environment", async (request) => {
+    const id = IdParamsSchema.parse(request.params).id;
+    const input = AppInstallSourceUpdateSchema.parse(request.body || {});
+    return { data: await service.updateInstanceInstallEnvironment(id, input) };
+  });
+  app.post("/api/controlled-instances/:id/apps/install-environment/test", async (request) => ({
+    data: await service.testInstanceInstallEnvironment(IdParamsSchema.parse(request.params).id),
+  }));
+  app.post("/api/controlled-instances/:id/apps/install-environment/prepare", async (request) => ({
+    data: await service.prepareInstanceInstallEnvironment(IdParamsSchema.parse(request.params).id),
+  }));
   app.get("/api/controlled-instances/:id/apps/catalog", async (request) => ({ data: await service.instanceAppCatalog(IdParamsSchema.parse(request.params).id) }));
   app.get("/api/controlled-instances/:id/apps/catalog/custom", async (request) => ({ data: await service.instanceCustomAppCatalog(IdParamsSchema.parse(request.params).id) }));
   app.patch("/api/controlled-instances/:id/apps/catalog/custom", async (request) => {

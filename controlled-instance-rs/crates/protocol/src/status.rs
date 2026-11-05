@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{AiSessionsSnapshot, InstanceShellCapabilities, CONTROL_PLANE_PROTOCOL_VERSION};
+use crate::{
+    AiSessionsSnapshot, ControlledInstanceAppInstallEnvironmentCapabilities,
+    InstanceShellCapabilities, CONTROL_PLANE_PROTOCOL_VERSION,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -166,6 +169,7 @@ pub struct FeatureCapabilities {
     pub ai_session_queue_pause: bool,
     pub model_relay: ModelRelayCapabilities,
     pub managed_model_environment: ManagedModelEnvironmentCapabilities,
+    pub app_install_environment: ControlledInstanceAppInstallEnvironmentCapabilities,
     pub ai_session_timeline: AiSessionTimelineCapabilities,
     pub ai_session_conversation_attachments: AiSessionConversationAttachmentCapabilities,
     pub ai_session_providers: Vec<AiSessionProviderCapability>,

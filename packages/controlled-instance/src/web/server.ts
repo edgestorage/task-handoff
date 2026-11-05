@@ -70,6 +70,7 @@ import {
 } from "@task-handoff/ai-session-runtime/ai-session-persistence-settings";
 import { WebEventBus } from "./events";
 import { AppManagementManager, AppManagementRequestError } from "./app-management";
+import { AppInstallEnvironmentError, AppInstallEnvironmentManager } from "./app-install-environment";
 import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch, type ConfigSyncOptions } from "./config-sync";
 import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { aiSessionRetentionCandidates, aiSessionRootNode, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
@@ -196,7 +197,7 @@ import { AppProfileCreateInputSchema, AppProfileListSchema, AppProfileRenameInpu
 import { TriggerSourceSchema, TriggerActionSchema, TriggerPolicySchema, TriggerTargetSchema } from "@task-handoff/protocol/triggers";
 import { bridgeWebSockets, TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
-import { AppManagementOperationRequestSchema, CodexInstanceSettingsSchema, UpdateControlledInstanceNodeAgentConnectionSchema } from "@task-handoff/protocol/control-plane";
+import { AppInstallSourceUpdateSchema, AppManagementOperationRequestSchema, CodexInstanceSettingsSchema, UpdateControlledInstanceNodeAgentConnectionSchema } from "@task-handoff/protocol/control-plane";
 import { StoryAutomationInstanceCreateInputSchema, StoryAutomationInstanceCreateResultSchema } from "@task-handoff/protocol/story-automation-instance";
 import {
   AgentRunInstanceProbeStateSchema,
@@ -728,10 +729,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const events = new WebEventBus();
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths, undefined, { managedAppRoot });
   const app = Fastify({ logger: options.logger ?? true });
+  const appManagementStateDir = path.join(storagePaths.runtimeDir, "app-management");
+  const installEnvironment = new AppInstallEnvironmentManager({
+    dataDir: storagePaths.dataDir,
+    stateDir: appManagementStateDir,
+    warn: (message) => app.log?.warn?.({ message }, "app install environment warning"),
+  });
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const appManagement = options.appManagement || new AppManagementManager({
-    stateDir: path.join(storagePaths.runtimeDir, "app-management"),
+    stateDir: appManagementStateDir,
     installBaseDir: managedAppRoot,
+    installEnvironment,
     sessions: () => [
       ...appRuntime.listSessions(),
       ...aiSessions.list().filter((session) => session.activeTurnId).map((session) => ({ id: session.id, appId: session.agent, status: "running" })),
@@ -783,6 +791,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     aiSessionController.timelineCapabilities(),
     aiSessionProviderCapabilities(),
     gitCredentialBrokerInstalled,
+    installEnvironment,
   ));
   const agentRunMembers = new AgentRunMemberBindingStore(storagePaths.runtimeDir);
   const storyAgentTools = new StoryAgentToolService(
@@ -796,7 +805,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     endpoint: `${(options.agentToolsBaseUrl || `http://127.0.0.1:${process.env.TASK_HANDOFF_WEB_PORT || 8080}`).replace(/\/$/, "")}/api/internal/agent-tools`,
     pluginPath: fs.existsSync(bundledOpenCodeStoryPlugin) ? bundledOpenCodeStoryPlugin : undefined,
   }) : undefined;
-  const replaceManagedAppEnvironment = () => appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
+  const replaceManagedAppEnvironment = () => appRuntime.replaceManagedEnvironment(installEnvironment.runtimeEnvironment(managedAppEnvironment(managedModelEnv)));
+  installEnvironment.onChange(replaceManagedAppEnvironment);
   replaceManagedAppEnvironment();
   const storyAgentToolEnvironment = storyAgentToolBridge?.runtimeEnvironment() || {};
   appRuntime.replaceSharedResourcePrivateEnvironment?.("codex", storyAgentToolEnvironment);
@@ -2009,6 +2019,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       aiSessionController.timelineCapabilities(),
       aiSessionProviderCapabilities(),
       gitCredentialBrokerInstalled,
+      installEnvironment,
     );
     return {
       data: {
@@ -2021,7 +2032,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/instance/capabilities", async () => ({
-    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities(), gitCredentialBrokerInstalled),
+    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities(), gitCredentialBrokerInstalled, installEnvironment),
   }));
 
   app.get("/api/workspace/status", async () => ({
@@ -2855,6 +2866,49 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     return reply.code(500).send({ error: { code: "app_management_failed", message: error instanceof Error ? error.message : String(error) } });
   };
+
+  const installEnvironmentError = (reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } }, error: unknown) => {
+    if (error instanceof z.ZodError) {
+      return reply.code(400).send({ error: { code: "install_sources_input_invalid", message: appLaunchInvalidMessage(error) } });
+    }
+    if (error instanceof AppInstallEnvironmentError) {
+      return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
+    }
+    return reply.code(500).send({ error: { code: "install_environment_failed", message: error instanceof Error ? error.message : String(error) } });
+  };
+
+  app.get("/api/apps/install-environment", async () => ({
+    data: installEnvironment.snapshot(),
+  }));
+
+  app.put<{ Body: unknown }>("/api/apps/install-environment", async (request, reply) => {
+    try {
+      const input = AppInstallSourceUpdateSchema.parse(request.body || {});
+      const environment = installEnvironment.update(input);
+      appManagement.publishSnapshot();
+      return { data: { environment } };
+    } catch (error) {
+      return installEnvironmentError(reply, error);
+    }
+  });
+
+  app.post("/api/apps/install-environment/test", async (_request, reply) => {
+    try {
+      return { data: await installEnvironment.testSources() };
+    } catch (error) {
+      return installEnvironmentError(reply, error);
+    }
+  });
+
+  app.post("/api/apps/install-environment/prepare", async (_request, reply) => {
+    try {
+      const environment = await installEnvironment.prepareNodeToolchain();
+      appManagement.publishSnapshot();
+      return { data: { environment } };
+    } catch (error) {
+      return installEnvironmentError(reply, error);
+    }
+  });
 
   app.post<{ Params: { appId: string }; Body: unknown }>("/api/apps/:appId/install", async (request, reply) => {
     try {

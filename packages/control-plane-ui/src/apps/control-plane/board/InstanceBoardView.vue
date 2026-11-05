@@ -219,6 +219,7 @@
     </template>
     <ProjectFolderPicker
       v-if="projectPickerInstance"
+      :folders="projectFoldersForInstance(projectPickerInstance)"
       :node-id="projectPickerInstance.nodeId"
       :node-name="instanceNodeLabel(projectPickerInstance)"
       :open="true"

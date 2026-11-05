@@ -140,18 +140,28 @@ function assertRustPayload({ packageManifest, runtimeManifest, outputs, nativeAd
   assertNoControlPlaneDatabasePayload(label, packageManifest, outputs);
 }
 
-export async function checkControlledInstanceArtifact(artifactDir) {
-  const archiveName = fs.readdirSync(artifactDir).find((entry) => entry.endsWith(".tar.gz"));
+export async function checkControlledInstanceArtifact(artifactDir, { version, implementation } = {}) {
+  const archiveName = fs.readdirSync(artifactDir).find((entry) => version
+    ? entry === `controlled-instance-runtime-${version}-linux-universal.tar.gz`
+    : entry.endsWith(".tar.gz"));
   if (!archiveName) throw new Error("controlled-instance runtime artifact is missing.");
   const inspected = await inspectArchive(path.join(artifactDir, archiveName));
   const { packageManifest, runtimeManifest, outputs, nativeAddons } = inspected;
   if (!packageManifest) throw new Error("controlled-instance runtime artifact is missing package.json.");
   if (!runtimeManifest) throw new Error("controlled-instance runtime artifact is missing runtime-manifest.json.");
+  const actualImplementation = packageManifest.taskHandoffRuntime?.implementation ?? "node";
+  if (implementation && actualImplementation !== implementation) {
+    throw new Error(`Controlled-instance artifact implementation is ${actualImplementation}; expected ${implementation}.`);
+  }
   if (packageManifest.taskHandoffRuntime?.implementation === "rust") {
     assertRustPayload(inspected);
     return { implementation: "rust", manifest: runtimeManifest };
   }
   assertNoControlPlaneDatabasePayload("controlled-instance runtime artifact", packageManifest, outputs);
+  const nativeRuntimeBinaries = inspected.entries.filter((entry) => entry.path.startsWith("bin/controlled-instance-"));
+  if (nativeRuntimeBinaries.length) {
+    throw new Error("Node controlled-instance runtime artifact must not contain Rust runtime binaries.");
+  }
   const unexpectedAddons = nativeAddons.filter((entry) => !entry.split("/").includes("node-pty"));
   if (unexpectedAddons.length) {
     throw new Error(`controlled-instance runtime artifact contains unexpected native addons: ${unexpectedAddons.join(", ")}.`);

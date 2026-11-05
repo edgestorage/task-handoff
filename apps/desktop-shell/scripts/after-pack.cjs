@@ -68,6 +68,19 @@ function validateDesktopTrayResource(context) {
 }
 
 async function afterPack(context) {
+  const projectDir = context.packager.projectDir;
+  const { pathToFileURL } = require("node:url");
+  const { resolveControlledInstanceImplementation } = await import(pathToFileURL(path.join(projectDir, "runtime-packages.config.mjs")));
+  const { prepareGitHelper, checkGitHelper } = await import(pathToFileURL(path.join(projectDir, "scripts/runtime-git-helper.mjs")));
+  const implementation = resolveControlledInstanceImplementation();
+  const dockerDir = path.join(resourcesDirectory(context), "app.asar.unpacked", "docker");
+  prepareGitHelper({
+    implementation,
+    dockerDir,
+    nodeHelper: path.join(projectDir, "dist/git-provisioning-helper.js"),
+    binariesDir: path.join(projectDir, "release/rust-controlled-instance-binaries"),
+  });
+  checkGitHelper(dockerDir, implementation);
   validateDesktopServerRuntime(context);
   validateDesktopTrayResource(context);
   normalizeNodePtyRuntime(context);

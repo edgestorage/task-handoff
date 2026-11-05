@@ -9,7 +9,8 @@ use controlled_instance_ai_session::{
     ProviderEvent,
 };
 use controlled_instance_app_runtime::{
-    AppManagementManager, AppManagementSession, AppRuntime, AppRuntimeError,
+    AppInstallEnvironmentManager, AppManagementManager, AppManagementSession, AppRuntime,
+    AppRuntimeError,
 };
 use controlled_instance_core::process::process_start_identity;
 use controlled_instance_protocol::{
@@ -171,6 +172,7 @@ pub struct AppState {
     pub events: EventBus,
     pub app_runtime: Arc<AppRuntime>,
     pub app_management: Arc<AppManagementManager>,
+    pub install_environment: AppInstallEnvironmentManager,
     app_session_authority: Arc<Mutex<AppSessionAuthority>>,
     pub ai_sessions: Arc<AiSessionRuntime>,
     pub ai_session_controller: Arc<AiSessionController>,
@@ -353,6 +355,11 @@ impl AppState {
         let managed_app_root = std::env::var_os("TASK_HANDOFF_MANAGED_APP_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| config.storage_paths.data_dir.join("managed-apps"));
+        let app_management_state_dir = config.storage_paths.runtime_dir.join("app-management");
+        let install_environment = AppInstallEnvironmentManager::new(
+            config.storage_paths.data_dir.clone(),
+            app_management_state_dir.clone(),
+        );
         let app_runtime = Arc::new(AppRuntime::new_with_managed_root(
             config.storage_paths.clone(),
             config.workspace_path.clone(),
@@ -511,8 +518,8 @@ impl AppState {
         let app_management_sessions = app_runtime.clone();
         let app_management_runtime = app_runtime.clone();
         let app_management_ai_sessions = ai_sessions.clone();
-        let app_management = Arc::new(AppManagementManager::new_with_runtime_hook(
-            config.storage_paths.runtime_dir.join("app-management"),
+        let app_management = Arc::new(AppManagementManager::new_with_runtime_hook_and_install_environment(
+            app_management_state_dir,
             managed_app_root,
             move || {
                 let mut sessions = app_management_sessions
@@ -546,6 +553,7 @@ impl AppState {
                 app_management_runtime.stop_shared_resource(app_id);
                 app_management_runtime.invalidate_catalog();
             },
+            install_environment.clone(),
         ));
         let management_admission = Arc::downgrade(&app_management);
         app_runtime.set_app_launch_admission(move |app_id| {
@@ -564,10 +572,30 @@ impl AppState {
             std::env::vars().collect(),
             &started_at,
         )?);
+        let mut managed_app_environment = controlled_models.runtime_environment();
+        managed_app_environment.extend(install_environment.runtime_overrides());
         ai_session_codex
             .client()
-            .replace_managed_environment(controlled_models.runtime_environment());
-        controlled_models.sync_app_environment(&app_runtime);
+            .replace_managed_environment(managed_app_environment);
+        controlled_models.sync_app_environment_with_overrides(
+            &app_runtime,
+            install_environment.runtime_overrides(),
+        );
+        {
+            let install_environment = install_environment.clone();
+            let controlled_models = controlled_models.clone();
+            let app_runtime = app_runtime.clone();
+            let ai_session_codex = ai_session_codex.clone();
+            install_environment.clone().on_change(move || {
+                let overrides = install_environment.runtime_overrides();
+                controlled_models.sync_app_environment_with_overrides(&app_runtime, overrides.clone());
+                let mut environment = controlled_models.runtime_environment();
+                environment.extend(overrides);
+                ai_session_codex
+                    .client()
+                    .replace_managed_environment(environment);
+            });
+        }
         ai_session_controller.set_model_selection_resolver(controlled_models.clone());
         ai_session_opencode.set_model_selection_projector(controlled_models.clone());
         ai_session_opencode.set_model_selection_resolver(controlled_models.clone());
@@ -589,6 +617,7 @@ impl AppState {
             events,
             app_runtime,
             app_management,
+            install_environment,
             app_session_authority,
             ai_sessions,
             ai_session_controller,
@@ -634,10 +663,13 @@ impl AppState {
     }
 
     pub async fn refresh_managed_model_environment(&self) {
+        let overrides = self.install_environment.runtime_overrides();
         self.controlled_models
-            .sync_app_environment(&self.app_runtime);
+            .sync_app_environment_with_overrides(&self.app_runtime, overrides.clone());
+        let mut environment = self.controlled_models.runtime_environment();
+        environment.extend(overrides);
         self.ai_session_codex
-            .replace_managed_environment(self.controlled_models.runtime_environment())
+            .replace_managed_environment(environment)
             .await;
     }
 
@@ -687,6 +719,7 @@ impl AppState {
         let ai_session_controller = self.ai_session_controller.clone();
         let trigger_store = self.trigger_store.clone();
         let git_credential_broker_installed = self.git_credential_broker_installed.clone();
+        let install_environment = self.install_environment.clone();
         self.node_agent_client.start(move || {
             build_status_snapshot(
                 &config,
@@ -695,6 +728,7 @@ impl AppState {
                 &ai_session_controller,
                 trigger_store.snapshot().ok(),
                 git_credential_broker_installed.load(Ordering::SeqCst),
+                Some(&install_environment),
             )
         });
     }
@@ -729,6 +763,7 @@ impl AppState {
             &self.app_runtime,
             &self.ai_session_controller,
             self.git_credential_broker_installed.load(Ordering::SeqCst),
+            Some(&self.install_environment),
         )
     }
 
@@ -1576,6 +1611,7 @@ impl AppState {
             &self.ai_session_controller,
             self.trigger_store.snapshot().ok(),
             self.git_credential_broker_installed.load(Ordering::SeqCst),
+            Some(&self.install_environment),
         )
     }
 
@@ -2278,6 +2314,7 @@ fn build_status_snapshot(
     ai_session_controller: &AiSessionController,
     triggers: Option<controlled_instance_protocol::TriggerSnapshot>,
     git_credential_broker_installed: bool,
+    install_environment: Option<&AppInstallEnvironmentManager>,
 ) -> InstanceStatusSnapshot {
     let running_app_session_ids = app_runtime
         .list_sessions()
@@ -2289,6 +2326,7 @@ fn build_status_snapshot(
         app_runtime,
         ai_session_controller,
         git_credential_broker_installed,
+        install_environment,
     );
     InstanceStatusSnapshot {
         // Node reports the controlled-instance lifecycle status independently
@@ -2318,6 +2356,7 @@ fn controlled_instance_capabilities(
     app_runtime: &AppRuntime,
     ai_session_controller: &AiSessionController,
     git_credential_broker_installed: bool,
+    install_environment: Option<&AppInstallEnvironmentManager>,
 ) -> ControlledInstanceCapabilities {
     let mut capabilities = ControlledInstanceCapabilities::default();
     let inventory = app_runtime.app_inventory();
@@ -2349,6 +2388,9 @@ fn controlled_instance_capabilities(
     capabilities.features.ai_session_workspace_checkout = true;
     capabilities.features.ai_session_persistence_settings = true;
     capabilities.features.node_agent_connection_update = true;
+    if let Some(install_environment) = install_environment {
+        capabilities.features.app_install_environment = install_environment.capabilities();
+    }
     capabilities.features.ai_session_send_idempotency = true;
     capabilities.features.ai_session_queue_pause = true;
     capabilities.features.private_model_catalog = true;

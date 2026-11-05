@@ -9,6 +9,7 @@ import { commandInvocation, quoteCommandInterpreterArgument } from "@task-handof
 import type { ArchiveInstallRecipe, InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
 import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
+import type { AppInstallEnvironmentManager, AppInstallExecutionPolicy } from "./app-install-environment";
 
 const MAX_LOG_CHARS = 8_192;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
@@ -60,6 +61,7 @@ export type AppRecipeExecutionContext = {
 export type AppRecipeExecutorOptions = {
   installBaseDir: string;
   stateDir: string;
+  installEnvironment?: Pick<AppInstallEnvironmentManager, "createExecutionPolicy">;
   env?: NodeJS.ProcessEnv;
   commandRunner?: (command: AppRecipeCommand, hooks?: AppRecipeCommandHooks) => Promise<AppRecipeCommandResult>;
   fetcher?: typeof fetch;
@@ -131,7 +133,7 @@ function resolvedCommand(executable: string, args: string[], timeoutMs: number, 
   return { executable: invocation.executable, args: invocation.args, env: invocation.env, timeoutMs };
 }
 
-function packageCommand(recipe: SystemPackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities, env: NodeJS.ProcessEnv): AppRecipeCommand {
+function packageCommand(recipe: SystemPackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities, env: NodeJS.ProcessEnv, aptOptions: string[] = []): AppRecipeCommand {
   if (!recipe.packages.length || recipe.packages.some((item) => !PACKAGE_NAME.test(item))) {
     throw new AppRecipeExecutionError("invalid_builtin_recipe", "The built-in system package recipe contains an invalid package name.");
   }
@@ -144,7 +146,7 @@ function packageCommand(recipe: SystemPackageInstallRecipe, operation: AppManage
     brew: { executable: "brew", install: ["install"], update: ["upgrade"], uninstall: ["uninstall"] },
   } as const;
   const selected = definitions[recipe.installer];
-  const args = [...selected[operation], ...recipe.packages];
+  const args = [...(recipe.installer === "apt" ? aptOptions : []), ...selected[operation], ...recipe.packages];
   if (capabilities.privilege === "root" || recipe.privilege === "user") {
     return resolvedCommand(selected.executable, args, 15 * 60_000, env, capabilities.platform as NodeJS.Platform);
   }
@@ -154,17 +156,25 @@ function packageCommand(recipe: SystemPackageInstallRecipe, operation: AppManage
   throw new AppRecipeExecutionError("insufficient_privilege", "The controlled instance cannot run this system package recipe.");
 }
 
-function aptRefreshCommand(capabilities: FinalComputerCapabilities, recipe: SystemPackageInstallRecipe): AppRecipeCommand {
+function aptRefreshCommand(capabilities: FinalComputerCapabilities, recipe: SystemPackageInstallRecipe, aptOptions: string[] = []): AppRecipeCommand {
   if (capabilities.privilege === "root" || recipe.privilege === "user") {
-    return { executable: "apt-get", args: ["update"], timeoutMs: 15 * 60_000 };
+    return { executable: "apt-get", args: [...aptOptions, "update"], timeoutMs: 15 * 60_000 };
   }
   if (capabilities.privilege === "passwordless-sudo") {
-    return { executable: "sudo", args: ["-n", "apt-get", "update"], timeoutMs: 15 * 60_000 };
+    return { executable: "sudo", args: ["-n", "apt-get", ...aptOptions, "update"], timeoutMs: 15 * 60_000 };
   }
   throw new AppRecipeExecutionError("insufficient_privilege", "The controlled instance cannot refresh the apt package index.");
 }
 
-function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppManagementOperation, capabilities: FinalComputerCapabilities, env: NodeJS.ProcessEnv, managedPrefix?: string): AppRecipeCommand {
+function nodePackageCommand(
+  recipe: NodePackageInstallRecipe,
+  operation: AppManagementOperation,
+  capabilities: FinalComputerCapabilities,
+  env: NodeJS.ProcessEnv,
+  managedPrefix: string | undefined,
+  policy: AppInstallExecutionPolicy | undefined,
+  npmCacheDir: string,
+): AppRecipeCommand {
   if (!recipe.packages.length || recipe.packages.some((item) => !NODE_PACKAGE_NAME.test(item))) {
     throw new AppRecipeExecutionError("invalid_builtin_recipe", "The built-in Node package recipe contains an invalid package name.");
   }
@@ -182,8 +192,12 @@ function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppMana
     : operation === "uninstall"
       ? ["uninstall", "--global", ...recipe.packages]
       : ["install", "--global", "--include=optional", "--no-audit", "--no-fund", ...packageSpecs];
+  const commandEnv: NodeJS.ProcessEnv = {
+    ...(policy ? policy.nodeEnvironment(env) : env),
+    npm_config_cache: npmCacheDir,
+  };
   const invocation = commandInvocation(recipe.installer, args, {
-    env,
+    env: commandEnv,
     platform: capabilities.platform as NodeJS.Platform,
     // npm is a `.cmd` launcher on Windows even when PATH lookup cannot see it.
     win32ShimWhenUnresolved: true,
@@ -198,7 +212,9 @@ function nodePackageCommand(recipe: NodePackageInstallRecipe, operation: AppMana
     return command;
   }
   if (capabilities.privilege === "passwordless-sudo") {
-    return { executable: "sudo", args: ["-n", recipe.installer, ...args], timeoutMs: 15 * 60_000 };
+    const sudoEnvironment = ["PATH", "npm_config_registry", "NPM_CONFIG_REGISTRY", "npm_config_cache"]
+      .flatMap((key) => invocation.env[key] === undefined ? [] : [`${key}=${invocation.env[key]}`]);
+    return { executable: "sudo", args: ["-n", "env", ...sudoEnvironment, invocation.executable, ...invocation.args], timeoutMs: 15 * 60_000 };
   }
   throw new AppRecipeExecutionError("insufficient_privilege", "The controlled instance cannot run this Node package recipe.");
 }
@@ -628,7 +644,14 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
     commandRunner: options.commandRunner || runAppRecipeCommand,
     fetcher: options.fetcher || fetch,
   };
-  return async (operation: AppManagementOperation, recipe: InstallRecipe, context: AppRecipeExecutionContext) => {
+  return async (operation: AppManagementOperation, recipe: InstallRecipe, context: AppRecipeExecutionContext, frozenPolicy?: AppInstallExecutionPolicy) => {
+    const sourcePolicy = frozenPolicy ?? resolved.installEnvironment?.createExecutionPolicy();
+    const npmCacheDir = path.join(resolved.stateDir, "npm-cache");
+    const sourceError = (error: unknown) => new AppRecipeExecutionError(
+      error && typeof error === "object" && "code" in error ? String(error.code) : "install_environment_failed",
+      error instanceof Error ? error.message : String(error),
+      false,
+    );
     const runCommand = (command: AppRecipeCommand) => {
       context.onCommand?.({ executable: command.executable, args: [...command.args] });
       return resolved.commandRunner(command, { onOutput: context.onOutput });
@@ -636,9 +659,17 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
     if (recipe.type === "bundled") throw new AppRecipeExecutionError("bundled_app", "Bundled apps do not support managed installation, update, or removal.");
     if (recipe.type === "system-package") {
       context.onPhase?.(operation === "install" ? "install-package" : operation === "update" ? "update-package" : "uninstall-package");
-      const command = packageCommand(recipe, operation, context.capabilities, resolved.env);
+      let aptOptions: string[] = [];
+      if (recipe.installer === "apt" && sourcePolicy) {
+        try {
+          aptOptions = sourcePolicy.aptSourceConfiguration()?.options || [];
+        } catch (error) {
+          throw sourceError(error);
+        }
+      }
+      const command = packageCommand(recipe, operation, context.capabilities, resolved.env, aptOptions);
       if (operation !== "uninstall" && recipe.installer === "apt") {
-        const refresh = await runCommand(aptRefreshCommand(context.capabilities, recipe));
+        const refresh = await runCommand(aptRefreshCommand(context.capabilities, recipe, aptOptions));
         if (refresh.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(refresh.stderr) || "The apt package index could not be refreshed.", true);
       }
       const result = await runCommand(command);
@@ -647,6 +678,13 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
     }
     if (recipe.type === "node-package") {
       context.onPhase?.(operation === "install" ? "install-node-package" : operation === "update" ? "update-node-package" : "uninstall-node-package");
+      if (sourcePolicy && (operation !== "uninstall" || !recipe.managed)) {
+        try {
+          await sourcePolicy.prepareNodeRuntime();
+        } catch (error) {
+          throw sourceError(error);
+        }
+      }
       if (recipe.managed) {
         if (!recipe.version) throw new AppRecipeExecutionError("invalid_builtin_recipe", "A managed Node package recipe requires an exact version.");
         const target = managedNodePackageRoot(resolved.installBaseDir, context.appId);
@@ -658,7 +696,7 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
         fs.rmSync(staging, { recursive: true, force: true });
         fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
         try {
-          const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env, staging);
+          const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env, staging, sourcePolicy, npmCacheDir);
           const result = await runCommand(command);
           if (result.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(result.stderr) || "The Node package manager failed.", true);
           verifyManagedNodePackage(staging, recipe, context.appId);
@@ -670,7 +708,7 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
           throw error;
         }
       }
-      const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env);
+      const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env, undefined, sourcePolicy, npmCacheDir);
       let result = await runCommand(command);
       const retirementDirectory = result.exitCode === 0 ? undefined : npmRetirementDirectory(result.stderr, recipe);
       if (retirementDirectory) {

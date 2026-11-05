@@ -293,13 +293,15 @@ class CloudRelayNodeChannel {
 
   close(reason = "normal") {
     if (this.closed) return;
-    this.closed = true;
-    const aux = [...this.aux.values()];
-    this.aux.clear();
-    this.auxByStreamId.clear();
-    for (const socket of aux) socket.remoteClosed(1001, reason);
-    this.mainSocket.remoteClosed(1001, reason);
-    this.session.close(reason);
+    // Local shutdown follows the same cleanup path as a peer/socket close.
+    // Setting `closed` before notifying the owner would make finish() a no-op
+    // and leave the transport's channel index pointing at a dead socket, which
+    // prevents the cloud node-relay runtime from requesting a new allocation.
+    try {
+      this.finish(reason);
+    } finally {
+      this.session.close(reason);
+    }
   }
 
   private handleMessage(message: NodeRelaySessionMessage) {

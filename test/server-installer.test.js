@@ -536,15 +536,15 @@ test("server package owns the unified management command and runtimes stay indep
   assert.equal(runtimePackages["node-agent"].dependencies["drizzle-orm"], "1.0.0-rc.4");
   assert.equal(runtimePackages["node-agent"].dependencies.pg, undefined);
   assert.equal(runtimePackages["controlled-instance"].binName, "task-handoff-controlled-instance");
-  assert.equal(runtimePackages["controlled-instance"].implementation, "rust");
+  assert.equal(runtimePackages["controlled-instance"].implementation, "node");
   assert.equal(runtimePackages["controlled-instance"].rustPackageDir, "release/rust-controlled-instance");
-  // The Node implementation remains available as the explicit rollback build.
+  // Rust remains available as an explicit alternative build.
   assert.deepEqual(runtimePackages["controlled-instance"].dependencies, { "node-pty": "^1.1.0" });
   for (const name of ["control-plane", "node-agent"]) {
     assert.deepEqual(runtimePackages[name].bundledNativeDependencies, ["node-pty"]);
   }
   assert.deepEqual(runtimePackages["controlled-instance"].bundledNativeDependencies, ["node-pty"]);
-  assert.match(prepare, /TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION/);
+  assert.match(prepare, /resolveControlledInstanceImplementation/);
   assert.match(prepare, /Rust controlled-instance package is missing/);
   assert.equal(runtimePackages.server.input, "apps/cli/src/runtime/server.ts");
   assert.deepEqual(runtimePackages["control-plane"].assets, [{ source: "scripts/install-node-agent.sh", target: "dist/install-node-agent.sh", executable: true }]);

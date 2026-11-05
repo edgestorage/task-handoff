@@ -16,6 +16,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { AppManagementManager, AppManagementRequestError } = require("../packages/controlled-instance/src/web/app-management.ts");
+const { AppInstallEnvironmentManager } = require("../packages/controlled-instance/src/web/app-install-environment.ts");
 const { createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
 
 const capabilities = { platform: "linux", arch: "x64", installers: ["apt"], privilege: "root" };
@@ -53,6 +54,44 @@ test("jobs are persisted before execution and finish only after authoritative de
   assert.deepEqual(events.map((event) => event.job.state), ["queued", "running", "running", "succeeded"]);
   assert.equal(events.at(-1).snapshot.apps[0].state, "installed");
   assert.equal(events.every((event) => event.streamId === manager.snapshot().streamId), true);
+});
+
+test("app jobs freeze the install source policy when the request is accepted", async () => {
+  const dirs = stateDirs("task-handoff-app-install-policy-");
+  const installEnvironment = new AppInstallEnvironmentManager({
+    dataDir: path.dirname(dirs.stateDir),
+    stateDir: dirs.stateDir,
+    env: {},
+    platform: "linux",
+    arch: "x64",
+    osReleasePath: path.join(path.dirname(dirs.stateDir), "missing-os-release"),
+  });
+  installEnvironment.update({ settings: { profile: "official", custom: {} } });
+  let state = "not-installed";
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let frozenRevision;
+  const manager = new AppManagementManager({
+    ...dirs,
+    installEnvironment,
+    definitions: () => [app()],
+    capabilities: () => capabilities,
+    detection: () => ({ state, executablePaths: state === "installed" ? ["/bin/tool"] : [] }),
+    execute: async (_operation, _recipe, _context, policy) => {
+      frozenRevision = policy?.revision;
+      await gate;
+      state = "installed";
+    },
+  });
+  const job = manager.request("tool", "install");
+  assert.equal(job.installSourceRevision, 1);
+
+  installEnvironment.update({ settings: { profile: "china", custom: {} } });
+  release();
+  await manager.waitForIdle();
+
+  assert.equal(frozenRevision, 1);
+  assert.equal(manager.getJob(job.id).installSourceRevision, 1);
 });
 
 test("command and bounded live output remain part of the authoritative job", async () => {
@@ -431,6 +470,20 @@ test("controlled instance exposes strict management, operation, and job APIs", a
     const snapshot = await web.inject({ method: "GET", url: "/api/apps/management" });
     assert.equal(snapshot.statusCode, 200);
     assert.equal(JSON.parse(snapshot.payload).data.apps[0].state, "not-installed");
+
+    const installEnvironment = await web.inject({ method: "GET", url: "/api/apps/install-environment" });
+    assert.equal(installEnvironment.statusCode, 200);
+    assert.equal(JSON.parse(installEnvironment.payload).data.settings.profile, "environment");
+    const updatedEnvironment = await web.inject({
+      method: "PUT",
+      url: "/api/apps/install-environment",
+      payload: { expectedRevision: 0, settings: { profile: "environment", custom: {} } },
+    });
+    assert.equal(updatedEnvironment.statusCode, 200);
+    assert.equal(JSON.parse(updatedEnvironment.payload).data.environment.revision, 1);
+    const sourceTest = await web.inject({ method: "POST", url: "/api/apps/install-environment/test", payload: {} });
+    assert.equal(sourceTest.statusCode, 200);
+    assert.deepEqual(JSON.parse(sourceTest.payload).data.checks, []);
 
     const invalid = await web.inject({ method: "POST", url: "/api/apps/tool/install", payload: { url: "https://example.invalid/tool.tgz" } });
     assert.equal(invalid.statusCode, 400);

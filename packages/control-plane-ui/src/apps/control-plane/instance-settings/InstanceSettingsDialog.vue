@@ -313,6 +313,16 @@
               </div>
             </section>
 
+            <section v-if="installEnvironmentSupported && appView === 'catalog'" class="instance-settings-card instance-settings-group">
+              <AppInstallEnvironmentCard
+                :instance-id="instance.id"
+                :environment="appManagement?.installEnvironment"
+                :apt-supported="installEnvironmentCapabilities.aptSources"
+                :node-toolchain-supported="installEnvironmentCapabilities.nodeToolchain"
+                @refresh="refreshApps"
+              />
+            </section>
+
             <section v-if="appView === 'catalog'" class="instance-settings-card instance-settings-group">
               <div class="instance-app-heading">
                 <div class="instance-settings-section-heading">
@@ -372,7 +382,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Bot, Boxes, ChevronRight, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
-import { supportsAiSessionFileSizeLimitSettings, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
+import { controlledInstanceAppInstallEnvironmentCapabilities, supportsAiSessionFileSizeLimitSettings, supportsControlledInstanceAppInstallEnvironment, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, CodexInstanceSettings, InstanceBoardItem, ManagedAppProjection, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
@@ -390,6 +400,7 @@ import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import BrowserProfilesSection from "./BrowserProfilesSection.vue";
+import AppInstallEnvironmentCard from "./AppInstallEnvironmentCard.vue";
 import AppManagementTasks from "./AppManagementTasks.vue";
 import { appTaskGroups, appTaskStatusKey, retryableAppTask } from "./appTaskPresentation";
 import ModelEntitySelection from "../../../components/models/ModelEntitySelection.vue";
@@ -486,6 +497,12 @@ const noGitCredentialValue = "__none__";
 const selectedGitCredentialId = ref(noGitCredentialValue);
 const gitCredentialBusy = ref(false);
 const gitBrokerSupported = computed(() => Boolean(props.instance && supportsGitCredentialProxy(props.instance.capabilities)));
+const installEnvironmentSupported = computed(() => Boolean(
+  props.instance && supportsControlledInstanceAppInstallEnvironment(props.instance.capabilities),
+));
+const installEnvironmentCapabilities = computed(() => props.instance
+  ? controlledInstanceAppInstallEnvironmentCapabilities(props.instance.capabilities)
+  : { sourceProfiles: [], nodeToolchain: false, npmSources: false, aptSources: false });
 const gitCredentials = useGitCredentialsQuery(computed(() => props.open && section.value === "git-credentials" && gitBrokerSupported.value));
 const gitAssignments = useInstanceGitCredentialAssignmentsQuery(computed(() => props.instance?.id || ""), computed(() => props.open && section.value === "git-credentials" && gitBrokerSupported.value));
 const assignedGitCredentialIds = computed(() => new Set((gitAssignments.data.value || []).map((assignment) => assignment.credentialId)));

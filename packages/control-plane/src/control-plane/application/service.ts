@@ -5,6 +5,10 @@ import {
   AppManagementJobResponseSchema,
   AppManagementUpdateCheckResponseSchema,
   AppManagementSnapshotSchema,
+  AppInstallEnvironmentSchema,
+  AppInstallEnvironmentTestResponseSchema,
+  AppInstallEnvironmentUpdateResponseSchema,
+  AppInstallSourceUpdateSchema,
   ControlledInstanceSchema,
   controlledInstanceAcceptsTraffic,
   CustomImageProfileSchema,
@@ -2256,6 +2260,39 @@ export class ControlPlaneService {
   async instanceAppManagementJob(instanceId: string, jobId: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     return parseResponse(AppManagementJobResponseSchema, await this.instanceRequest(instance, `/apps/jobs/${encodeURIComponent(jobId)}`));
+  }
+
+  async instanceInstallEnvironment(instanceId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return parseResponse(AppInstallEnvironmentSchema, await this.instanceRequest(instance, "/apps/install-environment"));
+  }
+
+  async updateInstanceInstallEnvironment(instanceId: string, input: unknown) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const body = AppInstallSourceUpdateSchema.parse(input);
+    return parseResponse(AppInstallEnvironmentUpdateResponseSchema, await this.instanceRequest(instance, "/apps/install-environment", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }));
+  }
+
+  async testInstanceInstallEnvironment(instanceId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return parseResponse(AppInstallEnvironmentTestResponseSchema, await this.instanceRequest(instance, "/apps/install-environment/test", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }));
+  }
+
+  async prepareInstanceInstallEnvironment(instanceId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    return parseResponse(AppInstallEnvironmentUpdateResponseSchema, await this.instanceRequest(instance, "/apps/install-environment/prepare", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }));
   }
 
   async requestInstanceAppUpdateCheck(instanceId: string, appId: string) {

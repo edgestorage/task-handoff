@@ -112,6 +112,19 @@ export class CloudNodeRelayChannels {
     return this.claims.has(nodeHandle) || this.channels.has(nodeHandle);
   }
 
+  channelState(nodeHandle: string): "live" | "disconnected" | "missing" {
+    const channel = this.channels.get(nodeHandle);
+    if (!channel) return "missing";
+    return this.options.transport?.()?.connected(channel.nodeId) ? "live" : "disconnected";
+  }
+
+  claimAgeMs(nodeHandle: string, now = this.now()): number | undefined {
+    const claim = this.claims.get(nodeHandle);
+    if (!claim) return undefined;
+    const requestedAt = Date.parse(claim.requestedAt);
+    return Number.isFinite(requestedAt) ? Math.max(0, now - requestedAt) : Number.POSITIVE_INFINITY;
+  }
+
   recordClaimFailure(nodeHandle: string, error: unknown) {
     this.recordError(nodeHandle, error);
   }

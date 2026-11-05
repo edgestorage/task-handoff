@@ -25,6 +25,7 @@ use crate::{
     builtin_managed_app_definitions, detect_final_computer_capabilities,
     detect_final_computer_capabilities_sync, detect_managed_app_ownership_with_context,
     detect_managed_app_with_managed_root, managed_app_projection, select_install_recipe,
+    install_environment::{AppInstallEnvironmentManager, AppInstallExecutionPolicy},
     AppRecipeExecutionContext, AppRecipeExecutionError, AppRecipeExecutor, AppUpdateCheckResult,
     AppUpdateChecker, InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult,
     ManagedAppOwnershipContext,
@@ -35,9 +36,10 @@ const ACTIVE_STATES: [AppManagementJobState; 2] = [
     AppManagementJobState::Running,
 ];
 const JOB_LOG_LIMIT: usize = 32_768;
-const JOB_FIELDS: [&str; 15] = [
+const JOB_FIELDS: [&str; 16] = [
     "id",
     "requestId",
+    "installSourceRevision",
     "appId",
     "operation",
     "state",
@@ -135,6 +137,7 @@ pub struct AppManagementManager {
     runtime_hook: RuntimeHook,
     executor: AppRecipeExecutor,
     update_checker: Arc<AppUpdateChecker>,
+    install_environment: Option<AppInstallEnvironmentManager>,
     queue: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -153,6 +156,7 @@ impl AppManagementManager {
             Arc::new(publish),
             Arc::new(|message| tracing::warn!(message, "app management warning")),
             Arc::new(|_| {}),
+            None,
         )
     }
 
@@ -171,6 +175,27 @@ impl AppManagementManager {
             Arc::new(publish),
             Arc::new(|message| tracing::warn!(message, "app management warning")),
             Arc::new(runtime_hook),
+            None,
+        )
+    }
+
+    pub fn new_with_runtime_hook_and_install_environment(
+        state_dir: impl Into<PathBuf>,
+        install_base_dir: impl Into<PathBuf>,
+        sessions: impl Fn() -> Vec<AppManagementSession> + Send + Sync + 'static,
+        publish: impl Fn(AppManagementEvent) + Send + Sync + 'static,
+        runtime_hook: impl Fn(&str) + Send + Sync + 'static,
+        install_environment: AppInstallEnvironmentManager,
+    ) -> Self {
+        Self::with_parts(
+            state_dir,
+            install_base_dir,
+            Arc::new(builtin_managed_app_definitions),
+            Arc::new(sessions),
+            Arc::new(publish),
+            Arc::new(|message| tracing::warn!(message, "app management warning")),
+            Arc::new(runtime_hook),
+            Some(install_environment),
         )
     }
 
@@ -182,11 +207,17 @@ impl AppManagementManager {
         publish: Publisher,
         warn: Warning,
         runtime_hook: RuntimeHook,
+        install_environment: Option<AppInstallEnvironmentManager>,
     ) -> Self {
         let state_dir = state_dir.into();
         let install_base_dir = install_base_dir.into();
         let jobs = load_jobs(&state_dir, &warn);
-        let capabilities = detect_final_computer_capabilities_sync();
+        let capabilities = install_environment
+            .as_ref()
+            .map(|environment| {
+                environment.augment_capabilities(detect_final_computer_capabilities_sync())
+            })
+            .unwrap_or_else(detect_final_computer_capabilities_sync);
         let state = ManagerState {
             jobs,
             capabilities,
@@ -205,8 +236,25 @@ impl AppManagementManager {
             publish,
             warn,
             runtime_hook,
-            executor: AppRecipeExecutor::new(install_base_dir, state_dir),
-            update_checker: Arc::new(AppUpdateChecker::new()),
+            executor: install_environment
+                .as_ref()
+                .map(|environment| {
+                    AppRecipeExecutor::new(install_base_dir.clone(), state_dir.clone())
+                        .with_install_environment(environment.clone())
+                })
+                .unwrap_or_else(|| AppRecipeExecutor::new(install_base_dir, state_dir.clone())),
+            update_checker: Arc::new(
+                install_environment
+                    .as_ref()
+                    .map(|environment| {
+                        AppUpdateChecker::new().with_install_environment(
+                            state_dir.clone(),
+                            environment.clone(),
+                        )
+                    })
+                    .unwrap_or_else(AppUpdateChecker::new),
+            ),
+            install_environment,
             queue: Arc::new(tokio::sync::Mutex::new(())),
         };
         manager.recover_interrupted();
@@ -216,7 +264,12 @@ impl AppManagementManager {
     pub fn snapshot(&self) -> AppManagementSnapshot {
         let definitions = (self.definitions)();
         let mut state = self.lock();
-        snapshot_locked(&definitions, &mut state, &self.install_base_dir)
+        snapshot_locked(
+            &definitions,
+            &mut state,
+            &self.install_base_dir,
+            self.install_environment.as_ref(),
+        )
     }
 
     pub async fn refresh_snapshot(&self, force_capabilities: bool) -> AppManagementSnapshot {
@@ -224,6 +277,11 @@ impl AppManagementManager {
         let stale = self.lock().capabilities_observed_at.elapsed() >= Duration::from_secs(10);
         if force_capabilities || stale {
             let capabilities = detect_final_computer_capabilities().await;
+            let capabilities = self
+                .install_environment
+                .as_ref()
+                .map(|environment| environment.augment_capabilities(capabilities.clone()))
+                .unwrap_or(capabilities);
             let mut state = self.lock();
             state.capabilities = capabilities;
             state.capabilities_observed_at = Instant::now();
@@ -263,7 +321,12 @@ impl AppManagementManager {
                 },
             );
         }
-        snapshot_locked(&definitions, &mut state, &self.install_base_dir)
+        snapshot_locked(
+            &definitions,
+            &mut state,
+            &self.install_base_dir,
+            self.install_environment.as_ref(),
+        )
     }
 
     pub fn has_active_operation(&self, app_id: &str) -> bool {
@@ -482,9 +545,14 @@ impl AppManagementManager {
             .details(json!({ "reason": reason })));
         }
         let timestamp = now();
+        let install_policy = self
+            .install_environment
+            .as_ref()
+            .map(AppInstallEnvironmentManager::create_execution_policy);
         let job = AppManagementJob {
             id: mint_entity_id("appjob"),
             request_id,
+            install_source_revision: install_policy.as_ref().map(|policy| policy.revision),
             app_id: app_id.to_string(),
             operation,
             state: AppManagementJobState::Queued,
@@ -508,7 +576,9 @@ impl AppManagementManager {
         let recipe = operation_recipe.expect("checked recipe");
         let operation = job.operation;
         tokio::spawn(async move {
-            manager.run_job(job_id, definition, operation, recipe).await;
+            manager
+                .run_job(job_id, definition, operation, recipe, install_policy)
+                .await;
         });
         Ok(job)
     }
@@ -531,7 +601,12 @@ impl AppManagementManager {
         state.sequence = state.sequence.saturating_add(1);
         let sequence = state.sequence;
         let observed_at = now();
-        let snapshot = snapshot_locked(&definitions, &mut state, &self.install_base_dir);
+        let snapshot = snapshot_locked(
+            &definitions,
+            &mut state,
+            &self.install_base_dir,
+            self.install_environment.as_ref(),
+        );
         let event = AppManagementEvent {
             event_type: "app-management".to_string(),
             stream_id: snapshot.stream_id.clone(),
@@ -550,6 +625,7 @@ impl AppManagementManager {
         definition: ManagedAppDefinition,
         operation: AppManagementOperation,
         recipe: InstallRecipe,
+        install_policy: Option<AppInstallExecutionPolicy>,
     ) {
         let _queue = self.queue.lock().await;
         let pending_output = Arc::new(Mutex::new(String::new()));
@@ -645,7 +721,9 @@ impl AppManagementManager {
             if operation != AppManagementOperation::Install {
                 (self.runtime_hook)(&definition.launcher.id);
             }
-            self.executor.execute(operation, &recipe, &context).await
+            self.executor
+                .execute_with_policy(operation, &recipe, &context, install_policy.as_ref())
+                .await
         };
         if result.is_ok() {
             (self.runtime_hook)(&definition.launcher.id);
@@ -769,7 +847,12 @@ impl AppManagementManager {
         let observed_at = now();
         let snapshot = include_snapshot.then(|| {
             let definitions = (self.definitions)();
-            snapshot_locked(&definitions, state, &self.install_base_dir)
+            snapshot_locked(
+                &definitions,
+                state,
+                &self.install_base_dir,
+                self.install_environment.as_ref(),
+            )
         });
         let event = AppManagementEvent {
             event_type: "app-management".to_string(),
@@ -823,6 +906,7 @@ fn snapshot_locked(
     definitions: &[ManagedAppDefinition],
     state: &mut ManagerState,
     install_base_dir: &Path,
+    install_environment: Option<&AppInstallEnvironmentManager>,
 ) -> AppManagementSnapshot {
     let mut jobs = state.jobs.values().cloned().collect::<Vec<_>>();
     jobs.sort_by(|left, right| right.requested_at.cmp(&left.requested_at));
@@ -876,6 +960,7 @@ fn snapshot_locked(
             .filter(|job| !ACTIVE_STATES.contains(&job.state))
             .take(50)
             .collect(),
+        install_environment: install_environment.map(AppInstallEnvironmentManager::snapshot),
         observed_at: now(),
     }
 }
@@ -1140,6 +1225,7 @@ mod tests {
         let mut job = AppManagementJob {
             id: "appjob_0000000000000".to_string(),
             request_id: None,
+            install_source_revision: None,
             app_id: "terminal-tty".to_string(),
             operation: AppManagementOperation::Install,
             state: AppManagementJobState::Running,
@@ -1265,6 +1351,7 @@ mod tests {
             Arc::new(move |event| published.lock().expect("events").push(event)),
             Arc::new(|_| {}),
             Arc::new(|_| {}),
+            None,
         );
 
         let event = manager.publish_snapshot();

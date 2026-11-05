@@ -50,10 +50,12 @@ describe('mobile native feature variants', () => {
     expect(config.plugins).toContainEqual(expect.arrayContaining(['expo-widgets']));
   });
 
-  test.each(['development', 'production'])('includes the native Browser config plugin in %s builds', (variant) => {
+  test.each(['development', 'production'])('configures native Browser and Apple sign-in in %s builds', (variant) => {
     process.env.TASK_HANDOFF_MOBILE_VARIANT = variant;
     const config = require('../app.config.js')();
     expect(config.plugins).toContain('./modules/task-handoff-browser/plugin/withTaskHandoffBrowser');
+    expect(config.plugins).toContain('expo-apple-authentication');
+    expect(config.ios.usesAppleSignIn).toBe(true);
   });
 
   test('keeps the native splash visible while the initial profile route resolves', () => {

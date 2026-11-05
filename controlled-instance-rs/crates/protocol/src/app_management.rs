@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppKind;
 
+pub const APP_INSTALL_ENVIRONMENT_PROTOCOL_VERSION: &str = "2026-11-05";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FinalComputerPlatform {
@@ -72,6 +74,155 @@ pub struct FinalComputerCapabilities {
     pub privilege: AppInstallPrivilege,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installer_access: Option<AppInstallerAccess>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AppInstallSourceProfile {
+    Environment,
+    Official,
+    China,
+    Custom,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppInstallSourceCustom {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm_registry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_dist_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apt_main_mirror: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apt_security_mirror: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppInstallSourceSettings {
+    pub profile: AppInstallSourceProfile,
+    #[serde(default)]
+    pub custom: AppInstallSourceCustom,
+}
+
+impl Default for AppInstallSourceSettings {
+    fn default() -> Self {
+        Self {
+            profile: AppInstallSourceProfile::Environment,
+            custom: AppInstallSourceCustom::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppInstallSourceUpdate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+    pub settings: AppInstallSourceSettings,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppInstallEffectiveSources {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm_registry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_dist_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apt_main_mirror: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apt_security_mirror: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AppInstallNodeToolchainState {
+    Host,
+    Private,
+    Missing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppInstallNodeToolchain {
+    pub state: AppInstallNodeToolchainState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm_version: Option<String>,
+    pub minimum_version: String,
+    pub managed_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppInstallEnvironment {
+    pub revision: u64,
+    pub settings: AppInstallSourceSettings,
+    pub effective: AppInstallEffectiveSources,
+    pub node: AppInstallNodeToolchain,
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppInstallEnvironmentUpdateResponse {
+    pub environment: AppInstallEnvironment,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AppInstallEnvironmentTestCheckId {
+    Npm,
+    Node,
+    AptMain,
+    AptSecurity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppInstallEnvironmentTestCheck {
+    pub id: AppInstallEnvironmentTestCheckId,
+    pub url: String,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppInstallEnvironmentTestResponse {
+    pub checks: Vec<AppInstallEnvironmentTestCheck>,
+    pub tested_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlledInstanceAppInstallEnvironmentCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<String>,
+    pub source_profiles: Vec<AppInstallSourceProfile>,
+    pub node_toolchain: bool,
+    pub npm_sources: bool,
+    pub apt_sources: bool,
+}
+
+impl Default for ControlledInstanceAppInstallEnvironmentCapabilities {
+    fn default() -> Self {
+        Self {
+            protocol_version: None,
+            source_profiles: Vec::new(),
+            node_toolchain: false,
+            npm_sources: false,
+            apt_sources: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -243,6 +394,8 @@ pub struct AppManagementJob {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_source_revision: Option<u64>,
     pub app_id: String,
     pub operation: AppManagementOperation,
     pub state: AppManagementJobState,
@@ -275,6 +428,8 @@ pub struct AppManagementSnapshot {
     pub apps: Vec<ManagedAppProjection>,
     pub active_jobs: Vec<AppManagementJob>,
     pub recent_jobs: Vec<AppManagementJob>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_environment: Option<AppInstallEnvironment>,
     pub observed_at: String,
 }
 
@@ -308,6 +463,7 @@ mod tests {
         let job = AppManagementJob {
             id: "appjob_0000000000000".to_string(),
             request_id: None,
+            install_source_revision: None,
             app_id: "codex".to_string(),
             operation: AppManagementOperation::Install,
             state: AppManagementJobState::Queued,

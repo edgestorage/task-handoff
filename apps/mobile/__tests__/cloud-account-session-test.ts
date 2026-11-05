@@ -23,7 +23,7 @@ let mockRandomSourceCounter = 0;
 jest.mock('expo-crypto', () => ({
   CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
   CryptoEncoding: { BASE64: 'base64' },
-  digestStringAsync: async () => 'cGtjZS1jaGFsbGVuZ2U=',
+  digestStringAsync: async () => 'A'.repeat(43) + '=',
   getRandomValues: (value: Uint8Array) => { value.fill(++mockRandomSourceCounter); return value; },
 }));
 
@@ -277,4 +277,69 @@ test('refresh replay or unauthorized rotation clears device credentials and requ
   await expect(session.accessToken()).rejects.toMatchObject({ code: 'CLOUD_ACCOUNT_REAUTHENTICATION_REQUIRED' });
   expect(storage.values.has(key)).toBe(false);
   expect(cloudAccountReauthenticationRequired()).toBe(true);
+});
+
+test('native Apple exchanges a nonce-bound assertion using the original PKCE state and persists only refresh credentials', async () => {
+  const storage = store();
+  const session = new MobileCloudAccountSession(storage.value);
+  let request: any;
+  jest.spyOn(session.client, 'beginAppleNative').mockImplementation(async (input) => {
+    request = input;
+    return { state: 'apple-server-state', nonce: 'server-nonce', expiresAt: new Date(Date.now() + 300_000).toISOString() };
+  });
+  const assertion = jest.spyOn(session.client, 'completeAppleNative').mockImplementation(async () => ({ code: authorizationCode, state: request.state, redirectUri: request.redirectUri, expiresAt }));
+  const exchange = jest.spyOn(session.client, 'exchangeAuthorizationCode').mockResolvedValue({ tokenType: 'Bearer', accessToken, accessExpiresAt: expiresAt, refreshCredential, deviceSessionId: 'native_device', accountId: 'account_a' });
+  const signIn = jest.fn(async () => ({ state: 'apple-server-state', identityToken: 'apple-signed-token' }));
+  await expect(session.loginWithApple({ bundleId: 'com.taskhandoff.mobile', signIn }, 'taskhandoff://official-auth/callback')).resolves.toBe('completed');
+  expect(signIn).toHaveBeenCalledWith(expect.objectContaining({ state: 'apple-server-state', nonce: 'server-nonce' }));
+  expect(assertion).toHaveBeenCalledWith({ state: 'apple-server-state', identityToken: 'apple-signed-token' });
+  expect(exchange).toHaveBeenCalledWith(expect.objectContaining({ state: request.state, codeVerifier: expect.any(String) }));
+  const saved = [...storage.values.values()].join('');
+  expect(saved).toContain(refreshCredential);
+  expect(saved).not.toContain('apple-signed-token');
+  expect(saved).not.toContain('server-nonce');
+  expect(saved).not.toContain(accessToken);
+});
+
+test('native Apple cancellation and state mismatch cannot issue a device session', async () => {
+  const session = new MobileCloudAccountSession(store().value);
+  jest.spyOn(session.client, 'beginAppleNative').mockResolvedValue({ state: 'server-state', nonce: 'nonce', expiresAt });
+  const complete = jest.spyOn(session.client, 'completeAppleNative');
+  const exchange = jest.spyOn(session.client, 'exchangeAuthorizationCode');
+  await expect(session.loginWithApple({ bundleId: 'app', signIn: async () => undefined }, 'taskhandoff://official-auth/callback')).resolves.toBe('cancelled');
+  await expect(session.loginWithApple({ bundleId: 'app', signIn: async () => ({ state: 'wrong', identityToken: 'token' }) }, 'taskhandoff://official-auth/callback')).rejects.toMatchObject({ code: 'CLOUD_LOGIN_STATE_INVALID' });
+  expect(complete).not.toHaveBeenCalled();
+  expect(exchange).not.toHaveBeenCalled();
+});
+
+test('cloud v0.1.13 missing native route can use web login, while verification failures stay visible', async () => {
+  const session = new MobileCloudAccountSession(store().value);
+  const begin = jest.spyOn(session.client, 'beginAppleNative');
+  const signIn = jest.fn();
+  begin.mockRejectedValueOnce(Object.assign(new Error('missing route'), { status: 404 }));
+  await expect(session.loginWithApple({ bundleId: 'app', signIn }, 'taskhandoff://official-auth/callback')).resolves.toBe('unavailable');
+  expect(signIn).not.toHaveBeenCalled();
+  begin.mockRejectedValueOnce(Object.assign(new Error('temporarily unavailable'), { status: 503 }));
+  await expect(session.loginWithApple({ bundleId: 'app', signIn }, 'taskhandoff://official-auth/callback')).rejects.toMatchObject({ status: 503 });
+});
+
+test('native account confirmation keeps the original PKCE grant in memory until explicit acceptance or cancellation', async () => {
+  const storage = store();
+  const session = new MobileCloudAccountSession(storage.value);
+  let request: any;
+  const confirmExpiry = new Date(Date.now() + 600_000).toISOString();
+  jest.spyOn(session.client, 'beginAppleNative').mockImplementation(async (input) => { request = input; return { state: 'native-state', nonce: 'nonce', expiresAt }; });
+  jest.spyOn(session.client, 'completeAppleNative').mockResolvedValue({ confirmationRequired: true, flow: 'flow-secret', termsVersion: '2026-08', expiresAt: confirmExpiry });
+  const confirm = jest.spyOn(session.client, 'confirmProviderAccount').mockImplementation(async () => ({ code: authorizationCode, state: request.state, redirectUri: request.redirectUri, expiresAt }));
+  jest.spyOn(session.client, 'exchangeAuthorizationCode').mockResolvedValue({ tokenType: 'Bearer', accessToken, accessExpiresAt: expiresAt, refreshCredential, deviceSessionId: 'native_device', accountId: 'account_a' });
+  const native = { bundleId: 'app', signIn: async () => ({ state: 'native-state', identityToken: 'apple-token' }) };
+  await expect(session.loginWithApple(native, 'taskhandoff://official-auth/callback')).resolves.toBe('confirmation-required');
+  expect(confirm).not.toHaveBeenCalled();
+  expect(storage.values.size).toBe(0);
+  await session.confirmProviderAccount();
+  expect(confirm).toHaveBeenCalledWith({ flow: 'flow-secret', termsVersion: '2026-08', acceptTerms: true });
+  expect([...storage.values.values()].join('')).not.toContain('flow-secret');
+  await session.loginWithApple(native, 'taskhandoff://official-auth/callback');
+  session.cancelProviderConfirmation();
+  await expect(session.confirmProviderAccount()).rejects.toMatchObject({ code: 'CLOUD_LOGIN_CHALLENGE_EXPIRED' });
 });

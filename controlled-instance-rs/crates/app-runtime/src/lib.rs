@@ -2,6 +2,7 @@ mod catalog;
 pub mod codex_app_server;
 pub mod command_invocation;
 pub mod executable_resolver;
+mod install_environment;
 mod log_retention;
 mod managed;
 mod managed_app_providers;
@@ -29,6 +30,11 @@ pub use managed::{
     ManagedAppOwnershipContext,
 };
 pub use managed_node_apps::ManagedNodeApps;
+pub use install_environment::{
+    AppInstallEnvironmentError, AppInstallEnvironmentManager, AppInstallEnvironmentOptions,
+    AppInstallExecutionPolicy, AptSourceConfiguration, APP_INSTALL_SOURCE_PROFILES,
+    MANAGED_NODE_VERSION, MINIMUM_NODE_VERSION,
+};
 pub use management::{AppManagementManager, AppManagementRequestError, AppManagementSession};
 pub use profiles::ChromiumProfileStore;
 pub use pty::{

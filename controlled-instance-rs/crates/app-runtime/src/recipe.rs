@@ -26,6 +26,7 @@ use xz2::read::XzDecoder;
 use crate::{
     command_invocation::{command_invocation, CommandInvocationOptions},
     executable_resolver::{ExecutableResolverOptions, Platform},
+    install_environment::{AppInstallEnvironmentManager, AppInstallExecutionPolicy},
     resolve_executable, InstallRecipe,
 };
 
@@ -107,6 +108,7 @@ pub struct AppRecipeExecutor {
     install_base_dir: PathBuf,
     state_dir: PathBuf,
     env: BTreeMap<String, String>,
+    install_environment: Option<AppInstallEnvironmentManager>,
 }
 
 impl AppRecipeExecutor {
@@ -115,7 +117,16 @@ impl AppRecipeExecutor {
             install_base_dir: install_base_dir.into(),
             state_dir: state_dir.into(),
             env: std::env::vars().collect(),
+            install_environment: None,
         }
+    }
+
+    pub fn with_install_environment(
+        mut self,
+        install_environment: AppInstallEnvironmentManager,
+    ) -> Self {
+        self.install_environment = Some(install_environment);
+        self
     }
 
     pub async fn execute(
@@ -124,6 +135,20 @@ impl AppRecipeExecutor {
         recipe: &InstallRecipe,
         context: &AppRecipeExecutionContext,
     ) -> Result<String, AppRecipeExecutionError> {
+        self.execute_with_policy(operation, recipe, context, None)
+            .await
+    }
+
+    pub async fn execute_with_policy(
+        &self,
+        operation: AppManagementOperation,
+        recipe: &InstallRecipe,
+        context: &AppRecipeExecutionContext,
+        frozen_policy: Option<&AppInstallExecutionPolicy>,
+    ) -> Result<String, AppRecipeExecutionError> {
+        let source_policy = frozen_policy
+            .cloned()
+            .or_else(|| self.install_environment.as_ref().map(|environment| environment.create_execution_policy()));
         match recipe {
             InstallRecipe::Bundled { .. } => Err(AppRecipeExecutionError::new(
                 "bundled_app",
@@ -142,6 +167,7 @@ impl AppRecipeExecutor {
                     packages,
                     privilege.unwrap_or(AppInstallPrivilege::User),
                     context,
+                    source_policy.as_ref(),
                 )
                 .await
             }
@@ -163,6 +189,7 @@ impl AppRecipeExecutor {
                         privilege: privilege.unwrap_or(AppInstallPrivilege::User),
                     },
                     context,
+                    source_policy.as_ref(),
                 )
                 .await
             }
@@ -186,6 +213,7 @@ impl AppRecipeExecutor {
         packages: &[String],
         recipe_privilege: AppInstallPrivilege,
         context: &AppRecipeExecutionContext,
+        source_policy: Option<&AppInstallExecutionPolicy>,
     ) -> Result<String, AppRecipeExecutionError> {
         if packages.is_empty()
             || packages
@@ -213,6 +241,17 @@ impl AppRecipeExecutor {
                 AppManagementOperation::Uninstall => "uninstall-package",
             },
         );
+        let apt_options = if installer == AppInstaller::Apt {
+            source_policy
+                .map(AppInstallExecutionPolicy::apt_source_configuration)
+                .transpose()
+                .map_err(source_policy_error)?
+                .flatten()
+                .map(|configuration| configuration.options)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let command = system_package_command(
             operation,
             installer,
@@ -220,9 +259,11 @@ impl AppRecipeExecutor {
             recipe_privilege,
             &context.capabilities,
             &self.env,
+            &apt_options,
         )?;
         if operation != AppManagementOperation::Uninstall && installer == AppInstaller::Apt {
-            let refresh = apt_refresh_command(recipe_privilege, &context.capabilities).await?;
+            let refresh =
+                apt_refresh_command(recipe_privilege, &context.capabilities, &apt_options).await?;
             let result = self.run_command(refresh, context).await?;
             if result.exit_code != 0 {
                 return Err(AppRecipeExecutionError::new(
@@ -262,6 +303,7 @@ impl AppRecipeExecutor {
         packages: &[String],
         options: NodePackageOptions<'_>,
         context: &AppRecipeExecutionContext,
+        source_policy: Option<&AppInstallExecutionPolicy>,
     ) -> Result<String, AppRecipeExecutionError> {
         let NodePackageOptions {
             managed,
@@ -297,6 +339,21 @@ impl AppRecipeExecutor {
                 AppManagementOperation::Uninstall => "uninstall-node-package",
             },
         );
+        if !(managed && operation == AppManagementOperation::Uninstall) {
+            if let Some(policy) = source_policy {
+                policy
+                    .prepare_node_runtime()
+                    .await
+                    .map_err(source_policy_error)?;
+            }
+        }
+        let mut npm_env = source_policy
+            .map(|policy| policy.node_environment(&self.env))
+            .unwrap_or_else(|| self.env.clone());
+        npm_env.insert(
+            "npm_config_cache".to_string(),
+            self.state_dir.join("npm-cache").display().to_string(),
+        );
         if managed {
             let target = managed_node_package_dir(&self.install_base_dir, &context.app_id)?;
             if operation == AppManagementOperation::Uninstall {
@@ -326,7 +383,7 @@ impl AppRecipeExecutor {
                 Some(&staging),
                 recipe_privilege,
                 &context.capabilities,
-                &self.env,
+                &npm_env,
             )?;
             let result = self.run_command(command, context).await;
             let result = match result {
@@ -380,7 +437,7 @@ impl AppRecipeExecutor {
             None,
             recipe_privilege,
             &context.capabilities,
-            &self.env,
+            &npm_env,
         )?;
         let mut result = self.run_command(command.clone(), context).await?;
         if result.exit_code != 0 {
@@ -693,6 +750,10 @@ fn bounded(value: &str) -> String {
     truncate_utf16_tail(value, MAX_LOG_CHARS)
 }
 
+fn source_policy_error(error: crate::install_environment::AppInstallEnvironmentError) -> AppRecipeExecutionError {
+    AppRecipeExecutionError::new(&error.code, error.message, false)
+}
+
 fn phase(context: &AppRecipeExecutionContext, value: &str) {
     phase_with_progress(context, value, None);
 }
@@ -789,6 +850,7 @@ fn system_package_command(
     recipe_privilege: AppInstallPrivilege,
     capabilities: &FinalComputerCapabilities,
     env: &BTreeMap<String, String>,
+    apt_options: &[String],
 ) -> Result<AppRecipeCommand, AppRecipeExecutionError> {
     let (executable, action): (&str, &[&str]) = match installer {
         AppInstaller::Apt => (
@@ -819,11 +881,15 @@ fn system_package_command(
         ),
         AppInstaller::Npm => unreachable!("npm is not a system package installer"),
     };
-    let args = action
-        .iter()
-        .map(ToString::to_string)
-        .chain(packages.iter().cloned())
-        .collect::<Vec<_>>();
+    let args = if installer == AppInstaller::Apt {
+        apt_options.to_vec()
+    } else {
+        Vec::new()
+    }
+    .into_iter()
+    .chain(action.iter().map(ToString::to_string))
+    .chain(packages.iter().cloned())
+    .collect::<Vec<_>>();
     if capabilities.privilege == AppInstallPrivilege::Root
         || recipe_privilege == AppInstallPrivilege::User
     {
@@ -858,13 +924,18 @@ fn system_package_command(
 async fn apt_refresh_command(
     recipe_privilege: AppInstallPrivilege,
     capabilities: &FinalComputerCapabilities,
+    apt_options: &[String],
 ) -> Result<AppRecipeCommand, AppRecipeExecutionError> {
     if capabilities.privilege == AppInstallPrivilege::Root
         || recipe_privilege == AppInstallPrivilege::User
     {
         return Ok(AppRecipeCommand {
             executable: "apt-get".to_string(),
-            args: vec!["update".to_string()],
+            args: apt_options
+                .iter()
+                .cloned()
+                .chain(std::iter::once("update".to_string()))
+                .collect(),
             env: BTreeMap::new(),
             timeout: PACKAGE_COMMAND_TIMEOUT,
             termination_grace: Duration::from_secs(5),
@@ -876,8 +947,11 @@ async fn apt_refresh_command(
             args: vec![
                 "-n".to_string(),
                 "apt-get".to_string(),
-                "update".to_string(),
-            ],
+            ]
+            .into_iter()
+            .chain(apt_options.iter().cloned())
+            .chain(std::iter::once("update".to_string()))
+            .collect(),
             env: BTreeMap::new(),
             timeout: PACKAGE_COMMAND_TIMEOUT,
             termination_grace: Duration::from_secs(5),
@@ -1131,11 +1205,31 @@ fn node_package_command(
         );
     }
     if capabilities.privilege == AppInstallPrivilege::PasswordlessSudo {
+        let command = resolved_command(
+            "npm",
+            args,
+            env,
+            PACKAGE_COMMAND_TIMEOUT,
+            capabilities.platform,
+            true,
+        )?;
+        let mut environment = Vec::new();
+        for key in ["PATH", "npm_config_registry", "NPM_CONFIG_REGISTRY", "npm_config_cache"] {
+            if let Some((name, value)) = command
+                .env
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            {
+                environment.push(format!("{name}={value}"));
+            }
+        }
         return Ok(AppRecipeCommand {
             executable: "sudo".to_string(),
-            args: ["-n".to_string(), "npm".to_string()]
+            args: ["-n".to_string(), "env".to_string()]
                 .into_iter()
-                .chain(args)
+                .chain(environment)
+                .chain(std::iter::once(command.executable))
+                .chain(command.args)
                 .collect(),
             env: BTreeMap::new(),
             timeout: PACKAGE_COMMAND_TIMEOUT,

@@ -12,7 +12,9 @@ use axum::{
     routing::{any, delete, get, patch, post, put},
     Json, Router,
 };
-use controlled_instance_app_runtime::AppManagementRequestError;
+use controlled_instance_app_runtime::{
+    AppInstallEnvironmentError, AppManagementRequestError,
+};
 use controlled_instance_protocol::{
     ai_session_transient_subscription_accepts, encode_event, project_ai_session_delta_for_consumer,
     project_ai_session_history_item_for_consumer,
@@ -21,7 +23,8 @@ use controlled_instance_protocol::{
     AgentRunMemberInstanceCreateResult, AgentRunMemberInstanceStatus, AgentRunResult,
     AiSessionConversationAttachment, AiSessionTransientSubscription, AiSessionWorkspaceSelection,
     ApiEnvelope, ApiError, ApiErrorEnvelope, AppDisplayOptions, AppLaunchRequest,
-    AppManagementOperation, AppManagementOperationRequest, ConfigSyncDirection, ConfigSyncPreset,
+    AppInstallSourceUpdate, AppManagementOperation, AppManagementOperationRequest,
+    ConfigSyncDirection, ConfigSyncPreset,
     ConfigSyncRequest, ManagedModelEnvironment, RepositoryAiSessionLaunchResult,
     RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch,
     RepositoryAiSessionWorkspaceBranchKind, RepositoryAiSessionWorkspaceCheckout,
@@ -240,6 +243,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/diagnostics", get(diagnostics))
         .route("/api/apps/catalog", get(app_catalog))
         .route("/api/apps/management", get(app_management))
+        .route(
+            "/api/apps/install-environment",
+            get(app_install_environment).put(update_app_install_environment),
+        )
+        .route(
+            "/api/apps/install-environment/test",
+            post(test_app_install_environment),
+        )
+        .route(
+            "/api/apps/install-environment/prepare",
+            post(prepare_app_install_environment),
+        )
         .route("/api/apps/{app_id}/install", post(app_management_install))
         .route(
             "/api/apps/{app_id}/uninstall",
@@ -5203,6 +5218,65 @@ async fn app_management(State(state): State<AppState>) -> Json<ApiEnvelope<Value
     })
 }
 
+async fn app_install_environment(State(state): State<AppState>) -> Json<ApiEnvelope<Value>> {
+    Json(ApiEnvelope {
+        data: serde_json::to_value(state.install_environment.snapshot()).unwrap_or(Value::Null),
+    })
+}
+
+async fn update_app_install_environment(
+    State(state): State<AppState>,
+    payload: Result<JsonValueBody, JsonRejection>,
+) -> Response {
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
+        Err(error) => return app_install_environment_body_error(error),
+    };
+    let update = match serde_json::from_value::<AppInstallSourceUpdate>(value) {
+        Ok(update) => update,
+        Err(error) => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "install_sources_input_invalid",
+                &error.to_string(),
+            )
+        }
+    };
+    match state.install_environment.update(update) {
+        Ok(environment) => {
+            state.app_management.publish_snapshot();
+            Json(ApiEnvelope {
+                data: json!({ "environment": environment }),
+            })
+            .into_response()
+        }
+        Err(error) => install_environment_error(error),
+    }
+}
+
+async fn test_app_install_environment(State(state): State<AppState>) -> Response {
+    match state.install_environment.test_sources().await {
+        Ok(response) => Json(ApiEnvelope {
+            data: serde_json::to_value(response).unwrap_or(Value::Null),
+        })
+        .into_response(),
+        Err(error) => install_environment_error(error),
+    }
+}
+
+async fn prepare_app_install_environment(State(state): State<AppState>) -> Response {
+    match state.install_environment.prepare_node_toolchain().await {
+        Ok(environment) => {
+            state.app_management.publish_snapshot();
+            Json(ApiEnvelope {
+                data: json!({ "environment": environment }),
+            })
+            .into_response()
+        }
+        Err(error) => install_environment_error(error),
+    }
+}
+
 async fn app_management_install(
     State(state): State<AppState>,
     Path(app_id): Path<String>,
@@ -6048,6 +6122,25 @@ fn app_management_body_error(error: JsonRejection) -> Response {
         StatusCode::BAD_REQUEST,
         "app_management_input_invalid",
         &error.body_text(),
+    )
+}
+
+fn app_install_environment_body_error(error: JsonRejection) -> Response {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return body_too_large_response();
+    }
+    api_error(
+        StatusCode::BAD_REQUEST,
+        "install_sources_input_invalid",
+        &error.body_text(),
+    )
+}
+
+fn install_environment_error(error: AppInstallEnvironmentError) -> Response {
+    api_error(
+        StatusCode::from_u16(error.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        &error.code,
+        &error.message,
     )
 }
 
@@ -16510,6 +16603,20 @@ mod tests {
             .expect("response")
     }
 
+    async fn put_json(app: &Router, uri: &str, body: Value) -> Response {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).expect("json body")))
+                    .expect("request"),
+            )
+            .await
+            .expect("response")
+    }
+
     async fn get_json(app: &Router, uri: &str) -> Response {
         app.clone()
             .oneshot(
@@ -17363,6 +17470,47 @@ mod tests {
         let apps = snapshot["data"]["apps"].as_array().expect("apps");
         assert!(apps.iter().any(|app| app["id"] == "codex"));
         assert!(apps.iter().any(|app| app["id"] == "thctl"));
+        let capabilities = get_json(&app, "/api/instance/capabilities").await;
+        assert_eq!(capabilities.status(), StatusCode::OK);
+        let capabilities = body_json(capabilities).await;
+        assert!(
+            capabilities["data"]["features"]["appInstallEnvironment"]["nodeToolchain"]
+                .is_boolean()
+        );
+        assert_eq!(
+            capabilities["data"]["features"]["appInstallEnvironment"]["sourceProfiles"]
+                .as_array()
+                .map(Vec::len),
+            Some(4)
+        );
+
+        let install_environment = get_json(&app, "/api/apps/install-environment").await;
+        assert_eq!(install_environment.status(), StatusCode::OK);
+        let install_environment = body_json(install_environment).await;
+        assert_eq!(
+            install_environment["data"]["settings"]["profile"],
+            "environment"
+        );
+        assert!(install_environment["data"]["revision"].is_u64());
+
+        let updated_environment = put_json(
+            &app,
+            "/api/apps/install-environment",
+            json!({
+                "expectedRevision": install_environment["data"]["revision"],
+                "settings": { "profile": "environment", "custom": {} }
+            }),
+        )
+        .await;
+        assert_eq!(updated_environment.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(updated_environment).await["data"]["environment"]["revision"],
+            1
+        );
+
+        let source_test = post_json(&app, "/api/apps/install-environment/test", json!({})).await;
+        assert_eq!(source_test.status(), StatusCode::OK);
+        assert_eq!(body_json(source_test).await["data"]["checks"], json!([]));
 
         let unknown = post_json(&app, "/api/apps/not-an-app/install", json!({})).await;
         assert_eq!(unknown.status(), StatusCode::NOT_FOUND);

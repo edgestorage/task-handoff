@@ -5,6 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { filesystemRoots, folderPlaces, listFolderTree, MAX_FOLDER_TREE_CHILDREN, requireBrowsableFolderPath } = require("../packages/node-agent/src/folders.ts");
+const { createNodeAgentApp } = require("../packages/node-agent/src/app.ts");
 const { nodeAgentStorePaths } = require("../packages/node-agent/src/persistence/paths.ts");
 const { UpdateLocalFolderSchema } = require("../packages/node-agent/src/schemas.ts");
 const { NodeAgentState } = require("../packages/node-agent/src/state.ts");
@@ -99,6 +100,14 @@ test("node-agent refuses to persist a local folder until its path passes authori
   assert.equal(created.path, path.resolve(workspace));
   assert.deepEqual(state.localFolders.list().map((folder) => folder.id), [created.id]);
 
+  assert.throws(
+    () => state.createLocalFolder({ name: "Workspace duplicate", path: `${workspace}${path.sep}`, labels: {} }),
+    (error) => error.code === "NODE_LOCAL_FOLDER_ALREADY_EXISTS"
+      && error.statusCode === 409
+      && error.details?.folderId === created.id,
+  );
+  assert.deepEqual(state.localFolders.list().map((folder) => folder.id), [created.id]);
+
   const renamed = state.updateLocalFolder(created.id, { name: "Customer Portal" });
   assert.equal(renamed.name, "Customer Portal");
   assert.equal(renamed.path, created.path);
@@ -117,4 +126,41 @@ test("local folder name updates accept reset-to-folder-name and cannot mutate th
   assert.deepEqual(UpdateLocalFolderSchema.parse({ name: "" }), { name: "" });
   assert.equal(UpdateLocalFolderSchema.safeParse({ name: "Customer Portal", path: "/other" }).success, false);
   assert.equal(UpdateLocalFolderSchema.safeParse({ name: "Customer Portal", defaultImageSelection: { imageId: "img_other" } }).success, false);
+});
+
+test("local folder API reports a duplicate project with the existing folder identity", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-folder-api-duplicate-"));
+  const workspace = path.join(dataDir, "workspace");
+  fs.mkdirSync(workspace);
+  const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_folder_api" });
+  t.after(async () => {
+    await app.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/local-folders",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { name: "Workspace", path: workspace },
+  });
+  assert.equal(created.statusCode, 201);
+  const folder = created.json().data;
+
+  const duplicate = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/local-folders",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { name: "Workspace again", path: `${workspace}${path.sep}` },
+  });
+  assert.equal(duplicate.statusCode, 409);
+  assert.equal(duplicate.json().error.code, "NODE_LOCAL_FOLDER_ALREADY_EXISTS");
+  assert.equal(duplicate.json().error.details.folderId, folder.id);
+
+  const listed = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/local-folders",
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.deepEqual(listed.json().data.map((item) => item.id), [folder.id]);
 });

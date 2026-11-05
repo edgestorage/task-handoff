@@ -11,6 +11,12 @@ on:
         required: true
         type: string
 
+      implementation:
+        description: "Controlled instance implementation (auto uses repository config)"
+        type: choice
+        default: auto
+        options: [auto, node, rust]
+
 permissions:
   contents: write
 
@@ -39,6 +45,70 @@ env:
   TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN: https://cloud.thandoff.com
 
 jobs:
+  runtime-selection:
+    runs-on: ubuntu-latest
+    outputs:
+      implementation: ${{ steps.runtime.outputs.implementation }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Resolve controlled instance implementation
+        id: runtime
+        shell: bash
+        env:
+          REQUESTED_IMPLEMENTATION: ${{ inputs.implementation != 'auto' && inputs.implementation || vars.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION }}
+        run: |
+          if [[ -n "$REQUESTED_IMPLEMENTATION" && "$REQUESTED_IMPLEMENTATION" != auto ]]; then
+            export TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION="$REQUESTED_IMPLEMENTATION"
+          fi
+          node --input-type=module -e 'import { resolveControlledInstanceImplementation } from "./runtime-packages.config.mjs"; console.log(`implementation=${resolveControlledInstanceImplementation()}`)' >> "$GITHUB_OUTPUT"
+
+  controlled-instance-rust-binaries:
+    needs: runtime-selection
+    if: needs.runtime-selection.outputs.implementation == 'rust'
+    name: Rust controlled instance binary (linux-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build on the glibc baseline
+        shell: bash
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.arch == 'x64' && 'x86_64-unknown-linux-gnu' || 'aarch64-unknown-linux-gnu' }}
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace/controlled-instance-rs \
+            -e CARGO_TARGET_DIR="target/linux-${{ matrix.arch }}" \
+            -e RUST_TOOLCHAIN="$RUST_TOOLCHAIN" \
+            rust:1.89-bookworm \
+            bash -c '
+              set -euo pipefail
+              export PATH="/usr/local/rustup/toolchains/1.89.0-${RUST_TOOLCHAIN}/bin:${PATH}"
+              cargo build --locked --release -p controlled-instance-cli
+              install -d -m 0755 /workspace/release/rust-controlled-instance-binaries
+              install -m 0755 "$CARGO_TARGET_DIR/release/controlled-instance-rs" \
+                "/workspace/release/rust-controlled-instance-binaries/controlled-instance-linux-${{ matrix.arch }}"
+            '
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-rust-controlled-instance-linux-${{ matrix.arch }}
+          path: release/rust-controlled-instance-binaries/*
+          if-no-files-found: error
+
   node-pty-prebuilds:
     name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})
     strategy:
@@ -84,7 +154,10 @@ jobs:
 
   controlled-instance-artifact:
     name: Linux controlled instance artifact
-    needs: node-pty-prebuilds
+    needs: [runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries]
+    if: ${{ !cancelled() && needs.runtime-selection.result == 'success' && needs.node-pty-prebuilds.result == 'success' && (needs.controlled-instance-rust-binaries.result == 'success' || needs.controlled-instance-rust-binaries.result == 'skipped') }}
+    env:
+      TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: ${{ needs.runtime-selection.outputs.implementation }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
@@ -120,6 +193,13 @@ jobs:
           path: release/node-pty-prebuilds
           merge-multiple: true
 
+      - uses: actions/download-artifact@v7
+        if: env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION == 'rust'
+        with:
+          pattern: desktop-rust-controlled-instance-linux-*
+          path: release/rust-controlled-instance-binaries
+          merge-multiple: true
+
       - name: Build Linux controlled instance production runtime
         shell: bash
         env:
@@ -136,7 +216,8 @@ jobs:
 
   build:
     name: Build ${{ matrix.platform }}
-    needs: controlled-instance-artifact
+    needs: [runtime-selection, controlled-instance-artifact]
+    if: ${{ !cancelled() && needs.controlled-instance-artifact.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -156,6 +237,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       NODE_OPTIONS: --max-old-space-size=4096
+      TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: ${{ needs.runtime-selection.outputs.implementation }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -209,6 +291,13 @@ jobs:
           echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
 
       - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v7
+        if: env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION == 'rust'
+        with:
+          pattern: desktop-rust-controlled-instance-linux-*
+          path: release/rust-controlled-instance-binaries
+          merge-multiple: true
 
       - uses: actions/download-artifact@v7
         with:

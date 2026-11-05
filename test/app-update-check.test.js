@@ -20,9 +20,11 @@ const dnfCapabilities = { platform: "linux", arch: "x64", installers: ["dnf"], p
 const npmCapabilities = { platform: "linux", arch: "x64", installers: ["npm"], privilege: "user", installerAccess: { npmGlobalWritable: true } };
 const sudoNpmCapabilities = { platform: "linux", arch: "x64", installers: ["npm"], privilege: "passwordless-sudo", installerAccess: { npmGlobalWritable: false } };
 
-function checkerWith(responses) {
+function checkerWith(responses, options = {}) {
   const commands = [];
   const checker = createAppUpdateChecker({
+    env: {},
+    ...options,
     commandRunner: async (command) => {
       commands.push(command);
       const match = responses.shift();
@@ -87,9 +89,10 @@ test("npm checks parse outdated json and elevate with sudo when the recipe does"
   const elevated = checkerWith([{ exitCode: 1, stdout: "", stderr: "" }]);
   await elevated.checker(sudoNpmRecipe, { appId: "codex", capabilities: sudoNpmCapabilities });
   assert.equal(elevated.commands[0].executable, "sudo");
-  assert.ok(elevated.commands[0].args[1].endsWith("npm"));
-  assert.deepEqual(elevated.commands[0].args.slice(0, 1), ["-n"]);
-  assert.deepEqual(elevated.commands[0].args.slice(2), ["outdated", "--global", "--json", "--depth=0", "@openai/codex"]);
+  assert.deepEqual(elevated.commands[0].args.slice(0, 2), ["-n", "env"]);
+  const npmIndex = elevated.commands[0].args.findIndex((value) => /npm$/.test(value));
+  assert.ok(npmIndex > 1);
+  assert.deepEqual(elevated.commands[0].args.slice(npmIndex + 1), ["outdated", "--global", "--json", "--depth=0", "@openai/codex"]);
 });
 
 test("archive and bundled recipes have no remote update source", async () => {

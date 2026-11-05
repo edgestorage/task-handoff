@@ -38,6 +38,8 @@ export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-10-02";
 export const AI_SESSION_RENAME_PROTOCOL_VERSION = "2026-09-17";
 // Browser profile capability on the controlled-instance app inventory boundary.
 export const APP_PROFILES_PROTOCOL_VERSION = "2026-10-02";
+// Instance-owned app installation environment and package source settings.
+export const APP_INSTALL_ENVIRONMENT_PROTOCOL_VERSION = "2026-11-05";
 export const NODE_AGENT_PROTOCOL_VERSION_HEADER = "x-task-handoff-node-agent-protocol-version";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
@@ -137,6 +139,15 @@ function emptyManagedModelEnvironmentCapabilities() {
   return { openCodeConfig: false };
 }
 
+function emptyAppInstallEnvironmentCapabilities() {
+  return {
+    sourceProfiles: [] as AppInstallSourceProfile[],
+    nodeToolchain: false,
+    npmSources: false,
+    aptSources: false,
+  };
+}
+
 function defaultControlledInstanceFeatures() {
   return {
     appRuntime: false,
@@ -158,6 +169,7 @@ function defaultControlledInstanceFeatures() {
     repositoryWorktreeMoveToMain: false,
     modelRelay: emptyModelRelayCapabilities(),
     managedModelEnvironment: emptyManagedModelEnvironmentCapabilities(),
+    appInstallEnvironment: emptyAppInstallEnvironmentCapabilities(),
     aiSessionSendIdempotency: false,
     aiSessionQueuePause: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
@@ -212,6 +224,91 @@ export const ControlledInstanceManagedModelEnvironmentCapabilitiesSchema = z.obj
   openCodeConfig: z.boolean().default(false),
 }).strip();
 
+export const AppInstallSourceProfileSchema = z.enum(["environment", "official", "china", "custom"]);
+
+function isInstallSourceUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:"
+      && !parsed.username
+      && !parsed.password
+      && !parsed.search
+      && !parsed.hash;
+  } catch {
+    return false;
+  }
+}
+
+export const AppInstallSourceUrlSchema = NonEmptyTrimmedTextSchema.max(2_048).refine(isInstallSourceUrl, {
+  message: "Install source URLs must use HTTPS without credentials, query strings, or fragments.",
+});
+
+export const AppInstallSourceCustomSchema = z.object({
+  npmRegistry: AppInstallSourceUrlSchema.optional(),
+  nodeDistUrl: AppInstallSourceUrlSchema.optional(),
+  aptMainMirror: AppInstallSourceUrlSchema.optional(),
+  aptSecurityMirror: AppInstallSourceUrlSchema.optional(),
+}).strict();
+
+export const AppInstallSourceSettingsSchema = z.object({
+  profile: AppInstallSourceProfileSchema,
+  custom: AppInstallSourceCustomSchema.default({}),
+}).strict();
+
+export const AppInstallSourceUpdateSchema = z.object({
+  expectedRevision: z.number().int().nonnegative().optional(),
+  settings: AppInstallSourceSettingsSchema,
+}).strict();
+
+export const AppInstallEffectiveSourcesSchema = z.object({
+  npmRegistry: AppInstallSourceUrlSchema.optional(),
+  nodeDistUrl: AppInstallSourceUrlSchema.optional(),
+  aptMainMirror: AppInstallSourceUrlSchema.optional(),
+  aptSecurityMirror: AppInstallSourceUrlSchema.optional(),
+}).strict();
+
+export const AppInstallNodeToolchainSchema = z.object({
+  state: z.enum(["host", "private", "missing"]),
+  version: TrimmedTextSchema.max(80).optional(),
+  npmVersion: TrimmedTextSchema.max(80).optional(),
+  minimumVersion: NonEmptyTrimmedTextSchema.max(80),
+  managedVersion: NonEmptyTrimmedTextSchema.max(80),
+  reason: TrimmedTextSchema.max(500).optional(),
+}).strict();
+
+export const AppInstallEnvironmentSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  settings: AppInstallSourceSettingsSchema,
+  effective: AppInstallEffectiveSourcesSchema,
+  node: AppInstallNodeToolchainSchema,
+  observedAt: DateTimeStringSchema,
+}).strict();
+
+export const AppInstallEnvironmentUpdateResponseSchema = z.object({
+  environment: AppInstallEnvironmentSchema,
+}).strict();
+
+export const AppInstallEnvironmentTestCheckSchema = z.object({
+  id: z.enum(["npm", "node", "apt-main", "apt-security"]),
+  url: AppInstallSourceUrlSchema,
+  ok: z.boolean(),
+  statusCode: z.number().int().min(100).max(599).optional(),
+  message: TrimmedTextSchema.max(500).optional(),
+}).strict();
+
+export const AppInstallEnvironmentTestResponseSchema = z.object({
+  checks: z.array(AppInstallEnvironmentTestCheckSchema).max(4),
+  testedAt: DateTimeStringSchema,
+}).strict();
+
+export const ControlledInstanceAppInstallEnvironmentCapabilitiesSchema = z.object({
+  protocolVersion: TrimmedTextSchema.max(40).optional(),
+  sourceProfiles: z.array(AppInstallSourceProfileSchema).max(4).default([]),
+  nodeToolchain: z.boolean().default(false),
+  npmSources: z.boolean().default(false),
+  aptSources: z.boolean().default(false),
+}).strip();
+
 export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   appRuntime: z.boolean().default(false),
   tty: z.boolean().default(false),
@@ -259,6 +356,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   // Compatibility for v0.0.46: absence or an invalid value disables only the
   // instance-shell feature domain and must not invalidate the capability document.
   instanceShell: InstanceShellCapabilitiesSchema.optional(),
+  // Additive capability: absence disables only instance-owned install source settings.
+  appInstallEnvironment: ControlledInstanceAppInstallEnvironmentCapabilitiesSchema.optional(),
 }).passthrough();
 
 /** The single capability document for the controlled-instance/control-plane boundary. */
@@ -284,6 +383,17 @@ export type AiSessionConversationAttachmentCapabilities = z.infer<typeof AiSessi
 export type AiSessionConversationAttachmentCapability = "metadata" | "content" | "upload";
 export type ControlledInstanceModelRelayCapabilities = z.infer<typeof ControlledInstanceModelRelayCapabilitiesSchema>;
 export type ControlledInstanceManagedModelEnvironmentCapabilities = z.infer<typeof ControlledInstanceManagedModelEnvironmentCapabilitiesSchema>;
+export type AppInstallSourceProfile = z.infer<typeof AppInstallSourceProfileSchema>;
+export type AppInstallSourceCustom = z.infer<typeof AppInstallSourceCustomSchema>;
+export type AppInstallSourceSettings = z.infer<typeof AppInstallSourceSettingsSchema>;
+export type AppInstallSourceUpdate = z.infer<typeof AppInstallSourceUpdateSchema>;
+export type AppInstallEffectiveSources = z.infer<typeof AppInstallEffectiveSourcesSchema>;
+export type AppInstallNodeToolchain = z.infer<typeof AppInstallNodeToolchainSchema>;
+export type AppInstallEnvironment = z.infer<typeof AppInstallEnvironmentSchema>;
+export type AppInstallEnvironmentUpdateResponse = z.infer<typeof AppInstallEnvironmentUpdateResponseSchema>;
+export type AppInstallEnvironmentTestCheck = z.infer<typeof AppInstallEnvironmentTestCheckSchema>;
+export type AppInstallEnvironmentTestResponse = z.infer<typeof AppInstallEnvironmentTestResponseSchema>;
+export type ControlledInstanceAppInstallEnvironmentCapabilities = z.infer<typeof ControlledInstanceAppInstallEnvironmentCapabilitiesSchema>;
 export type ControlledInstanceCapabilities = z.infer<typeof ControlledInstanceCapabilitiesSchema>;
 type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities & {
   features: ControlledInstanceCapabilities["features"] & {
@@ -300,6 +410,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     nodeAgentConnectionUpdate: boolean;
     modelRelay: ControlledInstanceModelRelayCapabilities;
     managedModelEnvironment: ControlledInstanceManagedModelEnvironmentCapabilities;
+    appInstallEnvironment: ControlledInstanceAppInstallEnvironmentCapabilities;
     instanceShell: InstanceShellCapabilities;
   };
 };
@@ -352,6 +463,8 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
   if (managedModelEnvironment.success) normalizedFeatures.managedModelEnvironment = managedModelEnvironment.data;
   const instanceShell = InstanceShellCapabilitiesSchema.safeParse(features.instanceShell);
   if (instanceShell.success) normalizedFeatures.instanceShell = instanceShell.data;
+  const appInstallEnvironment = ControlledInstanceAppInstallEnvironmentCapabilitiesSchema.safeParse(features.appInstallEnvironment);
+  if (appInstallEnvironment.success) normalizedFeatures.appInstallEnvironment = appInstallEnvironment.data;
   return ControlledInstanceCapabilitiesSchema.parse({
     ...document,
     features: { ...features, ...normalizedFeatures },
@@ -417,6 +530,16 @@ export function supportsControlledInstanceCodexManagedSettings(capabilities: unk
 
 export function supportsControlledInstanceNodeAgentConnectionUpdate(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.nodeAgentConnectionUpdate;
+}
+
+export function controlledInstanceAppInstallEnvironmentCapabilities(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.appInstallEnvironment;
+}
+
+export function supportsControlledInstanceAppInstallEnvironment(capabilities: unknown) {
+  const feature = controlledInstanceAppInstallEnvironmentCapabilities(capabilities);
+  return feature.protocolVersion === APP_INSTALL_ENVIRONMENT_PROTOCOL_VERSION
+    && feature.sourceProfiles.length > 0;
 }
 
 export function supportsBrowserTunnel(capabilities: unknown) {
@@ -922,6 +1045,9 @@ export const AppManagementErrorSchema = z.object({
 export const AppManagementJobSchema = z.object({
   id: IdSchema,
   requestId: IdSchema.optional(),
+  // Frozen when the job is accepted so a queued install cannot silently use
+  // source settings saved after the request.
+  installSourceRevision: z.number().int().nonnegative().optional(),
   appId: IdSchema,
   operation: AppManagementOperationSchema,
   state: AppManagementJobStateSchema,
@@ -943,6 +1069,9 @@ export const AppManagementSnapshotSchema = z.object({
   apps: z.array(ManagedAppProjectionSchema).max(256),
   activeJobs: z.array(AppManagementJobSchema).max(256),
   recentJobs: z.array(AppManagementJobSchema).max(256),
+  // Additive instance-owned settings snapshot. Omitted by instances that
+  // predate install environment support.
+  installEnvironment: AppInstallEnvironmentSchema.optional(),
   observedAt: TimestampSchema,
 }).strict();
 export const AppManagementOperationRequestSchema = z.object({

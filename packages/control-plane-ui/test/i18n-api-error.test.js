@@ -29,6 +29,7 @@ test("stable instance, node, and model errors have localized messages", () => {
   const cases = [
     ["LOCAL_FOLDER_REQUIRES_INSTANCE_NODE", "Select a local folder owned by the instance node.", "请选择实例所属节点上的本地文件夹。"],
     ["APP_CWD_REQUIRES_LOCAL_FOLDER_SOURCE", "A custom app working directory requires a local folder instance source.", "自定义 App 工作目录需要使用本地文件夹实例来源。"],
+    ["NODE_LOCAL_FOLDER_ALREADY_EXISTS", "This project already exists on the node. Select the existing project instead.", "节点上已存在该项目，请直接选择已有项目。"],
     ["NODE_LOCAL_FOLDER_NOT_FOUND", "The selected local folder was not found on the node.", "节点上不存在所选本地文件夹。"],
     ["NODE_FOLDER_PATH_NOT_FOUND", "The folder path does not exist on the node.", "节点上不存在该文件夹路径。"],
     ["NODE_FOLDER_PATH_NOT_DIRECTORY", "The selected path is not a folder.", "所选路径不是文件夹。"],

@@ -124,3 +124,34 @@ test("relay channel sockets keep ws text frames text and binary frames binary", 
   assert.deepEqual(sent.map((entry) => entry.binary), [false, true, false, true]);
   assert.deepEqual(sent.map((entry) => entry.streamId), [1, 1, 1, 1]);
 });
+
+test("a locally terminated relay main channel notifies its owner and disconnects the transport", () => {
+  const tunnel = {
+    attach() {},
+    detach() { return true; },
+    disconnect() { return true; },
+    attachAuxiliary() { return true; },
+    isCurrentSocket() { return true; },
+    handleSocketMessage() { return true; },
+  };
+  const transport = new CloudRelayNodeAgentTransport({ tunnel: tunnel as any });
+  const socket = {
+    readyState: 1,
+    send() {},
+    close() {},
+    on() {},
+    off() {},
+  };
+  let closeReason: string | undefined;
+  const channel = transport.attachNode("node_alpha", {
+    socket: socket as any,
+    key: new Uint8Array(32),
+    onClosed: (reason) => { closeReason = reason; },
+  }) as any;
+
+  assert.equal(transport.connected("node_alpha"), true);
+  channel.mainSocket.terminate();
+
+  assert.equal(closeReason, "terminated", "local channel shutdown must notify the relay runtime");
+  assert.equal(transport.connected("node_alpha"), false, "a closed channel must not remain live in the transport index");
+});

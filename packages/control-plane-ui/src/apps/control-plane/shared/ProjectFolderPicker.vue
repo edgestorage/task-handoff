@@ -25,13 +25,15 @@
 <script setup lang="ts">
 import { watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { createNodeLocalFolder, listNodeFolderPlaces, listNodeFolderTree } from "../../../api/queries";
+import { createNodeLocalFolder, listNodeFolderPlaces, listNodeFolderTree, listNodeLocalFolders } from "../../../api/queries";
 import type { NodeLocalFolder } from "../../../api/types";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { translateApiError } from "../../../i18n/apiError";
+import { createOrReuseNodeLocalFolder } from "./nodeLocalFolderConflict";
 
 const props = defineProps<{
+  folders?: NodeLocalFolder[];
   nodeId: string;
   nodeName: string;
   open: boolean;
@@ -45,7 +47,13 @@ const { t } = useI18n();
 
 const picker = useNodeStorageFolderPicker({
   createFolder: async (nodeId, input) => {
-    const folder = await createNodeLocalFolder(nodeId, input);
+    const folder = await createOrReuseNodeLocalFolder({
+      createFolder: () => createNodeLocalFolder(nodeId, input),
+      knownFolders: props.folders || [],
+      loadFolders: listNodeLocalFolders,
+      nodeId,
+      path: input.path,
+    });
     emit("created", folder);
     return folder;
   },

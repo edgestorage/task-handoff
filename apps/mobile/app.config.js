@@ -33,6 +33,7 @@ module.exports = () => {
   const cloudDiscovery = resolveCloudDiscovery(cloudEnvironment, variantName);
   const plugins = [
     ...(baseConfig.plugins || []),
+    'expo-apple-authentication',
     './modules/task-handoff-browser/plugin/withTaskHandoffBrowser',
     ...(taskStatusWidgetsEnabled ? [[
       'expo-widgets',
@@ -62,6 +63,7 @@ module.exports = () => {
     ios: {
       ...baseConfig.ios,
       bundleIdentifier: variant.applicationId,
+      usesAppleSignIn: true,
       infoPlist: {
         ...baseConfig.ios?.infoPlist,
         ...(variantName === 'development' ? {

@@ -24,7 +24,7 @@ function cloudRelayNodes(handles: string[]) {
   };
 }
 
-function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any; nodes?: CloudNodeRelayChannelsOptions["nodes"]; deferClaimResponses?: boolean; claimResponse?: (payload: any) => any; onChanged?: CloudNodeRelayChannelsOptions["onChanged"]; onTrustChanged?: CloudNodeRelayChannelsOptions["onTrustChanged"] }) {
+function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connector?: any; transport?: any; nodes?: CloudNodeRelayChannelsOptions["nodes"]; deferClaimResponses?: boolean; claimResponse?: (payload: any) => any; onChanged?: CloudNodeRelayChannelsOptions["onChanged"]; onTrustChanged?: CloudNodeRelayChannelsOptions["onTrustChanged"]; nodeRelayReconcileIntervalMs?: number; nodeRelayClaimGraceMs?: number }) {
   const sockets: FakeSocket[] = [];
   const deferredClaimResponses: Array<() => void> = [];
   class FakeSocket {
@@ -95,6 +95,8 @@ function runtimeFixture(input: { nodeRelay: boolean; handles: string[]; connecto
     state,
     identity,
     webSocket: FakeSocket as any,
+    nodeRelayReconcileIntervalMs: input.nodeRelayReconcileIntervalMs,
+    nodeRelayClaimGraceMs: input.nodeRelayClaimGraceMs,
     fetch: (async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch,
     nodeRelay: {
       nodes: input.nodes ?? cloudRelayNodes(input.handles),
@@ -378,6 +380,31 @@ test("a live node channel closing refreshes the Coordinator claim", async () => 
     assert.equal(refresh.payload.nodeHandle, "nrh_macmini");
     assert.equal(refresh.payload.failedRelayId, event.relayId, "a lost live socket must identify the failed Relay");
     assert.equal(runtime.nodeRelayState().channels.length, 0);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("reconciliation refreshes a stale claim that never became a live channel", async () => {
+  const { runtime, sockets } = runtimeFixture({
+    nodeRelay: true,
+    handles: ["nrh_macmini"],
+    nodeRelayReconcileIntervalMs: 10,
+    nodeRelayClaimGraceMs: 1,
+  });
+  runtime.start();
+  try {
+    for (let attempt = 0; attempt < 100 && runtime.nodeRelayState().claims.length === 0; attempt += 1) await wait(5);
+    assert.deepEqual(runtime.nodeRelayState().claims.map((claim) => claim.nodeHandle), ["nrh_macmini"]);
+
+    let refresh: any;
+    for (let attempt = 0; attempt < 500; attempt += 1) {
+      refresh = sockets[0].sent.find((message) => message.operation === "claim-node-relay-node" && message.payload.refreshAllocation === true);
+      if (refresh) break;
+      await wait(5);
+    }
+    assert.ok(refresh, "a claim without a live channel must not suppress recovery forever");
+    assert.equal(refresh.payload.nodeHandle, "nrh_macmini");
   } finally {
     await runtime.stop();
   }

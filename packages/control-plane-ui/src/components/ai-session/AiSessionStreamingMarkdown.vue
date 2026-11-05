@@ -11,6 +11,7 @@
         :smooth-streaming="false"
         :typewriter="false"
         :html-policy="htmlPolicy"
+        :is-dark="theme === 'dark'"
         mode="chat"
       />
     </div>
@@ -31,6 +32,7 @@ import MarkdownLinkContextMenu from "./MarkdownLinkContextMenu.vue";
 import type { MarkdownLinkTarget } from "./markdown-link-target";
 import { openDesktopExternalUrl } from "../../lib/desktopBridge";
 import type { RepositoryContext } from "@task-handoff/protocol/repository";
+import { useThemePreference } from "../../utils/theme";
 
 enableKatex();
 enableMermaid();
@@ -67,6 +69,7 @@ const emit = defineEmits<{
   openFile: [href: string];
 }>();
 const { t } = useI18n();
+const theme = useThemePreference();
 const menuLabels = computed(() => ({
   openFile: t("sessions.markdown.openFile"),
   openDesktopFile: t("sessions.markdown.openDesktopFile"),
@@ -405,6 +408,128 @@ watch(
 
 .ai-session-streaming-markdown :deep(.table-node tbody tr:hover > td) {
   background: var(--markdown-table-hover-bg, var(--surface-hover, rgb(127 127 127 / 12%)));
+}
+
+/* Mermaid teleports its fullscreen view to body. Keep that view on the same
+   theme contract as the inline diagram without changing unrelated renderers. */
+.ai-session-streaming-markdown :deep(.mermaid-block-container),
+:global(.markstream-vue:has(> .mermaid-modal-overlay)) {
+  --ms-foreground: var(--foreground);
+  --ms-muted-foreground: var(--muted-foreground);
+  --ms-accent: var(--accent);
+  --ms-accent-foreground: var(--accent-foreground);
+  --ms-border: var(--border);
+  --ms-ring: var(--ring);
+  --diagram-bg: var(--markdown-table-bg, var(--surface-raised));
+  --diagram-border: var(--markdown-table-border, var(--line));
+  --diagram-header-bg: linear-gradient(
+    180deg,
+    var(--markdown-table-head-bg, var(--surface-inset)),
+    color-mix(in srgb, var(--markdown-table-head-bg, var(--surface-inset)) 78%, transparent)
+  );
+  --code-fg: var(--markdown-text-color, var(--text-strong));
+  --code-action-fg: var(--markdown-muted-color, var(--text-muted));
+  --code-action-hover-bg: var(--surface-hover);
+  --code-action-hover-fg: var(--text-strong);
+  --focus-ring: hsl(var(--ring));
+  --modal-bg: var(--surface-overlay);
+  --modal-fg: var(--text-strong);
+  --ms-shadow-modal: var(--shadow-panel);
+  --ms-text-label: 12px;
+  --ms-action-btn-padding: 6px;
+  --ms-action-btn-icon: 14px;
+  --ms-size-diagram-min-height: 240px;
+  color: var(--code-fg);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-block-container) {
+  max-width: 100%;
+  margin: 0.75em 0;
+  border: 1px solid var(--diagram-border);
+  border-radius: 9px;
+  background: var(--diagram-bg);
+  box-shadow: var(--shadow-soft);
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-block-header) {
+  min-height: 36px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 4px 10px;
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-label-text) {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-block-header > .flex:first-child) {
+  color: var(--text-muted);
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-block-header .icon-slot svg path) {
+  stroke: currentColor;
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-header-actions) {
+  gap: 2px;
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-mode-btn),
+.ai-session-streaming-markdown :deep(.mermaid-action-btn),
+:global(.markstream-vue:has(> .mermaid-modal-overlay) .mermaid-action-btn) {
+  min-height: 28px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-mode-btn) {
+  padding: 6px 8px;
+  opacity: 1;
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-mode-btn:hover) {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-mode-btn.is-active) {
+  background: var(--surface-active);
+  color: var(--text-strong);
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-mode-btn:focus-visible),
+.ai-session-streaming-markdown :deep(.mermaid-action-btn:focus-visible),
+:global(.markstream-vue:has(> .mermaid-modal-overlay) .mermaid-action-btn:focus-visible) {
+  outline: 2px solid var(--focus-ring, var(--brand-accent));
+  outline-offset: 1px;
+}
+
+.ai-session-streaming-markdown :deep(.mermaid-source-panel) {
+  padding: 0;
+}
+
+.ai-session-streaming-markdown :deep(pre.mermaid-source-code) {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--diagram-bg);
+  color: var(--code-fg);
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 12px;
+}
+
+:global(.markstream-vue:has(> .mermaid-modal-overlay) .mermaid-modal-panel) {
+  border: 1px solid var(--diagram-border);
+  border-radius: 9px;
 }
 
 .ai-session-streaming-markdown :deep(.hljs-comment),

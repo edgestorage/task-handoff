@@ -141,6 +141,13 @@ export function localRuntimeCapabilities(capabilities: Record<string, unknown> =
   return normalizeRuntimeCapabilities("local", capabilities);
 }
 
+function comparableLocalFolderPath(folderPath: string) {
+  const resolved = path.resolve(folderPath);
+  // Windows paths are case-insensitive; the stored spelling can still differ
+  // when a user types a path instead of choosing it from the folder tree.
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 function defaultAccessStrategyForRuntime(type: NodeRuntime["type"]) {
   return type === "docker" ? "direct-port" as const : "node-proxy" as const;
 }
@@ -454,6 +461,8 @@ export class NodeAgentState {
   createLocalFolder(input: z.infer<typeof CreateLocalFolderSchema>) {
     const timestamp = now();
     const folderPath = requireBrowsableFolderPath(input.path);
+    const existingFolder = this.localFolderAtPath(folderPath);
+    if (existingFolder) throw this.localFolderAlreadyExistsError(existingFolder);
     const folder = NodeLocalFolderSchema.parse({
       ...input,
       name: input.name.trim() || path.basename(folderPath),
@@ -464,7 +473,32 @@ export class NodeAgentState {
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    return this.localFolders.put(folder);
+    try {
+      return this.localFolders.put(folder);
+    } catch (error) {
+      // A concurrent create can pass the read above and lose the race at the
+      // SQLite uniqueness boundary. Preserve the same business error instead of
+      // leaking a driver-level 500.
+      const raced = this.localFolderAtPath(folderPath);
+      if (raced) throw this.localFolderAlreadyExistsError(raced);
+      throw error;
+    }
+  }
+
+  private localFolderAtPath(folderPath: string) {
+    const comparablePath = comparableLocalFolderPath(folderPath);
+    return this.listLocalFolders().find((folder) => comparableLocalFolderPath(folder.path) === comparablePath);
+  }
+
+  private localFolderAlreadyExistsError(folder: NodeLocalFolder) {
+    return Object.assign(
+      new Error(`Project ${folder.path} already exists on this node.`),
+      {
+        statusCode: 409,
+        code: "NODE_LOCAL_FOLDER_ALREADY_EXISTS",
+        details: { folderId: folder.id },
+      },
+    );
   }
 
   /**

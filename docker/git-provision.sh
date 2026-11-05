@@ -14,12 +14,7 @@ fail() {
   exit "${2:-1}"
 }
 
-case "$(uname -m)" in
-  x86_64|amd64) helper_arch=x64 ;;
-  aarch64|arm64) helper_arch=arm64 ;;
-  *) fail HELPER_UNAVAILABLE 69 ;;
-esac
-git_helper="${bootstrap_dir}/controlled-instance-linux-${helper_arch}"
+git_helper="${bootstrap_dir}/git-provisioning-helper"
 if [ ! -x "${git_helper}" ]; then
   fail HELPER_UNAVAILABLE 69
 fi
@@ -96,9 +91,9 @@ done
 
 git_config=(
   -c credential.helper=
-  -c credential.helper="!${git_helper} git-provisioning-helper credential"
+  -c credential.helper="!${git_helper} credential"
   -c credential.useHttpPath=true
-  -c core.sshCommand="${git_helper} git-provisioning-helper ssh"
+  -c core.sshCommand="${git_helper} ssh"
 )
 # Workspace Git environment contract (mirrors @task-handoff/protocol/workspace-git).
 # Only the TASK_HANDOFF_WORKSPACE_GIT_* keys are provisioning input: released
@@ -119,7 +114,7 @@ stage cloning
 if ! runuser -u agent -- env \
   HOME=/tmp/task-handoff-git-home \
   GIT_TERMINAL_PROMPT=0 \
-  GIT_SSH_COMMAND="${git_helper} git-provisioning-helper ssh" \
+  GIT_SSH_COMMAND="${git_helper} ssh" \
   git "${git_config[@]}" "${clone_args[@]}"; then
   fail CLONE_FAILED 74
 fi
@@ -135,7 +130,7 @@ if [ "${TASK_HANDOFF_WORKSPACE_GIT_SUBMODULES:-false}" = "true" ]; then
   if ! runuser -u agent -- env \
     HOME=/tmp/task-handoff-git-home \
     GIT_TERMINAL_PROMPT=0 \
-    GIT_SSH_COMMAND="${git_helper} git-provisioning-helper ssh" \
+    GIT_SSH_COMMAND="${git_helper} ssh" \
     git "${git_config[@]}" -C "${checkout}" submodule update --init --recursive --progress; then
     fail CLONE_FAILED 74
   fi
@@ -143,7 +138,7 @@ fi
 if [ "${TASK_HANDOFF_WORKSPACE_GIT_LFS:-false}" = "true" ]; then
   stage lfs
   # git-lfs has no --progress flag; the stage marker is the progress contract here.
-  if ! runuser -u agent -- env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${git_helper} git-provisioning-helper ssh" git "${git_config[@]}" -C "${checkout}" lfs pull; then
+  if ! runuser -u agent -- env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${git_helper} ssh" git "${git_config[@]}" -C "${checkout}" lfs pull; then
     fail LFS_FAILED 76
   fi
 fi

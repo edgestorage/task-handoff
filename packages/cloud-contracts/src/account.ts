@@ -49,6 +49,42 @@ export const MobileAuthorizationResponseSchema = z.union([
   }),
 ]);
 
+
+// Native Apple authorization is opt-in and uses the same account/PKCE boundary.
+// Only the server-issued nonce and single-use state cross the native SDK boundary.
+export const AppleNativeChallengeRequestSchema = z.strictObject({
+  bundleId: z.string().min(1).max(255),
+  redirectUri: z.url(),
+  clientId: z.literal("mobile"),
+  codeChallenge: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/),
+  codeChallengeMethod: z.literal("S256"),
+  scopes: z.array(z.string()).optional(),
+  state: z.string().min(1).max(4096),
+});
+export const AppleNativeChallengeResponseSchema = z.object({
+  state: OpaqueSecretSchema,
+  nonce: z.string().min(16).max(256),
+  expiresAt: DateTimeSchema,
+});
+export const AppleNativeCompleteRequestSchema = z.strictObject({
+  state: OpaqueSecretSchema,
+  identityToken: z.string().min(1).max(16 * 1024),
+});
+export const ProviderAccountConfirmationRequestSchema = z.strictObject({
+  flow: OpaqueSecretSchema,
+  acceptTerms: z.literal(true),
+  termsVersion: z.string().min(1).max(80),
+});
+export const AppleNativeAuthorizationResponseSchema = z.union([
+  z.object({ code: OpaqueSecretSchema, state: z.string().min(1), redirectUri: z.url(), expiresAt: DateTimeSchema }),
+  z.object({ confirmationRequired: z.literal(true), flow: OpaqueSecretSchema, termsVersion: z.string().min(1), expiresAt: DateTimeSchema }),
+]);
+export type AppleNativeChallengeRequest = z.infer<typeof AppleNativeChallengeRequestSchema>;
+export type AppleNativeChallengeResponse = z.infer<typeof AppleNativeChallengeResponseSchema>;
+export type AppleNativeCompleteRequest = z.infer<typeof AppleNativeCompleteRequestSchema>;
+export type AppleNativeAuthorizationResponse = z.infer<typeof AppleNativeAuthorizationResponseSchema>;
+export type ProviderAccountConfirmationRequest = z.infer<typeof ProviderAccountConfirmationRequestSchema>;
+
 export const MobileTokenResponseSchema = z.object({
   tokenType: z.literal("Bearer"),
   accessToken: OpaqueSecretSchema,
