@@ -105,13 +105,15 @@
       ]
     },
     {
-      "source": "packages/controlled-instance/src/web/{app-management,app-recipe-executor,app-update-check}.ts",
+      "source": "packages/controlled-instance/src/web/{app-install-environment,app-management,app-recipe-executor,app-update-check}.ts",
       "rust": [
+        "controlled-instance-rs/crates/app-runtime/src/install_environment.rs",
         "controlled-instance-rs/crates/app-runtime/src/management.rs",
         "controlled-instance-rs/crates/app-runtime/src/recipe.rs",
         "controlled-instance-rs/crates/app-runtime/src/update_check.rs"
       ],
       "tests": [
+        "controlled-instance-rs/crates/app-runtime/src/install_environment.rs",
         "controlled-instance-rs/crates/app-runtime/src/management.rs",
         "controlled-instance-rs/crates/app-runtime/src/recipe.rs",
         "controlled-instance-rs/crates/app-runtime/src/update_check.rs"

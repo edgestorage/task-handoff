@@ -38,9 +38,12 @@ ${command}
 
 export function checkGitHelper(dockerDir, implementation) {
   const required = gitHelperAssets(implementation);
+  const requiresExecutableMode = process.platform !== "win32";
   for (const name of required) {
     const stats = fs.statSync(path.join(dockerDir, name), { throwIfNoEntry: false });
-    if (!stats?.isFile() || (stats.mode & 0o111) === 0) throw new Error(`Missing executable Git provisioning helper: ${name}.`);
+    if (!stats?.isFile() || (requiresExecutableMode && (stats.mode & 0o111) === 0)) {
+      throw new Error(`Missing executable Git provisioning helper: ${name}.`);
+    }
   }
   const other = gitHelperAssets(implementation === "node" ? "rust" : "node").filter((name) => !required.includes(name));
   if (other.some((name) => fs.existsSync(path.join(dockerDir, name)))) {

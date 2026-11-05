@@ -724,6 +724,8 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     modelRelay: { protocols: [], streaming: false },
     // Compatibility for v0.0.35: a stored pre-upgrade instance gets the flat managed model environment only.
     managedModelEnvironment: { openCodeConfig: false },
+    // Compatibility for v0.0.46: install source controls are additive and absent on older instances.
+    appInstallEnvironment: { sourceProfiles: [], nodeToolchain: false, npmSources: false, aptSources: false },
     // Compatibility for v0.0.33: a stored pre-upgrade instance has no decision send idempotency.
     aiSessionSendIdempotency: false,
     // Compatibility for v0.0.35: a stored pre-upgrade instance has no queue pause capability.

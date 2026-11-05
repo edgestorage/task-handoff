@@ -11,8 +11,14 @@ const matrixPath = path.join(root, "controlled-instance-rs", "docs", "http-route
 const BASELINE_HEADING = "## `v0.0.46` compatibility baseline";
 const TARGET_HEADING = "## Target-current Node extensions after `v0.0.46`";
 const BASELINE_ROUTE_COUNT = 201;
-const TARGET_ROUTE_COUNT = 202;
-const POST_BASELINE_ROUTES = new Set(["GET /api/internal/instance-shell"]);
+const TARGET_ROUTE_COUNT = 206;
+const POST_BASELINE_ROUTES = new Set([
+  "GET /api/internal/instance-shell",
+  "GET /api/apps/install-environment",
+  "PUT /api/apps/install-environment",
+  "POST /api/apps/install-environment/test",
+  "POST /api/apps/install-environment/prepare",
+]);
 const WEB_PROXY_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"];
 const WEB_PROXY_ALIAS_PATH = "/api/apps/sessions/{}/web/";
 const WEB_PROXY_PATH = "/api/apps/sessions/{}/web/*";

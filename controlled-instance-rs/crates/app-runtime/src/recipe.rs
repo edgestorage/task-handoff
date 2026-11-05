@@ -146,9 +146,11 @@ impl AppRecipeExecutor {
         context: &AppRecipeExecutionContext,
         frozen_policy: Option<&AppInstallExecutionPolicy>,
     ) -> Result<String, AppRecipeExecutionError> {
-        let source_policy = frozen_policy
-            .cloned()
-            .or_else(|| self.install_environment.as_ref().map(|environment| environment.create_execution_policy()));
+        let source_policy = frozen_policy.cloned().or_else(|| {
+            self.install_environment
+                .as_ref()
+                .map(|environment| environment.create_execution_policy())
+        });
         match recipe {
             InstallRecipe::Bundled { .. } => Err(AppRecipeExecutionError::new(
                 "bundled_app",
@@ -750,7 +752,9 @@ fn bounded(value: &str) -> String {
     truncate_utf16_tail(value, MAX_LOG_CHARS)
 }
 
-fn source_policy_error(error: crate::install_environment::AppInstallEnvironmentError) -> AppRecipeExecutionError {
+fn source_policy_error(
+    error: crate::install_environment::AppInstallEnvironmentError,
+) -> AppRecipeExecutionError {
     AppRecipeExecutionError::new(&error.code, error.message, false)
 }
 
@@ -944,14 +948,11 @@ async fn apt_refresh_command(
     if capabilities.privilege == AppInstallPrivilege::PasswordlessSudo {
         return Ok(AppRecipeCommand {
             executable: "sudo".to_string(),
-            args: vec![
-                "-n".to_string(),
-                "apt-get".to_string(),
-            ]
-            .into_iter()
-            .chain(apt_options.iter().cloned())
-            .chain(std::iter::once("update".to_string()))
-            .collect(),
+            args: vec!["-n".to_string(), "apt-get".to_string()]
+                .into_iter()
+                .chain(apt_options.iter().cloned())
+                .chain(std::iter::once("update".to_string()))
+                .collect(),
             env: BTreeMap::new(),
             timeout: PACKAGE_COMMAND_TIMEOUT,
             termination_grace: Duration::from_secs(5),
@@ -1214,7 +1215,12 @@ fn node_package_command(
             true,
         )?;
         let mut environment = Vec::new();
-        for key in ["PATH", "npm_config_registry", "NPM_CONFIG_REGISTRY", "npm_config_cache"] {
+        for key in [
+            "PATH",
+            "npm_config_registry",
+            "NPM_CONFIG_REGISTRY",
+            "npm_config_cache",
+        ] {
             if let Some((name, value)) = command
                 .env
                 .iter()

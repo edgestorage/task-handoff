@@ -56,3 +56,15 @@ test("Node helper packaging does not require any Rust binary directory", async (
   checkGitHelper(dockerDir, "node");
   assert.deepEqual(fs.readdirSync(dockerDir).sort(), ["git-provisioning-helper", "git-provisioning-helper.js"]);
 });
+
+test("POSIX helper packaging still requires executable files", { skip: process.platform === "win32" }, async (t) => {
+  const { prepareGitHelper, checkGitHelper } = await import("../scripts/runtime-git-helper.mjs");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-helper-mode-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const nodeHelper = path.join(root, "helper.js");
+  fs.writeFileSync(nodeHelper, "process.exit(0);\n");
+  const dockerDir = path.join(root, "docker");
+  prepareGitHelper({ implementation: "node", dockerDir, nodeHelper });
+  fs.chmodSync(path.join(dockerDir, "git-provisioning-helper"), 0o644);
+  assert.throws(() => checkGitHelper(dockerDir, "node"), /Missing executable Git provisioning helper/);
+});

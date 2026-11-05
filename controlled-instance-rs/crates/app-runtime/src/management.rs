@@ -24,11 +24,11 @@ use serde_json::{json, Value};
 use crate::{
     builtin_managed_app_definitions, detect_final_computer_capabilities,
     detect_final_computer_capabilities_sync, detect_managed_app_ownership_with_context,
-    detect_managed_app_with_managed_root, managed_app_projection, select_install_recipe,
+    detect_managed_app_with_managed_root,
     install_environment::{AppInstallEnvironmentManager, AppInstallExecutionPolicy},
-    AppRecipeExecutionContext, AppRecipeExecutionError, AppRecipeExecutor, AppUpdateCheckResult,
-    AppUpdateChecker, InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult,
-    ManagedAppOwnershipContext,
+    managed_app_projection, select_install_recipe, AppRecipeExecutionContext,
+    AppRecipeExecutionError, AppRecipeExecutor, AppUpdateCheckResult, AppUpdateChecker,
+    InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult, ManagedAppOwnershipContext,
 };
 
 const ACTIVE_STATES: [AppManagementJobState; 2] = [
@@ -199,6 +199,7 @@ impl AppManagementManager {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn with_parts(
         state_dir: impl Into<PathBuf>,
         install_base_dir: impl Into<PathBuf>,
@@ -247,12 +248,10 @@ impl AppManagementManager {
                 install_environment
                     .as_ref()
                     .map(|environment| {
-                        AppUpdateChecker::new().with_install_environment(
-                            state_dir.clone(),
-                            environment.clone(),
-                        )
+                        AppUpdateChecker::new()
+                            .with_install_environment(state_dir.clone(), environment.clone())
                     })
-                    .unwrap_or_else(AppUpdateChecker::new),
+                    .unwrap_or_default(),
             ),
             install_environment,
             queue: Arc::new(tokio::sync::Mutex::new(())),

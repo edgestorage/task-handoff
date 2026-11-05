@@ -12,9 +12,7 @@ use axum::{
     routing::{any, delete, get, patch, post, put},
     Json, Router,
 };
-use controlled_instance_app_runtime::{
-    AppInstallEnvironmentError, AppManagementRequestError,
-};
+use controlled_instance_app_runtime::{AppInstallEnvironmentError, AppManagementRequestError};
 use controlled_instance_protocol::{
     ai_session_transient_subscription_accepts, encode_event, project_ai_session_delta_for_consumer,
     project_ai_session_history_item_for_consumer,
@@ -22,10 +20,9 @@ use controlled_instance_protocol::{
     project_ai_sessions_snapshot_for_consumer, AgentRunError, AgentRunMemberInstanceCloseResult,
     AgentRunMemberInstanceCreateResult, AgentRunMemberInstanceStatus, AgentRunResult,
     AiSessionConversationAttachment, AiSessionTransientSubscription, AiSessionWorkspaceSelection,
-    ApiEnvelope, ApiError, ApiErrorEnvelope, AppDisplayOptions, AppLaunchRequest,
-    AppInstallSourceUpdate, AppManagementOperation, AppManagementOperationRequest,
-    ConfigSyncDirection, ConfigSyncPreset,
-    ConfigSyncRequest, ManagedModelEnvironment, RepositoryAiSessionLaunchResult,
+    ApiEnvelope, ApiError, ApiErrorEnvelope, AppDisplayOptions, AppInstallSourceUpdate,
+    AppLaunchRequest, AppManagementOperation, AppManagementOperationRequest, ConfigSyncDirection,
+    ConfigSyncPreset, ConfigSyncRequest, ManagedModelEnvironment, RepositoryAiSessionLaunchResult,
     RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch,
     RepositoryAiSessionWorkspaceBranchKind, RepositoryAiSessionWorkspaceCheckout,
     RepositoryAiSessionWorkspaceCheckoutRequest, RepositoryAiSessionWorkspaceInspectRequest,
@@ -17474,8 +17471,7 @@ mod tests {
         assert_eq!(capabilities.status(), StatusCode::OK);
         let capabilities = body_json(capabilities).await;
         assert!(
-            capabilities["data"]["features"]["appInstallEnvironment"]["nodeToolchain"]
-                .is_boolean()
+            capabilities["data"]["features"]["appInstallEnvironment"]["nodeToolchain"].is_boolean()
         );
         assert_eq!(
             capabilities["data"]["features"]["appInstallEnvironment"]["sourceProfiles"]
