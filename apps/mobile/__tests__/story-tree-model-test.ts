@@ -62,6 +62,18 @@ describe('mobile Story tree model', () => {
     expect(secondSwap.offsetY).toBe(-26);
   });
 
+  test('starts a Story drop at the released position relative to its target slot', () => {
+    const keys = ['n1:a', 'n1:b', 'n1:c'];
+    const targets = [
+      { key: 'n1:a', center: 50, height: 100 },
+      { key: 'n1:b', center: 208, height: 200 },
+      { key: 'n1:c', center: 346, height: 60 },
+    ];
+    const drop = storyDragPreview(keys, 'n1:a', 50, targets, 120, STORY_TREE_ROW_GAP);
+    expect(drop.keys).toEqual(['n1:b', 'n1:a', 'n1:c']);
+    expect(drop.offsetY).toBe(-88);
+  });
+
   test('moves surrounding Story rows by their preview positions without reordering the list', () => {
     const source = ['n1:a', 'n1:b', 'n1:c'];
     const targets = [

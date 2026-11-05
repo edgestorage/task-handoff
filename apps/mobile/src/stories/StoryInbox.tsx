@@ -81,10 +81,13 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const [expandedDocumentKeys, setExpandedDocumentKeys] = useState<Set<string>>(() => new Set());
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set());
   const [manualOrderPreview, setManualOrderPreview] = useState<string[]>();
+  const [reorderedStoryKeys, setReorderedStoryKeys] = useState<string[]>();
   const [storyDragShiftsByKey, setStoryDragShiftsByKey] = useState<Map<string, number>>();
   const [draggingStoryKey, setDraggingStoryKey] = useState<string>();
+  const [settlingStoryKey, setSettlingStoryKey] = useState<string>();
   const [pressedStoryKey, setPressedStoryKey] = useState<string>();
   const storyDragOffsetY = useSharedValue(0);
+  const storyDropSettleY = useSharedValue(0);
   const manualOrderPreviewRef = useRef<string[] | undefined>(undefined);
   const storyGroupHeights = useRef(new Map<string, number>());
   const storyHeaderHeights = useRef(new Map<string, number>());
@@ -93,6 +96,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     key: string;
     sourceCenter: number;
     sourceOrder: string[];
+    translationY: number;
     baseManualOrder: string[];
     targets: { key: string; center: number; height: number }[];
   } | undefined>(undefined);
@@ -118,7 +122,27 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     }
     return result;
   }, [directory.instances, sessions]);
-  const sortedStories = useMemo(() => sortStoryTree(visibleStories, locale, preferences.sortMode, sessionsByStory, preferences.manualKeys), [locale, preferences.manualKeys, preferences.sortMode, sessionsByStory, visibleStories]);
+  const displayedManualKeys = reorderedStoryKeys ?? preferences.manualKeys;
+  const sortedStories = useMemo(() => sortStoryTree(visibleStories, locale, preferences.sortMode, sessionsByStory, displayedManualKeys), [displayedManualKeys, locale, preferences.sortMode, sessionsByStory, visibleStories]);
+  const storyListExtraData = useMemo(() => ({ draggingStoryKey, reorderedStoryKeys, settlingStoryKey, storyDragShiftsByKey }), [draggingStoryKey, reorderedStoryKeys, settlingStoryKey, storyDragShiftsByKey]);
+  useEffect(() => {
+    if (!settlingStoryKey) return;
+    const timer = setTimeout(() => {
+      storyDragOffsetY.set(0);
+      storyDropSettleY.set(0);
+      setSettlingStoryKey(undefined);
+      setReorderedStoryKeys(undefined);
+    }, STORY_DROP_SETTLE_DURATION);
+    return () => clearTimeout(timer);
+  }, [settlingStoryKey, storyDragOffsetY, storyDropSettleY]);
+  useEffect(() => {
+    if (!reorderedStoryKeys || settlingStoryKey) return;
+    const frame = requestAnimationFrame(() => {
+      storyDragOffsetY.set(0);
+      setReorderedStoryKeys(undefined);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [reorderedStoryKeys, settlingStoryKey, storyDragOffsetY]);
   useEffect(() => {
     if (!stories.length || manualOrderPreview) return;
     const manualKeys = preferences.sortMode === 'manual'
@@ -177,6 +201,20 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     const manualKeys = normalizeManualStoryOrder(stories, preferences.manualKeys);
     updateStoryViewPreferences({ manualKeys: reorderStoryKeys(manualKeys, key, storyTreeKey(target), offset < 0 ? 'before' : 'after') });
   };
+  const settleDraggedStory = (key: string, offsetY: number) => {
+    if (Math.abs(offsetY) < 0.5) {
+      storyDropSettleY.set(0);
+      setSettlingStoryKey(undefined);
+      return;
+    }
+    storyDropSettleY.set(offsetY);
+    storyDropSettleY.set(withTiming(0, {
+      duration: STORY_DROP_SETTLE_DURATION,
+      easing: Easing.out(Easing.cubic),
+      reduceMotion: ReduceMotion.System,
+    }));
+    setSettlingStoryKey(key);
+  };
   const beginStoryDrag = (key: string) => {
     const sourceOrder = sortedStories.map(storyTreeKey);
     const baseManualOrder = normalizeManualStoryOrder(stories, preferences.manualKeys);
@@ -195,16 +233,20 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     });
     const source = targets.find((target) => target.key === key);
     if (!source || targets.length !== sourceOrder.length || targets.length < 2) return;
-    storyDrag.current = { activeTargetKey: key, baseManualOrder, key, sourceCenter: source.center, sourceOrder, targets };
+    storyDrag.current = { activeTargetKey: key, baseManualOrder, key, sourceCenter: source.center, sourceOrder, targets, translationY: 0 };
     manualOrderPreviewRef.current = sourceOrder;
+    setReorderedStoryKeys(undefined);
+    setSettlingStoryKey(undefined);
     setManualOrderPreview(sourceOrder);
     setStoryDragShiftsByKey(undefined);
     setDraggingStoryKey(key);
-    storyDragOffsetY.value = 0;
+    storyDropSettleY.set(0);
+    storyDragOffsetY.set(0);
   };
   const updateStoryDrag = (key: string, dy: number) => {
     const drag = storyDrag.current;
     if (!drag || drag.key !== key) return;
+    drag.translationY = dy;
     const pointerCenter = drag.sourceCenter + dy;
     const target = drag.targets.reduce((closest, candidate) => (
       Math.abs(candidate.center - pointerCenter) < Math.abs(closest.center - pointerCenter) ? candidate : closest
@@ -221,25 +263,29 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const finishStoryDrag = (key: string) => {
     const drag = storyDrag.current;
     if (!drag || drag.key !== key) return;
-    const manualKeys = manualOrderPreviewRef.current ?? drag.sourceOrder;
+    const preview = storyDragPreview(drag.sourceOrder, key, drag.sourceCenter, drag.targets, drag.translationY, STORY_TREE_ROW_GAP);
+    const manualKeys = preview.keys;
+    const orderChanged = !sameStringOrder(manualKeys, drag.sourceOrder);
     storyDrag.current = undefined;
     manualOrderPreviewRef.current = undefined;
     setManualOrderPreview(undefined);
     setStoryDragShiftsByKey(undefined);
     setDraggingStoryKey(undefined);
-    storyDragOffsetY.value = 0;
-    if (!sameStringOrder(manualKeys, drag.sourceOrder)) {
+    if (orderChanged) {
+      setReorderedStoryKeys(manualKeys);
       updateStoryViewPreferences({ manualKeys: replaceVisibleStoryOrder(drag.baseManualOrder, manualKeys) });
     }
+    settleDraggedStory(key, preview.offsetY);
   };
   const cancelStoryDrag = (key: string) => {
-    if (storyDrag.current?.key !== key) return;
+    const drag = storyDrag.current;
+    if (!drag || drag.key !== key) return;
     storyDrag.current = undefined;
     manualOrderPreviewRef.current = undefined;
     setManualOrderPreview(undefined);
     setStoryDragShiftsByKey(undefined);
     setDraggingStoryKey(undefined);
-    storyDragOffsetY.value = 0;
+    settleDraggedStory(key, drag.translationY);
   };
 
   useStoryEvents(refresh);
@@ -259,6 +305,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     )}
     contentInsetAdjustmentBehavior="automatic"
     data={sortedStories}
+    extraData={storyListExtraData}
     keyExtractor={storyTreeKey}
     ListEmptyComponent={<EmptyState
       icon={emptyError ? 'alert-circle-outline' : 'book-outline'}
@@ -295,11 +342,14 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
           dragging={draggingStoryKey === key}
           dragTranslationY={storyDragOffsetY}
           dragActive={Boolean(draggingStoryKey)}
+          dropSettleTranslationY={storyDropSettleY}
+          layoutTransitionSuspended={Boolean(reorderedStoryKeys)}
           onLayout={(event) => storyGroupHeights.current.set(key, event.nativeEvent.layout.height)}
+          settling={settlingStoryKey === key}
           style={[styles.storyGroup, {
             backgroundColor: colors.surface,
             borderColor: colors.workbenchCardBorder,
-          }, storyUnavailable && styles.storyGroupUnavailable, draggingStoryKey === key && styles.storyGroupDragging]}
+          }, storyUnavailable && styles.storyGroupUnavailable, (draggingStoryKey === key || settlingStoryKey === key) && styles.storyGroupDragging]}
           shift={dragShift}
           testID={`story-row-${key}`}
         >
@@ -492,6 +542,7 @@ function sameStringOrder(left: readonly string[] | undefined, right: readonly st
 
 const DISCLOSURE_ROTATION_DURATION = 200;
 const STORY_DRAG_SHIFT_DURATION = 160;
+const STORY_DROP_SETTLE_DURATION = 180;
 const STORY_CHILDREN_EXPAND_DURATION = 220;
 const STORY_CHILDREN_COLLAPSE_DURATION = 170;
 const STORY_GROUP_LAYOUT = LinearTransition
@@ -507,12 +558,15 @@ const STORY_CHILDREN_EXITING = FadeOut
   .easing(Easing.in(Easing.cubic))
   .reduceMotion(ReduceMotion.System);
 
-function StoryDragFrame({ children, dragActive, dragging, dragTranslationY, onLayout, shift, style, testID }: {
+function StoryDragFrame({ children, dragActive, dragging, dragTranslationY, dropSettleTranslationY, layoutTransitionSuspended, onLayout, settling, shift, style, testID }: {
   children: ReactNode;
   dragActive: boolean;
   dragging: boolean;
   dragTranslationY: SharedValue<number>;
+  dropSettleTranslationY: SharedValue<number>;
+  layoutTransitionSuspended: boolean;
   onLayout(event: LayoutChangeEvent): void;
+  settling: boolean;
   shift: number;
   style: StyleProp<ViewStyle>;
   testID: string;
@@ -528,10 +582,10 @@ function StoryDragFrame({ children, dragActive, dragging, dragTranslationY, onLa
       : 0;
   }, [dragActive, shift, shiftY]);
   const dragStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: dragging ? dragTranslationY.value : shiftY.value }],
+    transform: [{ translateY: dragging ? dragTranslationY.value : settling ? dropSettleTranslationY.value : dragActive ? shiftY.value : 0 }],
   }));
   return <Animated.View
-    layout={dragging ? undefined : STORY_GROUP_LAYOUT}
+    layout={dragging || settling || layoutTransitionSuspended ? undefined : STORY_GROUP_LAYOUT}
     onLayout={onLayout}
     style={[style, dragStyle]}
     testID={testID}

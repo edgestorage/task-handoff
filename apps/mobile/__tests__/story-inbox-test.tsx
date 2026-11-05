@@ -34,6 +34,38 @@ jest.mock('../src/ai-sessions/SessionStatusIndicator', () => {
   const { View } = jest.requireActual<typeof import('react-native')>('react-native');
   return { SessionStatusIndicator: () => React.createElement(View, { testID: 'session-status' }) };
 });
+jest.mock('../src/components/ReorderDragHandle', () => {
+  const React = jest.requireActual<typeof import('react')>('react');
+  const { View } = jest.requireActual<typeof import('react-native')>('react-native');
+  return { ReorderDragHandle: ({ disabled, label, moveDownLabel, moveUpLabel, onDragCancel, onDragEnd, onDragMove, onDragStart, onMoveDown, onMoveUp, testID = 'reorder-drag-handle' }: {
+    disabled?: boolean;
+    label: string;
+    moveDownLabel: string;
+    moveUpLabel: string;
+    onDragCancel(): void;
+    onDragEnd(): void;
+    onDragMove(dy: number): void;
+    onDragStart(): void;
+    onMoveDown(): void;
+    onMoveUp(): void;
+    testID?: string;
+  }) => React.createElement(View as React.ComponentType<Record<string, unknown>>, {
+    accessibilityActions: [{ name: 'decrement', label: moveUpLabel }, { name: 'increment', label: moveDownLabel }],
+    accessibilityLabel: label,
+    accessibilityRole: 'adjustable',
+    accessibilityState: { disabled: Boolean(disabled) },
+    onAccessibilityAction: (event: { nativeEvent: { actionName: string } }) => {
+      if (disabled) return;
+      if (event.nativeEvent.actionName === 'decrement') onMoveUp();
+      if (event.nativeEvent.actionName === 'increment') onMoveDown();
+    },
+    onDragCancel,
+    onDragEnd,
+    onDragMove,
+    onDragStart,
+    testID,
+  }) };
+});
 
 const mockRuntime = jest.mocked(useMobileControlPlaneRuntime);
 const mockDirectories = jest.mocked(useActiveDirectories);
@@ -346,6 +378,45 @@ describe('<StoryInbox />', () => {
 
     await waitFor(() => expect(screen.getAllByTestId(/^story-row-/).map((row) => row.props.testID)).toEqual(['story-row-node-a:story-b', 'story-row-node-a:story-a']));
     await screen.unmount();
+  });
+
+  test('commits a Story drag without replaying the reorder animation', async () => {
+    const alpha: Story = {
+      id: 'story-a', ownerNodeId: 'node-a', title: 'Alpha', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    const beta: Story = { ...alpha, id: 'story-b', title: 'Beta' };
+    mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [alpha, beta], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A', status: 'online', health: 'ok' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+    updateStoryViewPreferences({ manualKeys: ['node-a:story-a', 'node-a:story-b'], sortMode: 'manual' });
+    const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('story-drag-handle')).toHaveLength(2));
+    const handle = screen.getAllByTestId('story-drag-handle')[0];
+    await act(async () => {
+      const setHeight = (testID: string, height: number) => screen.getByTestId(testID).props.onLayout({ nativeEvent: { layout: { height } } });
+      setHeight('story-row-node-a:story-a', 50);
+      setHeight('story-node-node-a:story-a', 48);
+      setHeight('story-row-node-a:story-b', 50);
+      setHeight('story-node-node-a:story-b', 48);
+      handle.props.onDragStart();
+      handle.props.onDragMove(70);
+    });
+
+    expect(screen.getAllByTestId(/^story-row-/).map((row) => row.props.testID)).toEqual(['story-row-node-a:story-a', 'story-row-node-a:story-b']);
+    expect(screen.getByTestId('story-row-node-a:story-b').props.layout).toBeDefined();
+
+    try {
+      await act(async () => { handle.props.onDragEnd(); });
+
+      await waitFor(() => expect(screen.getAllByTestId(/^story-row-/).map((row) => row.props.testID)).toEqual(['story-row-node-a:story-b', 'story-row-node-a:story-a']));
+      expect(screen.getByTestId('story-row-node-a:story-a').props.layout).toBeUndefined();
+      expect(screen.getByTestId('story-row-node-a:story-b').props.layout).toBeUndefined();
+      await waitFor(() => expect(screen.getByTestId('story-row-node-a:story-a').props.layout).toBeDefined());
+      expect(screen.getByTestId('story-row-node-a:story-b').props.layout).toBeDefined();
+    } finally {
+      await screen.unmount();
+    }
   });
 
   test('expands a Story into document and node-scoped AI Session rows', async () => {
