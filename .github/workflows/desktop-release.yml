@@ -11,6 +11,11 @@ on:
         required: true
         type: string
 
+      release_tag:
+        description: "Existing v* tag to publish when dispatching from another ref"
+        required: false
+        type: string
+
       implementation:
         description: "Controlled instance implementation (auto uses repository config)"
         type: choice
@@ -21,7 +26,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: desktop-release-${{ github.ref }}
+  group: desktop-release-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -52,6 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.release_tag || github.ref }}
           persist-credentials: false
       - name: Resolve controlled instance implementation
         id: runtime
@@ -81,6 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.release_tag || github.ref }}
           persist-credentials: false
 
       - name: Build on the glibc baseline
@@ -125,6 +132,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - uses: pnpm/action-setup@v6
         with:
@@ -164,6 +173,8 @@ jobs:
       version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - uses: pnpm/action-setup@v6
         with:
@@ -241,6 +252,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - uses: pnpm/action-setup@v6
         with:
@@ -368,12 +381,34 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ !cancelled() && needs.build.result == 'success' && (inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')) }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+
+      - name: Validate release tag
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          if [[ -n "$INPUT_VERSION" && "$RELEASE_TAG" != "v$INPUT_VERSION" ]]; then
+            echo "::error::Release tag $RELEASE_TAG does not match version $INPUT_VERSION"
+            exit 1
+          fi
+          if ! git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "::error::Release tag does not exist: $RELEASE_TAG"
+            exit 1
+          fi
 
       - uses: actions/download-artifact@v8
         with:
@@ -388,7 +423,7 @@ jobs:
         shell: bash
         run: |
           gh api --method POST "repos/${GH_REPO}/releases/generate-notes" \
-            -f tag_name="$GITHUB_REF_NAME" \
+            -f tag_name="$RELEASE_TAG" \
             --jq '.body' > generated-release-notes.md
 
           append_installers() {
@@ -415,13 +450,13 @@ jobs:
                 # architecture; its file name carries no architecture token.
                 architecture="x64 + arm64"
               fi
-              url="https://github.com/${GH_REPO}/releases/download/${GITHUB_REF_NAME}/${name}"
+              url="https://github.com/${GH_REPO}/releases/download/${RELEASE_TAG}/${name}"
               printf '| %s | %s | [%s](%s) |\n' "$platform" "$architecture" "$format" "$url"
             done
           }
 
           {
-            echo "## Download TaskHandoff ${GITHUB_REF_NAME#v}"
+            echo "## Download TaskHandoff ${RELEASE_TAG#v}"
             echo
             echo '| Platform | Architecture | Installer |'
             echo '| --- | --- | --- |'
@@ -448,21 +483,21 @@ jobs:
           GH_REPO: edgestorage/task-handoff
         run: |
           prerelease_flag=()
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+          if [[ "$RELEASE_TAG" == *-* ]]; then
             prerelease_flag+=(--prerelease)
           fi
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release-artifacts/* --clobber
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-artifacts/* --clobber
             # The desktop release owns the user-facing update assets: a concurrent Runtime Package
             # Release may have created the same tag as a draft, and a draft is invisible to the
             # updater and anonymous downloads. Always land this release as published.
-            if [[ "$GITHUB_REF_NAME" == *-* ]]; then
-              gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --notes-file release-notes.md
+            if [[ "$RELEASE_TAG" == *-* ]]; then
+              gh release edit "$RELEASE_TAG" --draft=false --prerelease --notes-file release-notes.md
             else
-              gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=false --notes-file release-notes.md
+              gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --notes-file release-notes.md
             fi
           else
-            gh release create "$GITHUB_REF_NAME" release-artifacts/* --verify-tag --notes-file release-notes.md --title "TaskHandoff $GITHUB_REF_NAME" "${prerelease_flag[@]}"
+            gh release create "$RELEASE_TAG" release-artifacts/* --verify-tag --notes-file release-notes.md --title "TaskHandoff $RELEASE_TAG" "${prerelease_flag[@]}"
           fi
 
       - name: Verify published update manifests
@@ -470,8 +505,8 @@ jobs:
           GH_TOKEN: ${{ secrets.DESKTOP_RELEASE_TOKEN || github.token }}
           GH_REPO: edgestorage/task-handoff
         run: |
-          assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
-          version="${GITHUB_REF_NAME#v}"
+          assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+          version="${RELEASE_TAG#v}"
           channel="latest"
           if [[ "$version" == *-* ]]; then
             channel="${version#*-}"
