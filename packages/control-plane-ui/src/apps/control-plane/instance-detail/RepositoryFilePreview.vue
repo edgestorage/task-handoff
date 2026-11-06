@@ -65,11 +65,11 @@ watch([() => props.path, () => props.content, validLine], async ([, , line]) => 
 .repository-file-preview-scroll { width: 100%; height: 100%; min-width: 0; min-height: 0; background: var(--workspace-bg); }
 .repository-file-preview-scroll :deep([data-task-handoff-scroll-viewport]) { width: 100%; height: 100%; }
 .repository-file-preview-scroll :deep([data-task-handoff-scroll-viewport] > div) { display: flex; min-width: 100%; width: max-content; min-height: 100%; background: var(--workspace-bg); font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; letter-spacing: 0; }
-.repository-file-preview-gutter { position: sticky; z-index: 2; left: 0; flex: none; border-right: 1px solid color-mix(in srgb, var(--line-subtle) 70%, transparent); background: var(--workspace-bg); color: var(--text-subtle); padding: 16px 8px; text-align: right; user-select: none; }
+.repository-file-preview-gutter { position: sticky; z-index: 2; left: 0; flex: none; border-right: 1px solid color-mix(in srgb, var(--line-subtle) 70%, transparent); background: var(--workspace-bg); color: var(--text-subtle); padding: 16px 8px; text-align: right; -webkit-user-select: none; user-select: none; }
 .repository-file-preview-gutter-lines { display: block; }
 .repository-file-preview-gutter-numbers { display: block; white-space: pre; }
 .repository-file-preview-gutter-numbers[data-active="true"] { background: color-mix(in srgb, var(--brand-accent) 13%, transparent); color: var(--brand-accent); }
-.repository-file-preview { position: relative; flex: 1 0 auto; min-width: max-content; min-height: 100%; margin: 0; background: var(--workspace-bg); color: var(--text); font: inherit; padding: 16px; tab-size: 2; white-space: pre; }
+.repository-file-preview { position: relative; flex: 1 0 auto; min-width: max-content; min-height: 100%; margin: 0; background: var(--workspace-bg); color: var(--text); font: inherit; padding: 16px; tab-size: 2; white-space: pre; cursor: text; -webkit-user-select: text; user-select: text; }
 .repository-file-preview code { position: relative; z-index: 1; font: inherit; }
 .repository-file-preview-line { position: absolute; z-index: 0; left: 0; right: 0; height: 1.55em; border-left: 2px solid var(--brand-accent); background: color-mix(in srgb, var(--brand-accent) 13%, transparent); pointer-events: none; }
 </style>

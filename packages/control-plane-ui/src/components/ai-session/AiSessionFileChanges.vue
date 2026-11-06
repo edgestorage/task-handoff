@@ -95,9 +95,9 @@ async function copyDiff(diff: string) {
 .ai-session-file-change-line { display: grid; min-height: 21px; grid-template-columns: 42px 42px 20px minmax(max-content, 1fr); font: 12px/21px var(--font-mono, monospace); }
 .ai-session-file-change-line[data-kind="addition"] { background: color-mix(in srgb, var(--status-success) 13%, var(--surface)); }
 .ai-session-file-change-line[data-kind="deletion"] { background: color-mix(in srgb, var(--status-danger) 12%, var(--surface)); }
-.ai-session-file-change-number { border-right: 1px solid color-mix(in srgb, var(--line-subtle) 70%, transparent); color: var(--text-subtle); padding: 0 7px; text-align: right; user-select: none; }
-.ai-session-file-change-marker { color: var(--text-muted); text-align: center; user-select: none; }
-.ai-session-file-change-line code { padding-right: 18px; color: var(--text); white-space: pre; }
+.ai-session-file-change-number { border-right: 1px solid color-mix(in srgb, var(--line-subtle) 70%, transparent); color: var(--text-subtle); padding: 0 7px; text-align: right; -webkit-user-select: none; user-select: none; }
+.ai-session-file-change-marker { color: var(--text-muted); text-align: center; -webkit-user-select: none; user-select: none; }
+.ai-session-file-change-line code { padding-right: 18px; color: var(--text); white-space: pre; cursor: text; -webkit-user-select: text; user-select: text; }
 .ai-session-file-change-empty { min-width: min(320px, 100%); color: var(--text-muted); font-size: 12px; padding: 14px 12px 4px; }
 </style>
 <style scoped src="../../apps/control-plane/instance-detail/RepositorySyntaxHighlight.css"></style>

@@ -54,6 +54,7 @@ const { applyMainWindowChromeDensity, applyWindowsTitleBarTheme, desktopTitleBar
 const { appendRotatingLog } = require("./rotating-log.cjs");
 const { markLogStreamUnavailable, writeLogLine } = require("./log-sink.cjs");
 const { DesktopBrowserContextManager } = require("./desktop-browser-contexts.cjs");
+const { externalNavigationUrl, isAllowedControlPlaneNavigation } = require("./navigation-policy.cjs");
 
 let mainWindow;
 let controlPlaneProcess;
@@ -374,9 +375,34 @@ function desktopWindowWebPreferences(webviewTag = false) {
 
 function openExternalWindowsOnly(webContents) {
   webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    void shell.openExternal(targetUrl);
+    const externalUrl = externalNavigationUrl(targetUrl);
+    if (externalUrl) void shell.openExternal(externalUrl);
     return { action: "deny" };
   });
+}
+
+function navigationOrigin(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return ["http:", "https:"].includes(url.protocol) ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function guardControlPlaneNavigation(webContents, trustedOrigin) {
+  const blockExternalNavigation = (event, targetUrl) => {
+    if (isAllowedControlPlaneNavigation(targetUrl, trustedOrigin)) return;
+    event.preventDefault();
+    const externalUrl = externalNavigationUrl(targetUrl);
+    logInfo(`[desktop-shell] blocked cross-origin navigation webContents=${webContents.id} url=${browserDiagnosticUrl(targetUrl)} trustedOrigin=${trustedOrigin || ""} external=${externalUrl ? "opened" : "ignored"}`);
+    if (!externalUrl) return;
+    void shell.openExternal(externalUrl).catch((error) => {
+      logError(`[desktop-shell] external navigation open failed url=${browserDiagnosticUrl(externalUrl)} error=${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+  webContents.on("will-navigate", blockExternalNavigation);
+  webContents.on("will-redirect", blockExternalNavigation);
 }
 
 function createDesktopBrowserWindow(options, windowsOverlayHeight, browserTabs = false) {
@@ -516,6 +542,7 @@ function createWindow(url) {
     icon: desktopIconPath(),
     backgroundColor: desktopWindowBackgroundColor("dark"),
   }, 56, true);
+  guardControlPlaneNavigation(mainWindow.webContents, navigationOrigin(url));
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
@@ -618,6 +645,7 @@ function createControlPlaneWindow(url) {
     icon: desktopIconPath(),
     backgroundColor: "#071013",
   }, 42, true);
+  guardControlPlaneNavigation(controlPlaneWindow.webContents, parsedUrl.origin);
   if (instanceId) {
     let persistSizeTimer;
     const persistSize = () => {

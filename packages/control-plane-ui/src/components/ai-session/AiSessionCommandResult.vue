@@ -55,6 +55,6 @@ async function copyOutput() {
 .ai-session-command-result-copy { display: inline-flex; width: 24px; height: 24px; flex: 0 0 auto; align-items: center; justify-content: center; margin-left: auto; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0; }
 .ai-session-command-result-copy:hover, .ai-session-command-result-copy:focus-visible { outline: 0; background: var(--surface-hover); color: var(--text); }
 .ai-session-command-result-scroll { width: 100%; max-height: 320px; }
-.ai-session-command-result pre { min-width: max-content; margin: 0; background: transparent; color: var(--text); font: 12px/1.55 var(--font-mono, monospace); letter-spacing: 0; padding: 9px 12px 18px; tab-size: 2; white-space: pre; }
+.ai-session-command-result pre { min-width: max-content; margin: 0; background: transparent; color: var(--text); font: 12px/1.55 var(--font-mono, monospace); letter-spacing: 0; padding: 9px 12px 18px; tab-size: 2; white-space: pre; cursor: text; -webkit-user-select: text; user-select: text; }
 .ai-session-command-result-empty { color: var(--text-muted); font-size: 12px; padding: 13px 11px; }
 </style>

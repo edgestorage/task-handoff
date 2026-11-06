@@ -25,7 +25,7 @@ const direct: MobileControlPlaneProfile = {
   createdAt: '2026-08-29T00:00:00.000Z',
   updatedAt: '2026-08-29T00:00:00.000Z',
 };
-const timeline = { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] };
+const timeline = { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [], toolActivityAgents: [] };
 
 test('Browser capability requires native, directory, and Direct transport support', async () => {
   await expect(mobileBrowserCapability(direct, { browserTunnel: true, aiSessionTimeline: timeline })).resolves.toMatchObject({ supported: true });

@@ -5,7 +5,8 @@ use controlled_instance_core::atomic::write_json_atomic;
 use controlled_instance_protocol::{
     AiSessionConversationAttachment, AiSessionTimeline, AiSessionTimelineItem,
     AiSessionTimelineItemRevision, AiSessionTimelineSyncRead, AiSessionTimelineVersionedItem,
-    AiSessionTurnTimeline, AI_SESSION_MAX_TIMELINE_ATTACHMENTS, AI_SESSION_TIMELINE_SYNC_MAX_ITEMS,
+    AiSessionToolActivityWindow, AiSessionTurnTimeline, AI_SESSION_MAX_TIMELINE_ATTACHMENTS,
+    AI_SESSION_TIMELINE_SYNC_MAX_ITEMS, AI_SESSION_TOOL_ACTIVITY_WINDOW_MAX_ITEMS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -256,6 +257,43 @@ pub fn ai_session_timeline_item_revision(item: &AiSessionTimelineItem) -> String
     revision_hash(&serde_json::to_value(item).unwrap_or(Value::Null))
 }
 
+pub fn ai_session_tool_activity_window(
+    timeline: &AiSessionTurnTimeline,
+) -> AiSessionToolActivityWindow {
+    let boundary_index = timeline
+        .items
+        .iter()
+        .rposition(|item| matches!(item, AiSessionTimelineItem::AiMessage { .. }));
+    let boundary = boundary_index.map(|index| &timeline.items[index]);
+    let activities = timeline
+        .items
+        .iter()
+        .skip(boundary_index.map(|index| index + 1).unwrap_or(0))
+        .filter(|item| matches!(item, AiSessionTimelineItem::Activity { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    let total = activities.len();
+    let items = activities
+        .into_iter()
+        .skip(total.saturating_sub(AI_SESSION_TOOL_ACTIVITY_WINDOW_MAX_ITEMS))
+        .collect::<Vec<_>>();
+    let truncated = items.len() < total;
+    let revision = revision_hash(&serde_json::json!({
+        "boundaryItemId": boundary.map(AiSessionTimelineItem::id),
+        "items": items,
+    }));
+    AiSessionToolActivityWindow {
+        session_id: timeline.session_id.clone(),
+        turn_id: timeline.turn_id.clone(),
+        revision,
+        boundary_item_id: boundary.map(|item| item.id().to_string()),
+        items,
+        total,
+        truncated,
+        generated_at: timeline.generated_at.clone(),
+    }
+}
+
 pub fn sync_ai_session_timeline_items(
     items: &[AiSessionTimelineItem],
     known_items: &[AiSessionTimelineItemRevision],
@@ -485,6 +523,74 @@ mod tests {
             turn_id: turn_id.to_string(),
             text: text.to_string(),
         }
+    }
+
+    fn activity(id: &str, turn_id: &str) -> AiSessionTimelineItem {
+        AiSessionTimelineItem::Activity {
+            id: id.to_string(),
+            turn_id: turn_id.to_string(),
+            activity_kind: "commandExecution".to_string(),
+            title: "Command".to_string(),
+            status: None,
+            summary: None,
+            input: None,
+            output: None,
+            paths: None,
+            exit_code: None,
+            duration_ms: None,
+        }
+    }
+
+    #[test]
+    fn tool_activity_window_keeps_only_the_latest_message_tail() {
+        let timeline = AiSessionTurnTimeline {
+            session_id: "session-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            items: vec![
+                activity("before", "turn-1"),
+                item("message-1", "turn-1", "First"),
+                activity("first-tail", "turn-1"),
+                item("message-2", "turn-1", "Second"),
+                activity("tail-1", "turn-1"),
+                activity("tail-2", "turn-1"),
+            ],
+            generated_at: "2026-11-06T00:00:00.000Z".to_string(),
+        };
+        let window = ai_session_tool_activity_window(&timeline);
+        assert_eq!(window.boundary_item_id.as_deref(), Some("message-2"));
+        assert_eq!(
+            window
+                .items
+                .iter()
+                .map(AiSessionTimelineItem::id)
+                .collect::<Vec<_>>(),
+            vec!["tail-1", "tail-2"]
+        );
+        assert_eq!(window.total, 2);
+        assert!(!window.truncated);
+        assert_eq!(
+            window.revision,
+            ai_session_tool_activity_window(&timeline).revision
+        );
+    }
+
+    #[test]
+    fn tool_activity_window_is_bounded_and_reports_the_complete_total() {
+        let mut items = vec![item("message-1", "turn-1", "Done")];
+        items.extend((0..55).map(|index| activity(&format!("tail-{index}"), "turn-1")));
+        let window = ai_session_tool_activity_window(&AiSessionTurnTimeline {
+            session_id: "session-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            items,
+            generated_at: "2026-11-06T00:00:00.000Z".to_string(),
+        });
+        assert_eq!(
+            window.items.len(),
+            AI_SESSION_TOOL_ACTIVITY_WINDOW_MAX_ITEMS
+        );
+        assert_eq!(window.items[0].id(), "tail-5");
+        assert_eq!(window.total, 55);
+        assert!(window.truncated);
     }
 
     #[test]

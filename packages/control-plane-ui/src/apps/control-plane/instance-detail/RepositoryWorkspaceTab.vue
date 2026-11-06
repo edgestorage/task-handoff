@@ -12,6 +12,7 @@
       :initial-file-path="initialFilePath"
       :initial-file-request-id="initialFileRequestId"
       :path-search-supported="pathSearchSupported"
+      :file-content-supported="fileContentSupported"
       :session-id="sessionId"
       :session-kind="sessionKind"
       @open-changes="openWorkspaceFromPane"
@@ -29,7 +30,7 @@ import type { SessionTab } from "../useInstanceSessions";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryWorkspace from "./RepositoryWorkspace.vue";
 
-const props = defineProps<{ instanceId: string; pathSearchSupported: boolean; session: SessionTab }>();
+const props = defineProps<{ instanceId: string; pathSearchSupported: boolean; fileContentSupported: boolean; session: SessionTab }>();
 const { t } = useI18n();
 const emit = defineEmits<{ openWorkspace: [target: { cwdFolderId?: string; initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }] }>();
 const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : "");

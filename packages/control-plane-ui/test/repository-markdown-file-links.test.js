@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { repositoryFileLocation, repositoryRelativeFilePath } from "../src/apps/control-plane/instance-detail/repositoryFilePath.ts";
-import { classifyMarkdownLink } from "../src/components/ai-session/markdown-link-target.ts";
+import { classifyMarkdownLink, resolveRuntimeFilePath } from "../src/components/ai-session/markdown-link-target.ts";
 
 const context = {
   availability: "available",
@@ -48,6 +48,14 @@ test("Markdown file paths preserve source line and column locations", () => {
   assert.deepEqual(repositoryFileLocation("../spec.md:24:7", context), { path: "packages/spec.md", line: 24, column: 7 });
   assert.deepEqual(repositoryFileLocation("README.md#L8", context), { path: "packages/ui/README.md", line: 8, column: undefined });
   assert.deepEqual(repositoryFileLocation("README.md#L8C3-L12C9", context), { path: "packages/ui/README.md", line: 8, column: 3 });
+});
+
+test("runtime file links resolve relative paths against the local session cwd", () => {
+  assert.equal(resolveRuntimeFilePath("knowledge/note.md", "/Users/me/project"), "/Users/me/project/knowledge/note.md");
+  assert.equal(resolveRuntimeFilePath("/Users/me/project/knowledge/note.md", "/ignored"), "/Users/me/project/knowledge/note.md");
+  assert.equal(resolveRuntimeFilePath("knowledge\\note.md", "C:\\Users\\me\\project\\"), "C:\\Users\\me\\project\\knowledge\\note.md");
+  assert.equal(resolveRuntimeFilePath("knowledge/note.md"), undefined);
+  assert.equal(resolveRuntimeFilePath("knowledge/note.md", "relative/project"), undefined);
 });
 
 test("AI session Markdown file links are routed into File Explorer", async () => {

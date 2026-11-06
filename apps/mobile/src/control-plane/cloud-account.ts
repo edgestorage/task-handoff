@@ -1,5 +1,6 @@
 import { MOBILE_REFRESH_RECOVERY_PROTOCOL_VERSION, OfficialMobileAccountClient as CloudMobileAccountClient, type MobileTokenResponse } from '@task-handoff/cloud-contracts/mobile';
 import * as Crypto from 'expo-crypto';
+import Constants from 'expo-constants';
 import type { SecureValueStore } from '../platform/secure-storage';
 import { isMobileTestMode, isTrustedMobileCloudServiceOrigin, mobileCloudEnvironment } from '../platform/build-variant';
 import { markCloudAccountReauthenticationRequired } from './account-reauthentication';
@@ -37,6 +38,11 @@ export class MobileCloudAccountSession {
     if (this.baseOrigin !== mobileCloudEnvironment.serviceOrigin && !trustedDevelopment && !trustedEnvironment && !trustedDiscovery) throw cloudError('UNTRUSTED_CLOUD_SERVICE_ORIGIN');
     this.client = new CloudMobileAccountClient({
       origin: this.baseOrigin,
+      clientVersion: Constants.expoConfig?.version,
+      clientBuild: Constants.platform?.ios?.buildNumber
+        ?? (Constants.platform?.android?.versionCode !== undefined ? String(Constants.platform.android.versionCode) : undefined)
+        ?? Constants.expoConfig?.ios?.buildNumber
+        ?? (Constants.expoConfig?.android?.versionCode !== undefined ? String(Constants.expoConfig.android.versionCode) : undefined),
       request: options.request ?? (options.endpointResolver?.enabled ? options.endpointResolver.request : undefined),
       accessToken: () => this.accessToken(),
     });

@@ -2006,6 +2006,10 @@ export class ControlPlaneService {
     return this.aiSessionActionService.turnTimeline(instanceId, aiSessionId, turnId, revision);
   }
 
+  getAiSessionToolActivityWindow(instanceId: string, aiSessionId: string, turnId: string) {
+    return this.aiSessionActionService.toolActivityWindow(instanceId, aiSessionId, turnId);
+  }
+
   syncAiSessionTimeline(instanceId: string, aiSessionId: string, knownItems: ReadonlyArray<{ id: string; revision: string }>) {
     return this.aiSessionActionService.syncTimeline(instanceId, aiSessionId, knownItems);
   }

@@ -39,6 +39,7 @@ export type MarkdownCodeTools = {
 
 export type MarkdownRenderOptions = {
   codeTools?: MarkdownCodeTools;
+  resolveImageSrc?: (href: string) => string | undefined;
 };
 
 const languages = {
@@ -98,6 +99,24 @@ export function highlightSource(value: unknown, language?: unknown) {
   return hljs.highlight(text, { language: requestedLanguage, ignoreIllegals: true }).value;
 }
 
+export function isExternalWebHref(value: unknown, baseUrl?: string) {
+  const href = String(value ?? "").trim();
+  if (!href) return false;
+  let target: URL;
+  try {
+    target = baseUrl ? new URL(href, baseUrl) : new URL(href);
+  } catch {
+    return false;
+  }
+  if (target.protocol !== "http:" && target.protocol !== "https:") return false;
+  if (!baseUrl) return true;
+  try {
+    return target.origin !== new URL(baseUrl).origin;
+  } catch {
+    return true;
+  }
+}
+
 function createRenderer(options: MarkdownRenderOptions = {}) {
   const renderer = new Renderer();
   // Raw HTML is displayed as source. This keeps session content untrusted while
@@ -108,6 +127,12 @@ function createRenderer(options: MarkdownRenderOptions = {}) {
     return `<div class="markdown-table-wrapper">${table}</div>\n`;
   };
   renderer.code = ({ text, lang }) => renderCodeBlock(text, lang, options.codeTools);
+  if (options.resolveImageSrc) {
+    renderer.image = function (token) {
+      const href = options.resolveImageSrc!(token.href);
+      return href ? Reflect.apply(Renderer.prototype.image, this, [{ ...token, href }]) : escapeHtml(token.text);
+    };
+  }
   return renderer;
 }
 

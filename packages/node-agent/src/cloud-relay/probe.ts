@@ -18,7 +18,7 @@ export interface NodeRelayProbeResult {
 }
 
 /**
- * Measures at most three allowlisted Relay peers in parallel. Each target gets
+ * Measures at most ten allowlisted Relay peers in parallel. Each target gets
  * two sequential samples; the shared deadline also caps a peer that ignores its
  * abort signal. The `/probe` call carries no credentials and never follows a
  * redirect, matching the Control Plane's coarse link measurement.

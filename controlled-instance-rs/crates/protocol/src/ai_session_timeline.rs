@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const AI_SESSION_MAX_TIMELINE_ATTACHMENTS: usize = 6;
 pub const AI_SESSION_TIMELINE_SYNC_MAX_ITEMS: usize = 10_000;
+pub const AI_SESSION_TOOL_ACTIVITY_WINDOW_MAX_ITEMS: usize = 50;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -121,6 +122,20 @@ pub struct AiSessionTurnTimeline {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSessionToolActivityWindow {
+    pub session_id: String,
+    pub turn_id: String,
+    pub revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_item_id: Option<String>,
+    pub items: Vec<AiSessionTimelineItem>,
+    pub total: usize,
+    pub truncated: bool,
+    pub generated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AiSessionTimelineItemRevision {
     pub id: String,
@@ -195,5 +210,23 @@ mod tests {
             serde_json::to_value(not_modified).expect("serialize")["kind"],
             "not-modified"
         );
+    }
+
+    #[test]
+    fn tool_activity_window_uses_the_bounded_wire_shape() {
+        let window = AiSessionToolActivityWindow {
+            session_id: "session-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            revision: "revision".to_string(),
+            boundary_item_id: Some("message-1".to_string()),
+            items: Vec::new(),
+            total: 0,
+            truncated: false,
+            generated_at: "2026-11-06T00:00:00.000Z".to_string(),
+        };
+        let value = serde_json::to_value(window).expect("serialize");
+        assert_eq!(value["boundaryItemId"], "message-1");
+        assert_eq!(value["total"], 0);
+        assert_eq!(value["truncated"], false);
     }
 }

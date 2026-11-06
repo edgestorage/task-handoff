@@ -36,8 +36,9 @@
     >
       <div v-if="interactive && expanded" class="ai-session-tool-activity-expanded">
         <div class="ai-session-tool-activity-expanded-content">
-          <span v-if="loading">{{ t("sessions.timeline.loading") }}</span>
+          <span v-if="loading || (!contentLoaded && !error && !unavailable)">{{ t("sessions.timeline.activityLoading") }}</span>
           <span v-else-if="error" role="alert">{{ error }}</span>
+          <span v-else-if="unavailable">{{ t("sessions.timeline.activityUnavailable") }}</span>
           <template v-else-if="displayNodes.length">
             <template v-for="node in displayNodes" :key="node.id">
               <article
@@ -89,6 +90,8 @@ const props = withDefaults(defineProps<{
   error?: string;
   interactive?: boolean;
   loading?: boolean;
+  contentLoaded?: boolean;
+  unavailable?: boolean;
 }>(), {
   currentTool: undefined,
   phase: "unknown",
@@ -101,8 +104,10 @@ const props = withDefaults(defineProps<{
   error: "",
   interactive: false,
   loading: false,
+  contentLoaded: true,
+  unavailable: false,
 });
-const emit = defineEmits<{ addToConversation: [content: string] }>();
+const emit = defineEmits<{ addToConversation: [content: string]; load: [] }>();
 const { t } = useI18n();
 const markdownCodeTools = computed(() => ({
   copiedLabel: t("sessions.markdown.copied"),
@@ -147,6 +152,7 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
 function toggleExpanded(event: MouseEvent) {
   beginDisclosureTransition(event.currentTarget as Element);
   expanded.value = !expanded.value;
+  if (expanded.value && !props.contentLoaded && !props.loading && !props.unavailable) emit("load");
 }
 const statusText = computed(() => {
   if (props.phase === "approval") {

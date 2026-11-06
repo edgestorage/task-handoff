@@ -9,6 +9,7 @@ import { useAiSessionTimelineStore } from "../src/apps/control-plane/useAiSessio
 
 const panelUrl = new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url);
 const presentationSource = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionTimelinePresentation.ts", import.meta.url), "utf8");
+const toolActivityWindowSource = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionToolActivityWindow.ts", import.meta.url), "utf8");
 
 function loadTimelinePresentation(readTimeline, readTurnTimeline, syncTimeline, syncTurnTimeline) {
   const compiled = ts.transpileModule(presentationSource, {
@@ -25,6 +26,7 @@ function loadTimelinePresentation(readTimeline, readTurnTimeline, syncTimeline, 
     "@task-handoff/protocol/control-plane": { supportsAiSessionTimelineCapability },
     "../../api/queries": {
       getAiSessionTimeline: readTimeline,
+      getAiSessionToolActivityWindow: async () => { throw new Error("tool activity is not expected"); },
       getAiSessionTurnTimeline: readTurnTimeline,
       syncAiSessionTimeline: syncTimeline,
       syncAiSessionTurnTimeline: syncTurnTimeline,
@@ -33,6 +35,14 @@ function loadTimelinePresentation(readTimeline, readTurnTimeline, syncTimeline, 
     "../../components/ai-session/timelineActivities": { compactTimelineForTurn },
     "./useInstanceSessions": { aiSessionTurns: (session) => session?.turns || [] },
     "./useAiSessionTimelineStore": { useAiSessionTimelineStore },
+    "./useAiSessionToolActivityWindow": {
+      useAiSessionToolActivityWindow: () => ({
+        conversationToolActivityWindows: vue.ref({}),
+        loadToolActivityWindow: async () => undefined,
+        selectedToolActivityWindow: vue.ref({ status: "idle", items: [], total: 0, truncated: false }),
+        supportsToolActivity: vue.ref(false),
+      }),
+    },
   };
   new Function("require", "exports", "module", compiled)((name) => {
     if (name in modules) return modules[name];
@@ -40,6 +50,217 @@ function loadTimelinePresentation(readTimeline, readTurnTimeline, syncTimeline, 
   }, module.exports, module);
   return module.exports.useAiSessionTimelinePresentation;
 }
+
+function loadToolActivityWindow(readWindow, timelineStore = useAiSessionTimelineStore()) {
+  const compiled = ts.transpileModule(toolActivityWindowSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const module = { exports: {} };
+  const modules = {
+    vue,
+    "vue-i18n": { useI18n: () => ({ t: (key) => key }) },
+    "@task-handoff/protocol/control-plane": { supportsAiSessionTimelineCapability },
+    "@task-handoff/protocol/ai-sessions": { AI_SESSION_TOOL_ACTIVITY_WINDOW_MAX_ITEMS: 50 },
+    "../../api/queries": { getAiSessionToolActivityWindow: readWindow },
+    "../../i18n/apiError": { translateApiError: (error) => error instanceof Error ? error.message : String(error) },
+    "./useInstanceSessions": { aiSessionTurns: (session) => session?.turns || [] },
+    "./useAiSessionTimelineStore": { useAiSessionTimelineStore: () => timelineStore },
+  };
+  new Function("require", "exports", "module", compiled)((name) => {
+    if (name in modules) return modules[name];
+    throw new Error(`Unexpected tool activity window import: ${name}`);
+  }, module.exports, module);
+  return module.exports.useAiSessionToolActivityWindow;
+}
+
+test("bounded tool activity hydrates only on demand and refetches after returning to a session", async () => {
+  const instanceId = "instance-tool-window";
+  const instance = {
+    id: instanceId,
+    capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: ["codex"],
+      liveItemAgents: ["codex"],
+      toolActivityAgents: ["codex"],
+    } } },
+  };
+  const sessionA = { id: "session-a", agent: "codex", turns: [{ id: "turn-a", providerTurnId: "provider-turn-a", status: "running", revision: 1 }] };
+  const sessionB = { id: "session-b", agent: "codex", turns: [{ id: "turn-b", providerTurnId: "provider-turn-b", status: "running", revision: 1 }] };
+  const currentSession = vue.ref(sessionA);
+  const timelineStore = useAiSessionTimelineStore();
+  const reads = [];
+  const useToolActivityWindow = loadToolActivityWindow(async (readInstanceId, readSessionId, readTurnId) => {
+    reads.push({ readInstanceId, readSessionId, readTurnId });
+    return {
+      sessionId: readSessionId,
+      turnId: readTurnId,
+      revision: `revision-${reads.length}`,
+      boundaryItemId: "message-1",
+      items: [{ id: `command-${reads.length}`, turnId: readTurnId, type: "activity", activityKind: "commandExecution", title: "Command", status: "completed" }],
+      total: 1,
+      truncated: false,
+      generatedAt: "2026-11-06T00:00:00.000Z",
+    };
+  }, timelineStore);
+  timelineStore.cleanupInstance(instanceId);
+  const scope = vue.effectScope();
+  let presentation;
+  scope.run(() => {
+    presentation = useToolActivityWindow({
+      instance: () => instance,
+      promptIndex: () => 0,
+      session: currentSession,
+    });
+  });
+
+  try {
+    assert.equal(presentation.supportsToolActivity.value, true);
+    assert.equal(presentation.selectedToolActivityWindow.value.status, "idle");
+    assert.equal(reads.length, 0);
+
+    await presentation.loadToolActivityWindow("turn-a");
+    assert.deepEqual(reads, [{ readInstanceId: instanceId, readSessionId: "session-a", readTurnId: "turn-a" }]);
+    assert.deepEqual(presentation.selectedToolActivityWindow.value.items.map((item) => item.id), ["command-1"]);
+
+    await presentation.loadToolActivityWindow("turn-a");
+    assert.equal(reads.length, 1);
+
+    currentSession.value = sessionB;
+    await vue.nextTick();
+    assert.equal(presentation.selectedToolActivityWindow.value.status, "idle");
+    currentSession.value = sessionA;
+    await vue.nextTick();
+    assert.equal(presentation.selectedToolActivityWindow.value.status, "idle");
+    await presentation.loadToolActivityWindow("turn-a");
+    assert.equal(reads.length, 2);
+  } finally {
+    scope.stop();
+    timelineStore.cleanupInstance(instanceId);
+  }
+});
+
+test("bounded tool activity keeps later live events without another HTTP read", async () => {
+  const instanceId = "instance-tool-window-live";
+  const instance = {
+    id: instanceId,
+    capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: ["codex"],
+      liveItemAgents: ["codex"],
+      toolActivityAgents: ["codex"],
+    } } },
+  };
+  const session = { id: "session-live", agent: "codex", turns: [{ id: "turn-live", providerTurnId: "provider-turn-live", status: "running", revision: 1 }] };
+  const timelineStore = useAiSessionTimelineStore();
+  let reads = 0;
+  const useToolActivityWindow = loadToolActivityWindow(async (_instanceId, readSessionId, readTurnId) => {
+    reads += 1;
+    return {
+      sessionId: readSessionId,
+      turnId: readTurnId,
+      revision: "revision-live",
+      boundaryItemId: "message-live",
+      items: [{ id: "command-before", turnId: "provider-turn-live", type: "activity", activityKind: "commandExecution", title: "Before", status: "completed" }],
+      total: 1,
+      truncated: false,
+      generatedAt: "2026-11-06T00:00:00.000Z",
+    };
+  }, timelineStore);
+  timelineStore.cleanupInstance(instanceId);
+  const scope = vue.effectScope();
+  let presentation;
+  scope.run(() => {
+    presentation = useToolActivityWindow({ instance: () => instance, promptIndex: () => 0, session: () => session });
+  });
+
+  try {
+    await presentation.loadToolActivityWindow("turn-live");
+    timelineStore.apply({
+      instanceId,
+      sessionId: "session-live",
+      providerSessionId: "provider-session-live",
+      generatedAt: "2026-11-06T00:00:01.000Z",
+      item: { id: "command-live", turnId: "provider-turn-live", type: "activity", activityKind: "commandExecution", title: "Live", status: "running" },
+    });
+    await vue.nextTick();
+    assert.deepEqual(presentation.selectedToolActivityWindow.value.items.map((item) => item.id), ["command-before", "command-live"]);
+    assert.equal(presentation.selectedToolActivityWindow.value.total, 2);
+    assert.equal(reads, 1);
+  } finally {
+    scope.stop();
+    timelineStore.cleanupInstance(instanceId);
+  }
+});
+
+test("bounded tool activity isolates in-flight reads across recovery epochs", async () => {
+  const instanceId = "instance-tool-window-recovery";
+  const instance = {
+    id: instanceId,
+    capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: ["codex"],
+      liveItemAgents: ["codex"],
+      toolActivityAgents: ["codex"],
+    } } },
+  };
+  const session = { id: "session-recovery", agent: "codex", turns: [{ id: "turn-recovery", providerTurnId: "provider-turn-recovery", status: "running", revision: 1 }] };
+  const timelineStore = useAiSessionTimelineStore();
+  let reads = 0;
+  let resolveFirstRead;
+  const firstRead = new Promise((resolve) => { resolveFirstRead = resolve; });
+  const useToolActivityWindow = loadToolActivityWindow(async (_instanceId, readSessionId, readTurnId) => {
+    reads += 1;
+    if (reads === 1) return firstRead;
+    return {
+      sessionId: readSessionId,
+      turnId: readTurnId,
+      revision: "revision-after-recovery",
+      boundaryItemId: "message-after-recovery",
+      items: [{ id: "command-after-recovery", turnId: readTurnId, type: "activity", activityKind: "commandExecution", title: "After recovery", status: "completed" }],
+      total: 1,
+      truncated: false,
+      generatedAt: "2026-11-06T00:00:02.000Z",
+    };
+  }, timelineStore);
+  timelineStore.cleanupInstance(instanceId);
+  const scope = vue.effectScope();
+  let presentation;
+  scope.run(() => {
+    presentation = useToolActivityWindow({ instance: () => instance, promptIndex: () => 0, session: () => session });
+  });
+
+  try {
+    const staleLoad = presentation.loadToolActivityWindow("turn-recovery");
+    assert.equal(reads, 1);
+    assert.equal(presentation.selectedToolActivityWindow.value.status, "loading");
+
+    timelineStore.recoverConnection();
+    const freshLoad = presentation.loadToolActivityWindow("turn-recovery");
+    await freshLoad;
+    assert.equal(reads, 2);
+    assert.deepEqual(presentation.selectedToolActivityWindow.value.items.map((item) => item.id), ["command-after-recovery"]);
+
+    resolveFirstRead({
+      sessionId: "session-recovery",
+      turnId: "turn-recovery",
+      revision: "revision-before-recovery",
+      boundaryItemId: "message-before-recovery",
+      items: [{ id: "command-before-recovery", turnId: "turn-recovery", type: "activity", activityKind: "commandExecution", title: "Before recovery", status: "completed" }],
+      total: 1,
+      truncated: false,
+      generatedAt: "2026-11-06T00:00:01.000Z",
+    });
+    await staleLoad;
+    assert.deepEqual(presentation.selectedToolActivityWindow.value.items.map((item) => item.id), ["command-after-recovery"]);
+  } finally {
+    scope.stop();
+    timelineStore.cleanupInstance(instanceId);
+  }
+});
 
 test("live Timeline store replaces item lifecycle updates in place", () => {
   const store = useAiSessionTimelineStore();
@@ -895,7 +1116,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(markdownContent, /\.markdown-content :deep\(> :first-child\) \{\s*margin-top: 0 !important;/);
   assert.match(markdownContent, /\.markdown-content :deep\(> :last-child\) \{\s*margin-bottom: 0 !important;/);
   assert.doesNotMatch(markdownContent, /:where\(\.markdown-content\) :deep\(> :(?:first|last)-child\)/);
-  assert.match(timeline, /<AiSessionResult[\s\S]*:is-latest="isLatestTurn\(virtualTurn\.index\)"[\s\S]*:response-content="turns\[virtualTurn\.index\]\.latestResponse\?\.text \|\| ''"[\s\S]*:session="session"[\s\S]*:activities="turns\[virtualTurn\.index\]\.activities"[\s\S]*:activity-history="turns\[virtualTurn\.index\]\.history"[\s\S]*activity-interactive/);
+  assert.match(timeline, /<AiSessionResult[\s\S]*:is-latest="isLatestTurn\(virtualTurn\.index\)"[\s\S]*:response-content="turns\[virtualTurn\.index\]\.latestResponse\?\.text \|\| ''"[\s\S]*:session="session"[\s\S]*:activities="turns\[virtualTurn\.index\]\.toolActivityWindow\.items"[\s\S]*:activity-loaded="turns\[virtualTurn\.index\]\.toolActivityWindow\.status === 'ready'"[\s\S]*:activity-loading="turns\[virtualTurn\.index\]\.toolActivityWindow\.status === 'loading'"[\s\S]*:activity-unavailable="!supportsToolActivity"[\s\S]*:activity-history="turns\[virtualTurn\.index\]\.history"[\s\S]*activity-interactive[\s\S]*@load-tool-activity="\$emit\('loadToolActivityWindow', turns\[virtualTurn\.index\]\.id\)"/);
   assert.doesNotMatch(timeline, /<AiSessionTurnHistory|<AiSessionActivityGroup/);
   assert.match(timeline, /return index === turns\.value\.length - 1/);
   assert.match(timeline, /import \{ elementScroll, useVirtualizer \} from "@tanstack\/vue-virtual"/);
@@ -1135,8 +1356,11 @@ test("compact mode renders history, latest AI response, then only the live activ
   const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
   assert.match(conversation, /aiSessionTurns\(props\.session\)\[props\.promptIndex\]/);
-  assert.match(conversation, /:activities="selectedTimeline\.activities"/);
-  assert.match(conversation, /:activity-nodes="selectedTimeline\.activityNodes"/);
+  assert.match(conversation, /:activities="selectedToolActivityWindow\.items"/);
+  assert.match(conversation, /:activity-loaded="selectedToolActivityWindow\.status === 'ready'"/);
+  assert.match(conversation, /@load-tool-activity="\$emit\('loadToolActivityWindow', selectedTurn\?\.id \|\| ''\)"/);
+  assert.match(conversation, /:tool-activity-windows="toolActivityWindows"/);
+  assert.match(conversation, /@load-tool-activity-window="\(turnId\) => \$emit\('loadToolActivityWindow', turnId\)"/);
   assert.match(conversation, /:activity-history="selectedTimeline\.history"/);
   assert.match(conversation, /:retry-warning="selectedTimeline\.retryWarning"/);
   assert.match(result, /<details v-if="retryWarning" class="ai-session-retry-warning" role="status"/);

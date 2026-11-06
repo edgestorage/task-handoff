@@ -254,8 +254,8 @@ export const NodeRelayAllocationResponseSchema = z.strictObject({
   allocations: z.array(NodeRelayNodeAllocationSchema),
 });
 
-/** Reconnect probing is deliberately small: at most three peers, two samples, one shared budget. */
-export const NODE_RELAY_PROBE_TARGET_LIMIT = 3;
+/** Reconnect probing is deliberately small: at most ten peers, two samples, one shared budget. */
+export const NODE_RELAY_PROBE_TARGET_LIMIT = 10;
 export const NODE_RELAY_PROBE_SAMPLE_COUNT = 2;
 export const NODE_RELAY_PROBE_BUDGET_MS = 1_200;
 export const NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE = "NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED";
@@ -271,6 +271,8 @@ export const NodeRelayProbeTargetSchema = z.strictObject({
  * until one winner has been selected.
  */
 export const NodeRelayProbeTargetsRequestSchema = z.strictObject({
+  /** Client-owned response budget, bounded by the shared target limit. */
+  maxTargets: z.number().int().min(1).max(NODE_RELAY_PROBE_TARGET_LIMIT).optional(),
   nodeId: IdSchema.optional(),
   controlPlaneIds: z.array(IdSchema).max(8).optional(),
 });

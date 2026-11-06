@@ -7,6 +7,7 @@ import { translateApiError } from "../../i18n/apiError";
 import { compactTimelineForTurn } from "../../components/ai-session/timelineActivities";
 import { aiSessionTurns } from "./useInstanceSessions";
 import { useAiSessionTimelineStore } from "./useAiSessionTimelineStore";
+import { useAiSessionToolActivityWindow } from "./useAiSessionToolActivityWindow";
 
 const activeTurnTimelineLoads = new Map<string, Promise<void>>();
 const activeSessionTimelineLoads = new Map<string, Promise<void>>();
@@ -38,6 +39,12 @@ export function useAiSessionTimelinePresentation(options: {
   const instance = computed(() => toValue(options.instance));
   const session = computed(() => toValue(options.session));
   const promptIndex = computed(() => toValue(options.promptIndex));
+  const {
+    conversationToolActivityWindows,
+    loadToolActivityWindow,
+    selectedToolActivityWindow,
+    supportsToolActivity,
+  } = useAiSessionToolActivityWindow({ instance, promptIndex, session });
   const timelineRefreshEpoch = ref(0);
   const supportsSessionRead = computed(() => {
     const current = session.value;
@@ -238,12 +245,16 @@ export function useAiSessionTimelinePresentation(options: {
   );
 
   return {
+    conversationToolActivityWindows,
     conversationTurnTimelines,
     loadFullTimeline,
+    loadToolActivityWindow,
     loadTurnTimeline,
     selectedTurn,
     selectedTurnState,
     selectedTurnTimeline,
+    selectedToolActivityWindow,
+    supportsToolActivity,
     supportsTimeline,
     supportsTimelineReads,
   };

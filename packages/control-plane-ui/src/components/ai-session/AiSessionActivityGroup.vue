@@ -353,6 +353,8 @@ function runtimePathBasename(path: string) {
 .ai-session-activity-details :deep(.markdown-content) {
   font-size: 14px;
   line-height: 1.55;
+  -webkit-user-select: text;
+  user-select: text;
 }
 .ai-session-activity-details :deep(.markdown-content > :first-child) { margin-top: 0; }
 .ai-session-activity-details :deep(.markdown-content > :last-child) { margin-bottom: 0; }
@@ -373,6 +375,9 @@ function runtimePathBasename(path: string) {
   font: 12px/1.45 var(--font-mono, monospace);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
 }
 .activity-disclosure-enter-active,
 .activity-disclosure-leave-active { overflow: hidden; transition: height 180ms ease, opacity 180ms ease; will-change: height; }

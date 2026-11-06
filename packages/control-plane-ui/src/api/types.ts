@@ -28,6 +28,7 @@ import type {
   AiSessionSnapshotEvent as ProtocolAiSessionSnapshotEvent,
   AiSessionSource as ProtocolAiSessionSource,
   AiSessionTool as ProtocolAiSessionTool,
+  AiSessionToolActivityWindow,
   AiSessionTurn as ProtocolAiSessionTurn,
 } from "@task-handoff/protocol/ai-sessions";
 import { AiSessionEventType as ProtocolAiSessionEventType } from "@task-handoff/protocol/ai-sessions";
@@ -66,7 +67,7 @@ import type {
   ControlPlaneAuthSession as SharedControlPlaneAuthSession,
 } from "@task-handoff/control-plane-client";
 
-export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionForkResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult, AiSessionTimeline, AiSessionTurnTimeline };
+export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionForkResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult, AiSessionTimeline, AiSessionToolActivityWindow, AiSessionTurnTimeline };
 
 export type HealthResponse = {
   ok: boolean;

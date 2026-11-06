@@ -757,6 +757,10 @@ export function getAiSessionTurnTimeline(instanceId: string, aiSessionId: string
   return sharedAiSessionsApi.turnTimeline(instanceId, aiSessionId, turnId, revision, signal);
 }
 
+export function getAiSessionToolActivityWindow(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.toolActivity(instanceId, aiSessionId, turnId, signal);
+}
+
 export function syncAiSessionTimeline(instanceId: string, aiSessionId: string, knownItems: ReadonlyArray<{ id: string; revision: string }>, signal?: AbortSignal) {
   return sharedAiSessionsApi.syncTimeline(instanceId, aiSessionId, knownItems, signal);
 }

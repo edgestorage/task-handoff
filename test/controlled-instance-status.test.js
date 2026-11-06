@@ -121,6 +121,7 @@ test("instance capabilities are projected from available inventory items", () =>
     sessionReadAgents: ["codex"],
     turnReadAgents: ["codex"],
     liveItemAgents: ["codex"],
+    toolActivityAgents: ["codex"],
   }, [
     { agent: "codex", actions: { create: true, send: true }, timeline: { sessionRead: true, turnRead: true, liveItems: true } },
     { agent: "opencode", actions: { create: true, send: true }, timeline: { sessionRead: true, turnRead: true, liveItems: true } },
@@ -162,6 +163,7 @@ test("instance capabilities are projected from available inventory items", () =>
     sessionReadAgents: ["codex"],
     turnReadAgents: ["codex"],
     liveItemAgents: ["codex"],
+    toolActivityAgents: ["codex"],
   });
   assert.deepEqual(capabilities.features.aiSessionProviders.map((provider) => provider.agent), ["codex"]);
   assert.deepEqual(capabilities.features.aiSessionConversationAttachments.uploadAgents, ["codex"]);
@@ -195,6 +197,7 @@ test("controlled instance capability normalization isolates malformed feature do
     sessionReadAgents: [],
     turnReadAgents: [],
     liveItemAgents: [],
+    toolActivityAgents: [],
   });
   assert.deepEqual(normalized.features.futureFeature, { enabled: true });
   assert.equal(normalized.futureDocumentField, "preserved");

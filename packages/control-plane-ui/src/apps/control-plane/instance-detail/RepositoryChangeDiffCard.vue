@@ -293,9 +293,9 @@ function isPatchHeader(line: RepositoryDiff["lines"][number]) {
 .repository-review-split-lines .repository-review-hunk-controls { grid-column: 1; }
 .repository-review-split-lines .repository-review-context-tail code,
 .repository-review-split-lines .repository-review-context-tail .repository-review-context-tail-fill { grid-column: 3; }
-.repository-review-line-number { border-right: 1px solid color-mix(in srgb, var(--line-subtle) 70%, transparent); color: var(--text-subtle); padding: 0 7px; text-align: right; user-select: none; }
-.repository-review-line-marker { color: var(--text-muted); text-align: center; user-select: none; }
-.repository-review-diff-line code { padding-right: 18px; color: inherit; white-space: pre; }
+.repository-review-line-number { border-right: 1px solid color-mix(in srgb, var(--line-subtle) 70%, transparent); color: var(--text-subtle); padding: 0 7px; text-align: right; -webkit-user-select: none; user-select: none; }
+.repository-review-line-marker { color: var(--text-muted); text-align: center; -webkit-user-select: none; user-select: none; }
+.repository-review-diff-line code { padding-right: 18px; color: inherit; white-space: pre; cursor: text; -webkit-user-select: text; user-select: text; }
 .spin { animation: repository-review-spin 0.9s linear infinite; }
 @keyframes repository-review-spin { to { transform: rotate(360deg); } }
 @container repository-review (max-width: 720px) {

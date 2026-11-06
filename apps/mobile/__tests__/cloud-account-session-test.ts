@@ -5,7 +5,9 @@ import type { SecureValueStore } from '../src/platform/secure-storage';
 jest.mock('expo-constants', () => ({
   __esModule: true,
   default: {
+    platform: { ios: { buildNumber: "16" } },
     expoConfig: {
+      version: "0.0.12",
       extra: {
         cloudEnvironment: {
           id: 'test',
@@ -59,6 +61,7 @@ test('cloud mobile login uses one-time PKCE state and stores only the refresh cr
   const session = new MobileCloudAccountSession(storage.value, { request });
 
   await session.beginLogin({ providerId: 'email', redirectUri: 'taskhandoff://cloud-auth/callback', email: 'user@example.test', password: 'correct password' });
+  expect(requests[0][1].headers).toMatchObject({ 'x-task-handoff-client-version': '0.0.12', 'x-task-handoff-client-build': '16' });
   const authorization = JSON.parse(String(requests[0][1].body));
   expect(authorization).toMatchObject({ clientId: 'mobile', kind: 'mobile', redirectUri: 'taskhandoff://cloud-auth/callback', codeChallengeMethod: 'S256' });
   expect(authorization.state).toHaveLength(32);

@@ -245,6 +245,33 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared AI Session client reads the bounded tool activity route", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: {
+        sessionId: "session two",
+        turnId: "turn/three",
+        revision: "revision-1",
+        boundaryItemId: "message-1",
+        items: [{ id: "command-1", turnId: "turn/three", type: "activity", activityKind: "commandExecution", title: "Command", status: "completed" }],
+        total: 1,
+        truncated: false,
+        generatedAt: "2026-11-06T00:00:00.000Z",
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const window = await api.aiSessions.toolActivity("instance/one", "session two", "turn/three");
+  assert.equal(window.boundaryItemId, "message-1");
+  assert.deepEqual(window.items.map((item) => item.id), ["command-1"]);
+  assert.equal(
+    requests[0].path,
+    "/api/controlled-instances/instance%2Fone/ai-sessions/session%20two/turns/turn%2Fthree/tool-activity",
+  );
+});
+
 test("shared Browser client owns access route encoding and strict handshake parsing", async () => {
   const requests = [];
   const transport = {

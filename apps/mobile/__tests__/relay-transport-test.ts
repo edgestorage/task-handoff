@@ -61,7 +61,7 @@ function selection(overrides: Record<string, unknown> = {}) {
 function grantFor(candidate: (typeof candidates)[number], generation = 1, overrides: Partial<RelaySessionGrant> = {}): RelaySessionGrant {
   const now = Date.now();
   const issuedAt = new Date(now).toISOString();
-  const expiresAt = new Date(now + 15 * 60_000).toISOString();
+  const expiresAt = overrides.expiresAt ?? new Date(now + 15 * 60_000).toISOString();
   return {
     protocolVersion: RELAY_SESSION_PROTOCOL_VERSION,
     audience: 'task-handoff:relay-session-grant',
@@ -235,7 +235,7 @@ test('first connection performs exactly bootstrap and confirm before attaching t
 
   expect(account.bootstrapRelaySession).toHaveBeenCalledTimes(1);
   expect(account.confirmRelaySession).toHaveBeenCalledTimes(1);
-  expect(account.bootstrapRelaySession).toHaveBeenCalledWith(expect.objectContaining({ clientProofPublicKey, maxCandidates: 3 }), expect.stringMatching(/^relay_bootstrap_/));
+  expect(account.bootstrapRelaySession).toHaveBeenCalledWith(expect.objectContaining({ clientProofPublicKey, maxCandidates: 10 }), expect.stringMatching(/^relay_bootstrap_/));
   expect(open).toHaveBeenCalledWith(expect.objectContaining({
     mode: 'attach',
     relayUrl: candidates[0].relayUrl,
@@ -980,7 +980,7 @@ test('the configured E2E rekey boundary re-attaches without bootstrap or confirm
   }
 });
 
-test('a healthy grant renews in the background after ten minutes', async () => {
+test('compatibility for mobile-v0.0.12 persisted grants without renewal policy keeps the ten-minute cadence', async () => {
   jest.useFakeTimers();
   try {
     const { account, channels, open, transport } = harness();
@@ -1200,4 +1200,85 @@ test('event topic updates are sent in place without reconnecting the channel', a
   }));
   expect(open).toHaveBeenCalledTimes(1);
   connection.close();
+});
+
+test.each([60, 120])('server policy renews a %i-minute grant at twenty minutes and reschedules from the next signed policy', async (ttlMinutes) => {
+  jest.useFakeTimers();
+  try {
+    const { account, channels, open, transport } = harness();
+    account.confirmRelaySession.mockImplementationOnce(async () => ({
+      ...candidates[0], substituted: false,
+      grant: grantFor(candidates[0], 1, { expiresAt: new Date(Date.now() + ttlMinutes * 60_000).toISOString(), renewAfterMs: 20 * 60_000 }),
+    }));
+    account.renewRelaySession.mockImplementationOnce(async () => ({
+      grant: grantFor(candidates[0], 2, { expiresAt: new Date(Date.now() + ttlMinutes * 60_000).toISOString(), renewAfterMs: 7 * 60_000 }),
+    }));
+    const created = channelHarness({ leaseExpiresAt: new Date(Date.now() + ttlMinutes * 60_000).toISOString() });
+    channels.push(created);
+    open.mockResolvedValueOnce(created.channel);
+    (created.channel.renew as jest.Mock).mockImplementation(async (grant: RelaySessionGrant) => ({ generation: grant.generation, committed: true, leaseExpiresAt: grant.expiresAt }));
+    await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+    await jest.advanceTimersByTimeAsync(20 * 60_000 - 1);
+    expect(account.renewRelaySession).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(account.renewRelaySession).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(7 * 60_000 - 1);
+    expect(account.renewRelaySession).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(account.renewRelaySession).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenCalledTimes(1);
+    created.drop();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('returning after thirty minutes resumes the persisted sixty-minute grant and promptly renews the missed interval', async () => {
+  jest.useFakeTimers();
+  try {
+    const sessionStore = memoryRelaySessionStore();
+    sessionStore.grant = grantFor(candidates[0], 1, {
+      expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(), renewAfterMs: 20 * 60_000,
+    });
+    jest.setSystemTime(Date.now() + 30 * 60_000);
+    const { account, channels, open, transport } = harness({ sessionStore });
+    await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ mode: 'resume' }));
+    expect(account.bootstrapRelaySession).not.toHaveBeenCalled();
+    expect(account.confirmRelaySession).not.toHaveBeenCalled();
+    expect(account.renewRelaySession).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(account.renewRelaySession).toHaveBeenCalledTimes(1);
+    expect(sessionStore.grant?.generation).toBe(2);
+    expect(open).toHaveBeenCalledTimes(1);
+    channels[0].drop();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('renewal intervals beyond the JS timer range re-arm without renewing early', async () => {
+  jest.useFakeTimers();
+  try {
+    const { account, channels, open, transport } = harness({ e2eRekeyIntervalMs: 0 });
+    const renewAfterMs = 30 * 24 * 60 * 60_000;
+    const expiresAt = new Date(Date.now() + 2 * renewAfterMs).toISOString();
+    account.confirmRelaySession.mockImplementationOnce(async () => ({
+      ...candidates[0], substituted: false,
+      grant: grantFor(candidates[0], 1, { expiresAt, renewAfterMs }),
+    }));
+    const created = channelHarness({ leaseExpiresAt: expiresAt });
+    channels.push(created);
+    open.mockResolvedValueOnce(created.channel);
+    await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+    await jest.advanceTimersByTimeAsync(2 ** 31 - 1);
+    expect(account.renewRelaySession).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(renewAfterMs - (2 ** 31 - 1) - 1);
+    expect(account.renewRelaySession).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(account.renewRelaySession).toHaveBeenCalledTimes(1);
+    created.drop();
+  } finally {
+    jest.useRealTimers();
+  }
 });

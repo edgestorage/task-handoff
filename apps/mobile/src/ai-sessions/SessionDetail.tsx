@@ -62,6 +62,7 @@ export function SessionDetail({
   timelines = {},
   timelineEnabled = false,
   timelineHistoryEnabled = timelineEnabled,
+  onLoadTimeline,
   onRetryTimeline,
   onContinueFromTurn,
   onVisible,
@@ -86,6 +87,7 @@ export function SessionDetail({
   timelines?: Readonly<Record<string, MobileTurnTimelineState>>;
   timelineEnabled?: boolean;
   timelineHistoryEnabled?: boolean;
+  onLoadTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onRetryTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onContinueFromTurn?(turn: DetailTurn): void;
   onVisible?(): void;
@@ -294,7 +296,7 @@ export function SessionDetail({
   const listEmptyComponent = contentLoading ? null : <EmptyState icon="chatbubble-outline" iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />;
   const renderDetailItem = ({ item }: { item: DetailItem }) => <View
     testID={`session-detail-item-${item.role}`}
-  ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onContinueFromTurn={onContinueFromTurn} onRetryTimeline={onRetryTimeline} trimEnd={trimEndItemIds.has(item.id)} /></View>;
+  ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onContinueFromTurn={onContinueFromTurn} onLoadTimeline={onLoadTimeline} onRetryTimeline={onRetryTimeline} trimEnd={trimEndItemIds.has(item.id)} /></View>;
   return (
     <Profiler id="detail" onRender={recordDetailRender}>
       <>
@@ -459,11 +461,11 @@ export function detailItems(
     if ((!active || timelineEnabled) && !projected.some((item) => item.role === 'history')) {
       const responseIndex = projected.findIndex((item) => item.role === 'assistant');
       projected.splice(responseIndex < 0 ? Math.min(1, projected.length) : responseIndex, 0, {
-        id: `${turn.id}:timeline-history-status`,
+        id: `${turn.id}:timeline-history`,
         role: 'history',
         history: [],
         historyError: timeline?.error,
-        historyStatus: active ? 'ready' : timelineHistoryEnabled ? timeline?.status ?? 'idle' : 'ready',
+        historyStatus: timelineHistoryEnabled ? timeline?.status ?? 'idle' : 'ready',
         turn,
       });
     }
@@ -517,7 +519,7 @@ function compactMobileTimeline(items: DetailItem[], turn: DetailTurn) {
   const trailing = items.slice(latestResponseIndex + 1).filter((item, offset) => latestResponseIndex + 1 + offset !== primaryUserIndex && item.role !== 'warning');
   return [
     ...(primaryUser ? [primaryUser] : []),
-    ...(history.length ? [{ id: `timeline-history:${history[0].id}`, role: 'history' as const, history, turn }] : []),
+    ...(history.length ? [{ id: `${turn.id}:timeline-history`, role: 'history' as const, history, turn }] : []),
     items[latestResponseIndex],
     ...trailing,
     ...(retryWarning ? [retryWarning] : []),
@@ -554,6 +556,7 @@ function DetailItemContent({
   conversation,
   item,
   onContinueFromTurn,
+  onLoadTimeline,
   onRetryTimeline,
   timelineNested = false,
   trimEnd = false,
@@ -561,6 +564,7 @@ function DetailItemContent({
   conversation: boolean;
   item: DetailItem;
   onContinueFromTurn?(turn: DetailTurn): void;
+  onLoadTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onRetryTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   timelineNested?: boolean;
   trimEnd?: boolean;
@@ -568,7 +572,7 @@ function DetailItemContent({
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   if (item.role === 'activity') return <TimelineActivityGroup activities={item.activities ?? []} />;
-  if (item.role === 'history') return <TimelineHistory error={item.historyError} items={item.history ?? []} onRetry={item.turn && onRetryTimeline ? () => onRetryTimeline(item.turn!) : undefined} status={item.historyStatus} turn={item.turn} />;
+  if (item.role === 'history') return <TimelineHistory error={item.historyError} items={item.history ?? []} onLoad={item.turn && onLoadTimeline ? () => onLoadTimeline(item.turn!) : undefined} onRetry={item.turn && onRetryTimeline ? () => onRetryTimeline(item.turn!) : undefined} status={item.historyStatus} turn={item.turn} />;
   if (item.role === 'current') return <TimelineCurrentActivity item={item} />;
   if (conversation && item.role === 'user') return <View style={styles.userMessage}><View style={[styles.conversationUser, { backgroundColor: colors.workbenchSelectionBackground }]} testID="session-user-message"><SafeMarkdown nativeSelectable={false} trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
@@ -612,12 +616,14 @@ function MessageActions({ item, onContinueFromTurn }: { item: DetailItem; onCont
 function TimelineHistory({
   error,
   items,
+  onLoad,
   onRetry,
   status = 'ready',
   turn,
 }: {
   error?: string;
   items: readonly DetailItem[];
+  onLoad?(): void;
   onRetry?(): void;
   status?: MobileTurnTimelineState['status'];
   turn?: DetailTurn;
@@ -626,11 +632,20 @@ function TimelineHistory({
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const processedLabel = useProcessedLabel(turn, t);
-  if (!items.length && ['idle', 'loading', 'stale'].includes(status)) return <View accessibilityState={{ busy: true }} style={styles.timelineHistoryHeader}>
+  const toggleHistory = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && ['idle', 'stale'].includes(status)) onLoad?.();
+  };
+  if (!items.length && status === 'idle') return <Pressable accessibilityLabel={t('sessions.timelineDetails')} accessibilityRole="button" onPress={toggleHistory} style={styles.timelineHistoryHeader} testID="session-timeline-load-button">
+    <DisclosureChevron color={colors.textMuted} expanded={false} size={mobileWebMetric(15)} />
+    <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel}</Text>
+  </Pressable>;
+  if (!items.length && ['loading', 'stale'].includes(status)) return <View accessibilityState={{ busy: true }} style={styles.timelineHistoryHeader}>
     <ActivityIndicator animating color={colors.textMuted} size="small" testID="session-timeline-loading-indicator" />
     <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel} · {t('sessions.timelineLoading')}</Text>
   </View>;
-  if (!items.length && status === 'error') return <Pressable accessibilityRole="button" onPress={onRetry} style={styles.timelineHistoryHeader}>
+  if (!items.length && status === 'error') return <Pressable accessibilityRole="button" onPress={() => { setExpanded(true); onRetry?.(); }} style={styles.timelineHistoryHeader}>
     <ChevronRight color={colors.textMuted} size={mobileWebMetric(15)} />
     <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel} · {t('sessions.timelineLoadFailed')}</Text>
     {error ? <Text numberOfLines={1} style={[styles.timelineHistoryError, { color: colors.textMuted }]}>{error}</Text> : null}
@@ -640,7 +655,7 @@ function TimelineHistory({
     <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel}</Text>
   </View>;
   return <View style={styles.timelineHistory}>
-    <Pressable accessibilityLabel={t('sessions.timelineDetails')} accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.timelineHistoryHeader}>
+    <Pressable accessibilityLabel={t('sessions.timelineDetails')} accessibilityRole="button" accessibilityState={{ expanded }} onPress={toggleHistory} style={styles.timelineHistoryHeader}>
       <DisclosureChevron color={colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} />
       <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel}</Text>
     </Pressable>

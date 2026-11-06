@@ -1,23 +1,34 @@
 <template>
-  <div ref="root" class="markdown-content" v-html="html" @click="handleMarkdownCodeCopy" />
+  <div ref="root" class="markdown-content" v-html="html" @click="handleMarkdownClick" />
 </template>
 
 <script setup lang="ts">
 import "katex/dist/katex.min.css";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { handleMarkdownCodeCopy, renderMarkdown, type MarkdownCodeTools } from "./markdown";
+import { handleMarkdownCodeCopy, isExternalWebHref, renderMarkdown, type MarkdownCodeTools } from "./markdown";
 import { renderMermaid, type MermaidTheme } from "./mermaid";
 
 const props = defineProps<{
   codeTools?: MarkdownCodeTools;
   content?: unknown;
+  resolveImageSrc?: (href: string) => string | undefined;
 }>();
 
 const root = ref<HTMLElement>();
-const html = computed(() => renderMarkdown(props.content, { codeTools: props.codeTools }));
+const html = computed(() => renderMarkdown(props.content, { codeTools: props.codeTools, resolveImageSrc: props.resolveImageSrc }));
 const mermaidSources = new WeakMap<Element, string>();
 let renderVersion = 0;
 let themeObserver: MutationObserver | undefined;
+
+async function handleMarkdownClick(event: MouseEvent) {
+  const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : undefined;
+  if (anchor && typeof window !== "undefined" && isExternalWebHref(anchor.getAttribute("href"), window.location.href)) {
+    event.preventDefault();
+    window.open(anchor.href, "_blank", "noopener,noreferrer");
+    return;
+  }
+  await handleMarkdownCodeCopy(event);
+}
 
 function currentMermaidTheme(): MermaidTheme {
   const theme = document.documentElement.dataset.theme;

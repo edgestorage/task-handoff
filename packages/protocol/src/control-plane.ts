@@ -114,6 +114,7 @@ function emptyAiSessionTimelineCapabilities() {
     sessionReadAgents: [] as string[],
     turnReadAgents: [] as string[],
     liveItemAgents: [] as string[],
+    toolActivityAgents: [] as string[],
   };
 }
 
@@ -166,6 +167,7 @@ function defaultControlledInstanceFeatures() {
     gitCliCredentialBroker: false,
     gitCredentialProxy: false,
     repositoryPathSearch: false,
+    repositoryFileContent: false,
     repositoryWorktreeMoveToMain: false,
     modelRelay: emptyModelRelayCapabilities(),
     managedModelEnvironment: emptyManagedModelEnvironmentCapabilities(),
@@ -191,6 +193,7 @@ export const AiSessionTimelineCapabilitiesSchema = z.object({
   sessionReadAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
   turnReadAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
   liveItemAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+  toolActivityAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
 }).passthrough();
 
 export const AiSessionConversationAttachmentCapabilitiesSchema = z.object({
@@ -335,6 +338,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   gitCredentialProxy: z.boolean().optional(),
   // Compatibility for v0.0.32: absence disables repository-wide path search.
   repositoryPathSearch: z.boolean().optional(),
+  // Compatibility for v0.0.49: absence disables raw-file previews and downloads.
+  repositoryFileContent: z.boolean().optional(),
   // Compatibility for v0.0.33: absence disables moving a worktree into the main worktree.
   repositoryWorktreeMoveToMain: z.boolean().optional(),
   // Compatibility for v0.0.33: absence means the internal AI Session send route
@@ -378,7 +383,7 @@ export const UpdateControlledInstanceNodeAgentConnectionSchema = z.object({
 }).strict();
 
 export type AiSessionTimelineCapabilities = z.infer<typeof AiSessionTimelineCapabilitiesSchema>;
-export type AiSessionTimelineCapability = "session-read" | "turn-read" | "live-items";
+export type AiSessionTimelineCapability = "session-read" | "turn-read" | "live-items" | "tool-activity";
 export type AiSessionConversationAttachmentCapabilities = z.infer<typeof AiSessionConversationAttachmentCapabilitiesSchema>;
 export type AiSessionConversationAttachmentCapability = "metadata" | "content" | "upload";
 export type ControlledInstanceModelRelayCapabilities = z.infer<typeof ControlledInstanceModelRelayCapabilitiesSchema>;
@@ -403,6 +408,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     gitCliCredentialBroker: boolean;
     gitCredentialProxy: boolean;
     repositoryPathSearch: boolean;
+    repositoryFileContent: boolean;
     repositoryWorktreeMoveToMain: boolean;
     aiSessionSendIdempotency: boolean;
     privateModelCatalog: boolean;
@@ -441,6 +447,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "gitCliCredentialBroker",
     "gitCredentialProxy",
     "repositoryPathSearch",
+    "repositoryFileContent",
     "repositoryWorktreeMoveToMain",
     "aiSessionSendIdempotency",
     "aiSessionQueuePause",
@@ -559,6 +566,10 @@ export function supportsRepositoryPathSearch(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.repositoryPathSearch;
 }
 
+export function supportsRepositoryFileContent(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.repositoryFileContent;
+}
+
 export function supportsRepositoryWorktreeMoveToMain(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.repositoryWorktreeMoveToMain;
 }
@@ -645,7 +656,8 @@ export function aiSessionTimelineCapabilityAgents(
   const normalized = aiSessionTimelineCapabilities(capabilities);
   if (capability === "session-read") return normalized.sessionReadAgents;
   if (capability === "turn-read") return normalized.turnReadAgents;
-  return normalized.liveItemAgents;
+  if (capability === "live-items") return normalized.liveItemAgents;
+  return normalized.toolActivityAgents;
 }
 
 export function supportsAiSessionTimelineCapability(

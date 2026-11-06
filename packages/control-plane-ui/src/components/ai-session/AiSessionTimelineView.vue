@@ -69,12 +69,16 @@
             :provider-turn-id="completedTurn(turns[virtualTurn.index].id)?.providerTurnId"
             :response-content="turns[virtualTurn.index].latestResponse?.text || ''"
             :retry-warning="turns[virtualTurn.index].retryWarning"
+            :runtime-path-access="runtimePathAccess"
             :turn-started-at="turns[virtualTurn.index].startedAt"
             :turn-ended-at="turns[virtualTurn.index].endedAt"
             :session="session"
             :turn-id="completedTurn(turns[virtualTurn.index].id)?.id || turns[virtualTurn.index].id"
-            :activities="turns[virtualTurn.index].activities"
-            :activity-nodes="turns[virtualTurn.index].activityNodes"
+            :activities="turns[virtualTurn.index].toolActivityWindow.items"
+            :activity-loaded="turns[virtualTurn.index].toolActivityWindow.status === 'ready'"
+            :activity-loading="turns[virtualTurn.index].toolActivityWindow.status === 'loading'"
+            :activity-error="turns[virtualTurn.index].toolActivityWindow.error"
+            :activity-unavailable="!supportsToolActivity"
             :activity-history="turns[virtualTurn.index].history"
             :activity-history-status="turns[virtualTurn.index].timelineStatus"
             :activity-history-error="turns[virtualTurn.index].timelineError"
@@ -90,6 +94,7 @@
             @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
             @resolve-approval="$emit('resolveApproval', $event)"
             @load-activity-history="$emit('loadTurnTimeline', turns[virtualTurn.index].id)"
+            @load-tool-activity="$emit('loadToolActivityWindow', turns[virtualTurn.index].id)"
             @retry-activity-history="$emit('loadTurnTimeline', turns[virtualTurn.index].id, true)"
           >
             <template #turn-footer>
@@ -126,9 +131,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { Check, Copy } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
-import type { AiSessionHistoryTurn, AiSessionTimelineActivity, AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionHistoryTurn, AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTurnTimelineState } from "../../apps/control-plane/useAiSessionTimelineStore";
+import type { AiSessionToolActivityWindowState } from "../../apps/control-plane/useAiSessionToolActivityWindow";
 import { Button } from "../ui/button";
 import AiSessionResult from "./AiSessionResult.vue";
 import AiSessionTurnActions from "./AiSessionTurnActions.vue";
@@ -149,12 +155,17 @@ const props = withDefaults(defineProps<{
   storedTurns?: AiSessionHistoryTurn[];
   turnBodiesReady?: boolean;
   turnTimelines?: Record<string, AiSessionTurnTimelineState>;
+  toolActivityWindows?: Record<string, AiSessionToolActivityWindowState>;
+  supportsToolActivity?: boolean;
+  runtimePathAccess?: "desktop-local";
 }>(), {
   allowSavePreset: true,
   approvalDecisions: () => ["allow", "deny", "skip"],
   storedTurns: () => [],
   turnBodiesReady: true,
   turnTimelines: () => ({}),
+  toolActivityWindows: () => ({}),
+  supportsToolActivity: true,
 });
 const emit = defineEmits<{
   editQueuedMessage: [payload: { queueId: string; message: string }];
@@ -171,6 +182,7 @@ const emit = defineEmits<{
   layoutWillChange: [];
   layoutCommitted: [];
   loadTurnTimeline: [turnId: string, force?: boolean];
+  loadToolActivityWindow: [turnId: string];
 }>();
 const { locale, t } = useI18n();
 const markdownCodeTools = computed(() => ({
@@ -186,8 +198,7 @@ type DisplayConversationTurn = {
   userMessages: Extract<TimelineMessage, { type: "user-message" }>[];
   history: TimelineTurnNode[];
   latestResponse?: TimelineMessage;
-  activities: AiSessionTimelineActivity[];
-  activityNodes: TimelineTurnNode[];
+  toolActivityWindow: AiSessionToolActivityWindowState;
   timelineStatus: AiSessionTurnTimelineState["status"];
   timelineError?: string;
   retryWarning?: string;
@@ -197,6 +208,7 @@ const sourceTurns = computed(() => props.session?.turns || props.storedTurns);
 const turns = computed<DisplayConversationTurn[]>(() => sourceTurns.value.map((turn) => {
   const state = props.turnTimelines[turn.id] || { status: "idle" as const, items: [] };
   const timeline = compactTimelineForTurn(state.items, turn);
+  const toolActivityWindow = props.toolActivityWindows[turn.id] || { status: "idle" as const, items: [], total: 0, truncated: false };
   const retainedUserMessages = "userMessages" in turn && Array.isArray(turn.userMessages) ? turn.userMessages : [];
   const userMessages = retainedUserMessages.length
     ? retainedUserMessages.map((message) => ({ ...message, turnId: turn.id, type: "user-message" as const }))
@@ -222,8 +234,7 @@ const turns = computed<DisplayConversationTurn[]>(() => sourceTurns.value.map((t
     userMessages,
     history: timeline.history,
     latestResponse,
-    activities: timeline.activities,
-    activityNodes: timeline.activityNodes,
+    toolActivityWindow,
     timelineStatus: state.status,
     timelineError: state.error,
     retryWarning: timeline.retryWarning,

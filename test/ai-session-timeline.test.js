@@ -27,7 +27,7 @@ const { CodexAppServerRpcError, codexPaginatedTimelineSupported } = require("../
 const { codexNotification } = require("../packages/ai-session-runtime/src/codex-app-server/protocol/events.ts");
 const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex-app-server/session/timeline-store.ts");
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
-const { AiSessionEventType, AiSessionTimelineReadSchema, AiSessionTimelineSchema, AiSessionTurnTimelineReadSchema, AiSessionTurnTimelineSchema, mergeAiSessionTimelineItems } = require("../packages/protocol/src/ai-sessions.ts");
+const { AiSessionEventType, AiSessionTimelineReadSchema, AiSessionTimelineSchema, AiSessionToolActivityWindowSchema, AiSessionTurnTimelineReadSchema, AiSessionTurnTimelineSchema, mergeAiSessionTimelineItems } = require("../packages/protocol/src/ai-sessions.ts");
 const { AiSessionActionService } = require("../packages/control-plane/src/control-plane/sessions/ai-session-actions.ts");
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { NodeTunnelEventRouter } = require("../packages/control-plane/src/control-plane/nodes/tunnel-event-router.ts");
@@ -111,7 +111,15 @@ test("AI session controller routes Timeline reads through provider capabilities"
       return { sessionId: current.id, providerSessionId: "provider-1", items: [], generatedAt: "2026-08-16T00:00:00.000Z" };
     },
     async turnTimeline(current, turnId) {
-      return { sessionId: current.id, turnId, items: [], generatedAt: "2026-08-16T00:00:00.000Z" };
+      return {
+        sessionId: current.id,
+        turnId,
+        items: [
+          { id: "message-1", turnId, type: "ai-message", text: "Done" },
+          { id: "command-1", turnId, type: "activity", activityKind: "commandExecution", title: "Command", status: "completed" },
+        ],
+        generatedAt: "2026-08-16T00:00:00.000Z",
+      };
     },
     async interrupt(current) {
       return { session: current, provider: "claude", action: "interrupt" };
@@ -121,9 +129,14 @@ test("AI session controller routes Timeline reads through provider capabilities"
     sessionReadAgents: ["claude"],
     turnReadAgents: ["claude"],
     liveItemAgents: [],
+    toolActivityAgents: ["claude"],
   });
   assert.equal((await controller.timeline(session.id)).sessionId, session.id);
   assert.equal((await controller.turnTimeline(session.id, "turn-1")).turnId, "turn-1");
+  const window = await controller.toolActivityWindow(session.id, "turn-1");
+  assert.equal(AiSessionToolActivityWindowSchema.safeParse(window).success, true);
+  assert.equal(window.boundaryItemId, "message-1");
+  assert.deepEqual(window.items.map((item) => item.id), ["command-1"]);
 });
 
 test("AI session controller relays provider-neutral realtime Timeline items", () => {
@@ -181,6 +194,7 @@ test("AI session controller advertises Timeline read and live-item capabilities 
     sessionReadAgents: [],
     turnReadAgents: ["turn-reader"],
     liveItemAgents: ["live-only"],
+    toolActivityAgents: ["turn-reader"],
   });
 });
 
@@ -644,6 +658,50 @@ test("per-turn Timeline forwarding is independently capability-gated", async () 
   await assert.rejects(
     () => unsupported.turnTimeline("instance_unsupported", "ais_1", "turn_2"),
     (error) => error.code === "AI_SESSION_TURN_TIMELINE_UNSUPPORTED",
+  );
+});
+
+test("bounded tool activity forwarding is independently capability-gated", async () => {
+  let requestedPath = "";
+  const service = new AiSessionActionService({
+    requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: ["codex"],
+      liveItemAgents: ["codex"],
+      toolActivityAgents: ["codex"],
+    } } } }),
+    request: async (_instance, route) => {
+      requestedPath = route;
+      return {
+        sessionId: "ais_1",
+        turnId: "turn_2",
+        revision: "revision-1",
+        boundaryItemId: "message-1",
+        items: [{ id: "command-1", turnId: "turn_2", type: "activity", activityKind: "commandExecution", title: "Command", status: "completed" }],
+        total: 1,
+        truncated: false,
+        generatedAt: "2026-08-15T00:00:00.000Z",
+      };
+    },
+    requireRuntime: async () => ({}),
+  });
+  const window = await service.toolActivityWindow("instance_1", "ais_1", "turn_2");
+  assert.equal(requestedPath, "/ai-sessions/ais_1/turns/turn_2/tool-activity");
+  assert.equal(AiSessionToolActivityWindowSchema.safeParse(window).success, true);
+
+  const unsupported = new AiSessionActionService({
+    requireInstance: async () => ({ capabilities: { features: { aiSessionTimeline: {
+      sessionReadAgents: ["codex"],
+      turnReadAgents: ["codex"],
+      liveItemAgents: ["codex"],
+      toolActivityAgents: [],
+    } } } }),
+    request: async () => { throw new Error("must not forward"); },
+    requireRuntime: async () => ({}),
+  });
+  await assert.rejects(
+    () => unsupported.toolActivityWindow("instance_unsupported", "ais_1", "turn_2"),
+    (error) => error.code === "AI_SESSION_TOOL_ACTIVITY_UNSUPPORTED",
   );
 });
 

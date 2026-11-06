@@ -14,18 +14,24 @@ export const NODE_RELAY_CONTROL_PROTOCOL_VERSION = "2026-11-01";
 export const RELAY_ALLOCATION_LEASE_MS = 10 * 60_000;
 export const RELAY_MAX_ATTACH_LEASE_MS = 15 * 60_000;
 
-// A session grant is the resumable authorization boundary. Phase one keeps the
-// existing ten-minute refresh cadence and gives the session five minutes of
-// recovery headroom after a missed renewal. The ceiling is the Relay attach
-// lease, so a grant can never authorize a channel longer than a Relay accepts.
-export const RELAY_SESSION_GRANT_TTL_MS = 15 * 60_000;
+// Session grants extend the channel independently of the short initial attach
+// capability. These are Coordinator defaults, not wire lifetime ceilings; clients
+// schedule from the signed grant and Relay retains state through its expiresAt.
+export const RELAY_SESSION_GRANT_TTL_MS = 60 * 60_000;
+// Compatibility for mobile-v0.0.12 / runtime v0.0.49: strict old readers accept
+// neither the policy field nor grants lasting longer than fifteen minutes.
+export const RELAY_SESSION_LEGACY_GRANT_TTL_MS = 15 * 60_000;
+export const RELAY_SESSION_LEGACY_REFRESH_INTERVAL_MS = 10 * 60_000;
+export const RELAY_SESSION_POLICY_CAPABILITY = "relay-session-policy-v1";
 export const RELAY_SESSION_MIN_GRANT_TTL_MS = 60_000;
-export const RELAY_SESSION_MAX_GRANT_TTL_MS = RELAY_MAX_ATTACH_LEASE_MS;
-export const RELAY_SESSION_REFRESH_INTERVAL_MS = 10 * 60_000;
+export const RELAY_SESSION_REFRESH_INTERVAL_MS = 20 * 60_000;
 export const RELAY_SESSION_RENEWAL_LEAD_MS = 5_000;
 export const RELAY_SESSION_MAX_E2E_AGE_MS = 60 * 60_000;
 export const RELAY_SESSION_PROOF_WINDOW_MS = 30_000;
-export const RELAY_REVOCATION_MIN_VALIDITY_MS = RELAY_SESSION_MAX_GRANT_TTL_MS;
+// Historical signed revocations persisted by cloud v0.1.15 cannot be re-signed
+// during reads. Accept their original lifetime; new producers retain revocations
+// through the actual expiry of every revoked grant.
+export const RELAY_REVOCATION_MIN_VALIDITY_MS = 15 * 60_000;
 export const RELAY_SESSION_RESUME_CAPABILITY = "relay-session-resume-v1";
 export const RELAY_SESSION_REQUIRED_CAPABILITIES = Object.freeze([RELAY_SESSION_RESUME_CAPABILITY] as const);
 export const RELAY_SESSION_NOT_READY_CODE = "RELAY_SESSION_RESUME_NOT_READY";
@@ -41,8 +47,8 @@ export const RELAY_MAX_NODE_ATTACH_LEASE_MS = 24 * 60 * 60_000;
 // exactly one winner. It only has to outlive a client's probe budget, and every
 // second it stays open is another second of unredeemed attach capabilities.
 export const RELAY_SELECTION_TTL_MS = 15_000;
-export const RELAY_DEFAULT_MAX_CANDIDATES = 3;
-export const RELAY_MAX_CANDIDATES = 5;
+export const RELAY_DEFAULT_MAX_CANDIDATES = 10;
+export const RELAY_MAX_CANDIDATES = 10;
 // Older control-plane link hints are still returned so a client can down-weight
 // them, but they are never silently refreshed or hidden.
 export const RELAY_CP_HINT_FRESHNESS_MS = 90_000;

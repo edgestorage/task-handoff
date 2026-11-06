@@ -146,6 +146,7 @@ import {
   AiSessionTimelineReadSchema,
   AiSessionTimelineSyncInputSchema,
   AiSessionTimelineSyncReadSchema,
+  AiSessionToolActivityWindowSchema,
   AiSessionTurnTimelineSchema,
   AiSessionTurnTimelineReadSchema,
   AiSessionTurnIndexSchema,
@@ -2545,6 +2546,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const input = AiSessionTimelineSyncInputSchema.parse(request.body || {});
       const timeline = AiSessionTurnTimelineSchema.parse(await aiSessionController.turnTimeline(request.params.id, request.params.turnId));
       return { data: AiSessionTimelineSyncReadSchema.parse(syncAiSessionTimelineItems(timeline.items, input.knownItems)) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string; turnId: string } }>("/api/ai-sessions/:id/turns/:turnId/tool-activity", async (request, reply) => {
+    try {
+      const window = AiSessionToolActivityWindowSchema.parse(
+        await aiSessionController.toolActivityWindow(request.params.id, request.params.turnId),
+      );
+      return { data: window };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

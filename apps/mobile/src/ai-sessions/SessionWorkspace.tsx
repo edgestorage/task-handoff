@@ -224,6 +224,15 @@ export function SessionWorkspace({
   const timelineRecoveryRevision = mobileAiSessionStore.timelineRecoveryRevision(controlPlaneId);
   const timelineLoadInputs = useRef({ session, timelines });
   const timelineRefreshScope = useRef<string | undefined>(undefined);
+  const requestedTimelineTurns = useRef(new Set<string>());
+  const [timelineLoadRevision, setTimelineLoadRevision] = useState(0);
+  const requestTimelineLoad = useCallback((turn: { id: string; providerTurnId?: string }) => {
+    if (!sessionId || (!supportsTurnTimeline && !supportsSessionTimeline)) return;
+    const key = JSON.stringify([controlPlaneId, instanceId, sessionId, turn.id]);
+    if (requestedTimelineTurns.current.has(key)) return;
+    requestedTimelineTurns.current.add(key);
+    setTimelineLoadRevision((value) => value + 1);
+  }, [controlPlaneId, instanceId, sessionId, supportsSessionTimeline, supportsTurnTimeline]);
   useEffect(() => actions?.subscribe(() => rerender((value) => value + 1)), [actions]);
   useEffect(() => {
     let live = true;
@@ -362,13 +371,15 @@ export function SessionWorkspace({
     timelineRefreshScope.current = refreshScope;
     const turns = aiSessionDisplayTurns(timelineSession);
     const visibleTurns = detailMode === 'conversation' ? turns : turns.slice(selectedTurnIndex, selectedTurnIndex + 1);
-    const loadableTurns = visibleTurns.filter((turn) => {
+    const loadableTurns = visibleTurns.filter((turn) => (
+      requestedTimelineTurns.current.has(JSON.stringify([controlPlaneId, instanceId, timelineSession.id, turn.id]))
+    )).filter((turn) => {
       const state = timelineStates[turn.id];
       if (state?.status && !['idle', 'stale'].includes(state.status) && !(resumed && state.status === 'ready')) return false;
       return true;
     });
     if (!loadableTurns.length) return;
-    if (supportsTurnTimeline && !(detailMode === 'conversation' && supportsSessionTimeline)) {
+    if (supportsTurnTimeline) {
       for (const turn of loadableTurns) {
         const requestKey = JSON.stringify([controlPlaneId, instanceId, timelineSession.id, turn.id]);
         const requestToken = Symbol(requestKey);
@@ -450,7 +461,7 @@ export function SessionWorkspace({
       });
     }
     // Timeline store transitions deliberately do not restart in-flight reads.
-  }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, session?.id, supportsSessionTimeline, supportsTurnTimeline, timelineRecoveryRevision, timelineTurnSignature]);
+  }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, session?.id, supportsSessionTimeline, supportsTurnTimeline, timelineLoadRevision, timelineRecoveryRevision, timelineTurnSignature]);
   useEffect(() => {
     queueOrderPreviewRef.current = undefined;
     setQueueOrderPreview(undefined);
@@ -872,6 +883,7 @@ export function SessionWorkspace({
           messages={messages}
           mode={detailMode}
           onModeChange={setDetailMode}
+          onLoadTimeline={requestTimelineLoad}
           onRetryTimeline={(turn) => {
             if (selectedTurnBodyFailure) {
               setTurnBodyFailure(undefined);

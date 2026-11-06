@@ -131,6 +131,9 @@
               :selected-turn-state="selectedTurnState"
               :turn-bodies-ready="turnBodiesReady"
               :turn-timelines="turnTimelines"
+              :tool-activity-windows="toolActivityWindows"
+              :supports-tool-activity="supportsToolActivity"
+              :runtime-path-access="desktopRuntimePathAccess(card.instance)"
               activity-interactive
               @edit-queued-message="$emit('editQueuedMessage', $event)"
               @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
@@ -142,6 +145,7 @@
               @resolve-approval="$emit('resolveApproval', $event)"
               @continue-from-turn="$emit('continueFromTurn', $event)"
               @load-turn-timeline="(turnId, force) => $emit('loadTurnTimeline', turnId, force)"
+              @load-tool-activity-window="(turnId) => $emit('loadToolActivityWindow', turnId)"
             />
           </div>
         </ScrollArea>
@@ -221,11 +225,13 @@ import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
 import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionCompactPrompt.vue";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
 import type { AiSessionTurnTimelineState } from "../useAiSessionTimelineStore";
+import type { AiSessionToolActivityWindowState } from "../useAiSessionToolActivityWindow";
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import type { AiSessionCommandInput, AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
+import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import { aiSessionPermissionKey } from "../useAiSessionPermissionMode";
 import { useAiSessionQueuePlacement } from "../useAiSessionQueuePlacement";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
@@ -277,6 +283,8 @@ const props = defineProps<{
   timelineMode: "compact" | "full";
   turnBodiesReady: boolean;
   turnTimelines: Record<string, AiSessionTurnTimelineState>;
+  toolActivityWindows: Record<string, AiSessionToolActivityWindowState>;
+  supportsToolActivity: boolean;
 }>();
 
 defineEmits<{
@@ -285,6 +293,7 @@ defineEmits<{
   editQueuedMessage: [payload: { queueId: string; message: string }];
   latestPrompt: [];
   loadTurnTimeline: [turnId: string, force?: boolean];
+  loadToolActivityWindow: [turnId: string];
   nextPrompt: [];
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
   previousPrompt: [];

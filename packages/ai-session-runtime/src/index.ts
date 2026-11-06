@@ -15,6 +15,7 @@ export * from "./ai-session-resume.ts";
 export * from "./ai-session-title.ts";
 export * from "./ai-session-open-app.ts";
 export * from "./ai-session-turns.ts";
+export * from "./ai-session-tool-activity-window.ts";
 export * from "./claude-control-sock.ts";
 export * from "./codex-app-server.ts";
 export * from "./codex-app-server-protocol.ts";

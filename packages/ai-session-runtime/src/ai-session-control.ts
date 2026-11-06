@@ -19,6 +19,7 @@ import type {
   AiSessionTurnTimeline,
 } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionTimelineCapabilities } from "@task-handoff/protocol/control-plane";
+import { aiSessionToolActivityWindow } from "./ai-session-tool-activity-window.ts";
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import { aiSessionAttachmentMetas } from "./ai-session/persistence";
@@ -249,6 +250,7 @@ export class AiSessionController {
       sessionReadAgents: providers.filter((provider) => supports(provider, "sessionRead")).map((provider) => provider.agent),
       turnReadAgents: providers.filter((provider) => supports(provider, "turnRead")).map((provider) => provider.agent),
       liveItemAgents: providers.filter((provider) => supports(provider, "liveItems")).map((provider) => provider.agent),
+      toolActivityAgents: providers.filter((provider) => supports(provider, "turnRead")).map((provider) => provider.agent),
     };
   }
 
@@ -660,6 +662,10 @@ export class AiSessionController {
       throw aiSessionControlError("AI_SESSION_TURN_TIMELINE_UNSUPPORTED", `${session.agent} sessions do not expose per-turn Timeline reads.`, 409);
     }
     return provider.turnTimeline(session, turnId);
+  }
+
+  async toolActivityWindow(sessionId: string, turnId: string) {
+    return aiSessionToolActivityWindow(await this.turnTimeline(sessionId, turnId));
   }
 
   async resolveApproval(sessionId: string, decision: AiSessionApprovalDecision) {

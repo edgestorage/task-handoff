@@ -6,6 +6,20 @@ export type MarkdownLinkTarget =
   | { kind: "web"; href: string; url: string }
   | { kind: "unsupported"; href: string };
 
+export function isAbsoluteFilePath(value: string) {
+  return value.startsWith("/") || /^[a-z]:[\\/]/i.test(value);
+}
+
+export function resolveRuntimeFilePath(path: string, runtimeCwd?: string) {
+  const filePath = path.trim();
+  if (!filePath) return undefined;
+  if (isAbsoluteFilePath(filePath)) return filePath;
+  const cwd = runtimeCwd?.trim();
+  if (!cwd || !isAbsoluteFilePath(cwd)) return undefined;
+  const separator = cwd.includes("\\") && !cwd.startsWith("/") ? "\\" : "/";
+  return `${cwd.replace(/[\\/]+$/, "")}${separator}${filePath.replace(/^[\\/]+/, "")}`;
+}
+
 export function classifyMarkdownLink(href: string, context?: RepositoryContext): MarkdownLinkTarget {
   const raw = href.trim();
   if (!raw) return { kind: "unsupported", href };

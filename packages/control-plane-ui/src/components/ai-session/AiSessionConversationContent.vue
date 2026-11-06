@@ -50,6 +50,9 @@
           :session="session"
           :turn-bodies-ready="turnBodiesReady"
           :turn-timelines="turnTimelines"
+          :tool-activity-windows="toolActivityWindows"
+          :supports-tool-activity="supportsToolActivity"
+          :runtime-path-access="runtimePathAccess"
           @edit-queued-message="$emit('editQueuedMessage', $event)"
           @open-file="$emit('openFile', $event)"
           @add-to-conversation="$emit('addToConversation', $event)"
@@ -64,6 +67,7 @@
           @layout-will-change="$emit('layoutWillChange')"
           @layout-committed="$emit('layoutCommitted')"
           @load-turn-timeline="(turnId, force) => $emit('loadTurnTimeline', turnId, force)"
+          @load-tool-activity-window="(turnId) => $emit('loadToolActivityWindow', turnId)"
         />
         <span v-else>{{ t("sessions.timeline.noHistory") }}</span>
       </div>
@@ -85,15 +89,20 @@
         :turn-ended-at="turnElapsedEnd(selectedTurn)"
         :session="session"
         :turn-id="selectedTurn?.id"
-        :activities="selectedTimeline.activities"
-        :activity-nodes="selectedTimeline.activityNodes"
+        :activities="selectedToolActivityWindow.items"
         :activity-history="selectedTimeline.history"
         :activity-history-status="selectedTurnState.status"
         :activity-history-error="selectedTurnState.error"
         :activity-interactive="activityInteractive"
+        :activity-loaded="selectedToolActivityWindow.status === 'ready'"
+        :activity-loading="selectedToolActivityWindow.status === 'loading'"
+        :activity-error="selectedToolActivityWindow.error"
+        :activity-unavailable="!supportsToolActivity"
+        :runtime-path-access="runtimePathAccess"
         @layout-will-change="$emit('layoutWillChange')"
         @layout-committed="$emit('layoutCommitted')"
         @load-activity-history="$emit('loadTurnTimeline', selectedTurn?.id || '')"
+        @load-tool-activity="$emit('loadToolActivityWindow', selectedTurn?.id || '')"
         @retry-activity-history="$emit('loadTurnTimeline', selectedTurn?.id || '', true)"
         @edit-queued-message="$emit('editQueuedMessage', $event)"
         @open-file="$emit('openFile', $event)"
@@ -137,6 +146,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTurnTimelineState } from "../../apps/control-plane/useAiSessionTimelineStore";
+import type { AiSessionToolActivityWindowState } from "../../apps/control-plane/useAiSessionToolActivityWindow";
 import { aiSessionTurns, displayAiSessionResponse } from "../../apps/control-plane/useInstanceSessions";
 import { compactTimelineForTurn, turnElapsedEnd } from "./timelineActivities";
 import { useAiSessionQueuePlacement } from "../../apps/control-plane/useAiSessionQueuePlacement";
@@ -165,6 +175,9 @@ const props = withDefaults(defineProps<{
   selectedTurnState?: AiSessionTurnTimelineState;
   turnBodiesReady?: boolean;
   turnTimelines?: Record<string, AiSessionTurnTimelineState>;
+  toolActivityWindows?: Record<string, AiSessionToolActivityWindowState>;
+  supportsToolActivity?: boolean;
+  runtimePathAccess?: "desktop-local";
 }>(), {
   activityInteractive: true,
   allowSavePreset: true,
@@ -178,6 +191,8 @@ const props = withDefaults(defineProps<{
   selectedTurnState: () => ({ status: "ready", items: [] }),
   turnBodiesReady: true,
   turnTimelines: () => ({}),
+  toolActivityWindows: () => ({}),
+  supportsToolActivity: true,
 });
 
 const emit = defineEmits<{
@@ -187,6 +202,7 @@ const emit = defineEmits<{
   layoutCommitted: [];
   layoutWillChange: [];
   loadTurnTimeline: [turnId: string, force?: boolean];
+  loadToolActivityWindow: [turnId: string];
   openFile: [href: string];
   addToConversation: [content: string];
   removeQueuedMessage: [queueId: string];
@@ -203,6 +219,9 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const { queuePlacement } = useAiSessionQueuePlacement();
 const selectedTurn = computed(() => aiSessionTurns(props.session)[props.promptIndex]);
+const selectedToolActivityWindow = computed<AiSessionToolActivityWindowState>(() => (
+  props.toolActivityWindows[selectedTurn.value?.id || ""] || { status: "idle", items: [], total: 0, truncated: false }
+));
 const compactResponseContent = computed(() => displayAiSessionResponse(props.session, props.promptIndex, t));
 const showSessionError = computed(() => props.session.status === "failed"
   && (props.mode === "full" || props.promptIndex >= props.promptCount - 1));

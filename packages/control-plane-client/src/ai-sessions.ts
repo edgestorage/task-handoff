@@ -15,6 +15,7 @@ import {
   AiSessionTimelineReadSchema,
   AiSessionTimelineSyncInputSchema,
   AiSessionTimelineSyncReadSchema,
+  AiSessionToolActivityWindowSchema,
   AiSessionTurnTimelineSchema,
   AiSessionTurnTimelineReadSchema,
   AiSessionMentionCatalogSchema,
@@ -187,6 +188,9 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     turnTimeline(instanceId: string, aiSessionId: string, turnId: string, revision?: string, signal?: AbortSignal) {
       const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}/timeline${query}`, CompatibleAiSessionTurnTimelineReadSchema, { signal });
+    },
+    toolActivity(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}/tool-activity`, AiSessionToolActivityWindowSchema, { signal });
     },
     syncTimeline(instanceId: string, aiSessionId: string, knownItems: ReadonlyArray<{ id: string; revision: string }>, signal?: AbortSignal) {
       const input = AiSessionTimelineSyncInputSchema.parse({ knownItems });

@@ -83,12 +83,18 @@ export class RepositoryFileService {
     return { entries, truncated };
   }
 
-  read(relativePath: string): RepositoryFileContent {
+  contentPath(relativePath: string) {
     const resolved = this.resolve(relativePath, { mustExist: true });
     const stat = fs.lstatSync(resolved.absolutePath);
     this.assertRegularFile(resolved.absolutePath, stat);
+    return resolved.absolutePath;
+  }
+
+  read(relativePath: string): RepositoryFileContent {
+    const absolutePath = this.contentPath(relativePath);
+    const stat = fs.lstatSync(absolutePath);
     if (stat.size > this.maxFileBytes) throw new RepositoryFileError("REPOSITORY_FILE_TOO_LARGE", `File exceeds ${this.maxFileBytes} bytes.`);
-    const buffer = fs.readFileSync(resolved.absolutePath);
+    const buffer = fs.readFileSync(absolutePath);
     if (buffer.includes(0)) throw new RepositoryFileError("REPOSITORY_FILE_BINARY", "Binary files cannot be opened in the text editor.");
     let content: string;
     try {

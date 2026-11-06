@@ -562,6 +562,10 @@ export function registerSessionRoutes({
     const input = AiSessionTimelineSyncInputSchema.parse(request.body || {});
     return { data: await service.syncAiSessionTurnTimeline(params.id, params.sessionId, params.turnId, input.knownItems) };
   });
+  app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/turns/:turnId/tool-activity", async (request) => {
+    const params = InstanceSessionTurnParamsSchema.parse(request.params);
+    return { data: await service.getAiSessionToolActivityWindow(params.id, params.sessionId, params.turnId) };
+  });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/resume", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     const input = AiSessionResumeInputSchema.parse(request.body || {});

@@ -29,8 +29,18 @@ test("expanded tool activity consumes live items without triggering timeline rel
   const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
   assert.doesNotMatch(activity, /requestExpand|activityRevision/);
   assert.match(activity, /const expanded = ref\(false\);/);
-  assert.match(activity, /const emit = defineEmits<\{ addToConversation: \[content: string\] \}>\(\);/);
+  assert.match(activity, /const emit = defineEmits<\{ addToConversation: \[content: string\]; load: \[\] \}>\(\);/);
   assert.match(activity, /function toggleExpanded\(event: MouseEvent\) \{[\s\S]*beginDisclosureTransition\(event\.currentTarget as Element\);[\s\S]*expanded\.value = !expanded\.value;/);
+  assert.match(activity, /expanded\.value = !expanded\.value;[\s\S]*!props\.contentLoaded && !props\.loading && !props\.unavailable[\s\S]*emit\("load"\)/);
+});
+
+test("unhydrated tool activity shows loading until the bounded window arrives", () => {
+  assert.match(activity, /v-if="loading \|\| \(!contentLoaded && !error && !unavailable\)"/);
+  assert.match(activity, /t\("sessions\.timeline\.activityLoading"\)/);
+  assert.match(activity, /v-else-if="unavailable"/);
+  assert.match(activity, /t\("sessions\.timeline\.activityUnavailable"\)/);
+  assert.match(activity, /v-else-if="displayNodes\.length"/);
+  assert.match(activity, /v-else>\{\{ t\("sessions\.timeline\.noActivities"\) \}\}<\//);
 });
 
 test("reasoning activity stays collapsed inside the thinking disclosure and renders Markdown on demand", () => {

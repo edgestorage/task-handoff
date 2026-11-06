@@ -52,7 +52,7 @@
       <ContextMenu v-if="displayContent" v-model:open="responseMenuOpen">
         <ContextMenuTrigger as-child>
           <section class="ai-session-detail-response" :class="{ 'ai-session-detail-response-active': active }" @contextmenu="handleResponseContextMenu">
-            <AiSessionStreamingMarkdown :code-tools="markdownCodeTools" :content="responseContent" :file-links="fileLinks" :instance-id="instanceId" :is-latest="isLatest" :provider-turn-id="providerTurnId" :session-id="session.id" :turn-id="turnId" @open-file="$emit('openFile', $event)" />
+            <AiSessionStreamingMarkdown :code-tools="markdownCodeTools" :content="responseContent" :file-links="fileLinks" :instance-id="instanceId" :is-latest="isLatest" :provider-turn-id="providerTurnId" :runtime-cwd="session.cwd" :runtime-path-access="runtimePathAccess" :session-id="session.id" :turn-id="turnId" @open-file="$emit('openFile', $event)" />
           </section>
         </ContextMenuTrigger>
         <ContextMenuContent class="ai-session-response-context-menu">
@@ -74,7 +74,10 @@
         :error="activityError"
         :interactive="activityInteractive"
         :loading="activityLoading"
+        :content-loaded="activityLoaded"
+        :unavailable="activityUnavailable"
         @add-to-conversation="$emit('addToConversation', $event)"
+        @load="$emit('loadToolActivity')"
       />
 
       <AiSessionSubAgents
@@ -138,6 +141,7 @@ const props = withDefaults(defineProps<{
   showQueue?: boolean;
   retryWarning?: string;
   providerTurnId?: string;
+  runtimePathAccess?: "desktop-local";
   turnId?: string;
   turnStartedAt?: string;
   turnEndedAt?: string;
@@ -151,6 +155,8 @@ const props = withDefaults(defineProps<{
   activityError?: string;
   activityInteractive?: boolean;
   activityLoading?: boolean;
+  activityLoaded?: boolean;
+  activityUnavailable?: boolean;
 }>(), {
   busy: false,
   canInterrupt: false,
@@ -171,6 +177,8 @@ const props = withDefaults(defineProps<{
   activityError: "",
   activityInteractive: false,
   activityLoading: false,
+  activityLoaded: true,
+  activityUnavailable: false,
 });
 
 const emit = defineEmits<{
@@ -186,6 +194,7 @@ const emit = defineEmits<{
   layoutWillChange: [element: HTMLElement];
   layoutCommitted: [element: HTMLElement];
   loadActivityHistory: [];
+  loadToolActivity: [];
   retryActivityHistory: [];
 }>();
 

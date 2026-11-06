@@ -2,6 +2,9 @@ import { z } from "zod";
 import { canonicalJson, DateTimeSchema, IdSchema, LocaleTextSchema, OpaqueSecretSchema, Sha256DigestSchema } from "./common.ts";
 import { CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION, OUTBOUND_CONNECTION_PROTOCOL_VERSION, OfficialAudience, RELAY_FRAMING_PROTOCOL_VERSION, RELAY_MAX_CANDIDATES, RELAY_REVOCATION_MIN_VALIDITY_MS, RELAY_SESSION_RESUME_CAPABILITY } from "./versions.ts";
 
+// Resource bounds allow additive capability names without a closed enum.
+export const RelayCapabilitiesSchema = z.array(z.string().trim().min(1).max(80)).max(1024);
+
 export const TrafficClassSchema = z.enum(["interactive", "stream", "bulk"]);
 
 /**
@@ -49,9 +52,10 @@ export const ControlPlaneAccessSettingsSchema = z.strictObject({
   if (new Set(value.availableRoleIds).size !== value.availableRoleIds.length) context.addIssue({ code: "custom", path: ["availableRoleIds"], message: "available roles must be unique" });
   if (!value.availableRoleIds.includes(value.ownerRoleId)) context.addIssue({ code: "custom", path: ["ownerRoleId"], message: "the owner role must be available" });
 });
-export const ControlPlaneAccessSettingsViewSchema = ControlPlaneAccessSettingsSchema.extend({
+// Unsigned response: ignore additive fields, including fields on role entries.
+export const ControlPlaneAccessSettingsViewSchema = ControlPlaneAccessSettingsSchema.strip().extend({
   catalogRevision: z.number().int().nonnegative(),
-  roles: z.array(AccessRoleCatalogEntrySchema).max(256),
+  roles: z.array(AccessRoleCatalogEntrySchema.strip()).max(256),
 });
 export const UpdateControlPlaneAvailableRolesSchema = z.strictObject({
   expectedSettingsRevision: z.number().int().positive(),
@@ -210,7 +214,9 @@ export const OutboundConnectionRegistrationPayloadSchema = z.strictObject({
   // so the cloud never has to guess which channel kinds a live connection may use.
   scopes: CloudRelayScopesSchema.optional(),
   epoch: z.number().int().nonnegative(),
-  capabilities: z.array(z.enum(["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY, CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY, RELAY_SESSION_RESUME_CAPABILITY])).min(1),
+  // Capabilities extend independently of the connection protocol. Unknown tokens
+  // must not prevent a newer independently upgraded Control Plane registering.
+  capabilities: RelayCapabilitiesSchema.min(1),
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
 }).superRefine((value, context) => {

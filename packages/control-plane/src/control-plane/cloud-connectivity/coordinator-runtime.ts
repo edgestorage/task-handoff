@@ -10,6 +10,7 @@ import {
   NODE_RELAY_TRUST_RETRY_UNSUPPORTED_NOT_OBSERVED,
   OutboundConnectionRegistrationResponseSchema,
   RELAY_SESSION_RESUME_CAPABILITY,
+  RELAY_SESSION_POLICY_CAPABILITY,
   RESOURCE_SHARING_CAPABILITY_HEADER,
   RESOURCE_SHARING_CLIENT_CAPABILITY,
 } from "@task-handoff/cloud-contracts";
@@ -68,7 +69,7 @@ export class CloudCoordinatorConnector {
       publicKey: identity.publicKey, publicKeyFingerprint: identity.fingerprint,
       ...(input.bindingId ? { bindingId: input.bindingId, bindingRevision: input.bindingRevision } : {}),
       scopes: input.scopes,
-      epoch: input.epoch, capabilities: ["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY, CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY, ...(this.options.supportsRelaySessionResume ? [RELAY_SESSION_RESUME_CAPABILITY] : [])],
+      epoch: input.epoch, capabilities: ["request", "stream", "websocket", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY, CONTROL_PLANE_ACCESS_ROLE_CATALOG_CAPABILITY, CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY, ...(this.options.supportsRelaySessionResume ? [RELAY_SESSION_RESUME_CAPABILITY, RELAY_SESSION_POLICY_CAPABILITY] : [])],
       issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 5 * 60_000).toISOString(),
     };
     const socketUrl = new URL("/api/v1/control-plane/connect", input.serviceOrigin);

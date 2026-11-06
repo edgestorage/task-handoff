@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
-import { AccessibilityInfo, Animated, Easing, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native';
+import { AccessibilityInfo, Animated, Dimensions, Easing, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, UIManager, View, type GestureResponderEvent, type TextStyle } from 'react-native';
 import { UITextView as SelectableText } from '@bsky.app/react-native-uitextview';
 import * as Clipboard from 'expo-clipboard';
 import { Check, Copy } from 'lucide-react-native';
@@ -9,9 +9,15 @@ import { common, createLowlight } from 'lowlight';
 import { useI18n } from '../i18n';
 import { openSystemLink } from '../platform/links';
 import { splitGraphemes } from './graphemes';
+import { type FloatingMenuItem, type FloatingMenuPage } from './menu/menu-model';
+import { FloatingMenu, type FloatingMenuAnchor } from './menu/FloatingMenu';
+import { mobileMarkdownLinkTarget, safeMarkdownLink, type MobileMarkdownLinkTarget } from './markdown-link-target';
+import { useMobileToast } from './MobileToast';
 import { useMobileTheme, type MobileThemeColors } from './theme';
 import { mobileWebMetric, mobileWebType } from './mobile-web-typography';
 import { useStreamingMarkdown } from './useStreamingMarkdown';
+
+export { safeMarkdownLink } from './markdown-link-target';
 
 // Keep one parser configuration for snapshots and streaming updates. Raw HTML is
 // deliberately disabled: session output is untrusted and must remain text.
@@ -22,15 +28,6 @@ const markdownParser = MarkdownIt({
   typographer: true,
 });
 const codeHighlighter = createLowlight(common);
-
-export function safeMarkdownLink(raw: string) {
-  try {
-    const url = new URL(raw);
-    return ['https:', 'http:', 'mailto:'].includes(url.protocol) ? url.toString() : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * Normalize protocol text before parsing. HTML safety is enforced by the
@@ -161,6 +158,8 @@ export function SafeMarkdown({
   trimEnd?: boolean;
 }) {
   const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const toast = useMobileToast();
   const styles = useMemo(() => markdownStyles(colors, compact), [colors, compact]);
   const reducedMotion = useReduceMotion(Boolean(streamKey));
   const source = sanitizeMarkdown(children);
@@ -177,12 +176,65 @@ export function SafeMarkdown({
     ? [...blocks.stable, blocks.tail]
     : [{ id: 0, source: paced.visible }];
   const deferFinalCodeHighlight = streaming && hasUnclosedMarkdownFence(blocks?.tail.source ?? paced.visible);
+  const [linkMenu, setLinkMenu] = useState<{ anchor: FloatingMenuAnchor; target: MobileMarkdownLinkTarget }>();
   // The map is intentionally replaced when the authoritative stream identity changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const textStreamState = useMemo(() => new Map<string, string>(), [streamKey]);
+  const openLinkMenu = useCallback((raw: string, event: GestureResponderEvent) => {
+    const target = mobileMarkdownLinkTarget(raw);
+    if (!target) return;
+    const { pageX, pageY, target: reactTag } = event.nativeEvent as typeof event.nativeEvent & { target?: number };
+    if (Number.isFinite(pageX) && Number.isFinite(pageY)) {
+      setLinkMenu({ anchor: { height: 0, point: { x: pageX, y: pageY }, width: 0, x: pageX, y: pageY }, target });
+      return;
+    }
+    const showFallback = () => {
+      const { height, width } = Dimensions.get('window');
+      setLinkMenu({ anchor: { height: 0, width: 0, x: width / 2, y: height / 2 }, target });
+    };
+    // iOS UITextView long-press events only expose the native target. Measure
+    // that text fragment so the menu still anchors to the pressed link.
+    if (typeof reactTag === 'number' && reactTag > 0 && typeof UIManager.measureInWindow === 'function') {
+      UIManager.measureInWindow(reactTag, (x, y, width, height) => {
+        if ([x, y, width, height].every(Number.isFinite)) setLinkMenu({ anchor: { height, width, x, y }, target });
+        else showFallback();
+      });
+    } else {
+      showFallback();
+    }
+  }, []);
+  const copyLinkValue = useCallback(async (value: string) => {
+    try {
+      await Clipboard.setStringAsync(value);
+      toast.show({ title: t('sessions.linkActions.copied'), tone: 'success' });
+    } catch {
+      toast.show({ title: t('sessions.linkActions.copyFailed'), tone: 'error' });
+    }
+  }, [t, toast]);
+  const openLinkValue = useCallback((url: string) => {
+    void openSystemLink(url).catch(() => {
+      toast.show({ title: t('sessions.linkActions.openFailed'), tone: 'error' });
+    });
+  }, [t, toast]);
+  const linkMenuPage = useMemo<FloatingMenuPage | undefined>(() => {
+    if (!linkMenu) return undefined;
+    const { target } = linkMenu;
+    const items: FloatingMenuItem[] = target.kind === 'web'
+      ? [
+        { key: 'open', label: t('sessions.linkActions.open'), icon: 'open-outline', onPress: () => openLinkValue(target.url) },
+        { key: 'copy', label: t('sessions.linkActions.copyLink'), icon: 'copy-outline', onPress: () => { void copyLinkValue(target.url); } },
+      ]
+      : [
+        { key: 'copy', label: t('sessions.linkActions.copyPath'), icon: 'copy-outline', onPress: () => { void copyLinkValue(target.path); } },
+      ];
+    return {
+      title: t('sessions.linkActions.title'),
+      blocks: items.map((item) => ({ type: 'item', key: item.key, item })),
+    };
+  }, [copyLinkValue, linkMenu, openLinkValue, t]);
   const rules = useMemo(
-    () => createRules(paced.revealEnabled, reducedMotion, trimEnd, deferFinalCodeHighlight, nativeSelectable, streamKey, textStreamState),
-    [deferFinalCodeHighlight, nativeSelectable, paced.revealEnabled, reducedMotion, streamKey, textStreamState, trimEnd],
+    () => createRules(paced.revealEnabled, reducedMotion, trimEnd, deferFinalCodeHighlight, nativeSelectable, openLinkMenu, t('sessions.linkActions.hint'), streamKey, textStreamState),
+    [deferFinalCodeHighlight, nativeSelectable, openLinkMenu, paced.revealEnabled, reducedMotion, streamKey, t, textStreamState, trimEnd],
   );
   const renderer = useMemo(() => new AstRenderer(
     { ...renderRules, ...rules },
@@ -208,6 +260,11 @@ export function SafeMarkdown({
           treeKey={`block:${block.id}`}
         />
       ))}
+      {linkMenu && linkMenuPage ? <FloatingMenu
+        anchor={linkMenu.anchor}
+        onDismiss={() => setLinkMenu(undefined)}
+        page={linkMenuPage}
+      /> : null}
     </View>
   );
 }
@@ -429,11 +486,13 @@ function createRules(
   trimEnd: boolean,
   deferFinalCodeHighlight: boolean,
   nativeSelectable: boolean,
+  onLinkLongPress: (raw: string, event: GestureResponderEvent) => void,
+  linkAccessibilityHint: string,
   streamKey?: string,
   textStreamState?: Map<string, string>,
 ): RenderRules {
   const rules: Record<string, SafeRenderRule> = {
-    ...createFlowRules(nativeSelectable),
+    ...createFlowRules(nativeSelectable, onLinkLongPress, linkAccessibilityHint),
     code_block: (node, children, parentNodes, styles) => renderCodeBlock(
       node,
       children,
@@ -475,7 +534,7 @@ function MarkdownText({ nativeSelectable, ...props }: MarkdownTextProps) {
   return <Text {...props} selectable />;
 }
 
-function createFlowRules(nativeSelectable: boolean): Record<string, SafeRenderRule> {
+function createFlowRules(nativeSelectable: boolean, onLinkLongPress: (raw: string, event: GestureResponderEvent) => void, linkAccessibilityHint: string): Record<string, SafeRenderRule> {
   return {
   heading1: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading1'),
   heading2: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading2'),
@@ -503,8 +562,11 @@ function createFlowRules(nativeSelectable: boolean): Record<string, SafeRenderRu
   u: (node, children) => <MarkdownText key={node.key} nativeSelectable={nativeSelectable}>{children}</MarkdownText>,
   link: (node, children, _parentNodes, styles, onLinkPress) => (
     <MarkdownText
+      accessibilityHint={linkAccessibilityHint}
+      accessibilityRole="link"
       key={node.key}
       nativeSelectable={nativeSelectable}
+      onLongPress={(event) => onLinkLongPress(node.attributes.href, event)}
       onPress={() => (onLinkPress as ((raw: string) => boolean | void) | undefined)?.(node.attributes.href)}
       style={styles.link}
     >

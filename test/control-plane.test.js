@@ -730,7 +730,7 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     aiSessionSendIdempotency: false,
     // Compatibility for v0.0.35: a stored pre-upgrade instance has no queue pause capability.
     aiSessionQueuePause: false,
-    aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
+    aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [], toolActivityAgents: [] },
     aiSessionConversationAttachments: { metadataAgents: [], contentAgents: [], uploadAgents: [], retentionSettings: false, fileSizeLimitSettings: false },
     aiSessionProviders: [],
     // Compatibility for v0.0.46: stored instances without the additive Instance Shell capability normalize it to unsupported.
@@ -7398,6 +7398,7 @@ test("control plane node instance aggregation isolates invalid node protocol dat
     sessionReadAgents: [],
     turnReadAgents: [],
     liveItemAgents: [],
+    toolActivityAgents: [],
   });
   assert.equal(goodDirectoryInstance.capabilities.aiSessionQueuePause, true);
   const oldDirectoryInstance = directory.body.data.find((instance) => instance.id === "inst_old_protocol");

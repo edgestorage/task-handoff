@@ -239,6 +239,7 @@ export function controlledInstanceCapabilities(
       gitCliCredentialBroker: gitCredentialBrokerInstalled,
       gitCredentialProxy: gitCredentialBrokerInstalled,
       repositoryPathSearch: true,
+      repositoryFileContent: true,
       repositoryWorktreeMoveToMain: true,
       aiSessionSendIdempotency: true,
       aiSessionQueuePause: true,

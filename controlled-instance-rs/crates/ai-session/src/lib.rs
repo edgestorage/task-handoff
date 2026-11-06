@@ -65,8 +65,8 @@ pub use provider::{
 };
 pub use timeline::{
     ai_session_timeline_item_revision, ai_session_timeline_revision,
-    sync_ai_session_timeline_items, validate_known_timeline_items, AiSessionTimelineError,
-    AiSessionTimelineStore,
+    ai_session_tool_activity_window, sync_ai_session_timeline_items, validate_known_timeline_items,
+    AiSessionTimelineError, AiSessionTimelineStore,
 };
 pub use title::{
     ai_session_title_output_schema, ai_session_title_prompt, parse_ai_session_title,

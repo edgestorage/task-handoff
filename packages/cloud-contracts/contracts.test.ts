@@ -42,6 +42,9 @@ import {
   CloudDeviceAuthSchema,
   RELAY_SESSION_PROTOCOL_VERSION,
   RelaySessionAudience,
+  RelayCapabilityReportSchema,
+  relaySessionCapabilitiesFromHeader,
+  normalizeRelayCapabilities,
   acceptControlPlaneHandshake,
   beginClientHandshake,
   cloudClientTranscriptSigningInput,
@@ -100,7 +103,7 @@ test("node relay v2 contracts are additive and keep the allocation winner opaque
     ],
   };
   assert.deepEqual(NodeRelayProbeTargetsResponseSchema.parse(targets), targets);
-  assert.equal(NodeRelayProbeTargetsResponseSchema.safeParse({ targets: [...targets.targets, targets.targets[0]] }).success, false);
+  assert.equal(NodeRelayProbeTargetsResponseSchema.safeParse({ targets: Array.from({ length: 11 }, () => targets.targets[0]) }).success, false);
   assert.equal(NodeRelayProbeTargetsResponseSchema.safeParse({ targets: [{ ...targets.targets[0], claimGrant: "leak" }] }).success, false);
 
   const v2Request = {
@@ -228,10 +231,21 @@ test("node grants and revocations carry complete shared node authority", () => {
   assert.equal(RelayRevocationSchema.safeParse({ ...accessRevocation, accessRoleId: undefined }).success, false);
 });
 
-test("capability negotiation accepts only the shared-access registration capability", () => {
+test("registration capabilities are additive for independently upgraded clients", () => {
   const registration = { protocolVersion: CONTROL_PLANE_REGISTRATION_PROTOCOL_VERSION, audience: OfficialAudience.CoordinatorControl, connectionId: "connection_a", processInstanceId: "process_a", reportedControlPlaneId: "control_plane_a", publicKey: "p".repeat(43), publicKeyFingerprint: fingerprint, epoch: 1, capabilities: ["request", CONTROL_PLANE_SHARED_ACCESS_CAPABILITY], issuedAt: at, expiresAt: at, signature: "s".repeat(32) };
   assert.equal(OutboundConnectionRegistrationSchema.safeParse(registration).success, true);
-  assert.equal(OutboundConnectionRegistrationSchema.safeParse({ ...registration, capabilities: ["resource-sharing-v1"] }).success, false);
+  assert.equal(OutboundConnectionRegistrationSchema.safeParse({ ...registration, capabilities: ["future-capability-v1"] }).success, true);
+  const capabilities = [...Array.from({ length: 1022 }, (_, index) => `future-capability-${index}`), "relay-session-policy-v1", "x".repeat(80)];
+  assert.equal(OutboundConnectionRegistrationSchema.safeParse({ ...registration, capabilities }).success, true);
+  assert.deepEqual(RelayCapabilityReportSchema.parse({ capabilities }).capabilities, capabilities);
+  assert.deepEqual(relaySessionCapabilitiesFromHeader(capabilities.join(",")), capabilities);
+  assert.deepEqual(normalizeRelayCapabilities([...capabilities, null, "", "  relay-session-policy-v1 "]), capabilities);
+  for (const invalid of [[...capabilities, "overflow"], ["x".repeat(81)]]) {
+    assert.equal(OutboundConnectionRegistrationSchema.safeParse({ ...registration, capabilities: invalid }).success, false);
+    assert.equal(RelayCapabilityReportSchema.safeParse({ capabilities: invalid }).success, false);
+    assert.equal(RelayCapabilityReportSchema.safeParse({ capabilities: [], requiredCapabilities: invalid }).success, false);
+    assert.throws(() => normalizeRelayCapabilities(invalid));
+  }
 });
 
 test("X25519 session key is bound to the signed Control Plane and ticket transcript", () => {
@@ -448,4 +462,51 @@ test("device auth, trust outcomes and handshake replies reject unsupported wire 
     transcript: "t".repeat(43),
     signature: "v".repeat(86),
   }).success, true);
+});
+
+
+test("mobile login providers ignore additive fields but still validate known fields", async () => {
+  let provider: unknown = { id: "email", displayName: "Email", futureField: true };
+  const client = new publicContracts.OfficialMobileAccountClient({ origin: "https://cloud.example.test", accessToken: async () => "token", request: async () => ({ ok: true, status: 200, json: async () => ({ data: [provider], futureEnvelopeField: true }) }) });
+  assert.deepEqual(await client.publicProviders(), [{ id: "email", displayName: "Email" }]);
+  provider = { id: "email", displayName: 42 };
+  await assert.rejects(() => client.publicProviders());
+  provider = { id: "email" };
+  await assert.rejects(() => client.publicProviders());
+});
+
+test("cloud access settings ignore additive fields at both levels and preserve authority checks", () => {
+  const role = { roleId: "role_admin", name: "Admin", system: true, status: "active" };
+  const view = { bindingId: "binding_a", ownerRoleId: role.roleId, availableRoleIds: [role.roleId], settingsRevision: 1, updatedAt: at, catalogRevision: 1, roles: [role] };
+  assert.deepEqual(publicContracts.ControlPlaneAccessSettingsViewSchema.parse({ ...view, futureField: true, roles: [{ ...role, futureField: true }] }), view);
+  for (const invalid of [{ ...view, ownerRoleId: "role_missing" }, { ...view, availableRoleIds: [role.roleId, role.roleId] }, { ...view, roles: [{ ...role, system: "yes" }] }, { ...view, settingsRevision: undefined }]) {
+    assert.equal(publicContracts.ControlPlaneAccessSettingsViewSchema.safeParse(invalid).success, false);
+  }
+});
+
+test("Relay lifecycle responses ignore additive fields and reject invalid known fields", () => {
+  const common = { role: "client", sessionId: "session_a", generation: 1, leaseExpiresAt: at };
+  const cases = [
+    [publicContracts.RelaySessionResumeResultSchema, { ...common, type: "attached", allocationId: "allocation_a", channelId: "channel_a", state: "open" }, { generation: "1" }],
+    [publicContracts.RelaySessionRenewalResultSchema, { ...common, type: "renewed", committed: true }, { committed: "yes" }],
+    [publicContracts.RelaySessionClosedMessageSchema, { type: "session-closed", sessionId: "session_a", code: "idle-timeout", retryable: true }, { retryable: "yes" }],
+  ] as const;
+  for (const [schema, baseline, invalid] of cases) {
+    assert.deepEqual(schema.parse({ ...baseline, futureField: { nested: true } }), baseline);
+    assert.equal(schema.safeParse({ ...baseline, ...invalid }).success, false);
+    assert.equal(schema.safeParse({ ...baseline, sessionId: undefined }).success, false);
+  }
+});
+
+test("candidate rankings and Node probe budgets accept ten entries and reject eleven", () => {
+  const ids = Array.from({ length: 10 }, (_, index) => `allocation_${index}`);
+  assert.equal(publicContracts.RelaySelectionConfirmationSchema.safeParse({ winnerAllocationId: ids[0], rankedAllocationIds: ids, measurements: ids.map(allocationId => ({ allocationId, relayId: "relay_a", sampleCount: 2, failureCount: 0 })) }).success, true);
+  assert.equal(publicContracts.RelaySelectionConfirmationSchema.safeParse({ winnerAllocationId: ids[0], rankedAllocationIds: [...ids, "overflow"] }).success, false);
+  const targets = ids.map((_, index) => ({ relayId: `relay_${index}`, relayUrl: "wss://relay.example.test/connect" }));
+  assert.equal(NodeRelayProbeTargetsResponseSchema.safeParse({ targets }).success, true);
+  assert.equal(NodeRelayProbeTargetsResponseSchema.safeParse({ targets: [] }).success, true);
+  assert.equal(NodeRelayProbeTargetsResponseSchema.safeParse({ targets: targets.slice(0, 2) }).success, true);
+  assert.equal(NodeRelayProbeTargetsResponseSchema.safeParse({ targets: [...targets, targets[0]] }).success, false);
+  assert.equal(publicContracts.NodeRelayProbeTargetsRequestSchema.safeParse({ maxTargets: 10 }).success, true);
+  assert.equal(publicContracts.NodeRelayProbeTargetsRequestSchema.safeParse({ maxTargets: 11 }).success, false);
 });

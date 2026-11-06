@@ -63,7 +63,7 @@ function activate(node: RepositoryFileTreeNode) {
 
 <style scoped>
 .repository-file-tree { display: grid; min-width: 0; }
-.repository-file-tree-row { display: flex; width: 100%; min-height: 31px; align-items: center; gap: 6px; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 3px 6px 3px calc(6px + var(--repository-tree-depth) * 14px); text-align: left; }
+.repository-file-tree-row { display: flex; width: 100%; min-height: 31px; align-items: center; gap: 6px; border: 0; border-radius: 4px; background: transparent; color: var(--text); cursor: pointer; padding: 3px 6px 3px calc(6px + var(--repository-tree-depth) * 14px); text-align: left; }
 .repository-file-tree-row:hover:not(:disabled), .repository-file-tree-row:focus-visible { background: var(--surface-subtle); color: var(--text); }
 .repository-file-tree-row[data-active="true"] { background: color-mix(in srgb, var(--brand-accent) 10%, transparent); color: var(--text); }
 .repository-file-tree-row:disabled { cursor: not-allowed; opacity: 0.55; }

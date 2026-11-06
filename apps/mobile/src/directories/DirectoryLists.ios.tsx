@@ -17,6 +17,7 @@ import {
   accessibilityLabel,
   background,
   buttonStyle,
+  contentShape,
   font,
   foregroundStyle,
   frame,
@@ -26,6 +27,7 @@ import {
   pickerStyle,
   refreshable,
   scrollContentBackground,
+  shapes,
   tag,
   tint,
 } from '@expo/ui/swift-ui/modifiers';
@@ -71,7 +73,7 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
               footer={node.error ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.error)]}>{node.error.code}: {node.error.message}</Text> : undefined}
             >
               <Button
-                modifiers={[buttonStyle('plain'), frame({ maxWidth: Infinity, alignment: 'leading' }), accessibilityLabel(t('directories.open', { name: node.name }))]}
+                modifiers={[buttonStyle('plain'), frame({ maxWidth: Infinity, alignment: 'leading' }), contentShape(shapes.rectangle()), accessibilityLabel(t('directories.open', { name: node.name }))]}
                 onPress={() => onOpen?.(node)}
               >
                 <HStack alignment="center" spacing={12}>
@@ -172,6 +174,7 @@ function InstanceButton({ instance, nodeConnectionEnabled, onPress, selected }: 
     <Button modifiers={[
       buttonStyle('plain'),
       frame({ maxWidth: Infinity, alignment: 'leading' }),
+      contentShape(shapes.rectangle()),
       accessibilityLabel(t('directories.open', { name: instance.name })),
       ...(selected ? [listRowBackground(colors.workbenchSelectionBackground)] : []),
     ]} onPress={onPress}>

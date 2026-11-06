@@ -28,7 +28,7 @@ import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { createControlPlaneClient, type ControlPlaneClientTransport, type RepositoryWorkspaceTarget } from "@task-handoff/control-plane-client";
-import { deleteUrlData, getUrlData, postUrlData, putUrlData, requestUrlEnvelope } from "./client";
+import { deleteUrlData, getUrlData, getUrlHeaders, postUrlData, putUrlData, requestUrlEnvelope } from "./client";
 
 export type RepositorySessionTarget = {
   instanceId: string;
@@ -153,6 +153,14 @@ export function getRepositoryDirectory(target: RepositorySessionTarget, path = "
 
 export function getRepositoryFile(target: RepositorySessionTarget, path: string, options?: { signal?: AbortSignal }) {
   return getUrlData<RepositoryFileContent>(repositoryUrlWithQuery(target, "files", { path }), options);
+}
+
+export function repositoryFileContentUrl(target: RepositorySessionTarget, path: string) {
+  return repositoryUrlWithQuery(target, "files/content", { path });
+}
+
+export function getRepositoryFileContentHeaders(target: RepositorySessionTarget, path: string, options?: { signal?: AbortSignal }) {
+  return getUrlHeaders(repositoryFileContentUrl(target, path), options);
 }
 
 export async function searchRepositoryPaths(target: RepositorySessionTarget, query: string, limit = 100, options?: { signal?: AbortSignal }) {

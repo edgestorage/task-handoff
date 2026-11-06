@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import fastifyStatic from "@fastify/static";
 import { z } from "zod";
 import type { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import {
@@ -222,6 +223,35 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
     try {
       return { data: await createAiSessionWorkspace(request.body) };
     } catch (error) { return sendRepositoryError(reply, sanitizeAiSessionLaunchError(error)); }
+  });
+
+  // Reuse the static-file sender for streaming, HEAD and RFC byte ranges. The
+  // repository service remains the authority for regular-file/path boundaries.
+  app.register(async (contentRoutes) => {
+    if (!contentRoutes.hasReplyDecorator("sendFile")) {
+      await contentRoutes.register(fastifyStatic, { serve: false });
+    }
+    contentRoutes.addHook("onSend", async (_request, reply, payload) => {
+      // Native PDF viewers are browser plugins and cannot run under CSP sandbox.
+      // Other raw documents, including SVG/HTML, must not execute at our origin.
+      if (String(reply.getHeader("content-type")).split(";", 1)[0] !== "application/pdf") {
+        reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+      }
+      return payload;
+    });
+    for (const kind of ["ai-session", "app-session"] as const) {
+      const segment = kind === "ai-session" ? "ai-sessions" : "apps/sessions";
+      contentRoutes.get<{ Params: { id: string }; Querystring: unknown }>(`/api/${segment}/:id/repository/files/content`, async (request, reply) => {
+        try {
+          const query = FileQuerySchema.parse(request.query || {});
+          const state = await requireWorkspace(servicesFor(kind, request.params.id).resolve);
+          const absolutePath = repositoryFiles(state, options.workspaceRoots).contentPath(query.path);
+          reply.header("Cache-Control", "private, no-store");
+          reply.header("X-Content-Type-Options", "nosniff");
+          return reply.sendFile(path.basename(absolutePath), path.dirname(absolutePath), { cacheControl: false, dotfiles: "allow" });
+        } catch (error) { return sendRepositoryError(reply, error); }
+      });
+    }
   });
 
   for (const kind of ["ai-session", "app-session"] as const) {

@@ -467,6 +467,10 @@ pub fn router(state: AppState) -> Router {
             post(sync_ai_session_turn_timeline),
         )
         .route(
+            "/api/ai-sessions/{id}/turns/{turn_id}/tool-activity",
+            get(ai_session_tool_activity_window),
+        )
+        .route(
             "/api/ai-sessions/{id}/turns/{turn_id}",
             get(ai_session_turn),
         )
@@ -698,6 +702,10 @@ fn repository_routes(prefix: &str) -> Router<AppState> {
         .route(
             &format!("{prefix}/files/search"),
             get(repository_file_search),
+        )
+        .route(
+            &format!("{prefix}/files/content"),
+            get(repository_file_content),
         )
         .route(
             &format!("{prefix}/files"),
@@ -3383,6 +3391,61 @@ async fn repository_file_search(
         Ok(result) => repository_data(result),
         Err(error) => repository_error(error),
     }
+}
+
+async fn repository_file_content(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    Path(id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    request: Request,
+) -> Response {
+    let query: RepositoryFileQuery =
+        match parse_repository_query(&query, validate_repository_file_query) {
+            Ok(query) => query,
+            Err(response) => return response,
+        };
+    let resolved = match require_workspace(resolve_repository_target(&state, &uri, &id).await) {
+        Ok(resolved) => resolved,
+        Err(error) => return repository_error(error),
+    };
+    let service = match state.repository_service.files(&resolved) {
+        Ok(service) => service,
+        Err(error) => return repository_error(error),
+    };
+    let path = match service.content_path(&query.path) {
+        Ok(path) => path,
+        Err(error) => return repository_error(error),
+    };
+    let mut response = ServeFile::new(path)
+        .oneshot(request)
+        .await
+        .expect("ServeFile is infallible")
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        header::HeaderValue::from_static("nosniff"),
+    );
+    // Native PDF viewers cannot run under CSP sandbox; other raw documents must
+    // not execute at the instance/Control Plane origin.
+    if response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some("application/pdf")
+    {
+        response.headers_mut().insert(
+            "content-security-policy",
+            header::HeaderValue::from_static(
+                "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            ),
+        );
+    }
+    response
 }
 
 async fn repository_file_read(
@@ -12019,6 +12082,20 @@ async fn ai_session_turn_timeline(
     .into_response()
 }
 
+async fn ai_session_tool_activity_window(
+    State(state): State<AppState>,
+    Path((id, turn_id)): Path<(String, String)>,
+) -> Response {
+    match state
+        .ai_session_controller
+        .tool_activity_window(&id, &turn_id)
+        .await
+    {
+        Ok(window) => Json(ApiEnvelope { data: window }).into_response(),
+        Err(error) => ai_session_provider_error(error),
+    }
+}
+
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AiSessionTimelineSyncRequest {
@@ -18911,6 +18988,14 @@ mod tests {
                         "text": "First answer"
                     },
                     {
+                        "id": "item-2a",
+                        "turnId": "provider-turn-1",
+                        "type": "activity",
+                        "activityKind": "commandExecution",
+                        "title": "Command",
+                        "status": "completed"
+                    },
+                    {
                         "id": "item-3",
                         "turnId": "provider-turn-2",
                         "type": "ai-message",
@@ -18954,7 +19039,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            3
+            4
         );
         let revision = timeline["data"]["revision"]
             .as_str()
@@ -18993,7 +19078,7 @@ mod tests {
             .expect("timeline sync");
         let snapshot = body_json(snapshot).await;
         assert_eq!(snapshot["data"]["kind"], "snapshot");
-        assert_eq!(snapshot["data"]["items"].as_array().unwrap().len(), 3);
+        assert_eq!(snapshot["data"]["items"].as_array().unwrap().len(), 4);
 
         let turn_timeline = app
             .clone()
@@ -19012,8 +19097,23 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            2
+            3
         );
+        let tool_activity = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ai-sessions/ses_0000000000005/turns/provider-turn-1/tool-activity")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("tool activity");
+        let tool_activity = body_json(tool_activity).await;
+        assert_eq!(tool_activity["data"]["boundaryItemId"], "item-2");
+        assert_eq!(tool_activity["data"]["total"], 1);
+        assert_eq!(tool_activity["data"]["truncated"], false);
+        assert_eq!(tool_activity["data"]["items"][0]["id"], "item-2a");
         let known_items = turn_timeline["data"]["timeline"]["items"]
             .as_array()
             .unwrap()
@@ -20684,6 +20784,116 @@ mod tests {
             .expect("operations")
             .iter()
             .any(|operation| operation["clientRequestId"] == "fork-snapshot-cleanup"));
+    }
+
+    #[tokio::test]
+    async fn repository_raw_content_preserves_binary_ranges_and_file_boundaries() {
+        let (state, _state_root) = test_state();
+        let root = tempfile::tempdir().expect("workspace");
+        let size = 5 * 1024 * 1024;
+        std::fs::write(root.path().join("movie.mp4"), vec![0x7f; size]).expect("media");
+        let mut session = ai_session_record("ses_0000000000030", "aps_0000000000030");
+        session.cwd = Some(root.path().display().to_string());
+        session.status = "idle".to_string();
+        state.ai_sessions.save(session).expect("session");
+        let app = router(state);
+        let base = "/api/ai-sessions/ses_0000000000030/repository/files/content?path=";
+        let head = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::HEAD)
+                    .uri(format!("{base}movie.mp4"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("head");
+        assert_eq!(head.status(), StatusCode::OK);
+        assert_eq!(head.headers()[header::CONTENT_TYPE], "video/mp4");
+        assert_eq!(head.headers()[header::CONTENT_LENGTH], size.to_string());
+        assert_eq!(head.headers()[header::CACHE_CONTROL], "private, no-store");
+        assert!(head
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes()
+            .is_empty());
+        let range = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{base}movie.mp4"))
+                    .header(header::RANGE, "bytes=10-19")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("range");
+        assert_eq!(range.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            range.headers()[header::CONTENT_RANGE],
+            format!("bytes 10-19/{size}")
+        );
+        assert_eq!(
+            range
+                .into_body()
+                .collect()
+                .await
+                .expect("body")
+                .to_bytes()
+                .as_ref(),
+            &[0x7f; 10]
+        );
+        let suffix = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{base}movie.mp4"))
+                    .header(header::RANGE, "bytes=-5")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("suffix");
+        assert_eq!(suffix.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            suffix
+                .into_body()
+                .collect()
+                .await
+                .expect("body")
+                .to_bytes()
+                .len(),
+            5
+        );
+        for path in ["..%2Foutside", "%2Fetc%2Fpasswd", ".git%2Fconfig"] {
+            let forbidden = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("{base}{path}"))
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_ne!(forbidden.status(), StatusCode::OK);
+        }
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{base}missing.png"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("missing");
+        assert_eq!(
+            body_json(missing).await["error"]["code"],
+            "REPOSITORY_FILE_NOT_FOUND"
+        );
     }
 
     #[tokio::test]

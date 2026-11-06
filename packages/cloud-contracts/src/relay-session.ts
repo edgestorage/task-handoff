@@ -10,6 +10,7 @@ import {
   AccessTicketSchema,
   ConfirmedRelayAllocationSchema,
   RelayAttachCapabilitySchema,
+  RelayCapabilitiesSchema,
   RelayRateLimitSchema,
   RelayRevocationSchema,
   RelaySelectionSchema,
@@ -18,7 +19,9 @@ import {
   validateControlPlaneAccessFields,
 } from "./relay.ts";
 import {
-  RELAY_SESSION_MAX_GRANT_TTL_MS,
+  RELAY_MAX_CANDIDATES,
+  RELAY_SESSION_LEGACY_REFRESH_INTERVAL_MS,
+  RELAY_SESSION_RENEWAL_LEAD_MS,
   RELAY_SESSION_PROTOCOL_VERSION,
   RELAY_SESSION_RESUME_CAPABILITY,
   RelaySessionAudience,
@@ -98,6 +101,9 @@ export const RelaySessionGrantPayloadSchema = z.strictObject({
   maxConcurrentChannels: z.number().int().positive().optional(),
   sessionTranscriptTicket: RelaySessionTranscriptTicketSchema,
   revocationEpoch: z.number().int().nonnegative(),
+  // Coordinator-owned scheduling policy, signed and replaced with each generation.
+  // Absent on mobile-v0.0.12 / runtime v0.0.49 grants; never default a signed field.
+  renewAfterMs: z.number().int().positive().optional(),
   issuedAt: DateTimeSchema,
   expiresAt: DateTimeSchema,
   ...ControlPlaneAccessFieldsSchema.shape,
@@ -105,8 +111,10 @@ export const RelaySessionGrantPayloadSchema = z.strictObject({
   validateControlPlaneAccessFields(value, context);
   const issuedAt = Date.parse(value.issuedAt);
   const expiresAt = Date.parse(value.expiresAt);
+  if (value.renewAfterMs !== undefined && value.renewAfterMs >= expiresAt - issuedAt) {
+    context.addIssue({ code: "custom", path: ["renewAfterMs"], message: "renewal must precede grant expiry" });
+  }
   if (expiresAt <= issuedAt) context.addIssue({ code: "custom", path: ["expiresAt"], message: "grant expiry must be after issuance" });
-  if (expiresAt - issuedAt > RELAY_SESSION_MAX_GRANT_TTL_MS) context.addIssue({ code: "custom", path: ["expiresAt"], message: "grant exceeds the Relay attach lease ceiling" });
   const transcript = value.sessionTranscriptTicket;
   if (transcript.accountId !== value.accountId || transcript.deviceSessionId !== value.deviceSessionId
     || transcript.controlPlaneId !== value.controlPlaneId || transcript.bindingId !== value.bindingId
@@ -175,7 +183,7 @@ export const RelaySessionControlMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type RelaySessionControlMessage = z.infer<typeof RelaySessionControlMessageSchema>;
 
-export const RelaySessionResumeResultSchema = z.strictObject({
+export const RelaySessionResumeResultSchema = z.object({
   type: z.literal("attached"),
   role: z.enum(["client", "control-plane"]),
   sessionId: IdSchema,
@@ -187,7 +195,7 @@ export const RelaySessionResumeResultSchema = z.strictObject({
 });
 export type RelaySessionResumeResult = z.infer<typeof RelaySessionResumeResultSchema>;
 
-export const RelaySessionRenewalResultSchema = z.strictObject({
+export const RelaySessionRenewalResultSchema = z.object({
   type: z.literal("renewed"),
   role: z.enum(["client", "control-plane"]),
   sessionId: IdSchema,
@@ -207,7 +215,7 @@ export const RelaySessionDetachedMessageSchema = z.strictObject({
  * Sent before a Relay closes an attached socket so the client can distinguish a
  * recoverable idle timeout from an authoritative session failure.
  */
-export const RelaySessionClosedMessageSchema = z.strictObject({
+export const RelaySessionClosedMessageSchema = z.object({
   type: z.literal("session-closed"),
   sessionId: IdSchema,
   code: z.string().trim().min(1).max(80),
@@ -246,7 +254,7 @@ export const RelaySessionBootstrapRequestSchema = z.strictObject({
   trafficClasses: z.array(TrafficClassSchema).min(1).max(3),
   trafficClass: TrafficClassSchema,
   preferredRegion: z.string().trim().min(1).max(80).optional(),
-  maxCandidates: z.number().int().min(1).max(5).optional(),
+  maxCandidates: z.number().int().min(1).max(RELAY_MAX_CANDIDATES).optional(),
   preferredRelayId: IdSchema.optional(),
   clientProofPublicKey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
@@ -290,8 +298,8 @@ export const RelayRevocationAckSchema = z.strictObject({ throughEpoch: z.number(
 export type RelayRevocationAck = z.infer<typeof RelayRevocationAckSchema>;
 
 export const RelayCapabilityReportSchema = z.strictObject({
-  capabilities: z.array(z.string().trim().min(1).max(80)).max(32),
-  requiredCapabilities: z.array(z.string().trim().min(1).max(80)).max(32).optional(),
+  capabilities: RelayCapabilitiesSchema,
+  requiredCapabilities: RelayCapabilitiesSchema.optional(),
 });
 export const RelaySessionResumeCapability = RELAY_SESSION_RESUME_CAPABILITY;
 export type RelayCapabilityReport = z.infer<typeof RelayCapabilityReportSchema>;
@@ -308,4 +316,28 @@ function accessTuple(value: { ownerAccountId?: string; accessMode?: "owner" | "s
     shareRevision: value.shareRevision ?? null,
     accessRoleId: value.accessRoleId ?? null,
   });
+}
+
+/**
+ * Read only after signature verification. Compatibility for mobile-v0.0.12:
+ * persisted grants without a policy retain their original ten-minute cadence.
+ */
+export function relaySessionRenewalAt(grant: RelaySessionGrant): number {
+  return Math.min(
+    Date.parse(grant.issuedAt) + (grant.renewAfterMs ?? RELAY_SESSION_LEGACY_REFRESH_INTERVAL_MS),
+    Date.parse(grant.expiresAt) - RELAY_SESSION_RENEWAL_LEAD_MS,
+  );
+}
+
+/** The existing cloud capability header is shared by all optional features. */
+export function relaySessionCapabilitiesFromHeader(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  const report = RelayCapabilityReportSchema.safeParse({ capabilities: value.split(/[\s,]+/).filter(Boolean) });
+  return report.success ? report.data.capabilities : [];
+}
+
+/** Additive capability reports preserve unknown tokens for future consumers. */
+export function normalizeRelayCapabilities(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return RelayCapabilitiesSchema.parse([...new Set(value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean))]);
 }

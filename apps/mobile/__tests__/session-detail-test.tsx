@@ -14,6 +14,7 @@ import { conversationDetailItems, conversationListOptions, detailItems, isSessio
 import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, OFFLINE_NOTICE_DELAY_MS, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { advanceStreamingMarkdownBlocks, CHARACTER_FADE_MS, hasUnclosedMarkdownFence, initialStreamingText, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText, streamingMarkdownStableCutoff } from '../src/components/SafeMarkdown';
+import { mobileMarkdownLinkTarget } from '../src/components/markdown-link-target';
 import { nextStreamingMarkdownCommit } from '../src/components/useStreamingMarkdown';
 import { MobileAiSessionPermissionStore } from '../src/ai-sessions/permission-store';
 import type { ValueStore } from '../src/platform/secure-storage';
@@ -671,7 +672,7 @@ test('detail navigates one authoritative turn and applies streaming only to late
   await fireEvent(screen.getByTestId('session-detail-scroll'), 'layout', { nativeEvent: { layout: { height: 500, width: 390 } } });
   await waitFor(() => screen.getByText('Second prompt'));
   expect(conversationDetailItems(multiTurn, []).map((item) => item.id)).toEqual([
-    'turn-1:user', 'turn-1:timeline-history-status', 'turn-1:assistant', 'turn-2:user', 'turn-2:assistant',
+    'turn-1:user', 'turn-1:timeline-history', 'turn-1:assistant', 'turn-2:user', 'turn-2:assistant',
   ]);
   screen.getByText('First prompt');
   screen.getByText('shell · pnpm test');
@@ -961,9 +962,40 @@ test('completed timeline exposes loading, failure retry, and empty history state
   await fireEvent.press(retryButton);
   expect(retry).toHaveBeenCalledWith(expect.objectContaining({ id: 'turn-1' }));
   await failed.unmount();
+
+  const load = jest.fn();
+  const idle = await render(<SessionDetail
+    messages={[]}
+    onLoadTimeline={load}
+    session={completed}
+    timelineEnabled
+    timelines={{ 'turn-1': { status: 'idle', items: [{ id: 'answer', turnId: 'turn-1', type: 'ai-message', text: 'Done' }] } }}
+  />);
+  await fireEvent.press(idle.getByRole('button', { name: 'Process details' }));
+  expect(load).toHaveBeenCalledWith(expect.objectContaining({ id: 'turn-1' }));
+  await idle.unmount();
 });
 
-test('workspace retries a failed authoritative turn timeline request', async () => {
+test('conversation mode loads a Turn timeline only after its history opens', async () => {
+  const completed = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    status: 'idle',
+    currentTool: undefined,
+    subAgents: [],
+    turns: [{ ...session.turns![0], status: 'completed', lastMessage: 'Done' }],
+  });
+  const load = jest.fn();
+  const screen = await render(<SessionDetail messages={[]} mode="conversation" onLoadTimeline={load} session={completed} timelineEnabled timelines={{ 'turn-1': { status: 'idle', items: [] } }} />);
+  await fireEvent(screen.getByTestId('session-detail-scroll'), 'layout', { nativeEvent: { layout: { height: 500, width: 390 } } });
+
+  expect(load).not.toHaveBeenCalled();
+  const loadButton = screen.getByTestId('session-timeline-load-button');
+  await fireEvent(loadButton, 'click');
+  expect(load).toHaveBeenCalledWith(expect.objectContaining({ id: 'turn-1' }));
+  await screen.unmount();
+});
+
+test('workspace loads a Turn timeline on demand and retries a failed request', async () => {
   const completed = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     id: 'session-timeline-load',
@@ -985,6 +1017,22 @@ test('workspace retries a failed authoritative turn timeline request', async () 
         generatedAt: session.updatedAt,
       },
   });
+  mobileAiSessionStore.setSessionTurnIndex('cp-timeline-load', 'instance-timeline-load', completed.turnsRevision!, AiSessionTurnIndexSchema.parse({
+    sessionId: completed.id,
+    revision: completed.turnsRevision,
+    turns: [{
+      id: completed.turns![0].id,
+      providerTurnId: completed.turns![0].providerTurnId,
+      status: completed.turns![0].status,
+      phase: completed.turns![0].phase,
+      revision: completed.turns![0].revision,
+      bodyRevision: 'body-timeline-load',
+      startedAt: completed.turns![0].startedAt,
+      updatedAt: completed.turns![0].updatedAt,
+      completedAt: completed.turns![0].completedAt,
+    }],
+  }));
+  mobileAiSessionStore.setSessionTurn('cp-timeline-load', 'instance-timeline-load', completed.id, 'body-timeline-load', completed.turns![0]);
   const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
   function Harness() {
     const [, rerender] = useReducer((value: number) => value + 1, 0);
@@ -992,7 +1040,7 @@ test('workspace retries a failed authoritative turn timeline request', async () 
     return <SessionWorkspace
       client={client}
       controlPlaneId="cp-timeline-load"
-      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [], toolActivityAgents: [] } }}
       instanceId="instance-timeline-load"
       messages={[]}
       session={completed}
@@ -1005,8 +1053,11 @@ test('workspace retries a failed authoritative turn timeline request', async () 
     <Harness />
   </SafeAreaProvider>);
 
+  expect(screen.getByTestId('session-timeline-load-button')).toBeTruthy();
+  expect(turnTimeline).not.toHaveBeenCalled();
+  expect(mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]).status).toBe('idle');
+  await fireEvent.press(screen.getByRole('button', { name: 'Process details' }));
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]).status).toBe('error'));
-  expect(screen.queryByTestId('session-turn-loading-overlay')).toBeNull();
   expect(screen.getByText(/Failed to load full activity/)).toBeTruthy();
   await fireEvent.press(screen.getByRole('button', { name: /Failed to load full activity/ }));
   await waitFor(() => expect(turnTimeline).toHaveBeenCalledTimes(2));
@@ -1073,7 +1124,7 @@ test('workspace keeps an in-flight timeline request authoritative across Turn li
     return <SessionWorkspace
       client={client}
       controlPlaneId={controlPlaneId}
-      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [], toolActivityAgents: [] } }}
       instanceId={instanceId}
       messages={[]}
       session={current}
@@ -1084,6 +1135,8 @@ test('workspace keeps an in-flight timeline request authoritative across Turn li
     <Harness />
   </SafeAreaProvider>);
 
+  expect(turnTimeline).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Process details' }));
   await waitFor(() => expect(turnTimeline).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, running.id, running.turns![0]).status).toBe('loading'));
   await act(async () => completeTurn());
@@ -1153,19 +1206,22 @@ test('session-read capability loads a recovery snapshot while live items remain 
       client={client}
       controlPlaneId="cp-session-read-live"
       detailMode="conversation"
-      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: ['codex'], turnReadAgents: [], liveItemAgents: ['codex'] } }}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: ['codex'], turnReadAgents: [], liveItemAgents: ['codex'], toolActivityAgents: [] } }}
       instanceId="instance-session-read-live"
       messages={[]}
       session={running}
     />
   </SafeAreaProvider>);
 
+  await fireEvent(screen.getByTestId('session-detail-scroll'), 'layout', { nativeEvent: { layout: { height: 500, width: 390 } } });
+  expect(timeline).not.toHaveBeenCalled();
+  await fireEvent(screen.getByTestId('session-timeline-load-button'), 'click');
   await waitFor(() => expect(timeline).toHaveBeenCalledWith('instance-session-read-live', running.id));
   await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-session-read-live');
 });
 
-test('workspace loads the latest queued turn timeline to recover items emitted before subscription', async () => {
+test('workspace keeps the latest queued turn timeline unloaded until history opens', async () => {
   const queued = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     id: 'session-timeline-queued',
@@ -1186,13 +1242,16 @@ test('workspace loads the latest queued turn timeline to recover items emitted b
     <SessionWorkspace
       client={client}
       controlPlaneId="cp-timeline-queued"
-      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: ['codex'] } }}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: ['codex'], toolActivityAgents: [] } }}
       instanceId="instance-timeline-queued"
       messages={[]}
       session={queued}
     />
   </SafeAreaProvider>);
 
+  expect(turnTimeline).not.toHaveBeenCalled();
+  expect(mobileAiSessionStore.timelineTurnState('cp-timeline-queued', 'instance-timeline-queued', queued.id, queued.turns![0]).status).toBe('idle');
+  await fireEvent.press(screen.getByRole('button', { name: 'Process details' }));
   await waitFor(() => expect(turnTimeline).toHaveBeenCalledWith('instance-timeline-queued', queued.id, 'turn-timeline-queued'));
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-queued', 'instance-timeline-queued', queued.id, queued.turns![0]).status).toBe('ready'));
   await screen.unmount();
@@ -1241,7 +1300,7 @@ test('switching sessions and returning conditionally refreshes the cached timeli
     return <SessionWorkspace
       client={client}
       controlPlaneId={controlPlaneId}
-      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [], toolActivityAgents: [] } }}
       instanceId={instanceId}
       messages={[]}
       session={current}
@@ -1252,8 +1311,12 @@ test('switching sessions and returning conditionally refreshes the cached timeli
     <Harness />
   </SafeAreaProvider>);
 
+  expect(turnTimeline).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Process details' }));
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).status).toBe('ready'));
   await act(async () => selectSession(sessionB));
+  await fireEvent(screen.getByTestId('session-detail-scroll'), 'layout', { nativeEvent: { layout: { height: 500, width: 390 } } });
+  await fireEvent(screen.getByTestId('session-timeline-load-button'), 'click');
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionB.id, sessionB.turns![0]).status).toBe('ready'));
   await act(async () => selectSession(sessionA));
   await waitFor(() => expect(turnTimeline.mock.calls.filter((call) => call[1] === sessionA.id)).toHaveLength(2));
@@ -1329,7 +1392,7 @@ test('returning to a mobile session applies only changed Timeline items from HTT
       client={client}
       controlPlaneId={controlPlaneId}
       detailMode="conversation"
-      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [], toolActivityAgents: [] } }}
       instanceId={instanceId}
       messages={[]}
       session={current}
@@ -1340,9 +1403,14 @@ test('returning to a mobile session applies only changed Timeline items from HTT
     <Harness />
   </SafeAreaProvider>);
 
+  await fireEvent(screen.getByTestId('session-detail-scroll'), 'layout', { nativeEvent: { layout: { height: 500, width: 390 } } });
+  expect(syncTurnTimeline).not.toHaveBeenCalled();
+  await fireEvent(screen.getByTestId('session-timeline-load-button'), 'click');
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).status).toBe('ready'));
   const untouchedItem = mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).items[0];
   await act(async () => selectSession(sessionB));
+  await fireEvent(screen.getByTestId('session-detail-scroll'), 'layout', { nativeEvent: { layout: { height: 500, width: 390 } } });
+  await fireEvent(screen.getByTestId('session-timeline-load-button'), 'click');
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionB.id, sessionB.turns![0]).status).toBe('ready'));
   await act(async () => selectSession(sessionA));
   await waitFor(() => expect(syncTurnTimeline.mock.calls.filter((call) => call[1] === sessionA.id)).toHaveLength(2));
@@ -1410,7 +1478,7 @@ test('session-read timelines recover content accumulated while another session w
       client={client}
       controlPlaneId={controlPlaneId}
       detailMode="conversation"
-      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: ['codex'], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: ['codex'], turnReadAgents: [], liveItemAgents: [], toolActivityAgents: [] } }}
       instanceId={instanceId}
       messages={[]}
       session={current}
@@ -1421,8 +1489,13 @@ test('session-read timelines recover content accumulated while another session w
     <Harness />
   </SafeAreaProvider>);
 
+  await fireEvent(screen.getByTestId('session-detail-scroll'), 'layout', { nativeEvent: { layout: { height: 500, width: 390 } } });
+  expect(timeline).not.toHaveBeenCalled();
+  await fireEvent(screen.getByTestId('session-timeline-load-button'), 'click');
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]).status).toBe('ready'));
   await act(async () => selectSession(sessionB));
+  await fireEvent(screen.getByTestId('session-detail-scroll'), 'layout', { nativeEvent: { layout: { height: 500, width: 390 } } });
+  await fireEvent(screen.getByTestId('session-timeline-load-button'), 'click');
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionB.id, sessionB.turns![0]).status).toBe('ready'));
   await act(async () => selectSession(sessionA));
   await waitFor(() => expect(timeline.mock.calls.filter((call) => call[1] === sessionA.id)).toHaveLength(2));
@@ -1440,6 +1513,65 @@ test('safe markdown normalizes protocol text and rejects executable schemes', ()
   expect(safeMarkdownLink('javascript:alert(1)')).toBeUndefined();
   expect(safeMarkdownLink('file:///etc/passwd')).toBeUndefined();
   expect(safeMarkdownLink('https://example.com/docs')).toBe('https://example.com/docs');
+});
+
+test('mobile markdown targets distinguish external links from local paths', () => {
+  expect(mobileMarkdownLinkTarget('https://example.com/docs')).toEqual({ kind: 'web', url: 'https://example.com/docs' });
+  expect(mobileMarkdownLinkTarget('knowledge/note.md#L12')).toEqual({ kind: 'file', path: 'knowledge/note.md' });
+  expect(mobileMarkdownLinkTarget('file:///Users/me/note%20one.md')).toEqual({ kind: 'file', path: '/Users/me/note one.md' });
+  expect(mobileMarkdownLinkTarget('javascript:alert(1)')).toBeUndefined();
+  expect(mobileMarkdownLinkTarget('#section')).toBeUndefined();
+});
+
+test('markdown web links expose open and copy actions on long press', async () => {
+  const write = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SafeMarkdown>{'[docs](https://example.com/docs)'}</SafeMarkdown>
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  fireEvent(screen.getByRole('link', { name: 'docs' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
+  await waitFor(() => screen.getByText('Open link'));
+  await fireEvent.press(screen.getByText('Copy link'));
+  await waitFor(() => expect(write).toHaveBeenCalledWith('https://example.com/docs'));
+  await screen.unmount();
+  write.mockRestore();
+});
+
+test('markdown link menus still open when iOS omits long-press coordinates', async () => {
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SafeMarkdown>{'[docs](https://example.com/docs)'}</SafeMarkdown>
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  await fireEvent(screen.getByRole('link', { name: 'docs' }), 'longPress', { nativeEvent: { target: 2 } });
+  await waitFor(() => screen.getByText('Open link'));
+  await screen.unmount();
+});
+
+test('markdown local file links expose copy path on long press', async () => {
+  const write = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SafeMarkdown>{'[note](knowledge/note.md#L12)'}</SafeMarkdown>
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  fireEvent(screen.getByRole('link', { name: 'note' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
+  await waitFor(() => screen.getByText('Copy path'));
+  expect(screen.queryByText('Open link')).toBeNull();
+  await fireEvent.press(screen.getByText('Copy path'));
+  await waitFor(() => expect(write).toHaveBeenCalledWith('knowledge/note.md'));
+  await screen.unmount();
+  write.mockRestore();
 });
 
 test('streaming fence detection follows CommonMark marker and closing-length rules', () => {

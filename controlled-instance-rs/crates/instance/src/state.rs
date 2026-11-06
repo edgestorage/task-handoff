@@ -2401,6 +2401,7 @@ fn controlled_instance_capabilities(
     capabilities.features.git_cli_credential_broker = git_credential_broker_installed;
     capabilities.features.git_credential_proxy = git_credential_broker_installed;
     capabilities.features.repository_path_search = true;
+    capabilities.features.repository_file_content = true;
     capabilities.features.repository_worktree_move_to_main = true;
     capabilities.features.model_relay.protocols = vec![
         "openai-responses".to_string(),

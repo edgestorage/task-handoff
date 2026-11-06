@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY } from "@task-handoff/cloud-contracts";
+import { CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY, RELAY_SESSION_POLICY_CAPABILITY } from "@task-handoff/cloud-contracts";
 import { CloudCoordinatorConnector, controlPlaneHeartbeatIntervalMs } from "../src/control-plane/cloud-connectivity/coordinator-runtime.ts";
 import { CloudNodeRelayConnector } from "../src/control-plane/cloud-connectivity/node-relay-connector.ts";
 
@@ -68,7 +68,7 @@ class FakeRelaySocket extends EventEmitter {
   }
 }
 
-function controlConnector(Socket: typeof FakeControlSocket, timeouts?: { registrationTimeoutMs?: number; requestTimeoutMs?: number }) {
+function controlConnector(Socket: typeof FakeControlSocket, timeouts?: { registrationTimeoutMs?: number; requestTimeoutMs?: number; supportsRelaySessionResume?: boolean }) {
   return new CloudCoordinatorConnector({
     identity: {
       publicIdentity: () => ({ controlPlaneId: "control_plane_test", publicKey: "public-key", fingerprint: "sha256:fingerprint" }),
@@ -111,11 +111,12 @@ test("the Control Plane advertises that it follows the Coordinator-issued lease"
       socket = this;
     }
   }
-  const connector = controlConnector(CapturingSocket, { registrationTimeoutMs: 100 });
+  const connector = controlConnector(CapturingSocket, { registrationTimeoutMs: 100, supportsRelaySessionResume: true });
   const connection = await connector.connect(connectInput());
   const registration = socket?.sent.find((message) => message.type === "register");
   assert.ok(registration);
   assert.ok(registration.registration.capabilities.includes(CONTROL_PLANE_LEASE_RENEWAL_CAPABILITY));
+  assert.ok(registration.registration.capabilities.includes(RELAY_SESSION_POLICY_CAPABILITY));
   await connection.close("test-complete");
 });
 

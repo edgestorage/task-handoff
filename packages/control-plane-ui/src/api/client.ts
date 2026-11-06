@@ -95,6 +95,10 @@ export async function getUrlData<T>(url: string, options?: { signal?: AbortSigna
   return payload.data;
 }
 
+export async function getUrlHeaders(url: string, options?: { signal?: AbortSignal }) {
+  return (await withApiError(urlApi.head(url, options))).headers;
+}
+
 export async function postUrlData<T>(url: string, body?: unknown, options?: { signal?: AbortSignal }): Promise<T> {
   const payload = await withApiError(urlApi.post(url, { json: body ?? {}, ...options }).json<{ data: T }>());
   return payload.data;

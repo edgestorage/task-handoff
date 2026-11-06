@@ -1123,6 +1123,7 @@ impl AiSessionController {
         let mut session_read_agents = Vec::new();
         let mut turn_read_agents = Vec::new();
         let mut live_item_agents = Vec::new();
+        let mut tool_activity_agents = Vec::new();
         let mut ordered = providers.values().collect::<Vec<_>>();
         ordered.sort_by_key(|provider| provider_order(provider.agent()));
         for provider in ordered {
@@ -1132,6 +1133,7 @@ impl AiSessionController {
             }
             if timeline.turn_read {
                 turn_read_agents.push(provider.agent().to_string());
+                tool_activity_agents.push(provider.agent().to_string());
             }
             if timeline.live_items {
                 live_item_agents.push(provider.agent().to_string());
@@ -1141,6 +1143,7 @@ impl AiSessionController {
             session_read_agents,
             turn_read_agents,
             live_item_agents,
+            tool_activity_agents,
         }
     }
 
@@ -2649,6 +2652,15 @@ impl AiSessionController {
         self.provider(&session.agent)?
             .turn_timeline(&session, turn_id)
             .await
+    }
+
+    pub async fn tool_activity_window(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Result<controlled_instance_protocol::AiSessionToolActivityWindow, ProviderError> {
+        let timeline = self.turn_timeline(session_id, turn_id).await?;
+        Ok(crate::ai_session_tool_activity_window(&timeline))
     }
 
     pub async fn drain_queue(self: &Arc<Self>, session_id: &str) {

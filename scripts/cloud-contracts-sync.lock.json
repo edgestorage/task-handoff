@@ -15,7 +15,7 @@
     "relay-session",
     "versions"
   ],
-  "versions": "bc1d25491a5feba55a5e6b54cbd1dcb387615c274ebb4a47e54275ef265eb00a",
+  "versions": "e49e700620524c270ab66e7448ee35f4571dd49b134d9b2a420fc8ec241c2b87",
   "relayFrame": "137ceea18f38a3261b46b854b67e02811ff5785b02907a8f4c98d82c1e756460",
   "deviceAuth": "333892e913eabfbdb1b3d8f3c16f209d92029c608be5e42a3ecaa96d6bd5eece",
   "exports": {
@@ -72,11 +72,14 @@
         "ControlPlaneIdentitySchema"
       ],
       "client": [
+        "OFFICIAL_CLIENT_BUILD_HEADER",
+        "OFFICIAL_CLIENT_VERSION_HEADER",
         "OfficialAccountClient",
         "OfficialAccountClientOptions",
         "OfficialHttpResponse",
         "OfficialRequestFunction",
-        "officialClientError"
+        "officialClientError",
+        "officialClientMetadataFromHeaders"
       ],
       "common": [
         "DateTimeSchema",
@@ -247,6 +250,7 @@
         "RelayCandidateMeasurement",
         "RelayCandidateMeasurementSchema",
         "RelayCandidateSchema",
+        "RelayCapabilitiesSchema",
         "RelayChannelKind",
         "RelayChannelKindSchema",
         "RelayChannelSchema",
@@ -345,8 +349,11 @@
         "RelaySessionResumeResultSchema",
         "RelaySessionTranscriptTicket",
         "RelaySessionTranscriptTicketSchema",
+        "normalizeRelayCapabilities",
         "relayRoleProofSigningInput",
-        "relaySessionCapabilitiesSatisfy"
+        "relaySessionCapabilitiesFromHeader",
+        "relaySessionCapabilitiesSatisfy",
+        "relaySessionRenewalAt"
       ],
       "versions": [
         "CONTROL_PLANE_BINDING_PROTOCOL_VERSION",
@@ -367,10 +374,12 @@
         "RELAY_REVOCATION_MIN_VALIDITY_MS",
         "RELAY_SELECTION_TTL_MS",
         "RELAY_SESSION_GRANT_TTL_MS",
+        "RELAY_SESSION_LEGACY_GRANT_TTL_MS",
+        "RELAY_SESSION_LEGACY_REFRESH_INTERVAL_MS",
         "RELAY_SESSION_MAX_E2E_AGE_MS",
-        "RELAY_SESSION_MAX_GRANT_TTL_MS",
         "RELAY_SESSION_MIN_GRANT_TTL_MS",
         "RELAY_SESSION_NOT_READY_CODE",
+        "RELAY_SESSION_POLICY_CAPABILITY",
         "RELAY_SESSION_PROOF_WINDOW_MS",
         "RELAY_SESSION_PROTOCOL_VERSION",
         "RELAY_SESSION_REFRESH_INTERVAL_MS",
@@ -418,11 +427,14 @@
         "ControlPlaneIdentitySchema"
       ],
       "client": [
+        "OFFICIAL_CLIENT_BUILD_HEADER",
+        "OFFICIAL_CLIENT_VERSION_HEADER",
         "OfficialAccountClient",
         "OfficialAccountClientOptions",
         "OfficialHttpResponse",
         "OfficialRequestFunction",
-        "officialClientError"
+        "officialClientError",
+        "officialClientMetadataFromHeaders"
       ],
       "common": [
         "DateTimeSchema",
@@ -594,6 +606,7 @@
         "RelayCandidateMeasurement",
         "RelayCandidateMeasurementSchema",
         "RelayCandidateSchema",
+        "RelayCapabilitiesSchema",
         "RelayChannelKind",
         "RelayChannelKindSchema",
         "RelayChannelSchema",
@@ -694,8 +707,11 @@
         "RelaySessionResumeResultSchema",
         "RelaySessionTranscriptTicket",
         "RelaySessionTranscriptTicketSchema",
+        "normalizeRelayCapabilities",
         "relayRoleProofSigningInput",
-        "relaySessionCapabilitiesSatisfy"
+        "relaySessionCapabilitiesFromHeader",
+        "relaySessionCapabilitiesSatisfy",
+        "relaySessionRenewalAt"
       ],
       "versions": [
         "CONTROL_PLANE_BINDING_PROTOCOL_VERSION",
@@ -716,10 +732,12 @@
         "RELAY_REVOCATION_MIN_VALIDITY_MS",
         "RELAY_SELECTION_TTL_MS",
         "RELAY_SESSION_GRANT_TTL_MS",
+        "RELAY_SESSION_LEGACY_GRANT_TTL_MS",
+        "RELAY_SESSION_LEGACY_REFRESH_INTERVAL_MS",
         "RELAY_SESSION_MAX_E2E_AGE_MS",
-        "RELAY_SESSION_MAX_GRANT_TTL_MS",
         "RELAY_SESSION_MIN_GRANT_TTL_MS",
         "RELAY_SESSION_NOT_READY_CODE",
+        "RELAY_SESSION_POLICY_CAPABILITY",
         "RELAY_SESSION_PROOF_WINDOW_MS",
         "RELAY_SESSION_PROTOCOL_VERSION",
         "RELAY_SESSION_REFRESH_INTERVAL_MS",

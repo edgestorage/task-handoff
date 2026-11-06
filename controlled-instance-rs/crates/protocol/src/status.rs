@@ -164,6 +164,8 @@ pub struct FeatureCapabilities {
     pub git_cli_credential_broker: bool,
     pub git_credential_proxy: bool,
     pub repository_path_search: bool,
+    #[serde(default)]
+    pub repository_file_content: bool,
     pub repository_worktree_move_to_main: bool,
     pub ai_session_send_idempotency: bool,
     pub ai_session_queue_pause: bool,
@@ -195,6 +197,8 @@ pub struct AiSessionTimelineCapabilities {
     pub session_read_agents: Vec<String>,
     pub turn_read_agents: Vec<String>,
     pub live_item_agents: Vec<String>,
+    #[serde(default)]
+    pub tool_activity_agents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

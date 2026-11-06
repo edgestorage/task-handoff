@@ -178,6 +178,25 @@ export const AiSessionTurnTimelineSchema = z.object({
   generatedAt: DateTimeStringSchema,
 }).strict();
 
+export const AI_SESSION_TOOL_ACTIVITY_WINDOW_MAX_ITEMS = 50;
+
+/**
+ * Bounded projection for the live tool activity disclosure. The full Turn
+ * Timeline remains the authority for "处理过程"; this window only carries the
+ * activities after the latest assistant message that the collapsed tool
+ * activity count describes.
+ */
+export const AiSessionToolActivityWindowSchema = z.object({
+  sessionId: NonEmptyTrimmedTextSchema.max(120),
+  turnId: NonEmptyTrimmedTextSchema.max(240),
+  revision: NonEmptyTrimmedTextSchema.max(64),
+  boundaryItemId: NonEmptyTrimmedTextSchema.max(240).optional(),
+  items: z.array(AiSessionTimelineActivitySchema).max(AI_SESSION_TOOL_ACTIVITY_WINDOW_MAX_ITEMS),
+  total: z.number().int().min(0),
+  truncated: z.boolean(),
+  generatedAt: DateTimeStringSchema,
+}).strict();
+
 export const AiSessionSubAgentStatusSchema = z.enum([
   "pending-init",
   "running",
@@ -1668,6 +1687,7 @@ export type AiSessionTimelineActivity = z.infer<typeof AiSessionTimelineActivity
 export type AiSessionTimelineItem = z.infer<typeof AiSessionTimelineItemSchema>;
 export type AiSessionTimeline = z.infer<typeof AiSessionTimelineSchema>;
 export type AiSessionTurnTimeline = z.infer<typeof AiSessionTurnTimelineSchema>;
+export type AiSessionToolActivityWindow = z.infer<typeof AiSessionToolActivityWindowSchema>;
 export type AiSessionTimelineRead = z.infer<typeof AiSessionTimelineReadSchema>;
 export type AiSessionTurnTimelineRead = z.infer<typeof AiSessionTurnTimelineReadSchema>;
 export type AiSessionTimelineItemRevision = z.infer<typeof AiSessionTimelineItemRevisionSchema>;

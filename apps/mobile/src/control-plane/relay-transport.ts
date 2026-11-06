@@ -3,13 +3,16 @@ import * as Crypto from 'expo-crypto';
 import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
 import {
   RelayTtySnapshotEnvelopeSchema,
-  RELAY_SESSION_REFRESH_INTERVAL_MS,
+  RELAY_DEFAULT_MAX_CANDIDATES,
+  relaySessionRenewalAt,
   RELAY_SESSION_PROTOCOL_VERSION,
+  RELAY_SESSION_RENEWAL_LEAD_MS,
   type OfficialMobileAccountClient as CloudMobileAccountClient,
   type RelayAttachCapability,
   type RelayRoleProof,
   type RelaySelection as CloudRelaySelection,
   type RelaySessionGrant,
+  type CloudDeviceAuth,
 } from '@task-handoff/cloud-contracts/mobile';
 import type { MobileCloudRelayControlPlaneProfile } from './profile';
 import { probeRelayCandidates, RELAY_PROBE_FAST_BUDGET_MS, RELAY_PROBE_FAST_SAMPLES, type RelayProbeTarget } from './relay-prober';
@@ -18,9 +21,7 @@ import { RelayWinnerCache, type RelayWinnerEntry } from './relay-winner-cache';
 import { COMPACT_EVENT_ENVELOPE_VERSION, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
 import { RELAY_BODY_CHUNK_BYTES, RelayBinaryResponseSchema, type RelayBodyFrame } from '@task-handoff/protocol/relay-body';
 import { MOBILE_CONTROL_PLANE_CLOSED_MESSAGE, MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError, mobileEventKeepaliveFrame, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
-import { createEphemeralRelayProofKey, type RelayProofKeyProvider } from './relay-proof-key';
-import type { CloudDeviceAuth } from '@task-handoff/cloud-contracts/mobile';
-import type { DeviceAuthInput } from './relay-proof-key';
+import { createEphemeralRelayProofKey, type RelayProofKeyProvider, type DeviceAuthInput } from './relay-proof-key';
 import type { RelayPendingOperation, RelaySessionStore } from './relay-session-store';
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 import { isMobileDeviceTrustError } from './device-trust-error';
@@ -64,8 +65,10 @@ type RelayAttempt = {
 
 // Grants outlive a single Coordinator request. Renewal happens on the existing
 // Relay socket and never replaces the channel, allocation, or frame sequence.
-const LEASE_RENEWAL_LEAD_MS = 5_000;
 const LEASE_RENEWAL_MINIMUM_MS = 1_000;
+// JS timers have a signed 32-bit delay. Re-arm long waits without changing the
+// Coordinator's deadline; passing an overflowing delay may fire immediately.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 const LEASE_RENEWAL_RETRY_MS = 10_000;
 const DEFAULT_E2E_REKEY_INTERVAL_MS = 60 * 60_000;
 const E2E_REKEY_RETRY_MS = 30_000;
@@ -107,7 +110,7 @@ const MOBILE_RESOURCE_METRIC_SCOPE = { metricInstanceIds: [] as string[] };
  * How many Relays one connection attempt evaluates. Three is enough to route
  * around a bad region without making the probe phase a fleet-wide sweep.
  */
-const RELAY_CANDIDATE_COUNT = 3;
+const RELAY_CANDIDATE_COUNT = RELAY_DEFAULT_MAX_CANDIDATES;
 /** Used when the client cannot tell one network from another (no reachability module on this platform). */
 const DEFAULT_NETWORK_FINGERPRINT = 'default';
 
@@ -1268,14 +1271,17 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
 
   private scheduleLeaseRenewal(channel: EncryptedRelayChannel) {
     this.cancelLeaseRenewal();
-    const issuedAt = this.session ? Date.parse(this.session.grant.issuedAt) : Number.NaN;
+    const refreshAt = this.session ? relaySessionRenewalAt(this.session.grant) : Number.POSITIVE_INFINITY;
     const expiresAt = channel.leaseExpiresAt ? Date.parse(channel.leaseExpiresAt) : Number.NaN;
-    const refreshAt = Number.isFinite(issuedAt) ? issuedAt + RELAY_SESSION_REFRESH_INTERVAL_MS : Number.POSITIVE_INFINITY;
-    const expiryGuardAt = Number.isFinite(expiresAt) ? expiresAt - LEASE_RENEWAL_LEAD_MS : Number.POSITIVE_INFINITY;
+    const expiryGuardAt = Number.isFinite(expiresAt) ? expiresAt - RELAY_SESSION_RENEWAL_LEAD_MS : Number.POSITIVE_INFINITY;
     const renewAt = Math.min(refreshAt, expiryGuardAt);
     if (!Number.isFinite(renewAt)) return;
     const delay = Math.max(LEASE_RENEWAL_MINIMUM_MS, renewAt - Date.now());
-    const timer = setTimeout(() => { this.leaseTimer = undefined; void this.renewLease(channel); }, delay);
+    const timer = setTimeout(() => {
+      this.leaseTimer = undefined;
+      if (Date.now() < renewAt) this.scheduleLeaseRenewal(channel);
+      else void this.renewLease(channel);
+    }, Math.min(delay, MAX_TIMER_DELAY_MS));
     (timer as unknown as { unref?(): void }).unref?.();
     this.leaseTimer = timer;
   }

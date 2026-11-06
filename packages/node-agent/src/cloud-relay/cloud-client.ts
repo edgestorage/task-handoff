@@ -1,6 +1,7 @@
 import {
   NODE_RELAY_ADAPTIVE_SELECTION_UNSUPPORTED_CODE,
   NODE_RELAY_CAPABILITIES_HEADER,
+  NODE_RELAY_PROBE_TARGET_LIMIT,
   NODE_RELAY_FAILED_CONTROL_PLANE_IDS_HEADER,
   NODE_RELAY_TRUST_RETRY_CAPABILITY,
   NodeRelayAllocationResponseSchema,
@@ -91,6 +92,7 @@ export class NodeRelayCloudClient {
 
   async probeTargets(credential: string, input: { nodeId: string; controlPlaneIds?: string[] }): Promise<NodeRelayProbeTarget[]> {
     const body = NodeRelayProbeTargetsRequestSchema.parse({
+      maxTargets: NODE_RELAY_PROBE_TARGET_LIMIT,
       nodeId: input.nodeId,
       ...(input.controlPlaneIds?.length ? { controlPlaneIds: input.controlPlaneIds } : {}),
     });

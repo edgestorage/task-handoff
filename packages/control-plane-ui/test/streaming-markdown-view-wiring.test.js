@@ -91,13 +91,30 @@ test("streaming Markdown uses markstream pacing with independent character revea
 
 test("streaming Markdown link context menu only captures anchor context menus", () => {
   const menu = fs.readFileSync(new URL("../src/components/ai-session/MarkdownLinkContextMenu.vue", import.meta.url), "utf8");
-  assert.match(menu, /class="markdown-link-menu-host" @contextmenu\.capture="captureContextMenu"/);
+  const captureSource = menu.slice(menu.indexOf("function captureContextMenu"), menu.indexOf("function handleLinkContextMenu"));
+  assert.match(menu, /class="markdown-link-menu-host" @contextmenu\.capture="captureContextMenu" @contextmenu="handleLinkContextMenu"/);
   assert.match(menu, /event\.target instanceof Element \? event\.target\.closest\("a\[href\]"\)/);
   assert.match(menu, /<ContextMenuTrigger as-child :disabled="!target">/);
+  assert.match(menu, /class="markdown-link-context-menu-item"/);
+  assert.match(menu, /\.markdown-link-context-menu\.markdown-link-context-menu\s*\{[\s\S]*min-width: 190px;[\s\S]*padding: 6px;/);
+  assert.match(menu, /\.markdown-link-context-menu \.markdown-link-context-menu-item\s*\{[\s\S]*gap: 8px;[\s\S]*min-height: 32px;[\s\S]*font-size: 13px;/);
   assert.match(menu, /target\.value = undefined;[\s\S]*if \(!href\) \{\s*return;/);
-  assert.match(menu, /if \(target\.value\.kind === "unsupported"\) return;/);
-  assert.match(menu, /event\.stopPropagation\(\);\s*event\.preventDefault\(\);/);
+  assert.match(menu, /const classified = classifyMarkdownLink\(href, props\.repositoryContext\);[\s\S]*if \(classified\.kind === "unsupported"\) \{\s*return;\s*\}[\s\S]*target\.value = classified;/);
+  assert.doesNotMatch(captureSource, /event\.(?:stopPropagation|preventDefault)\(\)/);
+  assert.match(menu, /function handleLinkContextMenu\(event: MouseEvent\) \{\s*if \(!target\.value\) return;[\s\S]*event\.stopPropagation\(\);/);
+  assert.match(menu, /props\.runtimePathAccess !== "desktop-local" \|\| !canRevealDesktopLocalPath\(\)/);
+  assert.match(menu, /resolveRuntimeFilePath\(target\.path, props\.runtimeCwd\)/);
   assert.doesNotMatch(message, /ContextMenuTrigger[\s\S]*@contextmenu="captureContextMenu"/);
+});
+
+test("local session content forwards desktop path access to Markdown links", () => {
+  const panelConversation = panel.match(/<AiSessionConversationContent[\s\S]*?\/>/)?.[0] || "";
+  const dockConversation = dock.match(/<AiSessionConversationContent[\s\S]*?\/>/)?.[0] || "";
+  assert.match(panelConversation, /:runtime-path-access="desktopRuntimePathAccess\(instance\)"/);
+  assert.match(dockConversation, /:runtime-path-access="desktopRuntimePathAccess\(card\.instance\)"/);
+  assert.match(conversation, /:runtime-path-access="runtimePathAccess"/);
+  assert.match(timeline, /:runtime-path-access="runtimePathAccess"/);
+  assert.match(result, /:runtime-path-access="runtimePathAccess"/);
 });
 
 test("streaming Markdown keeps the existing session typography, semantic colors, code blocks, and tables", () => {

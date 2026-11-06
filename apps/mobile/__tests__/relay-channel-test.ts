@@ -335,7 +335,7 @@ describe('createMobileRelayChannelFactory', () => {
     expect(socket.listenerCount('message')).toBe(0);
   });
 
-  test('resumes with session-attach and accepts the full session acknowledgement', async () => {
+  test('resumes with session-attach and ignores additive acknowledgement fields', async () => {
     const identity = nacl.sign.keyPair();
     const socket = new FakeSocket();
     const factory = createMobileRelayChannelFactory({ webSocketFactory: () => socket, allowRelayUrl: () => true });
@@ -344,7 +344,7 @@ describe('createMobileRelayChannelFactory', () => {
     await flush();
 
     expect(JSON.parse(socket.sent[0] as string)).toEqual({ type: 'session-attach', grant, proof });
-    socket.emit('message', { data: JSON.stringify({ ...attached, state: 'open' }) });
+    socket.emit('message', { data: JSON.stringify({ ...attached, state: 'open', futureField: true }) });
     await flush();
     const hello = JSON.parse(new TextDecoder().decode(sentFrame(socket, 1).payload));
     socket.emit('message', { data: handshakeResponse(await acceptHandshake({ hello, identity })) });
@@ -430,7 +430,7 @@ describe('createMobileRelayChannelFactory', () => {
     const nextProof = { ...proof, grantId: 'grant_b', generation: 2 };
     const renewal = channel.renew!(nextGrant, nextProof);
     expect(JSON.parse(socket.sent[3] as string)).toEqual({ type: 'session-renew', grant: nextGrant, proof: nextProof });
-    socket.emit('message', { data: JSON.stringify({ type: 'renewed', role: 'client', sessionId: 'session_a', generation: 2, committed: true, leaseExpiresAt: '2026-10-20T00:25:00.000Z' }) });
+    socket.emit('message', { data: JSON.stringify({ type: 'renewed', role: 'client', sessionId: 'session_a', generation: 2, committed: true, leaseExpiresAt: '2026-10-20T00:25:00.000Z', futureField: true }) });
     await expect(renewal).resolves.toEqual({ generation: 2, committed: true, leaseExpiresAt: '2026-10-20T00:25:00.000Z' });
     expect(channel.leaseExpiresAt).toBe('2026-10-20T00:25:00.000Z');
 
@@ -451,7 +451,7 @@ describe('createMobileRelayChannelFactory', () => {
     const { channel, socket } = await connected();
     const notices: any[] = [];
     channel.subscribeControl!((notice) => notices.push(notice));
-    socket.emit('message', { data: JSON.stringify({ type: 'session-closed', sessionId: 'session_a', code: 'idle-timeout', retryable: true }) });
+    socket.emit('message', { data: JSON.stringify({ type: 'session-closed', sessionId: 'session_a', code: 'idle-timeout', retryable: true, futureField: true }) });
     expect(notices).toEqual([{ type: 'session-closed', sessionId: 'session_a', code: 'idle-timeout', retryable: true }]);
     expect(channel.generation).toBe(1);
   });

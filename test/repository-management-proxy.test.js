@@ -89,6 +89,7 @@ async function jsonFromProxy(response) {
 test("repository APIs cross local, direct, and reverse instance proxy transports without moving Git into control-plane", async () => {
   const fixture = createGitFixture();
   fixture.write("tracked.txt", "proxied change\n");
+  fs.writeFileSync(path.join(fixture.root, "movie.mp4"), Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]));
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-repository-proxy-"));
   const paths = runtimePaths(dataRoot);
   const restore = setRepositoryEnvironment(paths, fixture.base);
@@ -108,6 +109,14 @@ test("repository APIs cross local, direct, and reverse instance proxy transports
       assert.equal(requests[0].route, `/instances/${instance.id}/proxy/stream`);
       assert.equal(requests[0].envelope.path, `/api/ai-sessions/${ai.id}/repository/context`);
       assert.equal(requests[0].mode, connectionMode);
+      const mediaPath = `/api/ai-sessions/${ai.id}/repository/files/content?path=movie.mp4`;
+      const media = await gateway.proxyHttp(instance, mediaPath, { headers: { range: "bytes=2-5" } });
+      assert.equal(media.status, 206);
+      assert.equal(media.headers["content-type"], "video/mp4");
+      assert.equal(media.headers["content-range"], "bytes 2-5/8");
+      assert.deepEqual(Buffer.from(await new Response(media.body).arrayBuffer()), Buffer.from([2, 3, 4, 5]));
+      assert.equal(requests[1].envelope.path, mediaPath);
+      assert.equal(requests[1].envelope.headers.range, "bytes=2-5");
     }
 
     const gatewaySource = fs.readFileSync(path.join(__dirname, "../packages/control-plane/src/control-plane/instances/gateway.ts"), "utf8");

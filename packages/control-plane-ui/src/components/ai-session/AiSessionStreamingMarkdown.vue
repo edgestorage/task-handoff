@@ -1,5 +1,5 @@
 <template>
-  <MarkdownLinkContextMenu :labels="menuLabels" :repository-context="props.repositoryContext" :on-open-file="handleContextFile" :on-open-builtin-browser="openBuiltinBrowser">
+  <MarkdownLinkContextMenu :labels="menuLabels" :repository-context="props.repositoryContext" :runtime-cwd="props.runtimeCwd" :runtime-path-access="props.runtimePathAccess" :on-open-file="handleContextFile" :on-open-builtin-browser="openBuiltinBrowser">
     <div class="ai-session-streaming-markdown" @click="handleLinkClick">
       <MarkdownRender
         :content="displayContent"
@@ -55,6 +55,8 @@ const props = withDefaults(defineProps<{
   isLatest?: boolean;
   providerTurnId?: string;
   repositoryContext?: RepositoryContext;
+  runtimeCwd?: string;
+  runtimePathAccess?: "desktop-local";
   sessionId: string;
   turnId?: string;
 }>(), {

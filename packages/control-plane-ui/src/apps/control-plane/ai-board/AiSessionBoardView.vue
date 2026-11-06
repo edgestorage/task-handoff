@@ -210,6 +210,8 @@
           :selected-turn-state="selectedTurnTimelineState"
           :turn-bodies-ready="selectedCardTurnsReady"
           :turn-timelines="conversationTurnTimelines"
+          :tool-activity-windows="conversationToolActivityWindows"
+          :supports-tool-activity="supportsToolActivity"
           @latest-prompt="backToLatestPrompt(selectedCard)"
           @next-prompt="nextPrompt(selectedCard)"
           @select-model="selectSelectedSessionModel"
@@ -225,6 +227,7 @@
           @set-queue-paused="setSelectedQueuePaused"
           @retry-detail="loadSelectedCardSessionDetail"
           @load-turn-timeline="loadTurnTimeline"
+          @load-tool-activity-window="loadToolActivityWindow"
           @continue-from-turn="forkCardSession(selectedCard, 'current', $event)"
           @run="runSelectedSessionAction"
           @command="executeSelectedSessionCommand"
@@ -527,10 +530,13 @@ const {
 });
 const { viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
 const {
+  conversationToolActivityWindows,
   conversationTurnTimelines,
+  loadToolActivityWindow,
   loadTurnTimeline,
   selectedTurn: selectedTimelineTurn,
   selectedTurnState: selectedTurnTimelineState,
+  supportsToolActivity,
   supportsTimeline: supportsAiSessionTimeline,
 } = useAiSessionTimelinePresentation({
   instance: () => selectedCard.value?.instance,

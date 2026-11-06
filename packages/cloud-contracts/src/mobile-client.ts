@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RELAY_DEFAULT_MAX_CANDIDATES, RELAY_SESSION_POLICY_CAPABILITY } from "./versions.ts";
 import {
   AccountPublicProfileSchema,
   AppleNativeChallengeRequestSchema, AppleNativeChallengeResponseSchema, AppleNativeCompleteRequestSchema, AppleNativeAuthorizationResponseSchema, ProviderAccountConfirmationRequestSchema,
@@ -14,7 +15,7 @@ import {
   type MobileTokenResponse,
   type TotpEnrollmentResponse,
 } from "./account.ts";
-import { AccessTicketSchema, ConfirmedRelayAllocationSchema, RelayAllocationSchema, RelaySelectionSchema, type AccessTicket, type ConfirmedRelayAllocation, type RelayAllocation, type RelaySelection } from "./relay.ts";
+import { AccessTicketSchema, ConfirmedRelayAllocationSchema, RelayAllocationSchema, RelaySelectionSchema, RESOURCE_SHARING_CAPABILITY_HEADER, RESOURCE_SHARING_CLIENT_CAPABILITY, type AccessTicket, type ConfirmedRelayAllocation, type RelayAllocation, type RelaySelection } from "./relay.ts";
 import {
   IDEMPOTENCY_KEY_HEADER,
   RelaySessionBootstrapResultSchema,
@@ -30,10 +31,18 @@ export type OfficialApiInput = Readonly<Record<string, unknown>>;
 export type OfficialProviderId = "email" | "google" | "github" | "apple" | (string & {});
 export const MOBILE_PUBLIC_PROVIDERS_PATH = "/api/v1/auth/providers";
 
-export const OfficialProviderSummarySchema = z.strictObject({ id: z.string(), displayName: z.string(), icon: z.string().optional() });
+export const OfficialProviderSummarySchema = z.object({ id: z.string(), displayName: z.string(), icon: z.string().optional() });
 export type OfficialProviderSummary = z.infer<typeof OfficialProviderSummarySchema>;
 
 export class OfficialMobileAccountClient extends OfficialAccountClient {
+  protected override requestHeaders(): Record<string, string> {
+    return {
+      ...super.requestHeaders(),
+      "x-task-handoff-client": "mobile",
+      [RESOURCE_SHARING_CAPABILITY_HEADER]: `${RESOURCE_SHARING_CLIENT_CAPABILITY},${RELAY_SESSION_POLICY_CAPABILITY}`,
+    };
+  }
+
   register(input: OfficialApiInput): Promise<unknown> { return this.publicCall("/api/v1/auth/register", input, z.unknown()); }
   login(input: OfficialApiInput): Promise<MobileAuthorizationResponse> { return this.publicCall("/api/v1/auth/authorize", input, MobileAuthorizationResponseSchema); }
   beginAppleNative(input: AppleNativeChallengeRequest): Promise<AppleNativeChallengeResponse> {
@@ -52,7 +61,7 @@ export class OfficialMobileAccountClient extends OfficialAccountClient {
   }
   verifyEmail(input: OfficialApiInput): Promise<unknown> { return this.publicCall("/api/v1/auth/verify-email", input, z.unknown()); }
   async publicProviders(): Promise<OfficialProviderSummary[]> {
-    const response = await this.request(`${this.origin}${MOBILE_PUBLIC_PROVIDERS_PATH}`, { method: "GET", credentials: "omit", redirect: "error" });
+    const response = await this.request(`${this.origin}${MOBILE_PUBLIC_PROVIDERS_PATH}`, { method: "GET", headers: this.requestHeaders(), credentials: "omit", redirect: "error" });
     const body: unknown = await response.json();
     if (!response.ok) throw officialClientError(body, response.status);
     return responseData(z.array(OfficialProviderSummarySchema), body);
@@ -77,7 +86,7 @@ export class OfficialMobileAccountClient extends OfficialAccountClient {
    * for clients that never learned to probe, so the two shapes are separate
    * methods rather than one union the caller has to discriminate.
    */
-  allocateRelaySelection(input: OfficialApiInput): Promise<RelaySelection> { return this.dataCall("/api/v1/relay-allocations", "POST", RelaySelectionSchema, { ...input, maxCandidates: input.maxCandidates ?? 3 }); }
+  allocateRelaySelection(input: OfficialApiInput): Promise<RelaySelection> { return this.dataCall("/api/v1/relay-allocations", "POST", RelaySelectionSchema, { ...input, maxCandidates: input.maxCandidates ?? RELAY_DEFAULT_MAX_CANDIDATES }); }
   confirmRelaySelection(selectionId: string, input: OfficialApiInput): Promise<ConfirmedRelayAllocation> { return this.dataCall(`/api/v1/relay-selections/${encodeURIComponent(selectionId)}/confirm`, "POST", ConfirmedRelayAllocationSchema, input); }
   bootstrapRelaySession(input: OfficialApiInput, idempotencyKey: string): Promise<RelaySessionBootstrapResult> {
     return this.dataCall("/api/v1/relay-sessions/bootstrap", "POST", RelaySessionBootstrapResultSchema, input, idempotencyKey);
@@ -99,7 +108,7 @@ export class OfficialMobileAccountClient extends OfficialAccountClient {
   }
 
   private async publicCall<T>(path: string, input: OfficialApiInput, schema: z.ZodType<T>): Promise<T> {
-    const response = await this.request(`${this.origin}${path}`, { method: "POST", headers: { "content-type": "application/json", "x-task-handoff-client": "mobile" }, body: JSON.stringify(input), credentials: "omit", redirect: "error" });
+    const response = await this.request(`${this.origin}${path}`, { method: "POST", headers: { "content-type": "application/json", ...this.requestHeaders() }, body: JSON.stringify(input), credentials: "omit", redirect: "error" });
     const body: unknown = await response.json();
     if (!response.ok) throw officialClientError(body, response.status);
     return responseData(schema, body);

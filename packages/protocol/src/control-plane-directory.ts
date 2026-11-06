@@ -10,10 +10,11 @@ const ControlPlaneDirectoryTimelineCapabilitiesSchema = z.object({
   sessionReadAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
   turnReadAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
   liveItemAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  toolActivityAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
 }).passthrough();
 
 function emptyDirectoryTimelineCapabilities() {
-  return { sessionReadAgents: [] as string[], turnReadAgents: [] as string[], liveItemAgents: [] as string[] };
+  return { sessionReadAgents: [] as string[], turnReadAgents: [] as string[], liveItemAgents: [] as string[], toolActivityAgents: [] as string[] };
 }
 
 const ControlPlaneDirectoryConversationAttachmentCapabilitiesSchema = z.object({
@@ -74,14 +75,15 @@ export function directoryAiSessionProviderCapability(capabilities: unknown, agen
 export function supportsDirectoryAiSessionTimelineCapability(
   capabilities: unknown,
   agent: string,
-  capability: "session-read" | "turn-read" | "live-items",
+  capability: "session-read" | "turn-read" | "live-items" | "tool-activity",
 ) {
   const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
   if (!parsed.success) return false;
   const timeline = parsed.data.aiSessionTimeline;
   const agents = capability === "session-read" ? timeline.sessionReadAgents
     : capability === "turn-read" ? timeline.turnReadAgents
-      : timeline.liveItemAgents;
+      : capability === "live-items" ? timeline.liveItemAgents
+        : timeline.toolActivityAgents;
   return agents.includes(agent);
 }
 

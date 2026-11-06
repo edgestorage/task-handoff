@@ -195,13 +195,19 @@ impl RepositoryFileService {
         })
     }
 
+    pub fn content_path(&self, relative_path: &str) -> Result<PathBuf, RepositoryOperationError> {
+        let resolved = self.resolve(relative_path, false, true)?;
+        let metadata = fs::symlink_metadata(&resolved).map_err(file_not_found)?;
+        self.assert_regular_file(&resolved, &metadata)?;
+        Ok(resolved)
+    }
+
     pub fn read(
         &self,
         relative_path: &str,
     ) -> Result<RepositoryFileContent, RepositoryOperationError> {
-        let resolved = self.resolve(relative_path, false, true)?;
+        let resolved = self.content_path(relative_path)?;
         let metadata = fs::symlink_metadata(&resolved).map_err(file_not_found)?;
-        self.assert_regular_file(&resolved, &metadata)?;
         if metadata.len() > self.max_file_bytes {
             return Err(RepositoryOperationError::new(
                 "REPOSITORY_FILE_TOO_LARGE",

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { NodeRelayCloudClient } from "../src/cloud-relay/cloud-client.ts";
 import { probeNodeRelayTargets } from "../src/cloud-relay/probe.ts";
 
 const SERVICE_ORIGIN = "https://cloud.example.com";
@@ -47,30 +48,19 @@ test("probe requests are bounded, trusted, credential-free and identity checked"
   assert.deepEqual(result.measurements.map((measurement) => measurement.relayId), ["relay_a", "relay_b"]);
 });
 
-test("probe target and sample counts are capped, and duplicate URLs are measured once", async () => {
+test("probe target and sample counts are capped at ten and duplicate URLs are measured once", async () => {
   const urls: string[] = [];
   await probeNodeRelayTargets({
     serviceOrigin: SERVICE_ORIGIN,
-    targets: [
-      relayTarget("relay_a"),
-      relayTarget("relay_a_duplicate"),
-      relayTarget("relay_b"),
-      relayTarget("relay_c"),
-      relayTarget("relay_d"),
-    ],
-    samples: 2,
+    targets: [relayTarget("relay_0"), relayTarget("duplicate", "relay_0.cloud.example.com"), ...Array.from({ length: 10 }, (_, index) => relayTarget(`relay_${index + 1}`))],
+    samples: 8,
     fetchImpl: (async (input) => {
       urls.push(String(input));
-      const relayId = /https:\/\/(relay_[a-z]+)\./.exec(String(input))![1];
-      return probeResponse(relayId);
+      return probeResponse(new URL(String(input)).hostname.split(".")[0]);
     }) as typeof fetch,
   });
-  assert.equal(urls.length, 6);
-  assert.deepEqual([...new Set(urls)].sort(), [
-    "https://relay_a.cloud.example.com/probe",
-    "https://relay_a_duplicate.cloud.example.com/probe",
-    "https://relay_b.cloud.example.com/probe",
-  ]);
+  assert.equal(urls.length, 18, "first ten entries contain nine unique URLs, each sampled twice");
+  assert.deepEqual([...new Set(urls)].sort(), Array.from({ length: 9 }, (_, index) => `https://relay_${index}.cloud.example.com/probe`));
 });
 
 test("an identical Relay URL is never re-probed inside one reconnect attempt", async () => {
@@ -167,4 +157,29 @@ test("all-failure samples preserve the two-sample contract without invented RTT"
     fetchImpl: (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch,
   });
   assert.deepEqual(result.measurements, [{ relayId: "relay_a", sampleCount: 2, failureCount: 2 }]);
+});
+
+
+test("Node probes measure ten targets and keep the shared deadline", async () => {
+  const result = await probeNodeRelayTargets({
+    serviceOrigin: SERVICE_ORIGIN,
+    targets: Array.from({ length: 10 }, (_, index) => relayTarget(`relay_${index}`)),
+    fetchImpl: (async (url) => probeResponse(new URL(String(url)).hostname.split(".")[0])) as typeof fetch,
+  });
+  assert.equal(result.measurements.length, 10);
+});
+
+
+test("Node client requests up to ten probe targets and accepts smaller responses", async () => {
+  const targets = Array.from({ length: 10 }, (_, index) => relayTarget(`relay_${index}`));
+  let count = 10;
+  const client = new NodeRelayCloudClient({ cloudOrigin: SERVICE_ORIGIN, fetchImpl: (async (_url, init) => {
+    assert.equal(JSON.parse(String(init?.body)).maxTargets, 10);
+    return new Response(JSON.stringify({ data: { targets: targets.slice(0, count) } }), { status: 200 });
+  }) as typeof fetch });
+  assert.equal((await client.probeTargets("credential", { nodeId: "node_a" })).length, 10);
+  count = 2;
+  assert.equal((await client.probeTargets("credential", { nodeId: "node_a" })).length, 2);
+  count = 0;
+  assert.deepEqual(await client.probeTargets("credential", { nodeId: "node_a" }), []);
 });

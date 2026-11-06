@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { handleMarkdownCodeCopy, highlightSource, renderMarkdown } from "./markdown.ts";
+import { handleMarkdownCodeCopy, highlightSource, isExternalWebHref, renderMarkdown } from "./markdown.ts";
 
 test("renderMarkdown renders block Markdown and GFM consistently", () => {
   const html = renderMarkdown([
@@ -34,6 +35,15 @@ test("renderMarkdown preserves GFM table column alignment", () => {
   assert.match(html, /<th align="center">居中<\/th>/);
   assert.match(html, /<th align="right">右对齐<\/th>/);
   assert.match(html, /<td align="right">¥8\.00<\/td>/);
+});
+
+test("Markdown image resolvers apply before HTML is created and preserve default rendering", () => {
+  const markdown = "![diagram](./images/a.png)";
+  assert.match(renderMarkdown(markdown), /src="\.\/images\/a.png"/);
+  assert.match(renderMarkdown(markdown, { resolveImageSrc: () => "/raw?path=docs%2Fa.png&mode=read" }), /src="\/raw\?path=docs%2Fa.png&mode=read"/);
+  const unavailable = renderMarkdown(markdown, { resolveImageSrc: () => undefined });
+  assert.doesNotMatch(unavailable, /<img/);
+  assert.match(unavailable, /diagram/);
 });
 
 test("renderMarkdown preserves Markdown escapes and neutralizes raw HTML", () => {
@@ -102,6 +112,23 @@ test("renderMarkdown emits a safe pending container for Mermaid diagrams", () =>
   assert.match(html, /class="markdown-mermaid" data-mermaid-state="pending"/);
   assert.match(html, /<code>graph TD\n  A\[Start\] --&gt; B\[Done\]<\/code>/);
   assert.doesNotMatch(html, /class="hljs/);
+});
+
+test("external HTTP links are distinguished from the current application origin", () => {
+  const pageUrl = "http://127.0.0.1:18081/story/one";
+  assert.equal(isExternalWebHref("https://www.baidu.com/", pageUrl), true);
+  assert.equal(isExternalWebHref("//www.baidu.com/", pageUrl), true);
+  assert.equal(isExternalWebHref("http://127.0.0.1:18081/settings", pageUrl), false);
+  assert.equal(isExternalWebHref("/settings", pageUrl), false);
+  assert.equal(isExternalWebHref("#details", pageUrl), false);
+  assert.equal(isExternalWebHref("mailto:owner@example.com", pageUrl), false);
+});
+
+test("MarkdownContent delegates external links to a new browsing context", async () => {
+  const component = await readFile(new URL("./MarkdownContent.vue", import.meta.url), "utf8");
+  assert.match(component, /@click="handleMarkdownClick"/);
+  assert.match(component, /isExternalWebHref\(anchor\.getAttribute\("href"\), window\.location\.href\)/);
+  assert.match(component, /event\.preventDefault\(\);\s*window\.open\(anchor\.href, "_blank", "noopener,noreferrer"\);/);
 });
 
 test("handleMarkdownCodeCopy contains clipboard permission failures", async () => {

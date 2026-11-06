@@ -275,6 +275,8 @@
                       file-links
                       :is-latest="true"
                       :provider-turn-id="session.activeTurnId"
+                      :runtime-cwd="session.cwd"
+                      :runtime-path-access="desktopRuntimePathAccess(instance)"
                       :session-id="session.id"
                       :turn-id="session.latestTurnRef?.id"
                       @open-file="openMarkdownFile(session, $event)"
@@ -1039,11 +1041,15 @@
             :selected-turn-state="selectedTurnTimelineState"
             :turn-bodies-ready="selectedSessionTurnsReady"
             :turn-timelines="conversationTurnTimelines"
+            :tool-activity-windows="conversationToolActivityWindows"
+            :supports-tool-activity="supportsToolActivity"
+            :runtime-path-access="desktopRuntimePathAccess(instance)"
             activity-interactive
             @layout-will-change="beginDetailLayoutAnchor"
             @layout-committed="commitDetailLayoutAnchor"
             @retry-detail="loadSelectedSessionDetail"
             @load-turn-timeline="loadTurnTimeline"
+            @load-tool-activity-window="loadToolActivityWindow"
             @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
             @open-file="openMarkdownFile(selectedSession, $event)"
             @add-to-conversation="addResponseToConversation"
@@ -1215,6 +1221,8 @@
                 file-links
                 :is-latest="true"
                 :provider-turn-id="sessionListPreviewSession.activeTurnId"
+                :runtime-cwd="sessionListPreviewSession.cwd"
+                :runtime-path-access="desktopRuntimePathAccess(instance)"
                 :session-id="sessionListPreviewSession.id"
                 :turn-id="sessionListPreviewSession.latestTurnRef?.id"
                 @open-file="openMarkdownFile(sessionListPreviewSession, $event)"
@@ -1763,10 +1771,13 @@ const {
 } = useAiSessionConversationProjection({ instanceId: () => props.instance.id, summary: selectedSession, consumer: "instance-panel" });
 const { setViewMode: persistTimelineViewMode, viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
 const {
+  conversationToolActivityWindows,
   conversationTurnTimelines,
+  loadToolActivityWindow,
   loadTurnTimeline,
   selectedTurn: selectedTimelineTurn,
   selectedTurnState: selectedTurnTimelineState,
+  supportsToolActivity,
   supportsTimeline: supportsAiSessionTimeline,
 } = useAiSessionTimelinePresentation({
   instance: () => props.instance,

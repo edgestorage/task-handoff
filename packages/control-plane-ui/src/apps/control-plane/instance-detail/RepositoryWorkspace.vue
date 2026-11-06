@@ -58,8 +58,12 @@
           </template>
         </div>
         <span class="repository-workspace-head-actions">
-          <Button v-if="activeTab && !openingFilePath" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.rename')" :title="t('repository.workspace.rename')" @click="openRenameDialog(activeTab)"><PencilLine :size="14" /></Button>
-          <Button v-if="activeTab && !openingFilePath" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.delete')" :title="t('repository.workspace.delete')" @click="openDeleteDialog(activeTab)"><Trash2 :size="14" /></Button>
+          <ToggleGroup v-if="activeTabIsMarkdown && !openingFilePath && !fileOpenError" type="single" :model-value="markdownView" size="xs" :aria-label="t('repository.workspace.markdownView')" @update:model-value="setMarkdownView">
+            <ToggleGroupItem value="preview">{{ t("repository.workspace.preview") }}</ToggleGroupItem>
+            <ToggleGroupItem value="source">{{ t("repository.workspace.source") }}</ToggleGroupItem>
+          </ToggleGroup>
+          <Button v-if="activeTab?.kind === 'file' && !openingFilePath" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.rename')" :title="t('repository.workspace.rename')" @click="openRenameDialog(activeTab)"><PencilLine :size="14" /></Button>
+          <Button v-if="activeTab?.kind === 'file' && !openingFilePath" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.delete')" :title="t('repository.workspace.delete')" @click="openDeleteDialog(activeTab)"><Trash2 :size="14" /></Button>
           <Button
             v-if="gitBacked"
             variant="ghost"
@@ -91,13 +95,38 @@
           </section>
           <section v-else-if="activeTab" class="repository-workspace-editor">
             <div class="repository-workspace-editor-body">
-              <RepositoryFilePreview :content="activeTab.content" :line="activeTab.line" :path="activeTab.path" />
+              <RepositoryMediaPreview v-if="activeTab.kind === 'media'" :key="activeTab.path" :kind="activeTab.previewKind" :path="activeTab.path" :src="repositoryFileContentUrl(target, activeTab.path)" />
+              <template v-else>
+                <RepositoryMarkdownPreview v-if="activeTabIsMarkdown && markdownView === 'preview'" :content="activeTab.content" :context="context" :path="activeTab.path" :target="target" :file-content-supported="fileContentSupported" @open-file="openFile" />
+                <RepositoryFilePreview :content="activeTab.content" :line="activeTab.line" :path="activeTab.path" v-else />
+              </template>
             </div>
           </section>
-          <section v-else class="repository-workspace-empty">
-            <FolderOpen :size="38" />
-            <strong>{{ t("repository.workspace.openFile") }}</strong>
-            <span>{{ t("repository.workspace.browseHint") }}</span>
+          <section v-else class="repository-workspace-browser" :aria-label="t('repository.workspace.explorer')">
+            <RepositoryFileSearchToolbar
+              v-model:search="fileSearch"
+              :search-disabled="!pathSearchSupported"
+              :search-label="t('repository.workspace.searchFiles')"
+              :search-placeholder="t(pathSearchSupported ? 'repository.workspace.searchFiles' : 'repository.workspace.searchUnavailable')"
+            >
+              <Button variant="ghost" size="sm" @click="openNewFileDialog"><FilePlus2 :size="14" />{{ t("repository.workspace.newFile") }}</Button>
+            </RepositoryFileSearchToolbar>
+            <ScrollArea type="always" :horizontal="false" class="repository-workspace-browser-scroll">
+              <div class="repository-workspace-browser-content">
+                <RepositoryWorkspaceFileList
+                  :directory-load-error="directoryLoadError"
+                  :loading="loadingWorkspace || searchLoading"
+                  :nodes="workspaceTreeNodes"
+                  :search-error="searchError"
+                  :searching="searchLoading"
+                  :search-query="normalizedFileSearch"
+                  :search-truncated="searchResult?.truncated"
+                  :workspace-load-error="workspaceLoadError"
+                  @select="selectWorkspaceTreeNode"
+                  @toggle="toggleWorkspaceTreeNode"
+                />
+              </div>
+            </ScrollArea>
           </section>
         </main>
       </div>
@@ -149,27 +178,35 @@ import type {
   RepositoryPathSearchResult,
   RepositorySessionKind,
 } from "@task-handoff/protocol/repository";
-import { ChevronRight, FilePlus2, FolderOpen, GitCompareArrows, LoaderCircle, PencilLine, Trash2 } from "@lucide/vue";
+import { ChevronRight, FilePlus2, GitCompareArrows, LoaderCircle, PencilLine, Trash2 } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ApiError } from "../../../api/client";
-import { createRepositoryFile, deleteRepositoryFile, getRepositoryChanges, getRepositoryContext, getRepositoryDirectory, getRepositoryFile, renameRepositoryFile, searchRepositoryPaths } from "../../../api/repository";
+import { createRepositoryFile, deleteRepositoryFile, getRepositoryChanges, getRepositoryContext, getRepositoryDirectory, getRepositoryFile, getRepositoryFileContentHeaders, renameRepositoryFile, repositoryFileContentUrl, searchRepositoryPaths } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
+import { ScrollArea } from "../../../components/ui/scroll-area";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryFilePicker from "./RepositoryFilePicker.vue";
 import RepositoryFilePreview from "./RepositoryFilePreview.vue";
+import RepositoryFileSearchToolbar from "./RepositoryFileSearchToolbar.vue";
 import type { RepositoryFileTreeNode } from "./RepositoryFileTree.vue";
+import RepositoryMarkdownPreview from "./RepositoryMarkdownPreview.vue";
+import RepositoryMediaPreview from "./RepositoryMediaPreview.vue";
 import RepositoryWorkspaceFileList from "./RepositoryWorkspaceFileList.vue";
 import { repositoryFileLocation } from "./repositoryFilePath";
+import { isRepositoryMediaPath, repositoryMediaKind, type RepositoryMediaKind } from "./repositoryPreview";
 
 type FileTab = RepositoryFileContent & {
   id: string;
   kind: "file";
   line?: number;
 };
+
+type MediaTab = { id: string; kind: "media"; path: string; previewKind: RepositoryMediaKind; line?: undefined };
 
 type ScopedRepositoryError = {
   path: string;
@@ -188,6 +225,7 @@ const props = defineProps<{
   initialFilePath?: string;
   initialFileRequestId?: number;
   pathSearchSupported: boolean;
+  fileContentSupported: boolean;
   sessionId: string;
   sessionKind: RepositorySessionKind;
 }>();
@@ -209,7 +247,7 @@ const gitBacked = computed(() => props.context.availability === "available");
 const directories = ref<Map<string, RepositoryDirectoryListing>>(new Map());
 const expandedPaths = ref<Set<string>>(new Set());
 const changes = ref<Awaited<ReturnType<typeof getRepositoryChanges>>>();
-const tabs = ref<FileTab[]>([]);
+const tabs = ref<(FileTab | MediaTab)[]>([]);
 const activeTabId = ref("");
 const pickerRootPath = ref("");
 const openBreadcrumbIndex = ref<number>();
@@ -240,11 +278,21 @@ const deleteTarget = ref<FileTab>();
 const deleteError = ref<unknown>();
 const fileActionPending = ref(false);
 const activeTab = computed(() => tabs.value.find((tab) => tab.id === activeTabId.value));
+const activeTabIsMarkdown = computed(() => activeTab.value?.kind === "file" && /\.(md|markdown)$/i.test(activeTab.value.path));
+const markdownView = ref<"preview" | "source">("preview");
+
+function setMarkdownView(value: unknown) {
+  if (value === "preview" || value === "source") markdownView.value = value;
+}
+
+watch(() => [activeTab.value?.path, activeTab.value?.line], () => {
+  markdownView.value = activeTab.value?.line ? "source" : "preview";
+});
 const currentFilePath = computed(() => openingFilePath.value || activeTab.value?.path || fileOpenError.value?.path || "");
 const breadcrumbSegments = computed<RepositoryBreadcrumbSegment[]>(() => {
   const rootLabel = props.context.displayName || t("repository.title");
   const root = { directoryPath: "", label: rootLabel, title: props.context.repositoryRoot || rootLabel };
-  if (!currentFilePath.value) return [root, { directoryPath: "", label: t("repository.workspace.openFile"), title: t("repository.workspace.openFile") }];
+  if (!currentFilePath.value) return [root];
   const parts = currentFilePath.value.split("/");
   return [root, ...parts.map((label, index) => {
     const path = parts.slice(0, index + 1).join("/");
@@ -437,7 +485,7 @@ watch(fileSearch, (value, _previous, onCleanup) => {
 });
 
 watch(openBreadcrumbIndex, (index) => {
-  if (index !== undefined) return;
+  if (index !== undefined || !currentFilePath.value) return;
   fileSearch.value = "";
   searchResult.value = undefined;
   searchError.value = undefined;
@@ -558,15 +606,15 @@ async function openFile(entry: RepositoryDirectoryEntry | { path: string; line?:
   fileOpenError.value = undefined;
   const existing = tabs.value.find((tab) => tab.id === id);
   if (existing) {
-    existing.line = line;
+    if (existing.kind === "file") existing.line = line;
     selectTab(id, revision);
     return;
   }
   openingFilePath.value = entry.path;
   try {
-    const file = await getRepositoryFile(target.value, entry.path);
+    const tab = await readFileTab(entry.path, id, line);
     if (revision !== fileOpenRevision) return;
-    tabs.value.push({ ...file, id, kind: "file", line });
+    tabs.value.push(tab);
     activeTabId.value = id;
   } catch (error) {
     if (revision !== fileOpenRevision) return;
@@ -577,11 +625,27 @@ async function openFile(entry: RepositoryDirectoryEntry | { path: string; line?:
   }
 }
 
+async function readFileTab(path: string, id: string, line?: number): Promise<FileTab | MediaTab> {
+  const fileTarget = target.value;
+  const contentSupported = props.fileContentSupported;
+  if (!contentSupported || !isRepositoryMediaPath(path)) {
+    try {
+      const file = await getRepositoryFile(fileTarget, path);
+      return { ...file, id, kind: "file", line };
+    } catch (error) {
+      if (!contentSupported || !(error instanceof ApiError) || (error.code !== "REPOSITORY_FILE_BINARY" && error.code !== "REPOSITORY_FILE_TOO_LARGE")) throw error;
+    }
+  }
+  const headers = await getRepositoryFileContentHeaders(fileTarget, path);
+  return { id, kind: "media", path, previewKind: repositoryMediaKind(headers.get("content-type")) };
+}
+
 function selectTab(id: string, revision = ++fileOpenRevision) {
   if (revision !== fileOpenRevision) return;
   fileOpenError.value = undefined;
   openingFilePath.value = undefined;
   activeTabId.value = id;
+  markdownView.value = activeTab.value?.line ? "source" : "preview";
 }
 
 watch(
@@ -702,7 +766,7 @@ async function refreshOpenFile(tab: FileTab) {
 }
 
 async function refreshOpenFiles() {
-  await Promise.all(tabs.value.map(refreshOpenFile));
+  await Promise.all(tabs.value.filter((tab): tab is FileTab => tab.kind === "file").map(refreshOpenFile));
 }
 
 async function refreshRepositoryState() {
@@ -794,9 +858,9 @@ function closeTab(id: string) {
 .repository-workspace-file-error-body :deep(.repository-error-notice) { width: min(680px, 100%); }
 .repository-workspace-file-loading-body { align-items: center; justify-content: center; gap: 8px; padding: 24px; color: var(--text-muted); font-size: 12px; }
 .repository-workspace-file-loading-body > small { max-width: min(680px, 100%); overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.repository-workspace-empty { display: flex; min-height: 0; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--text-muted); }
-.repository-workspace-empty strong { color: var(--text-strong); font-size: 13px; }
-.repository-workspace-empty span { font-size: 12px; }
+.repository-workspace-browser { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+.repository-workspace-browser-scroll { min-width: 0; min-height: 0; }
+.repository-workspace-browser-content { padding: 4px 6px; }
 .repository-workspace-spin { animation: repository-workspace-spin 0.9s linear infinite; }
 :global([role="dialog"].repository-file-action-dialog) { width: min(480px, calc(100vw - 32px)); gap: 14px; border-color: var(--line-subtle); background: hsl(var(--background)); color: var(--text); }
 .repository-file-action-form { display: grid; gap: 9px; }
