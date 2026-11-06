@@ -664,6 +664,15 @@ export class NodeAgentCloudRelayClient {
         probeEvidence: { measurements: probe.measurements },
       });
     } catch (error) {
+      if (isRateLimitedCloudRelayError(error)) {
+        this.options.host.log.warn({
+          nodeId: this.options.nodeId,
+          code: (error as { code?: unknown })?.code ?? "RATE_LIMITED",
+          retryAfterMs: (error as { retryAfterMs?: unknown })?.retryAfterMs,
+          reason: "rate-limited",
+        }, "node agent cloud relay adaptive selection deferred");
+        throw error;
+      }
       if ((error as { unsupported?: unknown })?.unsupported === true) this.adaptiveSelectionUnsupported.add(binding.serviceOrigin);
       this.options.host.log.warn({
         nodeId: this.options.nodeId,
@@ -1233,6 +1242,11 @@ export class NodeAgentCloudRelayClient {
     this.refreshControlPlaneIds.clear();
     this.failedControlPlaneIds.clear();
   }
+}
+
+function isRateLimitedCloudRelayError(error: unknown) {
+  const record = error as { code?: unknown; statusCode?: unknown } | null | undefined;
+  return record?.statusCode === 429 || record?.code === "RATE_LIMITED";
 }
 
 function sameOptional(left: unknown, right: unknown) {

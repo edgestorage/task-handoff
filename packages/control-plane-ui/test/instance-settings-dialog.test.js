@@ -56,10 +56,10 @@ test("instance model controls live only in the settings dialog", () => {
   assert.doesNotMatch(dialog, /keyPreview|\.key\b|API key/);
 });
 
-test("instance settings exposes general, models, apps, and inventory freshness states", () => {
+test("instance settings exposes general, models, and apps without the inventory panel", () => {
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
   for (const section of ["general", "models", "apps"]) assert.match(dialog, new RegExp(`value=\\"${section}\\"`));
-  for (const state of ["current", "stale", "not-reported", "empty", "degraded"]) assert.match(dialog, new RegExp(state));
+  assert.doesNotMatch(dialog, /customLaunchers|appInventory|inventoryState|inventoryBadgeVariant/);
   assert.match(dialog, /:aria-label="t\('instances\.settings\.sections'\)"/);
   assert.match(dialog, /DialogContent/);
   assert.match(dialog, /ScrollArea/);

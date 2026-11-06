@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use crate::{
     builtin_managed_app_definitions, detect_final_computer_capabilities,
     detect_final_computer_capabilities_sync, detect_managed_app_ownership_with_context,
-    detect_managed_app_with_managed_root,
+    detect_managed_app_recipe_target, detect_managed_app_with_managed_root_for_target,
     install_environment::{AppInstallEnvironmentManager, AppInstallExecutionPolicy},
     managed_app_projection, select_install_recipe, AppRecipeExecutionContext,
     AppRecipeExecutionError, AppRecipeExecutor, AppUpdateCheckResult, AppUpdateChecker,
@@ -285,16 +285,23 @@ impl AppManagementManager {
             state.capabilities = capabilities;
             state.capabilities_observed_at = Instant::now();
         }
+        let capabilities = self.lock().capabilities.clone();
+        let target = detect_managed_app_recipe_target(capabilities.platform);
         let detections = definitions
             .iter()
             .map(|definition| {
                 (
                     definition.clone(),
-                    detect_managed_app_with_managed_root(definition, Some(&self.install_base_dir)),
+                    detect_managed_app_with_managed_root_for_target(
+                        definition,
+                        Some(&self.install_base_dir),
+                        capabilities.platform,
+                        capabilities.arch,
+                        target,
+                    ),
                 )
             })
             .collect::<Vec<_>>();
-        let capabilities = self.lock().capabilities.clone();
         let ownership_context = ManagedAppOwnershipContext {
             state_dir: &self.state_dir,
             install_base_dir: &self.install_base_dir,
@@ -365,8 +372,14 @@ impl AppManagementManager {
             })?;
         let (capabilities, detection, selected, source) = {
             let state = self.lock();
-            let detection =
-                detect_managed_app_with_managed_root(&definition, Some(&self.install_base_dir));
+            let target = detect_managed_app_recipe_target(state.capabilities.platform);
+            let detection = detect_managed_app_with_managed_root_for_target(
+                &definition,
+                Some(&self.install_base_dir),
+                state.capabilities.platform,
+                state.capabilities.arch,
+                target,
+            );
             let selected = select_install_recipe(&definition, &state.capabilities);
             let fingerprint = ownership_fingerprint(&detection, &state.capabilities);
             let cached = state.ownership.get(app_id);
@@ -499,8 +512,14 @@ impl AppManagementManager {
                 })));
             }
         }
-        let detection =
-            detect_managed_app_with_managed_root(&definition, Some(&self.install_base_dir));
+        let target = detect_managed_app_recipe_target(state.capabilities.platform);
+        let detection = detect_managed_app_with_managed_root_for_target(
+            &definition,
+            Some(&self.install_base_dir),
+            state.capabilities.platform,
+            state.capabilities.arch,
+            target,
+        );
         let selected = select_install_recipe(&definition, &state.capabilities);
         let fingerprint = ownership_fingerprint(&detection, &state.capabilities);
         let cached = state.ownership.get(app_id).cloned();
@@ -731,8 +750,14 @@ impl AppManagementManager {
         let _ = flush_task.await;
         let terminal = match result {
             Ok(_) => {
-                let detection =
-                    detect_managed_app_with_managed_root(&definition, Some(&self.install_base_dir));
+                let target = detect_managed_app_recipe_target(context.capabilities.platform);
+                let detection = detect_managed_app_with_managed_root_for_target(
+                    &definition,
+                    Some(&self.install_base_dir),
+                    context.capabilities.platform,
+                    context.capabilities.arch,
+                    target,
+                );
                 let satisfied = if operation == AppManagementOperation::Uninstall {
                     detection.state == controlled_instance_protocol::ManagedAppState::NotInstalled
                 } else {
@@ -921,8 +946,14 @@ fn snapshot_locked(
     let apps = definitions
         .iter()
         .map(|definition| {
-            let detection =
-                detect_managed_app_with_managed_root(definition, Some(install_base_dir));
+            let target = detect_managed_app_recipe_target(state.capabilities.platform);
+            let detection = detect_managed_app_with_managed_root_for_target(
+                definition,
+                Some(install_base_dir),
+                state.capabilities.platform,
+                state.capabilities.arch,
+                target,
+            );
             let fingerprint = ownership_fingerprint(&detection, &state.capabilities);
             let selected = select_install_recipe(definition, &state.capabilities);
             let cached = state.ownership.get(&definition.launcher.id);

@@ -139,3 +139,36 @@ test("managed npm recipes compare the manifest version with the pinned version",
     status: "update-available", installedVersion: "0.166.0", latestVersion: "0.165.0",
   });
 });
+
+test("managed native recipes compare the ownership manifest with the pinned platform package", async (context) => {
+  const os = require("node:os");
+  const path = require("node:path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-update-check-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const manifestDir = path.join(root, "native", "codex");
+  fs.mkdirSync(manifestDir, { recursive: true });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "@openai/codex",
+    packageVersion: "0.165.0-linux-x64", version: "0.165.0", integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+    launchPath: "vendor/x86_64-unknown-linux-musl/bin/codex", privilege: "user",
+  };
+  const writeManifest = (overrides = {}) => fs.writeFileSync(path.join(manifestDir, "managed-app.json"), JSON.stringify({
+    schemaVersion: 1, appId: "codex", version: recipe.version, package: recipe.package,
+    packageVersion: recipe.packageVersion, integrity: recipe.integrity, installRoot: manifestDir,
+    launchPath: recipe.launchPath, files: [recipe.launchPath], ...overrides,
+  }));
+  const { checker, commands } = checkerWith([]);
+  writeManifest();
+  assert.deepEqual(await checker(recipe, { appId: "codex", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" }, installBaseDir: root }), {
+    status: "up-to-date", installedVersion: "0.165.0", latestVersion: "0.165.0",
+  });
+  assert.equal(commands.length, 0);
+  writeManifest({ packageVersion: "0.164.0-linux-x64", version: "0.164.0" });
+  assert.deepEqual(await checker(recipe, { appId: "codex", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" }, installBaseDir: root }), {
+    status: "update-available", installedVersion: "0.164.0", latestVersion: "0.165.0",
+  });
+  writeManifest({ version: "0.164.0" });
+  assert.deepEqual(await checker(recipe, { appId: "codex", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" }, installBaseDir: root }), {
+    status: "update-available", installedVersion: "0.164.0", latestVersion: "0.165.0",
+  });
+});

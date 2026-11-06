@@ -38,6 +38,40 @@ async function tarArchive(root, options = {}) {
   return fs.readFileSync(file);
 }
 
+async function npmPackageArchive(root, options = {}) {
+  const source = path.join(root, options.sourceName || "npm-source");
+  const packageRoot = path.join(source, "package");
+  const launcher = path.join(packageRoot, "vendor", "bin", "tool");
+  fs.mkdirSync(path.dirname(launcher), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "native-tool", version: options.version || "1.2.3", scripts: { postinstall: "exit 99" } }));
+  fs.writeFileSync(launcher, options.body || "#!/bin/sh\nprintf '1.2.3\\n'\n", { mode: 0o755 });
+  if (options.symlink) fs.symlinkSync(options.symlink, path.join(packageRoot, "vendor", "bin", "tool-link"));
+  const file = path.join(root, options.sourceName ? `${options.sourceName}.tgz` : "native-package.tgz");
+  await tar.create({ cwd: source, file, gzip: true, portable: true }, ["package"]);
+  return fs.readFileSync(file);
+}
+
+function sri(value) {
+  return `sha512-${crypto.createHash("sha512").update(value).digest("base64")}`;
+}
+
+function installSourcePolicy(npmRegistry) {
+  return {
+    createExecutionPolicy: () => ({
+      revision: 1,
+      effective: { npmRegistry },
+      npmRegistry,
+      prepareNodeRuntime: async () => { throw new Error("native package source checks must not prepare Node"); },
+      nodeEnvironment: (env) => env,
+      aptSourceConfiguration: () => undefined,
+    }),
+  };
+}
+
+function requestRange(init) {
+  return new Headers(init?.headers).get("range");
+}
+
 test("timed out commands do not settle until an ignoring child process is killed", { skip: process.platform === "win32" }, async () => {
   const startedAt = Date.now();
   await assert.rejects(
@@ -505,3 +539,386 @@ for (const launcher of ["missing", "external"]) {
     assert.equal(spawnSync(target, [], { encoding: "utf8" }).stdout, "previous-version");
   });
 }
+
+test("native npm packages install without npm or node and uninstall only the manifest-owned tree", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-package-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installBaseDir = path.join(root, "managed-apps");
+  const archive = await npmPackageArchive(root);
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir,
+    stateDir: path.join(root, "state"),
+    fetcher: async () => new Response(archive, { headers: { "content-length": String(archive.length) } }),
+    commandRunner: async (command) => {
+      commands.push(command);
+      return { exitCode: 0, stdout: "1.2.3\n", stderr: "" };
+    },
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: sri(archive),
+    launchPath: "vendor/bin/tool", tarballUrl: "https://registry.example.test/native-tool.tgz", privilege: "user",
+  };
+  const executionContext = { appId: "native-tool", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" } };
+  await execute("install", recipe, executionContext);
+
+  const target = path.join(installBaseDir, "native", "native-tool");
+  const launcher = path.join(target, "vendor", "bin", "tool");
+  assert.equal(fs.statSync(launcher).mode & 0o111, 0o111);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].args.join(" "), "--version");
+  assert.equal(commands[0].executable.endsWith("/vendor/bin/tool"), true);
+  assert.equal(commands[0].executable.includes(`${path.sep}native${path.sep}.staging${path.sep}`), true);
+  assert.equal(commands.some(({ executable }) => /(?:^|\/)(?:npm|node)(?:\.exe|\.cmd)?$/.test(executable)), false);
+  const manifest = JSON.parse(fs.readFileSync(path.join(target, "managed-app.json"), "utf8"));
+  assert.equal(manifest.version, "1.2.3");
+  assert.equal(manifest.packageVersion, "1.2.3-linux-x64");
+  assert.equal(manifest.installRoot, target);
+  assert.equal(manifest.files.includes("vendor/bin/tool"), true);
+
+  await execute("uninstall", recipe, executionContext);
+  assert.equal(fs.existsSync(target), false);
+});
+
+test("native npm packages prefer the configured app install source", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-source-preferred-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const archive = await npmPackageArchive(root);
+  const requests = [];
+  const output = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    installEnvironment: installSourcePolicy("https://registry.npmmirror.com"),
+    fetcher: async (url, init) => {
+      requests.push({ url: String(url), range: requestRange(init) });
+      if (!String(url).startsWith("https://registry.npmmirror.com/")) throw new Error("official source must not be probed");
+      return requestRange(init)
+        ? new Response(null, { status: 206 })
+        : new Response(archive, { headers: { "content-length": String(archive.length) } });
+    },
+    commandRunner: async () => ({ exitCode: 0, stdout: "1.2.3\n", stderr: "" }),
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: sri(archive),
+    launchPath: "vendor/bin/tool", privilege: "user",
+  };
+  await execute("install", recipe, {
+    appId: "native-tool",
+    capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" },
+    onOutput: (stream, chunk) => output.push({ stream, chunk }),
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests.every(({ url }) => url.startsWith("https://registry.npmmirror.com/")), true);
+  assert.equal(requests[0].range, "bytes=0-0");
+  assert.equal(requests[1].range, null);
+  assert.match(output.map(({ chunk }) => chunk).join(""), /Using npm source https:\/\/registry\.npmmirror\.com/);
+});
+
+test("native npm packages fall back when the preferred source does not respond", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-source-fallback-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const archive = await npmPackageArchive(root);
+  const requests = [];
+  const output = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    installEnvironment: installSourcePolicy("https://primary.example.test"),
+    fetcher: async (url, init) => {
+      requests.push({ url: String(url), range: requestRange(init) });
+      if (String(url).startsWith("https://primary.example.test/")) throw new Error("connect timed out after 3000ms");
+      if (!String(url).startsWith("https://registry.npmjs.org/")) throw new Error("unexpected fallback source");
+      return requestRange(init)
+        ? new Response(null, { status: 206 })
+        : new Response(archive, { headers: { "content-length": String(archive.length) } });
+    },
+    commandRunner: async () => ({ exitCode: 0, stdout: "1.2.3\n", stderr: "" }),
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: sri(archive),
+    launchPath: "vendor/bin/tool", privilege: "user",
+  };
+  await execute("install", recipe, {
+    appId: "native-tool",
+    capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" },
+    onOutput: (stream, chunk) => output.push({ stream, chunk }),
+  });
+
+  assert.deepEqual(requests.map(({ url }) => new URL(url).hostname), [
+    "primary.example.test",
+    "registry.npmjs.org",
+    "registry.npmjs.org",
+  ]);
+  const log = output.map(({ chunk }) => chunk).join("");
+  assert.match(log, /npm source https:\/\/primary\.example\.test unavailable/);
+  assert.match(log, /Using fallback npm source https:\/\/registry\.npmjs\.org/);
+});
+
+test("native npm package source probes abort after three seconds and continue with a fallback", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-source-timeout-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const archive = await npmPackageArchive(root);
+  const startedAt = Date.now();
+  let abortedAt;
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    installEnvironment: installSourcePolicy("https://slow.example.test"),
+    fetcher: async (url, init) => {
+      if (String(url).startsWith("https://slow.example.test/")) {
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => {
+            abortedAt = Date.now();
+            reject(init.signal.reason);
+          }, { once: true });
+        });
+      }
+      if (!String(url).startsWith("https://registry.npmjs.org/")) throw new Error("unexpected fallback source");
+      return requestRange(init)
+        ? new Response(null, { status: 206 })
+        : new Response(archive, { headers: { "content-length": String(archive.length) } });
+    },
+    commandRunner: async () => ({ exitCode: 0, stdout: "1.2.3\n", stderr: "" }),
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: sri(archive),
+    launchPath: "vendor/bin/tool", privilege: "user",
+  };
+  await execute("install", recipe, {
+    appId: "native-tool",
+    capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" },
+  });
+
+  assert.ok(abortedAt, "the source probe should be aborted");
+  assert.ok(abortedAt - startedAt >= 2_800, `probe aborted too early after ${abortedAt - startedAt}ms`);
+  assert.ok(abortedAt - startedAt < 4_500, `probe aborted too late after ${abortedAt - startedAt}ms`);
+});
+
+test("native npm packages report every unavailable source before failing", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-source-offline-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const archive = await npmPackageArchive(root);
+  const requests = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    installEnvironment: installSourcePolicy("https://primary.example.test"),
+    fetcher: async (url) => {
+      requests.push(String(url));
+      throw new Error("connect timeout");
+    },
+    commandRunner: async () => { throw new Error("verification must not run"); },
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: sri(archive),
+    launchPath: "vendor/bin/tool", privilege: "user",
+  };
+  await assert.rejects(
+    execute("install", recipe, { appId: "native-tool", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" } }),
+    (error) => error instanceof AppRecipeExecutionError
+      && error.code === "npm_registry_unavailable"
+      && error.retryable === true
+      && error.message.includes("https://registry.npmjs.org")
+      && error.message.includes("https://registry.npmmirror.com"),
+  );
+  assert.deepEqual(requests.map((url) => new URL(url).hostname), [
+    "primary.example.test",
+    "registry.npmjs.org",
+    "registry.npmmirror.com",
+  ]);
+});
+
+test("native package updates preserve the previous install when verification fails", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-atomic-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installBaseDir = path.join(root, "managed-apps");
+  const firstArchive = await npmPackageArchive(root, { sourceName: "first", body: "#!/bin/sh\nprintf 'previous-version\\n'\n" });
+  const target = path.join(installBaseDir, "native", "native-tool");
+  fs.mkdirSync(path.join(target, "vendor", "bin"), { recursive: true });
+  const previousLauncher = path.join(target, "vendor", "bin", "tool");
+  fs.writeFileSync(previousLauncher, "#!/bin/sh\nprintf 'previous-version\\n'\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(target, "managed-app.json"), JSON.stringify({
+    schemaVersion: 1, appId: "native-tool", version: "1.0.0", package: "native-tool",
+    packageVersion: "1.0.0-linux-x64", integrity: sri(firstArchive), installRoot: target,
+    launchPath: "vendor/bin/tool", files: ["vendor/bin/tool", "managed-app.json"],
+  }));
+  const secondArchive = await npmPackageArchive(root, { sourceName: "second", body: "#!/bin/sh\nprintf 'next-version\\n'\n" });
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir,
+    stateDir: path.join(root, "state"),
+    fetcher: async () => new Response(secondArchive, { headers: { "content-length": String(secondArchive.length) } }),
+    commandRunner: async (command) => { commands.push(command); return { exitCode: 0, stdout: "next-version\n", stderr: "" }; },
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: sri(firstArchive),
+    launchPath: "vendor/bin/tool", tarballUrl: "https://registry.example.test/native-tool.tgz", privilege: "user",
+  };
+  await assert.rejects(
+    execute("update", recipe, { appId: "native-tool", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" } }),
+    (error) => error instanceof AppRecipeExecutionError && error.code === "checksum_mismatch",
+  );
+  assert.equal(commands.length, 0);
+  assert.equal(spawnSync(previousLauncher, [], { encoding: "utf8" }).stdout.trim(), "previous-version");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(target, "managed-app.json"), "utf8")).version, "1.0.0");
+});
+
+test("native npm packages reject links and launchers outside the package root", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-links-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const archive = await npmPackageArchive(root, { symlink: "/bin/sh" });
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    fetcher: async () => new Response(archive),
+    commandRunner: async () => { throw new Error("verification must not run"); },
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: sri(archive),
+    launchPath: "vendor/bin/tool", tarballUrl: "https://registry.example.test/native-tool.tgz", privilege: "user",
+  };
+  await assert.rejects(
+    execute("install", recipe, { appId: "native-tool", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" } }),
+    (error) => error instanceof AppRecipeExecutionError && error.code === "unsafe_archive",
+  );
+  await assert.rejects(
+    execute("install", { ...recipe, launchPath: "../escape" }, { appId: "native-tool", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" } }),
+    (error) => error instanceof AppRecipeExecutionError && error.code === "invalid_builtin_recipe",
+  );
+});
+
+test("native package downloads reject unsafe redirects before contacting the target", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-redirect-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const requests = [];
+  let redirectLocation = "http://mirror.example.test/native-tool.tgz";
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    fetcher: async (url, init) => {
+      requests.push({ url: String(url), redirect: init?.redirect });
+      return new Response(null, { status: 302, headers: { location: redirectLocation } });
+    },
+    commandRunner: async () => { throw new Error("verification must not run"); },
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+    launchPath: "vendor/bin/tool", tarballUrl: "https://registry.example.test/native-tool.tgz", privilege: "user",
+  };
+  for (const location of [
+    "http://mirror.example.test/native-tool.tgz",
+    "https://user:pass@mirror.example.test/native-tool.tgz",
+    "https://mirror.example.test/native-tool.tgz?token=secret",
+    "https://mirror.example.test/native-tool.tgz#fragment",
+  ]) {
+    redirectLocation = location;
+    requests.length = 0;
+    await assert.rejects(
+      execute("install", recipe, { appId: "native-tool", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" } }),
+      (error) => error instanceof AppRecipeExecutionError && error.code === "invalid_builtin_recipe",
+    );
+    assert.deepEqual(requests, [{ url: "https://registry.example.test/native-tool.tgz", redirect: "manual" }]);
+  }
+});
+
+test("native package tarball URLs reject non-canonical sources before any request", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-source-url-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const requests = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    fetcher: async (url) => {
+      requests.push(String(url));
+      throw new Error("unsafe source must not be requested");
+    },
+    commandRunner: async () => { throw new Error("verification must not run"); },
+  });
+  const baseRecipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+    launchPath: "vendor/bin/tool", privilege: "user",
+  };
+  for (const tarballUrl of [
+    "http://registry.example.test/native-tool.tgz",
+    "https://user:pass@registry.example.test/native-tool.tgz",
+    "https://registry.example.test/native-tool.tgz?token=secret",
+    "https://registry.example.test/native-tool.tgz#fragment",
+  ]) {
+    await assert.rejects(
+      execute("install", { ...baseRecipe, tarballUrl }, { appId: "native-tool", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" } }),
+      (error) => error instanceof AppRecipeExecutionError && error.code === "invalid_builtin_recipe",
+    );
+  }
+  assert.deepEqual(requests, []);
+});
+
+test("native package downloads fail with a retryable timeout when the body stalls", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-timeout-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const body = new ReadableStream({ pull: () => new Promise(() => {}) });
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    downloadTimeoutMs: 2_000,
+    downloadIdleTimeoutMs: 20,
+    fetcher: async () => new Response(body),
+    commandRunner: async () => { throw new Error("verification must not run"); },
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+    launchPath: "vendor/bin/tool", tarballUrl: "https://registry.example.test/native-tool.tgz", privilege: "user",
+  };
+  await assert.rejects(
+    execute("install", recipe, { appId: "native-tool", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" } }),
+    (error) => error instanceof AppRecipeExecutionError && error.code === "download_timeout" && error.retryable === true,
+  );
+});
+
+test("native package uninstall refuses unsafe ownership manifests without deleting the target", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-native-manifest-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installBaseDir = path.join(root, "managed-apps");
+  const target = path.join(installBaseDir, "native", "native-tool");
+  const launcher = path.join(target, "vendor", "bin", "tool");
+  fs.mkdirSync(path.dirname(launcher), { recursive: true });
+  fs.writeFileSync(launcher, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const execute = createAppRecipeExecutor({
+    installBaseDir,
+    stateDir: path.join(root, "state"),
+    fetcher: async () => { throw new Error("uninstall must not download"); },
+    commandRunner: async () => { throw new Error("uninstall must not run commands"); },
+  });
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+    launchPath: "vendor/bin/tool", privilege: "user",
+  };
+  const manifest = {
+    schemaVersion: 1, appId: "native-tool", version: "1.2.3", package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", integrity: recipe.integrity, installRoot: target,
+    launchPath: "vendor/bin/tool", files: ["vendor/bin/tool", "managed-app.json"],
+  };
+  for (const invalid of [
+    { ...manifest, installRoot: path.join("native", "native-tool") },
+    { ...manifest, files: ["vendor/bin/tool", "../escape"] },
+  ]) {
+    fs.writeFileSync(path.join(target, "managed-app.json"), JSON.stringify(invalid));
+    await assert.rejects(
+      execute("uninstall", recipe, { appId: "native-tool", capabilities: { platform: "linux", arch: "x64", installers: [], privilege: "user" } }),
+      (error) => error instanceof AppRecipeExecutionError && error.code === "ownership_manifest_missing",
+    );
+    assert.equal(fs.existsSync(launcher), true);
+  }
+});

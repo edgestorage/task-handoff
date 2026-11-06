@@ -17,12 +17,17 @@ import {
   detectFinalComputerCapabilities,
   detectFinalComputerCapabilitiesAsync,
   detectManagedApp,
+  detectManagedAppRecipeTarget,
   detectManagedAppOwnership,
+  managedAppLauncherPath,
   managedAppProjection,
+  managedNativeAppLauncher,
+  managedNativeAppRoot,
+  readNativeAppManifest,
   resolveApp,
   selectInstallRecipe,
 } from "@task-handoff/app-runtime";
-import type { ManagedAppOwnershipResult } from "@task-handoff/app-runtime";
+import type { ManagedAppOwnershipResult, ManagedAppRecipeTarget } from "@task-handoff/app-runtime";
 import type { InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult } from "@task-handoff/app-runtime/types";
 import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
 import { AppRecipeExecutionError, createAppRecipeExecutor, type AppRecipeExecutionContext } from "./app-recipe-executor";
@@ -37,15 +42,17 @@ function commandArgument(value: string) {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : JSON.stringify(value);
 }
 
-function managedNodePackageRecipe(definition: ManagedAppDefinition) {
-  return definition.distribution.recipes.find((recipe) => recipe.type === "node-package" && recipe.managed === true);
+function recipeTarget(capabilities: FinalComputerCapabilities): ManagedAppRecipeTarget {
+  return detectManagedAppRecipeTarget({ platform: capabilities.platform as NodeJS.Platform });
 }
 
-function definitionWithManagedLauncher(definition: ManagedAppDefinition, installBaseDir: string) {
-  if (!managedNodePackageRecipe(definition)) return definition;
+function definitionWithManagedLauncher(definition: ManagedAppDefinition, installBaseDir: string, capabilities: FinalComputerCapabilities) {
+  const target = managedAppLauncherPath(installBaseDir, definition, capabilities.platform as NodeJS.Platform, capabilities.arch, recipeTarget(capabilities));
+  if (!target) return definition;
   const resolved = resolveApp(definition.launcher, process.env, {
     managedAppRoot: installBaseDir,
     managedAppIds: new Set([definition.launcher.id]),
+    managedAppTargets: new Map([[definition.launcher.id, target]]),
   });
   return { ...definition, launcher: resolved.app };
 }
@@ -202,17 +209,30 @@ export class AppManagementManager {
     this.refreshCapabilities = options.capabilities
       ? async () => withInstallEnvironment(options.capabilities!())
       : async () => withInstallEnvironment(await detectFinalComputerCapabilitiesAsync());
-    this.detection = options.detection || ((definition) => detectManagedApp(definitionWithManagedLauncher(definition, options.installBaseDir)));
+    this.detection = options.detection || ((definition) => detectManagedApp(definitionWithManagedLauncher(definition, options.installBaseDir, this.capabilities())));
     const defaultOwnership = (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => {
-      const managedRecipe = managedNodePackageRecipe(definition);
-      if (managedRecipe) {
+      const target = recipeTarget(capabilities);
+      const selected = selectInstallRecipe(definition, capabilities, target).recipe;
+      if (selected?.type === "node-package" && selected.managed) {
         if (detection.state !== "installed") return { source: "none" as const };
         const root = path.resolve(options.installBaseDir, "node-package", definition.launcher.id);
         return detection.executablePaths.length > 0 && detection.executablePaths.every((value) => pathInside(path.resolve(value), root))
-          ? { source: "recipe" as const, recipe: managedRecipe }
+          ? { source: "recipe" as const, recipe: selected }
           : { source: "external" as const };
       }
       return detectManagedAppOwnership(definition, detection, capabilities, {
+        target,
+        nativeManifestOwned: async (_definition, recipe, detected) => {
+          const manifest = readNativeAppManifest(options.installBaseDir, definition.launcher.id);
+          const expectedRoot = path.resolve(managedNativeAppRoot(options.installBaseDir, definition.launcher.id));
+          const expectedLauncher = path.resolve(managedNativeAppLauncher(options.installBaseDir, definition.launcher.id, recipe.launchPath));
+          if (!manifest || manifest.appId !== definition.launcher.id || path.resolve(manifest.installRoot) !== expectedRoot) return false;
+          if (path.resolve(managedNativeAppLauncher(options.installBaseDir, definition.launcher.id, manifest.launchPath)) !== expectedLauncher) return false;
+          return detected.executablePaths.length > 0 && detected.executablePaths.every((value) => {
+            const candidate = path.resolve(value);
+            return candidate === expectedLauncher && pathInside(candidate, expectedRoot);
+          });
+        },
         archiveManifestOwned: async (_definition, recipe, detected) => {
           const expectedRoot = path.resolve(options.installBaseDir, recipe.installRoot);
           const manifestFile = path.join(options.stateDir, "manifests", `${definition.launcher.id}.json`);
@@ -257,11 +277,12 @@ export class AppManagementManager {
       const detection = this.detection(definition);
       const cached = this.ownershipByApp.get(definition.launcher.id);
       const fingerprint = this.ownershipFingerprint(detection, capabilities);
-      const selected = selectInstallRecipe(definition, capabilities).recipe;
+      const target = recipeTarget(capabilities);
+      const selected = selectInstallRecipe(definition, capabilities, target).recipe;
       const source = detection.state === "not-installed" ? "none"
         : selected?.type === "bundled" ? "bundled"
           : cached?.fingerprint === fingerprint ? cached.source : "external";
-      const projection = managedAppProjection(definition, detection, capabilities, source);
+      const projection = managedAppProjection(definition, detection, capabilities, source, target);
       const active = activeByApp.get(projection.id);
       const check = this.updateChecks.get(projection.id);
       const projected = check ? { ...projection, updateCheck: check } : projection;
@@ -313,14 +334,15 @@ export class AppManagementManager {
     const definition = this.definitions().find((entry) => entry.launcher.id === appId);
     if (!definition) throw new AppManagementRequestError("unknown_app", "The requested built-in app does not exist.", 404);
     const capabilities = await this.ensureCapabilities();
-    const selected = selectInstallRecipe(definition, capabilities);
+    const target = recipeTarget(capabilities);
+    const selected = selectInstallRecipe(definition, capabilities, target);
     const detection = this.detection(definition);
     const cached = this.ownershipByApp.get(definition.launcher.id);
     const fingerprint = this.ownershipFingerprint(detection, capabilities);
     const source = detection.state === "not-installed" ? "none"
       : selected.recipe?.type === "bundled" ? "bundled"
         : cached?.fingerprint === fingerprint ? cached.source : "external";
-    const projection = managedAppProjection(definition, detection, capabilities, source);
+    const projection = managedAppProjection(definition, detection, capabilities, source, target);
     if (!selected.recipe || projection.canUpdate !== true) {
       throw new AppManagementRequestError("app_operation_unavailable", projection.updateReason?.message || "The requested app update check is unavailable.", 409, { reason: projection.updateReason });
     }
@@ -368,14 +390,15 @@ export class AppManagementManager {
       throw new AppManagementRequestError("app_sessions_running", "The app has running sessions and cannot be changed.", 409, { sessionIds: runningSessions.map((session) => session.id) });
     }
     const capabilities = this.capabilities();
-    const selected = selectInstallRecipe(definition, capabilities);
+    const target = recipeTarget(capabilities);
+    const selected = selectInstallRecipe(definition, capabilities, target);
     const detection = this.detection(definition);
     const cached = this.ownershipByApp.get(definition.launcher.id);
     const fingerprint = this.ownershipFingerprint(detection, capabilities);
     const source = detection.state === "not-installed" ? "none"
       : selected.recipe?.type === "bundled" ? "bundled"
         : cached?.fingerprint === fingerprint ? cached.source : "external";
-    const projection = managedAppProjection(definition, detection, capabilities, source);
+    const projection = managedAppProjection(definition, detection, capabilities, source, target);
     const operationRecipe = operation === "uninstall" && cached?.fingerprint === fingerprint && cached.recipe ? cached.recipe : selected.recipe;
     const availability = operation === "install"
       ? { allowed: projection.canInstall, reason: projection.installReason }
@@ -559,7 +582,7 @@ export class AppManagementManager {
       this.ownershipByApp.set(definition.launcher.id, { fingerprint: this.ownershipFingerprint(detection, capabilities), source, recipe: ownership.recipe });
       return source;
     } catch (error) {
-      source = detection.state === "not-installed" ? "none" : selectInstallRecipe(definition, capabilities).recipe?.type === "bundled" ? "bundled" : "external";
+      source = detection.state === "not-installed" ? "none" : selectInstallRecipe(definition, capabilities, recipeTarget(capabilities)).recipe?.type === "bundled" ? "bundled" : "external";
       this.warn(`App ownership detection failed for ${definition.launcher.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
     this.ownershipByApp.set(definition.launcher.id, { fingerprint: this.ownershipFingerprint(detection, capabilities), source });

@@ -8,6 +8,7 @@ mod managed;
 mod managed_app_providers;
 mod managed_node_apps;
 mod management;
+mod native_package;
 mod profiles;
 mod pty;
 mod recipe;
@@ -28,14 +29,20 @@ pub use managed::{
     builtin_managed_app_definitions, current_arch, current_platform,
     detect_final_computer_capabilities, detect_final_computer_capabilities_sync,
     detect_managed_app, detect_managed_app_ownership, detect_managed_app_ownership_with_context,
-    detect_managed_app_with_managed_root, detect_managed_app_with_version,
-    find_builtin_managed_app, is_launchable_managed_definition, managed_app_projection,
-    select_install_recipe, validate_managed_definition, InstallRecipe, InstallRecipeSelection,
-    ManagedAppDefinition, ManagedAppDetectionResult, ManagedAppDetectionRule, ManagedAppOwnership,
-    ManagedAppOwnershipContext,
+    detect_managed_app_with_managed_root, detect_managed_app_with_managed_root_for_target,
+    detect_managed_app_with_version, find_builtin_managed_app, is_launchable_managed_definition,
+    managed_app_launcher_path, managed_app_projection, select_install_recipe,
+    select_install_recipe_with_target, validate_managed_definition, InstallRecipe,
+    InstallRecipeSelection, ManagedAppDefinition, ManagedAppDetectionResult,
+    ManagedAppDetectionRule, ManagedAppOwnership, ManagedAppOwnershipContext,
 };
 pub use managed_node_apps::ManagedNodeApps;
 pub use management::{AppManagementManager, AppManagementRequestError, AppManagementSession};
+pub use native_package::{
+    detect_managed_app_recipe_target, managed_native_app_launcher,
+    managed_native_app_manifest_path, managed_native_app_root, read_native_app_manifest,
+    ManagedAppRecipeLibc, ManagedAppRecipeTarget, NativeAppManifest,
+};
 pub use profiles::ChromiumProfileStore;
 pub use pty::{
     process_group_exists, resize_pty, spawn_pty, terminate_process_group, terminate_process_groups,

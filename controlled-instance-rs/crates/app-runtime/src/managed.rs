@@ -14,7 +14,14 @@ use controlled_instance_protocol::{
 use serde_json::Value;
 use tokio::process::Command;
 
-use crate::{resolve_executable, AppRuntimeError};
+use crate::{
+    native_package::{
+        detect_managed_app_recipe_target, managed_native_app_launcher, managed_native_app_root,
+        read_native_app_manifest, valid_native_launch_path, ManagedAppRecipeLibc,
+        ManagedAppRecipeTarget,
+    },
+    resolve_executable, AppRuntimeError,
+};
 
 const ALL_PLATFORMS: [FinalComputerPlatform; 7] = [
     FinalComputerPlatform::Linux,
@@ -80,6 +87,18 @@ pub enum InstallRecipe {
         managed: bool,
         version: Option<String>,
     },
+    NativePackage {
+        platforms: Vec<FinalComputerPlatform>,
+        arches: Option<Vec<FinalComputerArch>>,
+        privilege: Option<AppInstallPrivilege>,
+        libc: Option<ManagedAppRecipeLibc>,
+        package: String,
+        package_version: String,
+        version: String,
+        integrity: String,
+        launch_path: String,
+        tarball_url: Option<String>,
+    },
     Archive {
         platforms: Vec<FinalComputerPlatform>,
         arches: Option<Vec<FinalComputerArch>>,
@@ -97,6 +116,7 @@ impl InstallRecipe {
             Self::Bundled { .. } => "bundled",
             Self::SystemPackage { .. } => "system-package",
             Self::NodePackage { .. } => "node-package",
+            Self::NativePackage { .. } => "native-package",
             Self::Archive { .. } => "archive",
         }
     }
@@ -106,6 +126,7 @@ impl InstallRecipe {
             Self::Bundled { platforms, .. }
             | Self::SystemPackage { platforms, .. }
             | Self::NodePackage { platforms, .. }
+            | Self::NativePackage { platforms, .. }
             | Self::Archive { platforms, .. } => platforms,
         }
     }
@@ -115,6 +136,7 @@ impl InstallRecipe {
             Self::Bundled { arches, .. }
             | Self::SystemPackage { arches, .. }
             | Self::NodePackage { arches, .. }
+            | Self::NativePackage { arches, .. }
             | Self::Archive { arches, .. } => arches.as_deref(),
         }
     }
@@ -124,6 +146,7 @@ impl InstallRecipe {
             Self::Bundled { privilege, .. }
             | Self::SystemPackage { privilege, .. }
             | Self::NodePackage { privilege, .. }
+            | Self::NativePackage { privilege, .. }
             | Self::Archive { privilege, .. } => privilege.unwrap_or(AppInstallPrivilege::User),
         }
     }
@@ -133,13 +156,14 @@ impl InstallRecipe {
             Self::SystemPackage { installer, .. } | Self::NodePackage { installer, .. } => {
                 Some(*installer)
             }
-            Self::Bundled { .. } | Self::Archive { .. } => None,
+            Self::Bundled { .. } | Self::NativePackage { .. } | Self::Archive { .. } => None,
         }
     }
 
     pub fn packages(&self) -> &[String] {
         match self {
             Self::SystemPackage { packages, .. } | Self::NodePackage { packages, .. } => packages,
+            Self::NativePackage { package, .. } => std::slice::from_ref(package),
             Self::Bundled { .. } | Self::Archive { .. } => &[],
         }
     }
@@ -151,6 +175,14 @@ impl InstallRecipe {
     pub fn version(&self) -> Option<&str> {
         match self {
             Self::NodePackage { version, .. } => version.as_deref(),
+            Self::NativePackage { version, .. } => Some(version),
+            _ => None,
+        }
+    }
+
+    pub fn libc(&self) -> Option<ManagedAppRecipeLibc> {
+        match self {
+            Self::NativePackage { libc, .. } => *libc,
             _ => None,
         }
     }
@@ -263,6 +295,31 @@ fn node_recipe_with_version(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn native_recipe(
+    platform: FinalComputerPlatform,
+    arch: FinalComputerArch,
+    libc: Option<ManagedAppRecipeLibc>,
+    package: &str,
+    package_version: &str,
+    version: &str,
+    integrity: &str,
+    launch_path: &str,
+) -> InstallRecipe {
+    InstallRecipe::NativePackage {
+        platforms: vec![platform],
+        arches: Some(vec![arch]),
+        privilege: Some(AppInstallPrivilege::User),
+        libc,
+        package: package.to_string(),
+        package_version: package_version.to_string(),
+        version: version.to_string(),
+        integrity: integrity.to_string(),
+        launch_path: launch_path.to_string(),
+        tarball_url: None,
+    }
+}
+
 fn launcher(
     id: &str,
     name: &str,
@@ -327,13 +384,68 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
             launchable: true,
             detection: launcher_detection(),
-            recipes: vec![node_recipe_with_version(
-                AppInstaller::Npm,
-                "@openai/codex",
-                true,
-                Some("0.165.0"),
-                AppInstallPrivilege::User,
-            )],
+            recipes: vec![
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::X64,
+                    None,
+                    "@openai/codex",
+                    "0.165.0-linux-x64",
+                    "0.165.0",
+                    "sha512-FotDc7bVHwaommtsdDP8PPrH0a5IwC/t8H/LhdEcH4EBqgeYFRCtptiHcuwgvNRCLbTbOyFE/Ur6GzYCljgaSQ==",
+                    "vendor/x86_64-unknown-linux-musl/bin/codex",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::Arm64,
+                    None,
+                    "@openai/codex",
+                    "0.165.0-linux-arm64",
+                    "0.165.0",
+                    "sha512-qdrYdcabxn3biX2qTtb/GuuMk20ZAQYxcmY7lHcp6CkAzyqsXbL0vIJFwWJr83/pNM+CUZH4YaTPns2kN7ZIfA==",
+                    "vendor/aarch64-unknown-linux-musl/bin/codex",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Darwin,
+                    FinalComputerArch::X64,
+                    None,
+                    "@openai/codex",
+                    "0.165.0-darwin-x64",
+                    "0.165.0",
+                    "sha512-mxMtlntnUq0Xb8rjvHph3Ws045Q82BLbeKRRdkN70Es9mho/D/Blh1ShZvzQOnsoeVw8lbV9fOLjW1vncoufKQ==",
+                    "vendor/x86_64-apple-darwin/bin/codex",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Darwin,
+                    FinalComputerArch::Arm64,
+                    None,
+                    "@openai/codex",
+                    "0.165.0-darwin-arm64",
+                    "0.165.0",
+                    "sha512-MQ/Z0Xw9v08DHunnzodi9NwA844MI3+RO72IM8o0Lr/UemnlEoBMCxpojstxX6mf5ZQwUrIg0yekDd9cFZ29hg==",
+                    "vendor/aarch64-apple-darwin/bin/codex",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Win32,
+                    FinalComputerArch::X64,
+                    None,
+                    "@openai/codex",
+                    "0.165.0-win32-x64",
+                    "0.165.0",
+                    "sha512-f5LMyugPSnAovnTnR1N+SNHSTfWZ+ym5A4H3zZHz/zhuMGMGZD8IxUdlSUlEbiENYyPXrJ8G3Jh+CLyzTfQB6Q==",
+                    "vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Win32,
+                    FinalComputerArch::Arm64,
+                    None,
+                    "@openai/codex",
+                    "0.165.0-win32-arm64",
+                    "0.165.0",
+                    "sha512-6HLE44VQECPITRZN85NCV/w268Fw/083VKe+5ReOKO9wlL6Kyq1j1mLP2vZ3rmr0goG/HOykrJpZZT0aUD1ntg==",
+                    "vendor/aarch64-pc-windows-msvc/bin/codex.exe",
+                ),
+            ],
         },
         ManagedAppDefinition {
             launcher: launcher(
@@ -346,13 +458,88 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
             launchable: true,
             detection: launcher_detection(),
-            recipes: vec![node_recipe_with_version(
-                AppInstaller::Npm,
-                "opencode-ai",
-                true,
-                Some("1.18.30"),
-                AppInstallPrivilege::User,
-            )],
+            recipes: vec![
+                native_recipe(
+                    FinalComputerPlatform::Darwin,
+                    FinalComputerArch::Arm64,
+                    None,
+                    "opencode-darwin-arm64",
+                    "1.18.30",
+                    "1.18.30",
+                    "sha512-KO4FJGZpgmSz+NNQ6PizynT5qAzVfoZI5HJLpyD0tYNqePPu87g2/UgVmNW663Bock2r75koLZFjR5waZiFiqw==",
+                    "bin/opencode",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Darwin,
+                    FinalComputerArch::X64,
+                    None,
+                    "opencode-darwin-x64-baseline",
+                    "1.18.30",
+                    "1.18.30",
+                    "sha512-DMQWRe9blvI+639fcwqG+JUxppTOVrPyasMF/uWhTi5N+5veXpB1K/wV15D8Lz7uqblH/CE7apxroaz/E7vudA==",
+                    "bin/opencode",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::X64,
+                    Some(ManagedAppRecipeLibc::Gnu),
+                    "opencode-linux-x64-baseline",
+                    "1.18.30",
+                    "1.18.30",
+                    "sha512-//sHZuMaNZXo6fzBtgUI5vf1oXiMX9Un2a2R3AUzajRahuW42+98wg9J33uuICblE3RS6G4HxobrvnWA8mr4VA==",
+                    "bin/opencode",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::X64,
+                    Some(ManagedAppRecipeLibc::Musl),
+                    "opencode-linux-x64-baseline-musl",
+                    "1.18.30",
+                    "1.18.30",
+                    "sha512-8VAJb4VnNP6MbqWHMDMUwJ5k47tb5SPDqM0lcsCgfbeGjDy7rgFtlA8PYSgUgA9VTByBWmpfERR/34VVOHe82g==",
+                    "bin/opencode",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::Arm64,
+                    Some(ManagedAppRecipeLibc::Gnu),
+                    "opencode-linux-arm64",
+                    "1.18.30",
+                    "1.18.30",
+                    "sha512-KU2VO9oGRhV3M9LCYJXeBBtadIIgJYf620KMHFeghrGL0967Zz7PAcMBFZqTy7gUqNEnMaqOqAkSGx57BIw41Q==",
+                    "bin/opencode",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::Arm64,
+                    Some(ManagedAppRecipeLibc::Musl),
+                    "opencode-linux-arm64-musl",
+                    "1.18.30",
+                    "1.18.30",
+                    "sha512-IQedvhqaisv886gwk3bR603fPTErdExQa0z3hmqi7waIeuSsQG9B+suhg6iaD74lmxMbYMRlPlg4kIioytiHGg==",
+                    "bin/opencode",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Win32,
+                    FinalComputerArch::X64,
+                    None,
+                    "opencode-windows-x64-baseline",
+                    "1.18.30",
+                    "1.18.30",
+                    "sha512-BaqwQxA2TWBUNKsmrDoTF1gg3x6lbt7vA4WluRNuT6GuuJJhQ+lJzOTk2G9tqp4bMybR31p5zXAmPf9JwHP2GA==",
+                    "bin/opencode.exe",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Win32,
+                    FinalComputerArch::Arm64,
+                    None,
+                    "opencode-windows-arm64",
+                    "1.18.30",
+                    "1.18.30",
+                    "sha512-NLnAzRNqv+6ebLeK5DBGRcN6Fk3PM4STXyrp+IuI8w2WNLJ6JbIk7xxTfbMsrO+CBEV88DCurFOKHB4dpDBaYQ==",
+                    "bin/opencode.exe",
+                ),
+            ],
         },
         ManagedAppDefinition {
             launcher: launcher(
@@ -378,13 +565,88 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
             launchable: true,
             detection: launcher_detection(),
-            recipes: vec![node_recipe_with_version(
-                AppInstaller::Npm,
-                "@anthropic-ai/claude-code",
-                true,
-                Some("2.1.286"),
-                AppInstallPrivilege::User,
-            )],
+            recipes: vec![
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::X64,
+                    Some(ManagedAppRecipeLibc::Gnu),
+                    "@anthropic-ai/claude-code-linux-x64",
+                    "2.1.286",
+                    "2.1.286",
+                    "sha512-PnVL8ZCEev3IexLeOc9/QRfqRDUZRgnsaMLdpjlBN0VaieeTrf7mZ2JJi29ue2KAqHvq6SsOadU5G/shnFE4MA==",
+                    "claude",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::X64,
+                    Some(ManagedAppRecipeLibc::Musl),
+                    "@anthropic-ai/claude-code-linux-x64-musl",
+                    "2.1.286",
+                    "2.1.286",
+                    "sha512-+jDoHSkrSoucNqsnwQP/bioMEb39r3pBxn0sZPA7MINUZUBdrdG87nr/lzXxEAHaqspWvHMLaWMtmduEg4cIhg==",
+                    "claude",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::Arm64,
+                    Some(ManagedAppRecipeLibc::Gnu),
+                    "@anthropic-ai/claude-code-linux-arm64",
+                    "2.1.286",
+                    "2.1.286",
+                    "sha512-dHQ/ObyC4jaGHVk+gFE8P8PALMIVLhQSyhiC3y3kkuLp0H0MHgLxHt/srQ3zJs892ClDbtl1swxv4bw1ioruZA==",
+                    "claude",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::Arm64,
+                    Some(ManagedAppRecipeLibc::Musl),
+                    "@anthropic-ai/claude-code-linux-arm64-musl",
+                    "2.1.286",
+                    "2.1.286",
+                    "sha512-FZVGE3iU0eFRudjgyooGRsPAUqjqlcJ4dq64g4HDp9Wg6FsUpDFpVsKn9S6phSXogwSyMU3SfiI9oOTKvw4wVA==",
+                    "claude",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Darwin,
+                    FinalComputerArch::X64,
+                    None,
+                    "@anthropic-ai/claude-code-darwin-x64",
+                    "2.1.286",
+                    "2.1.286",
+                    "sha512-RlnglbMpkdvIdKzPphXI+KMwXefKpMJXYGpGAfpTI6XvkDcjgj5j8WXxvoySyl2qTetWOEqjkFB/V8rtW4qp4g==",
+                    "claude",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Darwin,
+                    FinalComputerArch::Arm64,
+                    None,
+                    "@anthropic-ai/claude-code-darwin-arm64",
+                    "2.1.286",
+                    "2.1.286",
+                    "sha512-QlU1+S7cNO1BKzlMJGRR/ZqdsP6c3+QAA2u9EX7dTO6HUo1/RAenn/q+mlyX60MZzTZOjPkAmTt77eYrH1IAwg==",
+                    "claude",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Win32,
+                    FinalComputerArch::X64,
+                    None,
+                    "@anthropic-ai/claude-code-win32-x64",
+                    "2.1.286",
+                    "2.1.286",
+                    "sha512-Cvq6m1e2eP0p47Ze+b6rw+DjXMhLCcT9g8ZKfFDxT0NB9d9mjHcNs6Qjb1oTqbO6AsN3Ie1DIqWt50J7kboz7g==",
+                    "claude.exe",
+                ),
+                native_recipe(
+                    FinalComputerPlatform::Win32,
+                    FinalComputerArch::Arm64,
+                    None,
+                    "@anthropic-ai/claude-code-win32-arm64",
+                    "2.1.286",
+                    "2.1.286",
+                    "sha512-d1pLr6/Z+/y4J+9j2AwpsfkKlGzf93cA2nfCbSqV81rciTCZpYYMKG1T0AhtJ2RbfQFicO1/rl1XdLOZAHZn0w==",
+                    "claude.exe",
+                ),
+            ],
         },
         ManagedAppDefinition {
             launcher: {
@@ -600,24 +862,34 @@ pub fn detect_managed_app_with_managed_root(
     definition: &ManagedAppDefinition,
     managed_root: Option<&Path>,
 ) -> ManagedAppDetectionResult {
+    detect_managed_app_with_managed_root_for_target(
+        definition,
+        managed_root,
+        current_platform(),
+        current_arch(),
+        detect_managed_app_recipe_target(current_platform()),
+    )
+}
+
+pub fn detect_managed_app_with_managed_root_for_target(
+    definition: &ManagedAppDefinition,
+    managed_root: Option<&Path>,
+    platform: FinalComputerPlatform,
+    arch: FinalComputerArch,
+    target: ManagedAppRecipeTarget,
+) -> ManagedAppDetectionResult {
     let Some(root) = managed_root else {
         return detect_managed_app(definition);
     };
-    let is_managed = definition
-        .recipes
-        .iter()
-        .any(InstallRecipe::is_managed_node_package);
-    if !is_managed {
+    let Some(launcher) = managed_app_launcher_path(root, definition, platform, arch, target) else {
         return detect_managed_app(definition);
-    }
+    };
     let mut scoped = definition.clone();
-    let bin = root
-        .join("node-package")
-        .join(&definition.launcher.id)
-        .join("node_modules")
-        .join(".bin");
-    let command = definition.launcher.id.clone();
-    scoped.launcher.command = Some(bin.join(&command).display().to_string());
+    let directory = launcher
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| launcher.clone());
+    scoped.launcher.command = Some(launcher.display().to_string());
     let env = scoped.launcher.env.get_or_insert_with(BTreeMap::new);
     let current_path = env
         .get("PATH")
@@ -626,12 +898,56 @@ pub fn detect_managed_app_with_managed_root(
         .unwrap_or_default();
     env.insert(
         "PATH".to_string(),
-        std::iter::once(bin.display().to_string())
+        std::iter::once(directory.display().to_string())
             .chain((!current_path.is_empty()).then_some(current_path))
             .collect::<Vec<_>>()
             .join(if cfg!(windows) { ";" } else { ":" }),
     );
     detect_managed_app_inner(&scoped, false)
+}
+
+pub fn managed_app_launcher_path(
+    root: &Path,
+    definition: &ManagedAppDefinition,
+    platform: FinalComputerPlatform,
+    arch: FinalComputerArch,
+    target: ManagedAppRecipeTarget,
+) -> Option<PathBuf> {
+    definition
+        .recipes
+        .iter()
+        .filter(|recipe| recipe.platforms().contains(&platform))
+        .filter(|recipe| {
+            recipe
+                .arches()
+                .map(|arches| arches.contains(&arch))
+                .unwrap_or(true)
+        })
+        .filter(|recipe| {
+            recipe
+                .libc()
+                .map(|libc| target.libc == Some(libc))
+                .unwrap_or(true)
+        })
+        .find_map(|recipe| match recipe {
+            InstallRecipe::NativePackage { launch_path, .. }
+                if valid_native_launch_path(launch_path) =>
+            {
+                Some(managed_native_app_launcher(
+                    root,
+                    &definition.launcher.id,
+                    launch_path,
+                ))
+            }
+            InstallRecipe::NodePackage { managed: true, .. } => Some(
+                root.join("node-package")
+                    .join(&definition.launcher.id)
+                    .join("node_modules")
+                    .join(".bin")
+                    .join(&definition.launcher.id),
+            ),
+            _ => None,
+        })
 }
 
 pub fn detect_managed_app_with_version(
@@ -704,6 +1020,18 @@ pub fn select_install_recipe(
     definition: &ManagedAppDefinition,
     capabilities: &FinalComputerCapabilities,
 ) -> InstallRecipeSelection {
+    select_install_recipe_with_target(
+        definition,
+        capabilities,
+        detect_managed_app_recipe_target(capabilities.platform),
+    )
+}
+
+pub fn select_install_recipe_with_target(
+    definition: &ManagedAppDefinition,
+    capabilities: &FinalComputerCapabilities,
+    target: ManagedAppRecipeTarget,
+) -> InstallRecipeSelection {
     let platform_matches = definition
         .recipes
         .iter()
@@ -718,7 +1046,16 @@ pub fn select_install_recipe(
                 .unwrap_or(true)
         })
         .collect::<Vec<_>>();
-    if arch_matches.is_empty() {
+    let libc_matches = arch_matches
+        .into_iter()
+        .filter(|recipe| {
+            recipe
+                .libc()
+                .map(|libc| target.libc == Some(libc))
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    if libc_matches.is_empty() {
         return InstallRecipeSelection {
             recipe: None,
             reason: Some(ManagedAppActionReason {
@@ -731,7 +1068,7 @@ pub fn select_install_recipe(
             }),
         };
     }
-    let installer_matches = arch_matches
+    let installer_matches = libc_matches
         .into_iter()
         .filter(|recipe| {
             recipe
@@ -1480,6 +1817,14 @@ pub async fn detect_managed_app_ownership_with_context(
             InstallRecipe::SystemPackage { .. } => {
                 system_package_owns_executable(&recipe, detection).await
             }
+            InstallRecipe::NativePackage { launch_path, .. } => context.is_some_and(|context| {
+                native_package_owns_executable(
+                    &definition.launcher.id,
+                    launch_path,
+                    detection,
+                    context,
+                )
+            }),
             InstallRecipe::Archive { install_root, .. } => context.is_some_and(|context| {
                 archive_manifest_owns_executable(
                     &definition.launcher.id,
@@ -1501,6 +1846,37 @@ pub async fn detect_managed_app_ownership_with_context(
         source: ManagedAppManagementSource::External,
         recipe: None,
     }
+}
+
+fn native_package_owns_executable(
+    app_id: &str,
+    launch_path: &str,
+    detection: &ManagedAppDetectionResult,
+    context: &ManagedAppOwnershipContext<'_>,
+) -> bool {
+    if !valid_native_launch_path(launch_path) || detection.executable_paths.is_empty() {
+        return false;
+    }
+    let Some(manifest) = read_native_app_manifest(context.install_base_dir, app_id) else {
+        return false;
+    };
+    if manifest.launch_path != launch_path {
+        return false;
+    }
+    let root = absolute_normalized(&managed_native_app_root(context.install_base_dir, app_id));
+    let manifest_root = absolute_normalized(&manifest.install_root);
+    let launcher = absolute_normalized(&managed_native_app_launcher(
+        context.install_base_dir,
+        app_id,
+        launch_path,
+    ));
+    if manifest_root != root || !path_inside(&launcher, &root) {
+        return false;
+    }
+    detection
+        .executable_paths
+        .iter()
+        .all(|candidate| absolute_normalized(candidate) == launcher)
 }
 
 fn archive_manifest_owns_executable(
@@ -1616,17 +1992,39 @@ mod tests {
             .any(|item| item.launcher.id == "codex" && item.launchable));
         let codex = find_builtin_managed_app("codex").expect("codex");
         let codex_recipe = &codex.recipes[0];
-        assert!(codex_recipe.is_managed_node_package());
+        assert!(matches!(codex_recipe, InstallRecipe::NativePackage { .. }));
+        assert_eq!(codex_recipe.kind(), "native-package");
         assert_eq!(codex_recipe.version(), Some("0.165.0"));
         assert_eq!(codex_recipe.packages(), &["@openai/codex".to_string()]);
-        assert_eq!(codex.recipes.len(), 1);
+        assert_eq!(codex.recipes.len(), 6);
         let opencode = find_builtin_managed_app("opencode").expect("opencode");
-        assert!(opencode.recipes[0].is_managed_node_package());
+        assert!(matches!(
+            opencode.recipes[0],
+            InstallRecipe::NativePackage { .. }
+        ));
         assert_eq!(opencode.recipes[0].version(), Some("1.18.30"));
+        assert_eq!(opencode.recipes.len(), 8);
+        let claude = find_builtin_managed_app("claude").expect("claude");
+        assert!(matches!(
+            claude.recipes[0],
+            InstallRecipe::NativePackage { .. }
+        ));
+        assert_eq!(claude.recipes[0].version(), Some("2.1.286"));
+        assert_eq!(claude.recipes.len(), 8);
+        assert_eq!(
+            claude
+                .recipes
+                .iter()
+                .filter(|recipe| recipe
+                    .libc()
+                    .is_some_and(|libc| libc == ManagedAppRecipeLibc::Musl))
+                .count(),
+            2
+        );
     }
 
     #[test]
-    fn managed_node_recipes_do_not_require_a_writable_global_npm_prefix() {
+    fn managed_recipes_do_not_require_a_writable_global_npm_prefix() {
         let caps = FinalComputerCapabilities {
             installer_access: Some(AppInstallerAccess {
                 npm_global_writable: Some(false),
@@ -1650,7 +2048,7 @@ mod tests {
         let selected = select_install_recipe(&definition, &capabilities(AppInstallPrivilege::User));
         assert_eq!(
             selected.recipe.as_ref().map(InstallRecipe::kind),
-            Some("node-package")
+            Some("native-package")
         );
         assert_eq!(
             selected.recipe.as_ref().map(InstallRecipe::privilege),
@@ -1685,6 +2083,35 @@ mod tests {
             projection.update_reason.map(|reason| reason.code),
             Some(Bundled)
         );
+    }
+
+    #[test]
+    fn native_recipe_selection_distinguishes_linux_libc_variants() {
+        let opencode = find_builtin_managed_app("opencode").expect("opencode");
+        let caps = capabilities(AppInstallPrivilege::User);
+        for (libc, expected) in [
+            (ManagedAppRecipeLibc::Gnu, "opencode-linux-x64-baseline"),
+            (
+                ManagedAppRecipeLibc::Musl,
+                "opencode-linux-x64-baseline-musl",
+            ),
+        ] {
+            let selected = select_install_recipe_with_target(
+                &opencode,
+                &caps,
+                ManagedAppRecipeTarget { libc: Some(libc) },
+            );
+            let Some(InstallRecipe::NativePackage {
+                package,
+                libc: Some(selected_libc),
+                ..
+            }) = selected.recipe
+            else {
+                panic!("expected a libc-specific native recipe");
+            };
+            assert_eq!(package, expected);
+            assert_eq!(selected_libc, libc);
+        }
     }
 
     #[tokio::test]
@@ -1742,5 +2169,89 @@ mod tests {
         )
         .await;
         assert_eq!(ownership.source, ManagedAppManagementSource::Recipe);
+    }
+
+    #[tokio::test]
+    async fn native_manifests_establish_recipe_ownership_only_for_the_owned_launcher() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let state_dir = temporary.path().join("state");
+        let install_base_dir = temporary.path().join("apps");
+        let install_root = install_base_dir.join("native").join("example");
+        let launcher_path = install_root.join("bin").join("example");
+        std::fs::create_dir_all(launcher_path.parent().expect("launcher directory"))
+            .expect("launcher directory");
+        std::fs::write(&launcher_path, "#!/bin/sh\nexit 0\n").expect("launcher");
+        std::fs::write(
+            install_root.join("managed-app.json"),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "appId": "example",
+                "version": "1.2.3",
+                "package": "example-native",
+                "packageVersion": "1.2.3",
+                "integrity": "sha512-FotDc7bVHwaommtsdDP8PPrH0a5IwC/t8H/LhdEcH4EBqgeYFRCtptiHcuwgvNRCLbTbOyFE/Ur6GzYCljgaSQ==",
+                "installRoot": install_root,
+                "launchPath": "bin/example",
+                "files": ["bin/example", "managed-app.json"],
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+        let definition = ManagedAppDefinition {
+            launcher: launcher(
+                "example",
+                "Example",
+                AppKind::Tty,
+                "Example app",
+                "example".to_string(),
+                None,
+            ),
+            launchable: true,
+            detection: launcher_detection(),
+            recipes: vec![InstallRecipe::NativePackage {
+                platforms: vec![FinalComputerPlatform::Linux],
+                arches: Some(vec![FinalComputerArch::X64]),
+                privilege: Some(AppInstallPrivilege::User),
+                libc: None,
+                package: "example-native".to_string(),
+                package_version: "1.2.3".to_string(),
+                version: "1.2.3".to_string(),
+                integrity: "sha512-FotDc7bVHwaommtsdDP8PPrH0a5IwC/t8H/LhdEcH4EBqgeYFRCtptiHcuwgvNRCLbTbOyFE/Ur6GzYCljgaSQ==".to_string(),
+                launch_path: "bin/example".to_string(),
+                tarball_url: None,
+            }],
+        };
+        let detection = ManagedAppDetectionResult {
+            state: ManagedAppState::Installed,
+            executable_paths: vec![launcher_path.clone()],
+            version: Some("1.2.3".to_string()),
+        };
+        let ownership = detect_managed_app_ownership_with_context(
+            &definition,
+            &detection,
+            &capabilities(AppInstallPrivilege::User),
+            Some(&ManagedAppOwnershipContext {
+                state_dir: &state_dir,
+                install_base_dir: &install_base_dir,
+            }),
+        )
+        .await;
+        assert_eq!(ownership.source, ManagedAppManagementSource::Recipe);
+
+        let external = ManagedAppDetectionResult {
+            executable_paths: vec![temporary.path().join("external-example")],
+            ..detection
+        };
+        let ownership = detect_managed_app_ownership_with_context(
+            &definition,
+            &external,
+            &capabilities(AppInstallPrivilege::User),
+            Some(&ManagedAppOwnershipContext {
+                state_dir: &state_dir,
+                install_base_dir: &install_base_dir,
+            }),
+        )
+        .await;
+        assert_eq!(ownership.source, ManagedAppManagementSource::External);
     }
 }

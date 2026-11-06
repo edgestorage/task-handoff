@@ -1,19 +1,15 @@
 use crate::{
-    builtin_managed_app_definitions,
+    builtin_managed_app_definitions, current_arch, current_platform,
     executable_resolver::{resolve_executable, ExecutableResolverOptions},
-    ManagedAppDefinition,
+    managed_app_launcher_path,
+    native_package::detect_managed_app_recipe_target,
+    InstallRecipe, ManagedAppDefinition,
 };
 use std::{
     collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
 };
-
-pub fn managed_node_package_bin(root: &Path, app_id: &str) -> PathBuf {
-    root.join("node-package")
-        .join(app_id)
-        .join("node_modules/.bin")
-}
 
 #[cfg(all(test, unix))]
 mod tests {
@@ -22,6 +18,28 @@ mod tests {
 
     fn executable(path: &Path, body: &str) {
         write(path, &format!("#!/bin/sh\n{body}\n")).expect("executable");
+    }
+
+    fn app_target(apps: &ManagedApps, app_id: &str) -> PathBuf {
+        let definition = apps
+            .definitions
+            .iter()
+            .find(|definition| definition.launcher.id == app_id)
+            .expect("managed app definition");
+        apps.target(definition).expect("managed app target")
+    }
+
+    #[test]
+    fn native_only_projection_does_not_require_a_node_runtime() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let definitions = builtin_managed_app_definitions()
+            .into_iter()
+            .filter(|definition| matches!(definition.launcher.id.as_str(), "codex" | "opencode"))
+            .collect();
+        let apps = ManagedApps::with_definitions(temporary.path().join("managed"), definitions);
+        assert!(!apps.needs_node());
+        assert!(app_target(&apps, "codex").starts_with(temporary.path().join("managed/native")));
+        assert!(app_target(&apps, "opencode").starts_with(temporary.path().join("managed/native")));
     }
 
     #[test]
@@ -48,7 +66,7 @@ mod tests {
             assert!(
                 String::from_utf8_lossy(&absent.stderr).contains("not installed in this instance")
             );
-            let target = managed_node_package_bin(&root, id).join(id);
+            let target = app_target(&apps, id);
             executable(
                 &target,
                 "printf 'managed:%s:%s:%s' \"$1\" \"${DISABLE_AUTOUPDATER:-}\" \"${OPENCODE_DISABLE_AUTOUPDATE:-}\"",
@@ -108,13 +126,10 @@ mod tests {
                 ".bashrc"
             };
             fs::write(home.join(file), "export PATH=/usr/bin:/bin\nalias codex='printf host-codex'\nclaude() { printf host-claude; }\nexport USER_STARTUP_RAN=yes\n").expect("user rc");
-            for id in ["codex", "claude", "opencode"] {
-                executable(
-                    &managed_node_package_bin(&root, id).join(id),
-                    &format!("printf '{id}-managed\\n'"),
-                );
-            }
             let apps = ManagedNodeApps::new(root);
+            for id in ["codex", "claude", "opencode"] {
+                executable(&app_target(&apps, id), &format!("printf '{id}-managed\\n'"));
+            }
             let mut base = std::env::vars().collect::<BTreeMap<_, _>>();
             base.insert("HOME".into(), home.display().to_string());
             base.remove("ZDOTDIR");
@@ -161,20 +176,24 @@ fn write(path: &Path, content: &str) -> io::Result<()> {
 /// A private command projection derived from the registry, including entries for absent apps.
 /// This prevents host PATH fallback without changing or installing anything in the user's prefix.
 #[derive(Clone)]
-pub struct ManagedNodeApps {
+pub struct ManagedApps {
     root: PathBuf,
     definitions: Vec<ManagedAppDefinition>,
 }
 
-impl ManagedNodeApps {
+impl ManagedApps {
     pub fn new(root: PathBuf) -> Self {
-        let definitions = builtin_managed_app_definitions()
+        Self::with_definitions(root, builtin_managed_app_definitions())
+    }
+
+    fn with_definitions(root: PathBuf, definitions: Vec<ManagedAppDefinition>) -> Self {
+        let definitions = definitions
             .into_iter()
             .filter(|definition| {
-                definition
-                    .recipes
-                    .iter()
-                    .any(|recipe| recipe.is_managed_node_package())
+                definition.recipes.iter().any(|recipe| {
+                    matches!(recipe, InstallRecipe::NativePackage { .. })
+                        || recipe.is_managed_node_package()
+                })
             })
             .collect();
         Self { root, definitions }
@@ -190,13 +209,35 @@ impl ManagedNodeApps {
             .any(|definition| definition.launcher.id == app_id)
     }
 
+    fn needs_node(&self) -> bool {
+        self.definitions.iter().any(|definition| {
+            definition
+                .recipes
+                .iter()
+                .any(InstallRecipe::is_managed_node_package)
+        })
+    }
+
+    fn target(&self, definition: &ManagedAppDefinition) -> Option<PathBuf> {
+        let platform = current_platform();
+        managed_app_launcher_path(
+            &self.root,
+            definition,
+            platform,
+            current_arch(),
+            detect_managed_app_recipe_target(platform),
+        )
+    }
+
     pub fn environment(
         &self,
         base: &BTreeMap<String, String>,
     ) -> io::Result<BTreeMap<String, String>> {
         for definition in &self.definitions {
             let app = &definition.launcher;
-            let target = managed_node_package_bin(&self.root, &app.id).join(&app.id);
+            let Some(target) = self.target(definition) else {
+                continue;
+            };
             let message = format!(
                 "{} is not installed in this instance. Install it from app management.",
                 app.name
@@ -218,7 +259,31 @@ impl ManagedNodeApps {
                     .map(|(name, value)| format!("set \"{name}={value}\""))
                     .collect::<Vec<_>>()
                     .join("\r\n");
-                write(&self.bin().join(format!("{}.cmd", app.id)), &format!("@echo off\r\nif not exist \"{}.cmd\" (\r\n echo {message} 1>&2\r\n exit /b 127\r\n)\r\n{exports}\r\ncall \"{}.cmd\" %*\r\n", target.display(), target.display()))?;
+                let executable = if target
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case("exe"))
+                {
+                    target.clone()
+                } else if target
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case("cmd"))
+                {
+                    target.clone()
+                } else {
+                    PathBuf::from(format!("{}.cmd", target.display()))
+                };
+                let invocation = if executable
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case("exe"))
+                {
+                    format!("\"{}\" %*", executable.display())
+                } else {
+                    format!("call \"{}\" %*", executable.display())
+                };
+                write(&self.bin().join(format!("{}.cmd", app.id)), &format!("@echo off\r\nif not exist \"{}\" (\r\n echo {message} 1>&2\r\n exit /b 127\r\n)\r\n{exports}\r\n{invocation}\r\n", executable.display()))?;
             }
         }
         let mut env = base.clone();
@@ -234,17 +299,19 @@ impl ManagedNodeApps {
             }
         }
         let mut prefix = vec![self.bin().display().to_string()];
-        if let Some(node) = resolve_executable(
-            "node",
-            &ExecutableResolverOptions {
-                env: env.clone(),
-                ..Default::default()
-            },
-        ) {
-            if let Some(parent) = node.executable.parent() {
-                prefix.push(parent.display().to_string());
+        if self.needs_node() {
+            if let Some(node) = resolve_executable(
+                "node",
+                &ExecutableResolverOptions {
+                    env: env.clone(),
+                    ..Default::default()
+                },
+            ) {
+                if let Some(parent) = node.executable.parent() {
+                    prefix.push(parent.display().to_string());
+                }
+                env.extend(node.env);
             }
-            env.extend(node.env);
         }
         let current = env.get("PATH").cloned().unwrap_or_default();
         let delimiter = if cfg!(windows) { ";" } else { ":" };
@@ -274,15 +341,17 @@ impl ManagedNodeApps {
             .to_ascii_lowercase();
         let directory = self.root.join("shell");
         let mut prefix = vec![self.bin().display().to_string()];
-        if let Some(node) = resolve_executable(
-            "node",
-            &ExecutableResolverOptions {
-                env: env.clone(),
-                ..Default::default()
-            },
-        ) {
-            if let Some(parent) = node.executable.parent() {
-                prefix.push(parent.display().to_string());
+        if self.needs_node() {
+            if let Some(node) = resolve_executable(
+                "node",
+                &ExecutableResolverOptions {
+                    env: env.clone(),
+                    ..Default::default()
+                },
+            ) {
+                if let Some(parent) = node.executable.parent() {
+                    prefix.push(parent.display().to_string());
+                }
             }
         }
         let restore = format!(
@@ -456,3 +525,5 @@ impl ManagedNodeApps {
         Ok(env)
     }
 }
+
+pub type ManagedNodeApps = ManagedApps;

@@ -8,13 +8,13 @@ use std::{
 };
 
 use crate::managed_app_providers::{managed_app_provider, managed_app_runtime_provider};
-use crate::AppRuntimeError;
-use crate::InstallRecipe;
 use crate::{
     command_invocation::{resolve_command_executable, CommandInvocationOptions},
+    current_arch, current_platform, detect_managed_app_recipe_target,
     executable_resolver::{
         resolve_executable as resolve_executable_resolution, ExecutableResolverOptions,
     },
+    managed_app_launcher_path, AppRuntimeError, InstallRecipe,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +44,7 @@ pub struct AppCatalogRepository {
     custom_path: Arc<PathBuf>,
     managed_app_root: Option<Arc<PathBuf>>,
     managed_app_ids: Arc<BTreeSet<String>>,
+    managed_app_targets: Arc<BTreeMap<String, PathBuf>>,
     mutation: Arc<Mutex<()>>,
 }
 
@@ -65,20 +66,44 @@ impl AppCatalogRepository {
         app_catalog_dir: impl AsRef<Path>,
         managed_app_root: Option<PathBuf>,
     ) -> Self {
-        let managed_app_ids = crate::builtin_managed_app_definitions()
+        let definitions = crate::builtin_managed_app_definitions()
             .into_iter()
             .filter(|definition| {
-                definition
-                    .recipes
-                    .iter()
-                    .any(InstallRecipe::is_managed_node_package)
+                definition.recipes.iter().any(|recipe| {
+                    matches!(recipe, InstallRecipe::NativePackage { .. })
+                        || recipe.is_managed_node_package()
+                })
             })
-            .map(|definition| definition.launcher.id)
+            .collect::<Vec<_>>();
+        let managed_app_ids = definitions
+            .iter()
+            .map(|definition| definition.launcher.id.clone())
             .collect();
+        let managed_app_targets = managed_app_root
+            .as_ref()
+            .map(|root| {
+                let platform = current_platform();
+                let target = detect_managed_app_recipe_target(platform);
+                definitions
+                    .iter()
+                    .filter_map(|definition| {
+                        managed_app_launcher_path(
+                            root,
+                            definition,
+                            platform,
+                            current_arch(),
+                            target,
+                        )
+                        .map(|path| (definition.launcher.id.clone(), path))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             custom_path: Arc::new(app_catalog_dir.as_ref().join("custom.json")),
             managed_app_root: managed_app_root.map(Arc::new),
             managed_app_ids: Arc::new(managed_app_ids),
+            managed_app_targets: Arc::new(managed_app_targets),
             mutation: Arc::new(Mutex::new(())),
         }
     }
@@ -163,6 +188,7 @@ impl AppCatalogRepository {
                     source,
                     self.managed_app_root.as_deref().map(PathBuf::as_path),
                     &self.managed_app_ids,
+                    &self.managed_app_targets,
                 )
             })
             .collect()
@@ -286,6 +312,7 @@ fn resolve_entry(
     source: AppSource,
     managed_app_root: Option<&Path>,
     managed_app_ids: &BTreeSet<String>,
+    managed_app_targets: &BTreeMap<String, PathBuf>,
 ) -> CatalogEntry {
     let mut launcher_env = app.env.clone().unwrap_or_default();
     let command = app.command.clone().unwrap_or_default();
@@ -296,13 +323,15 @@ fn resolve_entry(
     } else {
         None
     };
-    if let (Some(root), Some(managed_id)) = (managed_app_root, managed_id.as_deref()) {
-        let bin = root
-            .join("node-package")
-            .join(managed_id)
-            .join("node_modules")
-            .join(".bin");
-        let candidate = bin.join(managed_id);
+    if let (Some(_root), Some(managed_id)) = (managed_app_root, managed_id.as_deref()) {
+        let Some(candidate) = managed_app_targets.get(managed_id) else {
+            return CatalogEntry {
+                app,
+                source,
+                executable: None,
+            };
+        };
+        let bin = candidate.parent().unwrap_or(candidate.as_path());
         let existing = launcher_env
             .get("PATH")
             .cloned()
@@ -686,7 +715,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn managed_node_apps_resolve_from_the_instance_root_without_path_fallback() {
+    fn managed_native_apps_resolve_from_the_instance_root_without_path_fallback() {
         use std::os::unix::fs::PermissionsExt;
 
         let root = tempfile::tempdir().expect("tempdir");
@@ -703,13 +732,18 @@ mod tests {
             .as_deref()
             .is_some_and(|command| command.contains("managed-apps")));
 
-        let bin = managed
-            .join("node-package")
-            .join("codex")
-            .join("node_modules")
-            .join(".bin");
-        std::fs::create_dir_all(&bin).expect("bin directory");
-        let executable = bin.join("codex");
+        let definition = crate::find_builtin_managed_app("codex").expect("codex definition");
+        let platform = crate::current_platform();
+        let executable = crate::managed_app_launcher_path(
+            &managed,
+            &definition,
+            platform,
+            crate::current_arch(),
+            crate::detect_managed_app_recipe_target(platform),
+        )
+        .expect("native launcher");
+        std::fs::create_dir_all(executable.parent().expect("bin directory"))
+            .expect("bin directory");
         std::fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("executable");
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
             .expect("executable permissions");
@@ -954,7 +988,14 @@ mod tests {
 
         let mut terminal = terminal.clone();
         terminal.command = Some("/bin/sh".to_string());
-        let resolved = resolve_entry(terminal, AppSource::Builtin, None, &BTreeSet::new()).app;
+        let resolved = resolve_entry(
+            terminal,
+            AppSource::Builtin,
+            None,
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        )
+        .app;
         let value = serde_json::to_value(resolved).expect("serialize catalog item");
         assert_eq!(value.get("env"), Some(&json!({})));
         assert!(value.get("args").is_none());

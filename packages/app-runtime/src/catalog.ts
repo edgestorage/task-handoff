@@ -10,7 +10,7 @@ import type { ManagedAppRegistry } from "./managed-app-definitions/registry";
 import type { AppCatalogItem } from "./types";
 import fs from "node:fs";
 import path from "node:path";
-import { ManagedNodeApps, managedNodePackageBin } from "./managed-node-apps";
+import { ManagedApps } from "./managed-node-apps";
 import { resolveExecutable } from "@task-handoff/core/core/executable-resolver";
 
 export {
@@ -108,6 +108,7 @@ type AppResolutionOptions = {
   env?: NodeJS.ProcessEnv;
   managedAppRoot?: string;
   managedAppIds?: ReadonlySet<string>;
+  managedAppTargets?: ReadonlyMap<string, string>;
 };
 
 type ResolvedCatalogApp = {
@@ -122,8 +123,10 @@ export function resolveApp(app: AppCatalogItem, baseEnv: NodeJS.ProcessEnv = pro
   const managedId = options.managedAppIds?.has(app.id) ? app.id : options.managedAppIds?.has(command) ? command : undefined;
   const managed = Boolean(options.managedAppRoot && managedId);
   if (managed) {
-    const bin = managedNodePackageBin(options.managedAppRoot!, managedId!);
-    const candidate = path.join(bin, managedId!);
+    const projected = options.managedAppTargets?.get(managedId!);
+    if (!projected) return { app };
+    const bin = path.dirname(projected);
+    const candidate = projected;
     const resolution = resolveExecutable(candidate, { env, cwd: app.cwd });
     const managedEnv = {
       ...app.env,
@@ -165,7 +168,8 @@ export class AppCatalogRepository {
   private readonly customStore: DomainStore<CustomCatalog>;
   private readonly customCatalogSchema: ReturnType<typeof customCatalogSchema>;
   private readonly managedAppIds: ReadonlySet<string>;
-  readonly managedNodeApps?: ManagedNodeApps;
+  readonly managedApps?: ManagedApps;
+  private readonly managedAppTargets: ReadonlyMap<string, string>;
   private inventoryCache?: { fingerprint: string; items: InstanceAppInventoryItem[] };
   // Executable resolution probes PATH/Homebrew/npm candidates with accessSync.
   // Shared-resource ensure runs on every OpenCode request, so keep the resolved
@@ -183,16 +187,20 @@ export class AppCatalogRepository {
       defaultValue: () => ({ schemaVersion: 1, items: [] }),
       sanitize: sanitizeCustomCatalog,
     });
-    if (options.managedAppRoot) this.managedNodeApps = new ManagedNodeApps(options.managedAppRoot, registry.definitions({ includeOptional: true }));
-    this.managedAppIds = new Set(registry.definitions({ includeOptional: true })
-      .filter((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "node-package" && recipe.managed === true))
-      .map((definition) => definition.launcher.id));
+    const definitions = registry.definitions({ includeOptional: true });
+    if (options.managedAppRoot) this.managedApps = new ManagedApps(options.managedAppRoot, definitions);
+    this.managedAppIds = new Set(this.managedApps?.definitions.map((definition) => definition.launcher.id) || []);
+    this.managedAppTargets = new Map(this.managedApps?.definitions.flatMap((definition) => {
+      const target = this.managedApps?.target(definition.launcher.id);
+      return target ? [[definition.launcher.id, target] as const] : [];
+    }) || []);
   }
 
   private resolveCatalogApp(app: AppCatalogItem, source: "builtin" | "custom", env: NodeJS.ProcessEnv = process.env): ResolvedCatalogApp {
     return resolveApp(app, env, {
       managedAppRoot: this.options.managedAppRoot,
       managedAppIds: this.managedAppIds,
+      managedAppTargets: this.managedAppTargets,
     });
   }
 

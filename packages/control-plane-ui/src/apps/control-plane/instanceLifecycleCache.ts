@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/vue-query";
+import type { QueryClient, QueryFilters } from "@tanstack/vue-query";
 import type { InstanceLifecycleHeartbeat, InstanceLifecycleSnapshot, NodeStateProjectionEvent } from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneNodeFleetState } from "@task-handoff/protocol/control-plane-directory";
 import type { InstanceBoardItem, InstanceBoardPayload } from "../../api/types";
@@ -119,11 +119,18 @@ export function applyNodeFleetState(queryClient: QueryClient, state: ControlPlan
 
 export function applyNodeStateProjection(queryClient: QueryClient, state: NodeStateProjectionEvent) {
   let applied = false;
+  let recovered = false;
   queryClient.setQueryData<Node[]>(controlPlaneQueryKeys.nodes, (current) => current?.map((node) => {
     if (node.id !== state.nodeId) return node;
     applied = true;
+    // Compatibility for v0.0.47: an omitted switch must not overwrite a
+    // configured pause already learned from the authoritative node snapshot.
+    const connectionEnabled = state.connectionEnabled ?? node.connectionEnabled;
+    recovered = connectionEnabled !== false && state.status === "online"
+      && (node.connectionEnabled === false || node.status !== "online");
     return {
       ...node,
+      connectionEnabled,
       status: state.status,
       health: state.health,
       lastSeenAt: state.lastSeenAt ?? undefined,
@@ -132,5 +139,22 @@ export function applyNodeStateProjection(queryClient: QueryClient, state: NodeSt
       proxyState: state.proxyState ?? undefined,
     };
   }));
+  if (recovered) void recoverNodeStorySnapshots(queryClient, state.nodeId);
   return applied;
+}
+
+async function recoverNodeStorySnapshots(queryClient: QueryClient, nodeId: string) {
+  // Story snapshots have infinite staleTime. Even a previously successful
+  // snapshot can have missed changes while disconnected; recover its decisions
+  // as well as its directory without refetching unrelated nodes.
+  const filters = {
+    predicate: ({ queryKey }) => queryKey[0] === controlPlaneQueryKeys.stories()[0]
+      && (queryKey.length === 1 || (queryKey.length === 2 && queryKey[1] === nodeId)
+        || (queryKey[1] === "decisions" && queryKey[2] === nodeId)),
+  } satisfies QueryFilters;
+  // invalidateQueries alone reuses an initial in-flight request without data.
+  // Cancel first so an offline request cannot publish a late unavailable result
+  // after this recovery. Disabled queries stay stale until their view enables them.
+  await queryClient.cancelQueries(filters);
+  await queryClient.invalidateQueries(filters);
 }

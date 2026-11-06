@@ -418,6 +418,45 @@ test("update is unavailable for externally managed apps", async () => {
   assert.throws(() => manager.request("tool", "update"), (error) => error.code === "app_operation_unavailable" && error.details.reason.code === "EXTERNALLY_MANAGED");
 });
 
+test("native package ownership comes from the private ownership manifest", async () => {
+  const dirs = stateDirs("task-handoff-app-native-ownership-");
+  const target = path.join(dirs.installBaseDir, "native", "tool");
+  const launcherPath = path.join(target, "vendor", "bin", "tool");
+  const recipe = {
+    type: "native-package", platforms: ["linux"], arches: ["x64"], package: "native-tool",
+    packageVersion: "1.2.3-linux-x64", version: "1.2.3", integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+    launchPath: "vendor/bin/tool", privilege: "user",
+  };
+  const definition = {
+    launcher: { id: "tool", name: "Tool", kind: "tty", command: launcherPath },
+    detection: [{ type: "launcher-executable" }],
+    distribution: { recipes: [recipe] },
+  };
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, "managed-app.json"), JSON.stringify({
+    schemaVersion: 1, appId: "tool", version: recipe.version, package: recipe.package,
+    packageVersion: recipe.packageVersion, integrity: recipe.integrity, installRoot: target,
+    launchPath: recipe.launchPath, files: [recipe.launchPath, "managed-app.json"],
+  }));
+  let state = "installed";
+  const executed = [];
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [definition],
+    capabilities: () => ({ platform: "linux", arch: "x64", installers: [], privilege: "user" }),
+    detection: () => ({ state, executablePaths: state === "installed" ? [launcherPath] : [] }),
+    execute: async (operation, selected) => { executed.push({ operation, selected }); state = "not-installed"; },
+  });
+  await manager.refreshSnapshot();
+  assert.equal(manager.snapshot().apps[0].managementSource, "recipe");
+  assert.equal(manager.snapshot().apps[0].canUninstall, true);
+  const job = manager.request("tool", "uninstall");
+  await manager.waitForIdle();
+  assert.equal(manager.getJob(job.id).state, "succeeded");
+  assert.equal(executed[0].operation, "uninstall");
+  assert.equal(executed[0].selected.type, "native-package");
+});
+
 test("update conflicts with an active install of the same app", async () => {
   const dirs = stateDirs("task-handoff-app-update-conflict-");
   let release;

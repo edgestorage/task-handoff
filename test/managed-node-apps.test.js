@@ -9,7 +9,8 @@ require("./workspace-require.js").registerWorkspaceRequire();
 require.extensions[".ts"] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, "utf8"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true }, fileName: filename,
 }).outputText, filename);
-const { ManagedNodeApps, managedNodePackageBin } = require("../packages/app-runtime/src/managed-node-apps.ts");
+const { ManagedApps, managedAppLauncherPath } = require("../packages/app-runtime/src/managed-node-apps.ts");
+const { managedNativeAppManifestPath, readNativeAppManifest } = require("../packages/app-runtime/src/native-package.ts");
 const { builtinManagedAppDefinitions } = require("../packages/app-runtime/src/catalog.ts");
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
 
@@ -17,6 +18,35 @@ function executable(file, body) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 }
+
+function targetFor(managedRoot, command) {
+  const definition = builtinManagedAppDefinitions().find((entry) => entry.launcher.id === command);
+  return managedAppLauncherPath(managedRoot, definition);
+}
+
+test("native app manifests require a valid package identity and contained launcher path", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "native manifest "));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const manifestPath = managedNativeAppManifestPath(root, "tool");
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  const manifest = {
+    schemaVersion: 1, appId: "tool", version: "1.2.3", package: "native-tool", packageVersion: "1.2.3-linux-x64",
+    integrity: `sha512-${Buffer.alloc(64).toString("base64")}`, installRoot: path.join(root, "native", "tool"),
+    launchPath: "vendor/bin/tool", files: ["vendor/bin/tool", "managed-app.json"],
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  assert.equal(readNativeAppManifest(root, "tool")?.launchPath, manifest.launchPath);
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, launchPath: "../escape" }));
+  assert.equal(readNativeAppManifest(root, "tool"), undefined);
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, integrity: "sha512-not-base64!" }));
+  assert.equal(readNativeAppManifest(root, "tool"), undefined);
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, installRoot: path.join("native", "tool") }));
+  assert.equal(readNativeAppManifest(root, "tool"), undefined);
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, files: ["vendor/bin/tool", "../escape"] }));
+  assert.equal(readNativeAppManifest(root, "tool"), undefined);
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, files: new Array(100_001).fill("vendor/bin/tool") }));
+  assert.equal(readNativeAppManifest(root, "tool"), undefined);
+});
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "instance managed apps '"));
@@ -30,7 +60,7 @@ function fixture(t) {
   delete env.ZDOTDIR;
   delete env.TASK_HANDOFF_SHELL_USER_ZDOTDIR;
   delete env.TASK_HANDOFF_SHELL_COMMAND;
-  const apps = new ManagedNodeApps(managedRoot, builtinManagedAppDefinitions());
+  const apps = new ManagedApps(managedRoot, builtinManagedAppDefinitions());
   return { root, managedRoot, hostBin, home, env, apps };
 }
 
@@ -42,7 +72,7 @@ test("managed commands reject host fallback before install and after uninstall",
     assert.equal(result.status, 127);
     assert.match(result.stderr, /not installed in this instance/);
     assert.equal(result.stdout, "");
-    const target = path.join(managedNodePackageBin(managedRoot, command), command);
+    const target = targetFor(managedRoot, command);
     executable(target, "printf 'managed:%s:%s:%s' \"$1\" \"${DISABLE_AUTOUPDATER:-}\" \"${OPENCODE_DISABLE_AUTOUPDATE:-}\"");
     result = spawnSync(command, ["argument with spaces"], { env: launchEnv, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
@@ -57,9 +87,9 @@ for (const shell of ["/bin/bash", "/bin/zsh"]) {
   test(`${shell} startup cannot redirect managed commands to host aliases or functions`, { skip: process.platform === "win32" || !fs.existsSync(shell) }, (t) => {
     const { managedRoot, hostBin, home, env, apps } = fixture(t);
     for (const command of ["codex", "claude", "opencode"]) {
-      const target = path.join(managedNodePackageBin(managedRoot, command), command);
+      const target = targetFor(managedRoot, command);
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, `#!/usr/bin/env node\nconsole.log('${command}-managed');\n`, { mode: 0o755 });
+      fs.writeFileSync(target, `#!/bin/sh\nprintf '%s\\n' '${command}-managed'\n`, { mode: 0o755 });
     }
     const rc = `export PATH='${hostBin.replaceAll("'", "'\\''")}':/usr/bin:/bin\nalias codex='printf codex-host'\nclaude() { printf claude-host; }\nexport USER_STARTUP_RAN=yes\n`;
     fs.writeFileSync(path.join(home, shell.endsWith("zsh") ? ".zshrc" : ".bashrc"), rc);
@@ -75,7 +105,8 @@ test("apps inherit a managed SHELL and app launch cannot use a global command ov
   const shellEnv = apps.terminalEnvironment(env);
   const absent = spawnSync(shellEnv.SHELL, ["-c", "claude"], { env: shellEnv, encoding: "utf8" });
   assert.equal(absent.status, 127);
-  executable(path.join(managedNodePackageBin(managedRoot, "claude"), "claude"), "printf private-claude");
+  const claudeTarget = targetFor(managedRoot, "claude");
+  executable(claudeTarget, "printf private-claude");
   const inherited = spawnSync("/bin/sh", ["-c", '"$SHELL" -c claude'], { env: shellEnv, encoding: "utf8" });
   assert.equal(inherited.status, 0, inherited.stderr);
   assert.equal(inherited.stdout, "private-claude");
@@ -85,7 +116,7 @@ test("apps inherit a managed SHELL and app launch cannot use a global command ov
   const runtime = new AppRuntimeManager(paths);
   t.after(() => { runtime.stopAll(); if (previous === undefined) delete process.env.TASK_HANDOFF_CLAUDE_COMMAND; else process.env.TASK_HANDOFF_CLAUDE_COMMAND = previous; });
   assert.equal(runtime.appInventory().items.find((app) => app.id === "claude").availability, "available");
-  fs.rmSync(path.join(managedNodePackageBin(managedRoot, "claude"), "claude"));
+  fs.rmSync(claudeTarget);
   assert.throws(() => runtime.start("claude", { cwd: root }), (error) => error.code === "APP_DEPENDENCY_MISSING");
   runtime.setAppLaunchAdmission(() => false);
   assert.throws(() => runtime.start("terminal-tty", { cwd: root }), (error) => error.code === "APP_OPERATION_IN_PROGRESS");
@@ -141,9 +172,7 @@ test("instance exec and terminal share private app resolution and never use host
   const error = Buffer.concat(serverData(absent).map((frame) => frame.subarray(1))).toString("utf8");
   assert.match(error, /not installed in this instance/);
   assert.doesNotMatch(error, /host-claude/);
-  const bin = path.join(root, "managed-apps/node-package/claude/node_modules/.bin");
-  fs.mkdirSync(bin, { recursive: true });
-  fs.writeFileSync(path.join(bin, "claude"), "#!/usr/bin/env node\nconsole.log('instance-claude');\n", { mode: 0o755 });
+  executable(targetFor(path.join(root, "managed-apps"), "claude"), "printf 'instance-claude\\n'");
   for (const tty of [false, true]) {
     const socket = new FakeSocket();
     runtime.handle(socket);

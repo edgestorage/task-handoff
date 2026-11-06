@@ -69,14 +69,11 @@ test("legacy resuming replies require an explicit confirmed retry", () => {
   assert.match(workbench, /\{ expectedRevision: item\.decision\.revision, \.\.\.input, retry: true \}/);
 });
 
-test("the inbox source reuses the Story view queries and heals unavailable nodes", () => {
+test("the inbox reuses the shared Story snapshots recovered by node events", () => {
   const source = read("action-inbox/useStoryDecisionInbox.ts");
   assert.match(source, /storyDecisionNodes\(nodesQuery\.data\.value \|\| \[\]\)/);
   assert.match(source, /storyNodeQueryOptions\(node\.id, enabled\)/);
   assert.match(source, /storyDecisionsQueryOptions\(story\.id, story\.ownerNodeId, enabled\)/);
-  // 快照式查询不自愈：节点恢复在线后必须补拉曾经不可用的目录与失败的决策。
-  assert.match(source, /unavailableNodeIds\.includes\(node\.id\)/);
-  assert.match(source, /if \(query\.isError\) void query\.refetch\(\)/);
 });
 
 test("the workbench merges Story decisions into the approval center with a dedicated busy key", () => {

@@ -4,6 +4,7 @@ import type { CloudClientTrustOutcome } from '@task-handoff/cloud-contracts/mobi
 import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
 import { MobileDeviceTrustError } from '../src/control-plane/device-trust-error';
 import {
+  MOBILE_BACKGROUND_CONNECTION_GRACE_MS,
   MobileControlPlaneConnectionCoordinator,
   type MobileControlPlaneDomain,
 } from '../src/control-plane/use-mobile-control-plane-runtime';
@@ -384,7 +385,7 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     runtime.coordinator.stop();
   });
 
-  test('suspends the transport when the app has no foreground work', async () => {
+  test('keeps the connection through a short background interruption', async () => {
     const runtime = harness();
     const ai = domain('ai', ['ai.sessions'], true);
     runtime.coordinator.setEnvironment({ foreground: true, connected: true });
@@ -393,10 +394,60 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     expect(runtime.coordinator.snapshot().phase).toBe('connected');
 
     runtime.coordinator.setEnvironment({ foreground: false });
+    jest.advanceTimersByTime(MOBILE_BACKGROUND_CONNECTION_GRACE_MS - 1);
     await flushCoordinator();
 
+    expect(runtime.suspend).not.toHaveBeenCalled();
+    expect(runtime.close).not.toHaveBeenCalled();
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+
+    runtime.coordinator.setEnvironment({ foreground: true });
+    jest.advanceTimersByTime(MOBILE_BACKGROUND_CONNECTION_GRACE_MS);
+    await flushCoordinator();
+
+    expect(runtime.suspend).not.toHaveBeenCalled();
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    runtime.coordinator.stop();
+  });
+
+  test('suspends the transport after the background grace period expires', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+
+    runtime.coordinator.setEnvironment({ foreground: false });
+    jest.advanceTimersByTime(MOBILE_BACKGROUND_CONNECTION_GRACE_MS);
+    await flushCoordinator();
+
+    expect(runtime.close).toHaveBeenCalledTimes(1);
     expect(runtime.suspend).toHaveBeenCalledTimes(1);
     expect(runtime.coordinator.snapshot().phase).toBe('idle');
+    runtime.coordinator.stop();
+  });
+
+  test('revalidates before reusing a connection after a frozen background timeout', async () => {
+    const runtime = harness();
+    const ai = domain('ai', ['ai.sessions'], true);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+
+    const backgroundedAt = Date.now();
+    runtime.coordinator.setEnvironment({ foreground: false });
+    jest.setSystemTime(backgroundedAt + MOBILE_BACKGROUND_CONNECTION_GRACE_MS);
+    runtime.coordinator.setEnvironment({ foreground: true });
+    await flushCoordinator();
+
+    expect(runtime.revalidate).toHaveBeenCalledTimes(2);
+    expect(runtime.close).toHaveBeenCalledTimes(1);
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(2);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
     runtime.coordinator.stop();
   });
 

@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { resolveExecutable } from "@task-handoff/core/core/executable-resolver";
-import type { ManagedAppDefinition } from "./types";
+import { selectInstallRecipe } from "./managed-apps";
+import { detectManagedAppRecipeTarget, managedNativeAppLauncher } from "./native-package";
+import type { ManagedAppDefinition, ManagedAppRecipeArch, ManagedAppRecipePlatform, ManagedAppRecipeTarget } from "./types";
 
 export function managedNodePackageRoot(root: string, appId: string) {
   return path.join(root, "node-package", appId);
@@ -22,26 +24,60 @@ function write(file: string, content: string) {
   writeFileAtomic.sync(file, content, { mode: 0o700 });
 }
 
+function managedTarget(root: string, definition: ManagedAppDefinition, platform: NodeJS.Platform, arch: string, target = detectManagedAppRecipeTarget({ platform })) {
+  const selected = selectInstallRecipe(definition, {
+    platform: platform as ManagedAppRecipePlatform,
+    arch: arch as ManagedAppRecipeArch,
+    installers: ["apt", "dnf", "brew", "npm"],
+    privilege: "root",
+  }, target).recipe;
+  if (selected?.type === "native-package") return managedNativeAppLauncher(root, definition.launcher.id, selected.launchPath);
+  if (selected?.type === "node-package" && selected.managed) return path.join(managedNodePackageBin(root, definition.launcher.id), definition.launcher.id);
+  return undefined;
+}
+
+export function managedAppLauncherPath(
+  root: string,
+  definition: ManagedAppDefinition,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+  target: ManagedAppRecipeTarget = detectManagedAppRecipeTarget({ platform }),
+) {
+  return managedTarget(root, definition, platform, arch, target);
+}
+
 /** Private launch projection, derived from the registry; never installs or adopts host packages. */
-export class ManagedNodeApps {
+export class ManagedApps {
   readonly definitions: ManagedAppDefinition[];
   readonly bin: string;
 
   constructor(readonly root: string, definitions: ManagedAppDefinition[]) {
-    this.definitions = definitions.filter((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "node-package" && recipe.managed));
+    this.definitions = definitions.filter((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "native-package" || (recipe.type === "node-package" && recipe.managed)));
     this.bin = path.join(root, "bin");
   }
 
+  contains(appId: string) {
+    return this.definitions.some((definition) => definition.launcher.id === appId);
+  }
+
+  target(appId: string) {
+    const definition = this.definitions.find((entry) => entry.launcher.id === appId);
+    return definition ? managedTarget(this.root, definition, process.platform, process.arch) : undefined;
+  }
+
   private materializeCommands() {
-    for (const { launcher } of this.definitions) {
-      const target = path.join(managedNodePackageBin(this.root, launcher.id), launcher.id);
+    for (const definition of this.definitions) {
+      const { launcher } = definition;
+      const target = managedTarget(this.root, definition, process.platform, process.arch);
+      if (!target) continue;
       const message = `${launcher.name} is not installed in this instance. Install it from app management.`;
       const environment = Object.entries(launcher.env || {}).map(([name, value]) => `export ${name}=${quote(value!)}`).join("\n");
       // A permanent entry for every managed command prevents PATH from falling through to a
       // user's installation before install or after uninstall. npm's own bins remain private.
       write(path.join(this.bin, launcher.id), `#!/bin/sh\nif [ ! -x ${quote(target)} ]; then\n  printf '%s\\n' ${quote(message)} >&2\n  exit 127\nfi\n${environment}\nexec ${quote(target)} "$@"\n`);
       if (process.platform === "win32") {
-        write(path.join(this.bin, `${launcher.id}.cmd`), `@echo off\r\nif not exist "${target}.cmd" (\r\n  echo ${message} 1>&2\r\n  exit /b 127\r\n)\r\n${Object.entries(launcher.env || {}).map(([name, value]) => `set "${name}=${value}"`).join("\r\n")}\r\ncall "${target}.cmd" %*\r\n`);
+        const executable = target.toLowerCase().endsWith(".exe") ? target : `${target}.cmd`;
+        write(path.join(this.bin, `${launcher.id}.cmd`), `@echo off\r\nif not exist "${executable}" (\r\n  echo ${message} 1>&2\r\n  exit /b 127\r\n)\r\n${Object.entries(launcher.env || {}).map(([name, value]) => `set "${name}=${value}"`).join("\r\n")}\r\n${executable.toLowerCase().endsWith(".exe") ? `"${executable}"` : `call "${executable}"`} %*\r\n`);
       }
     }
   }
@@ -53,7 +89,8 @@ export class ManagedNodeApps {
       const key = Object.keys(normalized).find((name) => name.toUpperCase() === "PATH");
       if (key && key !== "PATH") { normalized.PATH = normalized.PATH || normalized[key]; delete normalized[key]; }
     }
-    const node = resolveExecutable("node", { env: normalized });
+    const needsNode = this.definitions.some((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "node-package" && recipe.managed));
+    const node = needsNode ? resolveExecutable("node", { env: normalized }) : undefined;
     const env = { ...normalized, ...node?.env };
     return { ...env, PATH: [...new Set([this.bin, ...(node ? [path.dirname(node.executable)] : []), ...(env.PATH || "").split(path.delimiter)].filter(Boolean))].join(path.delimiter) };
   }
@@ -74,7 +111,9 @@ export class ManagedNodeApps {
     const env = this.environment(base);
     const name = path.basename(command).toLowerCase().replace(/\.exe$/, "");
     const shellDir = path.join(this.root, "shell");
-    const node = resolveExecutable("node", { env });
+    const node = this.definitions.some((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "node-package" && recipe.managed))
+      ? resolveExecutable("node", { env })
+      : undefined;
     const prefix = [this.bin, ...(node ? [path.dirname(node.executable)] : [])].join(path.delimiter);
     const restore = `export PATH=${quote(prefix)}:"$PATH"\n${this.definitions.map(({ launcher }) => `unalias ${launcher.id} 2>/dev/null || :\nunset -f ${launcher.id} 2>/dev/null || :`).join("\n")}\n`;
     // Shell-specific startup hooks preserve user initialization, then restore the managed
@@ -116,3 +155,5 @@ export class ManagedNodeApps {
     return { args, env };
   }
 }
+
+export { ManagedApps as ManagedNodeApps };

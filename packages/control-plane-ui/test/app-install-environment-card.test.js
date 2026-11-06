@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
-test("install environment groups policy, runtime, and effective sources in one panel", () => {
+test("install environment groups saved sources and separates the runtime status", () => {
   const card = read("src/apps/control-plane/instance-settings/AppInstallEnvironmentCard.vue");
 
   assert.match(card, /class="install-environment-panel"/);

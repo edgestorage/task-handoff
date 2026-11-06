@@ -314,17 +314,17 @@ export class AppRuntimeManager extends EventEmitter {
   }
 
   private missingAppCommand(app: AppCatalogItem) {
-    return Object.assign(new Error(this.catalogRepository.managedNodeApps?.definitions.some(({ launcher }) => launcher.id === app.id)
+    return Object.assign(new Error(this.catalogRepository.managedApps?.definitions.some(({ launcher }) => launcher.id === app.id)
       ? `${app.name} is not installed in this instance. Install it from app management.`
       : `Missing required command: ${app.command || app.id}`), { code: "APP_DEPENDENCY_MISSING" });
   }
 
   processEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-    return this.catalogRepository.managedNodeApps?.terminalEnvironment(base) || base;
+    return this.catalogRepository.managedApps?.terminalEnvironment(base) || base;
   }
 
   prepareShell(command: string, args: string[], env: NodeJS.ProcessEnv) {
-    return this.catalogRepository.managedNodeApps?.prepareShell(command, args, env) || { args, env };
+    return this.catalogRepository.managedApps?.prepareShell(command, args, env) || { args, env };
   }
 
   stopSharedResource(appId: string) {

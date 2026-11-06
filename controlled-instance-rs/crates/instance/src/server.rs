@@ -16085,6 +16085,22 @@ mod tests {
         test_state_with_control_mode(ControlMode::Controlled)
     }
 
+    #[cfg(unix)]
+    fn managed_codex_launcher(state: &AppState) -> std::path::PathBuf {
+        let root = state.config.storage_paths.data_dir.join("managed-apps");
+        let definition = controlled_instance_app_runtime::find_builtin_managed_app("codex")
+            .expect("codex definition");
+        let platform = controlled_instance_app_runtime::current_platform();
+        controlled_instance_app_runtime::managed_app_launcher_path(
+            &root,
+            &definition,
+            platform,
+            controlled_instance_app_runtime::current_arch(),
+            controlled_instance_app_runtime::detect_managed_app_recipe_target(platform),
+        )
+        .expect("managed codex launcher")
+    }
+
     fn test_state_standalone() -> (AppState, tempfile::TempDir) {
         test_state_with_control_mode(ControlMode::Standalone)
     }
@@ -20227,11 +20243,7 @@ mod tests {
         let _env_guard = OPEN_APP_TEST_ENV_LOCK.lock().await;
         let (state, _root) = test_state();
         let workspace = tempfile::tempdir().expect("workspace");
-        let script = state
-            .config
-            .storage_paths
-            .data_dir
-            .join("managed-apps/node-package/codex/node_modules/.bin/codex");
+        let script = managed_codex_launcher(&state);
         std::fs::create_dir_all(script.parent().expect("bin directory")).expect("create bin");
         std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("script");
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
@@ -20396,11 +20408,7 @@ mod tests {
         let _env_guard = OPEN_APP_TEST_ENV_LOCK.lock().await;
         let (state, _root) = test_state();
         let workspace = tempfile::tempdir().expect("workspace");
-        let script = state
-            .config
-            .storage_paths
-            .data_dir
-            .join("managed-apps/node-package/codex/node_modules/.bin/codex");
+        let script = managed_codex_launcher(&state);
         std::fs::create_dir_all(script.parent().expect("bin directory")).expect("create bin");
         std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("script");
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
@@ -20516,11 +20524,7 @@ mod tests {
         let _env_guard = OPEN_APP_TEST_ENV_LOCK.lock().await;
         let (state, _root) = test_state();
         let workspace = tempfile::tempdir().expect("workspace");
-        let script = state
-            .config
-            .storage_paths
-            .data_dir
-            .join("managed-apps/node-package/codex/node_modules/.bin/codex");
+        let script = managed_codex_launcher(&state);
         std::fs::create_dir_all(script.parent().expect("bin directory")).expect("create bin");
         std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("script");
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))

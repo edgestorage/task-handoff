@@ -70,6 +70,8 @@ const { APP_SESSION_DELTA_RETENTION_MS } = require("../packages/protocol/src/app
 const { summarizeTranscriptLine } = require("../packages/core/src/core/transcript.ts");
 const { summarizeThreadTurns } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
+const { builtinManagedAppDefinitions } = require("../packages/app-runtime/src/catalog.ts");
+const { managedAppLauncherPath } = require("../packages/app-runtime/src/managed-node-apps.ts");
 const { CodexAppServerConnectionProxy } = require("../packages/app-runtime/src/codex-app-server-proxy.ts");
 const { AiSessionRefreshScheduler, createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
 const { applyManagedCodexModelConfig, codexProviderId } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
@@ -6832,14 +6834,25 @@ test("transcript progress extracts user prompts", () => {
   );
 });
 
+function managedCodexTarget(root) {
+  const definition = builtinManagedAppDefinitions().find((entry) => entry.launcher.id === "codex");
+  return managedAppLauncherPath(path.join(root, "managed-apps"), definition);
+}
+
+function managedClaudeTarget(root) {
+  const definition = builtinManagedAppDefinitions().find((entry) => entry.launcher.id === "claude");
+  return managedAppLauncherPath(path.join(root, "managed-apps"), definition);
+}
+
 test("web app serves core API routes with isolated storage", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-api-"));
   const paths = appRuntimeTestPaths(root);
-  for (const id of ["codex", "claude"]) {
-    const bin = path.join(root, "managed-apps", "node-package", id, "node_modules", ".bin");
-    fs.mkdirSync(bin, { recursive: true });
-    fs.symlinkSync(process.execPath, path.join(bin, id));
-  }
+  const codexTarget = managedCodexTarget(root);
+  fs.mkdirSync(path.dirname(codexTarget), { recursive: true });
+  fs.symlinkSync(process.execPath, codexTarget);
+  const claudeTarget = managedClaudeTarget(root);
+  fs.mkdirSync(path.dirname(claudeTarget), { recursive: true });
+  fs.symlinkSync(process.execPath, claudeTarget);
   const historicalChannelsDir = path.join(root, "channels");
   const historicalConversationsDir = path.join(root, "conversations");
   const historicalFiles = [
@@ -6938,10 +6951,10 @@ test("web app serves core API routes with isolated storage", async () => {
     const catalogItems = JSON.parse(catalog.payload).data;
     assert.equal(catalogItems.some((entry) => entry.id === "terminal-tty"), true);
     const codexApp = catalogItems.find((entry) => entry.id === "codex");
-    assert.equal(codexApp.command, path.join(root, "managed-apps/node-package/codex/node_modules/.bin/codex"));
+    assert.equal(codexApp.command, codexTarget);
     assert.deepEqual(codexApp.args, ["-c", "check_for_update_on_startup=false", "--model", "gpt-codex-test"]);
     const claudeApp = catalogItems.find((entry) => entry.id === "claude");
-    assert.equal(claudeApp.command, path.join(root, "managed-apps/node-package/claude/node_modules/.bin/claude"));
+    assert.equal(claudeApp.command, claudeTarget);
     assert.deepEqual(claudeApp.args, ["--dangerously-skip-permissions", "--model", "claude-sonnet-test"]);
     assert.equal(catalogItems.some((entry) => entry.id === "cc-switch"), false);
     assert.equal(catalogItems.some((entry) => entry.id === "web-cap"), false);
@@ -9150,7 +9163,7 @@ test("app runtime prepares vscode web sessions with a dark default theme", () =>
 test("app runtime resumes claude through the background worker and attaches by short id", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-bg-"));
   const paths = appRuntimeTestPaths(root);
-  const fakeClaude = path.join(root, "managed-apps", "node-package", "claude", "node_modules", ".bin", "claude");
+  const fakeClaude = managedClaudeTarget(root);
   fs.mkdirSync(path.dirname(fakeClaude), { recursive: true });
   const callsPath = path.join(root, "claude-calls.log");
   const commandPath = path.join(root, "claude-child-command.log");
@@ -9280,7 +9293,7 @@ test("app runtime injects managed model credentials without persisting them in s
 test("app runtime stops claude background worker when attach fails", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-attach-fail-"));
   const paths = appRuntimeTestPaths(root);
-  const fakeClaude = path.join(root, "managed-apps", "node-package", "claude", "node_modules", ".bin", "claude");
+  const fakeClaude = managedClaudeTarget(root);
   fs.mkdirSync(path.dirname(fakeClaude), { recursive: true });
   const callsPath = path.join(root, "claude-calls.log");
   fs.writeFileSync(
@@ -9311,7 +9324,7 @@ test("app runtime stops claude background worker when attach fails", () => {
 test("app runtime stop terminates claude background worker", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-stop-"));
   const paths = appRuntimeTestPaths(root);
-  const fakeClaude = path.join(root, "managed-apps", "node-package", "claude", "node_modules", ".bin", "claude");
+  const fakeClaude = managedClaudeTarget(root);
   fs.mkdirSync(path.dirname(fakeClaude), { recursive: true });
   fs.writeFileSync(fakeClaude, "#!/bin/sh\nif [ \"$1\" = \"--bg\" ]; then echo ac8eaf94; exit 0; fi\nexit 0\n", { mode: 0o755 });
   const socketPath = path.join(root, "control.sock");
@@ -10065,7 +10078,7 @@ test("codex app server uses a short unix socket path outside deep runtime direct
   const session = runtime.acquireSharedResource("codex", "codex", root, process.env, "app_test");
   try {
     assert.equal(spawned.length, 1);
-    assert.equal(spawned[0].command, path.join(paths.dataDir, "managed-apps/node-package/codex/node_modules/.bin/codex"));
+    assert.equal(spawned[0].command, managedCodexTarget(paths.dataDir));
     const appServerIndex = spawned[0].args.indexOf("app-server");
     assert.notEqual(appServerIndex, -1);
     assert.deepEqual(spawned[0].args.slice(appServerIndex, appServerIndex + 3), [

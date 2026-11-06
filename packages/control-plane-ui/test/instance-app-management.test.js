@@ -182,8 +182,7 @@ test("Apps settings exposes capability states, task feedback, safe confirmation,
     assert.equal(appTaskStatusKey(job({ state })), `instances.settings.${state}`);
   assert.match(dialog, /insufficient|Privilege|installReason|uninstallReason/i);
   assert.match(dialog, /t\("instances\.settings\.uninstallDescription"\)/);
-  assert.match(dialog, /t\("instances\.settings\.customLaunchers"\)/);
-  assert.match(dialog, /t\("instances\.settings\.customLaunchersDescription"\)/);
+  assert.doesNotMatch(dialog, /customLaunchers|appInventory|inventoryState/);
   assert.match(dialog, /AlertDialogContent/);
   assert.match(tasks, /Progress/);
   assert.match(tasks, /t\("instances\.settings\.liveInstallerOutput"\)/);
@@ -191,6 +190,7 @@ test("Apps settings exposes capability states, task feedback, safe confirmation,
   assert.match(dialog, /<AppManagementTasks/);
   assert.match(dialog, /<TabsTrigger ref="appTasksTab" value="tasks">/);
   assert.match(dialog, /openAppTask\(activeJob\(app\)!\.id\)/);
+  assert.doesNotMatch(dialog.match(/async function confirmAppOperation\(\)[\s\S]*?\n}/)?.[0] || "", /openAppTask|appView\.value = "tasks"/);
   assert.doesNotMatch(dialog, /instance-app-activity|instance-app-terminal|executionJob|terminalJob/);
   assert.match(dialog, /t\('instances\.settings\.appFilters'\)/);
   assert.match(dialog, /filteredManagedApps/);

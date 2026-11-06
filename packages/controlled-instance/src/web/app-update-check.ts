@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveExecutable } from "@task-handoff/app-runtime";
+import { readNativeAppManifest, resolveExecutable } from "@task-handoff/app-runtime";
 import type { FinalComputerCapabilities, ManagedAppUpdateStatus } from "@task-handoff/protocol/control-plane";
-import type { InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
+import type { InstallRecipe, NativePackageInstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
 import { runAppRecipeCommand, type AppRecipeCommand, type AppRecipeCommandResult } from "./app-recipe-executor";
 import type { AppInstallEnvironmentManager, AppInstallExecutionPolicy } from "./app-install-environment";
 
@@ -12,6 +12,7 @@ const MAX_VERSION_CHARS = 120;
 const PACKAGE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9+._:@/-]{0,199}$/;
 const NODE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]{0,99}\/)?[a-z0-9][a-z0-9._-]{0,99}$/i;
 const NODE_PACKAGE_VERSION = /^[a-zA-Z0-9][a-zA-Z0-9+._-]{0,120}$/;
+const NPM_INTEGRITY = /^sha(256|512)-[A-Za-z0-9+/]+={0,2}$/;
 
 export type AppUpdateCheckResult = {
   status: ManagedAppUpdateStatus;
@@ -208,9 +209,28 @@ export function createAppUpdateChecker(options: AppUpdateCheckerOptions = {}) {
     return parseNpmOutdated(response.stdout);
   };
 
+  const checkNativePackage = (recipe: NativePackageInstallRecipe, context: AppUpdateCheckContext): AppUpdateCheckResult => {
+    if (!NODE_PACKAGE_NAME.test(recipe.package) || !NODE_PACKAGE_VERSION.test(recipe.packageVersion) || !NODE_PACKAGE_VERSION.test(recipe.version)) {
+      return result("unknown", { reason: "The built-in native package recipe contains an invalid package or version." });
+    }
+    if (!NPM_INTEGRITY.test(recipe.integrity)) return result("unknown", { reason: "The built-in native package recipe contains an invalid integrity value." });
+    if (!context.installBaseDir) return result("unknown", { reason: "The managed app install directory is unavailable." });
+    const manifest = readNativeAppManifest(context.installBaseDir, context.appId);
+    if (!manifest) return result("update-available", { latestVersion: recipe.version, reason: "The native package ownership manifest is missing or invalid." });
+    const installedVersion = version(manifest.version);
+    const current = manifest.package === recipe.package
+      && manifest.packageVersion === recipe.packageVersion
+      && manifest.integrity === recipe.integrity
+      && manifest.version === recipe.version;
+    return current
+      ? result("up-to-date", { installedVersion, latestVersion: recipe.version })
+      : result("update-available", { installedVersion, latestVersion: recipe.version });
+  };
+
   return async (recipe: InstallRecipe, context: AppUpdateCheckContext): Promise<AppUpdateCheckResult> => {
     if (recipe.type === "bundled") return result("unsupported", { reason: "Bundled apps ship with the controlled computer and have no update source." });
     if (recipe.type === "archive") return result("unsupported", { reason: "Archive updates are delivered with the built-in app definition." });
+    if (recipe.type === "native-package") return checkNativePackage(recipe, context);
     const policy = options.installEnvironment?.createExecutionPolicy();
     return recipe.type === "system-package"
       ? checkSystemPackage(recipe, context.capabilities, policy)

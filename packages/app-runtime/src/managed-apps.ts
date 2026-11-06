@@ -16,7 +16,9 @@ import type {
   ManagedAppRecipeArch,
   ManagedAppRecipePlatform,
   ManagedAppRecipePrivilege,
+  ManagedAppRecipeTarget,
 } from "./types";
+import { detectManagedAppRecipeTarget } from "./native-package";
 
 const PLATFORM_VALUES = new Set(["linux", "darwin", "win32", "freebsd", "openbsd", "aix", "sunos"]);
 const ARCH_VALUES = new Set(["x64", "arm64", "arm", "ia32", "ppc64", "s390x", "riscv64"]);
@@ -146,7 +148,11 @@ function privilegeAllows(actual: FinalComputerCapabilities["privilege"], require
   return PRIVILEGE_RANK[actual] >= PRIVILEGE_RANK[required];
 }
 
-export function selectInstallRecipe(definition: ManagedAppDefinition, capabilities: FinalComputerCapabilities): {
+export function selectInstallRecipe(
+  definition: ManagedAppDefinition,
+  capabilities: FinalComputerCapabilities,
+  target: ManagedAppRecipeTarget = detectManagedAppRecipeTarget({ platform: capabilities.platform as NodeJS.Platform }),
+): {
   recipe?: InstallRecipe;
   reason?: ManagedAppActionReason;
 } {
@@ -155,7 +161,11 @@ export function selectInstallRecipe(definition: ManagedAppDefinition, capabiliti
   if (!archMatches.length) {
     return { reason: { code: "UNSUPPORTED_PLATFORM", message: `No built-in recipe supports ${capabilities.platform}/${capabilities.arch}.` } };
   }
-  const installerMatches = archMatches.filter((recipe) => !recipeUsesInstaller(recipe) || capabilities.installers.includes(recipe.installer));
+  const targetMatches = archMatches.filter((recipe) => recipe.type !== "native-package" || !recipe.libc || recipe.libc === target.libc);
+  if (!targetMatches.length) {
+    return { reason: { code: "UNSUPPORTED_PLATFORM", message: `No built-in recipe supports ${capabilities.platform}/${capabilities.arch}${target.libc ? ` (${target.libc})` : ""}.` } };
+  }
+  const installerMatches = targetMatches.filter((recipe) => !recipeUsesInstaller(recipe) || capabilities.installers.includes(recipe.installer));
   if (!installerMatches.length) {
     return { reason: { code: "INSTALLER_UNAVAILABLE", message: "The required package installer is unavailable on this computer." } };
   }
@@ -184,6 +194,8 @@ type ManagedAppOwnershipOptions = {
   realpath?: (value: string) => Promise<string>;
   readFile?: (value: string) => Promise<string>;
   archiveManifestOwned?: (definition: ManagedAppDefinition, recipe: Extract<InstallRecipe, { type: "archive" }>, detection: ManagedAppDetectionResult) => Promise<boolean>;
+  nativeManifestOwned?: (definition: ManagedAppDefinition, recipe: Extract<InstallRecipe, { type: "native-package" }>, detection: ManagedAppDetectionResult) => Promise<boolean>;
+  target?: ManagedAppRecipeTarget;
 };
 
 function existingAncestor(value: string) {
@@ -308,7 +320,7 @@ export async function detectManagedAppOwnership(
   options: ManagedAppOwnershipOptions = {},
 ): Promise<ManagedAppOwnershipResult> {
   if (detection.state === "not-installed") return { source: "none" };
-  const viableRecipes = definition.distribution.recipes.filter((recipe) => selectInstallRecipe({ ...definition, distribution: { recipes: [recipe] } }, capabilities).recipe);
+  const viableRecipes = definition.distribution.recipes.filter((recipe) => selectInstallRecipe({ ...definition, distribution: { recipes: [recipe] } }, capabilities, options.target).recipe);
   const bundled = viableRecipes.find((recipe) => recipe.type === "bundled");
   if (bundled) return { source: "bundled", recipe: bundled };
   const resolved = {
@@ -322,7 +334,9 @@ export async function detectManagedAppOwnership(
       ? await nodePackageOwnsExecutable(recipe, detection, capabilities, resolved)
       : recipe.type === "system-package"
         ? await systemPackageOwnsExecutable(recipe, detection, resolved)
-        : Boolean(options.archiveManifestOwned && await options.archiveManifestOwned(definition, recipe, detection));
+        : recipe.type === "native-package"
+          ? Boolean(options.nativeManifestOwned && await options.nativeManifestOwned(definition, recipe, detection))
+          : Boolean(options.archiveManifestOwned && await options.archiveManifestOwned(definition, recipe, detection));
     if (owned) return { source: "recipe", recipe };
   }
   return { source: "external" };
@@ -342,8 +356,9 @@ export function managedAppProjection(
   detection: ManagedAppDetectionResult,
   capabilities: FinalComputerCapabilities,
   managementSource?: ManagedAppManagementSource,
+  target?: ManagedAppRecipeTarget,
 ): ManagedAppProjection {
-  const selected = selectInstallRecipe(definition, capabilities);
+  const selected = selectInstallRecipe(definition, capabilities, target);
   const source = managementSource || (detection.state === "not-installed"
     ? "none"
     : selected.recipe?.type === "bundled" ? "bundled" : selected.recipe ? "recipe" : "external");

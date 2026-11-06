@@ -48,6 +48,12 @@ type ManagedAppRecipeConstraint = {
   privilege?: ManagedAppRecipePrivilege;
 };
 
+export type ManagedAppRecipeLibc = "gnu" | "musl";
+
+export type ManagedAppRecipeTarget = {
+  libc?: ManagedAppRecipeLibc;
+};
+
 export type BundledInstallRecipe = ManagedAppRecipeConstraint & {
   type: "bundled";
 };
@@ -68,6 +74,23 @@ export type NodePackageInstallRecipe = ManagedAppRecipeConstraint & {
   version?: string;
 };
 
+/**
+ * A platform-native executable distributed through the npm registry. The
+ * registry is only the artifact source: installation downloads and verifies
+ * the tarball without invoking npm, Node, or package lifecycle scripts.
+ */
+export type NativePackageInstallRecipe = ManagedAppRecipeConstraint & {
+  type: "native-package";
+  libc?: ManagedAppRecipeLibc;
+  package: string;
+  packageVersion: string;
+  /** Exact npm version exposed by the app and used by update checks. */
+  version: string;
+  integrity: string;
+  launchPath: string;
+  tarballUrl?: string;
+};
+
 export type ArchiveInstallRecipe = ManagedAppRecipeConstraint & {
   type: "archive";
   url: string;
@@ -76,7 +99,7 @@ export type ArchiveInstallRecipe = ManagedAppRecipeConstraint & {
   installRoot: string;
 };
 
-export type InstallRecipe = BundledInstallRecipe | SystemPackageInstallRecipe | NodePackageInstallRecipe | ArchiveInstallRecipe;
+export type InstallRecipe = BundledInstallRecipe | SystemPackageInstallRecipe | NodePackageInstallRecipe | NativePackageInstallRecipe | ArchiveInstallRecipe;
 
 export type ManagedAppDefinition = {
   launcher: AppCatalogItem;

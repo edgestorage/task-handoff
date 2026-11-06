@@ -9,6 +9,10 @@ use serde_json::Value;
 
 use crate::{
     install_environment::{AppInstallEnvironmentManager, AppInstallExecutionPolicy},
+    native_package::{
+        read_native_app_manifest, valid_native_package_name, valid_native_package_version,
+        NativePackageIntegrity,
+    },
     run_app_recipe_command, AppRecipeCommand, AppRecipeCommandResult, AppRecipeHooks,
     InstallRecipe,
 };
@@ -321,7 +325,63 @@ impl AppUpdateChecker {
                 )
                 .await
             }
+            InstallRecipe::NativePackage {
+                package,
+                package_version,
+                version,
+                integrity,
+                ..
+            } => self.check_native(
+                package,
+                package_version,
+                version,
+                integrity,
+                managed_context,
+            ),
         }
+    }
+
+    fn check_native(
+        &self,
+        package: &str,
+        package_version: &str,
+        app_version: &str,
+        integrity: &str,
+        managed_context: Option<(&str, &std::path::Path)>,
+    ) -> AppUpdateCheckResult {
+        if !valid_native_package_name(package)
+            || !valid_native_package_version(package_version)
+            || !valid_native_package_version(app_version)
+        {
+            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown).reason(
+                "The built-in native package recipe contains an invalid package or version.",
+            );
+        }
+        if NativePackageIntegrity::parse(integrity).is_none() {
+            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
+                .reason("The built-in native package recipe contains an invalid integrity value.");
+        }
+        let Some((app_id, install_base_dir)) = managed_context else {
+            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
+                .reason("The managed app install directory is unavailable.");
+        };
+        let Some(manifest) = read_native_app_manifest(install_base_dir, app_id) else {
+            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::UpdateAvailable)
+                .latest(Some(app_version))
+                .reason("The native package ownership manifest is missing or invalid.");
+        };
+        if manifest.package == package
+            && manifest.package_version == package_version
+            && manifest.integrity == integrity
+            && manifest.version == app_version
+        {
+            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::UpToDate)
+                .installed(Some(&manifest.version))
+                .latest(Some(app_version));
+        }
+        AppUpdateCheckResult::new(ManagedAppUpdateStatus::UpdateAvailable)
+            .installed(Some(&manifest.version))
+            .latest(Some(app_version))
     }
 
     async fn check_system(
@@ -669,6 +729,79 @@ mod tests {
             .await;
         assert_eq!(check.status, ManagedAppUpdateStatus::UpdateAvailable);
         assert_eq!(check.installed_version.as_deref(), Some("0.166.0"));
+        assert_eq!(check.latest_version.as_deref(), Some("0.165.0"));
+    }
+
+    #[tokio::test]
+    async fn native_updates_compare_the_ownership_manifest_with_the_pinned_package() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let manifest_dir = temporary.path().join("native").join("codex");
+        std::fs::create_dir_all(&manifest_dir).expect("manifest directory");
+        let manifest = |version: &str, package_version: &str| {
+            serde_json::json!({
+                "schemaVersion": 1,
+                "appId": "codex",
+                "version": version,
+                "package": "@openai/codex",
+                "packageVersion": package_version,
+                "integrity": "sha512-FotDc7bVHwaommtsdDP8PPrH0a5IwC/t8H/LhdEcH4EBqgeYFRCtptiHcuwgvNRCLbTbOyFE/Ur6GzYCljgaSQ==",
+                "installRoot": manifest_dir,
+                "launchPath": "vendor/x86_64-unknown-linux-musl/bin/codex",
+                "files": ["vendor/x86_64-unknown-linux-musl/bin/codex", "managed-app.json"],
+            })
+            .to_string()
+        };
+        std::fs::write(
+            manifest_dir.join("managed-app.json"),
+            manifest("0.165.0", "0.165.0-linux-x64"),
+        )
+        .expect("manifest");
+        let recipe = InstallRecipe::NativePackage {
+            platforms: vec![FinalComputerPlatform::Linux],
+            arches: Some(vec![FinalComputerArch::X64]),
+            privilege: Some(AppInstallPrivilege::User),
+            libc: None,
+            package: "@openai/codex".to_string(),
+            package_version: "0.165.0-linux-x64".to_string(),
+            version: "0.165.0".to_string(),
+            integrity: "sha512-FotDc7bVHwaommtsdDP8PPrH0a5IwC/t8H/LhdEcH4EBqgeYFRCtptiHcuwgvNRCLbTbOyFE/Ur6GzYCljgaSQ==".to_string(),
+            launch_path: "vendor/x86_64-unknown-linux-musl/bin/codex".to_string(),
+            tarball_url: None,
+        };
+        let capabilities = FinalComputerCapabilities {
+            platform: FinalComputerPlatform::Linux,
+            arch: FinalComputerArch::X64,
+            installers: Vec::new(),
+            privilege: AppInstallPrivilege::User,
+            installer_access: None,
+        };
+        let check = AppUpdateChecker::new()
+            .check_with_install_root(&recipe, &capabilities, Some(("codex", temporary.path())))
+            .await;
+        assert_eq!(check.status, ManagedAppUpdateStatus::UpToDate);
+
+        std::fs::write(
+            manifest_dir.join("managed-app.json"),
+            manifest("0.166.0", "0.166.0-linux-x64"),
+        )
+        .expect("manifest");
+        let check = AppUpdateChecker::new()
+            .check_with_install_root(&recipe, &capabilities, Some(("codex", temporary.path())))
+            .await;
+        assert_eq!(check.status, ManagedAppUpdateStatus::UpdateAvailable);
+        assert_eq!(check.installed_version.as_deref(), Some("0.166.0"));
+        assert_eq!(check.latest_version.as_deref(), Some("0.165.0"));
+
+        std::fs::write(
+            manifest_dir.join("managed-app.json"),
+            manifest("0.164.0", "0.165.0-linux-x64"),
+        )
+        .expect("manifest");
+        let check = AppUpdateChecker::new()
+            .check_with_install_root(&recipe, &capabilities, Some(("codex", temporary.path())))
+            .await;
+        assert_eq!(check.status, ManagedAppUpdateStatus::UpdateAvailable);
+        assert_eq!(check.installed_version.as_deref(), Some("0.164.0"));
         assert_eq!(check.latest_version.as_deref(), Some("0.165.0"));
     }
 

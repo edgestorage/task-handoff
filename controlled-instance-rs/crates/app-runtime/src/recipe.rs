@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use base64::Engine as _;
 use controlled_instance_core::text::truncate_utf16_tail;
 use controlled_instance_protocol::{
     AppInstallPrivilege, AppInstaller, AppManagementCommand, AppManagementOperation,
@@ -16,17 +17,24 @@ use controlled_instance_protocol::{
 use flate2::read::GzDecoder;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     process::Command,
 };
+use url::Url;
 use xz2::read::XzDecoder;
 
 use crate::{
     command_invocation::{command_invocation, CommandInvocationOptions},
     executable_resolver::{ExecutableResolverOptions, Platform},
     install_environment::{AppInstallEnvironmentManager, AppInstallExecutionPolicy},
+    native_package::{
+        managed_native_app_root, managed_native_app_staging, normalized_https_url, npm_tarball_url,
+        read_native_app_manifest, valid_https_url, valid_native_launch_path,
+        valid_native_package_name, valid_native_package_version, NativeAppManifest,
+        NativePackageIntegrity,
+    },
     resolve_executable, InstallRecipe,
 };
 
@@ -34,8 +42,67 @@ const MAX_LOG_CHARS: usize = 8_192;
 const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_ARTIFACT_REDIRECTS: usize = 8;
+const NPM_REGISTRY_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_NPM_REGISTRIES: [&str; 2] = [
+    "https://registry.npmjs.org",
+    "https://registry.npmmirror.com",
+];
 const PACKAGE_COMMAND_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MANAGED_NODE_PACKAGE_DIR: &str = "node-package";
+
+fn artifact_redirect_allowed(url: &Url, previous: usize) -> bool {
+    previous < MAX_ARTIFACT_REDIRECTS && valid_https_url(url)
+}
+
+fn artifact_http_client() -> Result<reqwest::Client, AppRecipeExecutionError> {
+    reqwest::Client::builder()
+        .timeout(DOWNLOAD_TOTAL_TIMEOUT)
+        .read_timeout(DOWNLOAD_IDLE_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if artifact_redirect_allowed(attempt.url(), attempt.previous().len()) {
+                attempt.follow()
+            } else {
+                attempt.error(std::io::Error::other(
+                    "managed artifact redirects must use HTTPS without credentials, query strings, or fragments and stay within the limit",
+                ))
+            }
+        }))
+        .build()
+        .map_err(|error| AppRecipeExecutionError::new("download_failed", error.to_string(), false))
+}
+
+fn artifact_request_error(error: reqwest::Error) -> AppRecipeExecutionError {
+    if error.is_redirect() {
+        AppRecipeExecutionError::new(
+            "invalid_builtin_recipe",
+            "Managed artifact redirects must use HTTPS without credentials, query strings, or fragments and stay within the redirect limit.",
+            false,
+        )
+    } else if error.is_timeout() {
+        AppRecipeExecutionError::new(
+            "download_timeout",
+            "The managed artifact download timed out.",
+            true,
+        )
+    } else {
+        AppRecipeExecutionError::new("download_failed", error.to_string(), true)
+    }
+}
+
+fn artifact_stream_error(error: reqwest::Error) -> AppRecipeExecutionError {
+    if error.is_timeout() {
+        AppRecipeExecutionError::new(
+            "download_timeout",
+            "The managed artifact download timed out.",
+            true,
+        )
+    } else {
+        AppRecipeExecutionError::new("download_failed", error.to_string(), true)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct NodePackageOptions<'a> {
@@ -190,6 +257,28 @@ impl AppRecipeExecutor {
                         version: version.as_deref(),
                         privilege: privilege.unwrap_or(AppInstallPrivilege::User),
                     },
+                    context,
+                    source_policy.as_ref(),
+                )
+                .await
+            }
+            InstallRecipe::NativePackage {
+                package,
+                package_version,
+                version,
+                integrity,
+                launch_path,
+                tarball_url,
+                ..
+            } => {
+                self.native_package(
+                    operation,
+                    package,
+                    package_version,
+                    version,
+                    integrity,
+                    launch_path,
+                    tarball_url.as_deref(),
                     context,
                     source_policy.as_ref(),
                 )
@@ -480,6 +569,167 @@ impl AppRecipeExecutor {
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn native_package(
+        &self,
+        operation: AppManagementOperation,
+        package: &str,
+        package_version: &str,
+        version: &str,
+        integrity: &str,
+        launch_path: &str,
+        tarball_url: Option<&str>,
+        context: &AppRecipeExecutionContext,
+        source_policy: Option<&AppInstallExecutionPolicy>,
+    ) -> Result<String, AppRecipeExecutionError> {
+        if !valid_native_package_name(package)
+            || !valid_native_package_version(package_version)
+            || !valid_native_package_version(version)
+        {
+            return Err(AppRecipeExecutionError::new(
+                "invalid_builtin_recipe",
+                "The native package recipe contains an invalid package or version.",
+                false,
+            ));
+        }
+        let integrity = NativePackageIntegrity::parse(integrity).ok_or_else(|| {
+            AppRecipeExecutionError::new(
+                "invalid_builtin_recipe",
+                "The native package recipe contains an invalid integrity value.",
+                false,
+            )
+        })?;
+        if !valid_native_launch_path(launch_path) {
+            return Err(AppRecipeExecutionError::new(
+                "invalid_builtin_recipe",
+                "The native package launcher path must be a safe relative path.",
+                false,
+            ));
+        }
+        let target = managed_native_app_root(&self.install_base_dir, &context.app_id);
+        phase(
+            context,
+            match operation {
+                AppManagementOperation::Install => "install-native-package",
+                AppManagementOperation::Update => "update-native-package",
+                AppManagementOperation::Uninstall => "uninstall-native-package",
+            },
+        );
+        if operation == AppManagementOperation::Uninstall {
+            let manifest = read_native_app_manifest(&self.install_base_dir, &context.app_id)
+                .ok_or_else(|| {
+                    AppRecipeExecutionError::new(
+                        "ownership_manifest_missing",
+                        "The native package ownership manifest is missing or invalid.",
+                        false,
+                    )
+                })?;
+            if !same_path(&manifest.install_root, &target) {
+                return Err(AppRecipeExecutionError::new(
+                    "ownership_manifest_invalid",
+                    "The native package ownership manifest does not match the install root.",
+                    false,
+                ));
+            }
+            match fs::remove_dir_all(&target) {
+                Ok(()) => return Ok(String::new()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(String::new())
+                }
+                Err(error) => {
+                    return Err(AppRecipeExecutionError::new(
+                        "package_cleanup_failed",
+                        error.to_string(),
+                        true,
+                    ))
+                }
+            }
+        }
+        let registry = source_policy
+            .and_then(|policy| policy.effective.npm_registry.as_deref())
+            .or_else(|| npm_registry_from_env(&self.env));
+        let staging = managed_native_app_staging(&self.install_base_dir, &context.app_id);
+        if let Some(parent) = staging.parent() {
+            fs::create_dir_all(parent).map_err(storage_error)?;
+        }
+        fs::create_dir_all(&staging).map_err(storage_error)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&staging, fs::Permissions::from_mode(0o700));
+        }
+        let artifact = staging.join("artifact.tgz");
+        let extracted = staging.join("root");
+        let result = async {
+            phase(context, "download");
+            let url = select_native_package_url(
+                tarball_url,
+                registry,
+                package,
+                package_version,
+                &self.env,
+                context,
+            )
+            .await?;
+            self.download_native_package(&url, &artifact, &integrity, context)
+                .await?;
+            phase(context, "inspect");
+            inspect_native_tarball(&artifact)?;
+            fs::create_dir_all(&extracted).map_err(storage_error)?;
+            phase(context, "extract");
+            extract_native_tarball(&artifact, &extracted)?;
+            let launcher = verify_native_package(&extracted, launch_path)?;
+            phase(context, "verify");
+            let verify = self
+                .run_command(
+                    AppRecipeCommand {
+                        executable: launcher.display().to_string(),
+                        args: vec!["--version".to_string()],
+                        env: self.env.clone(),
+                        timeout: Duration::from_secs(15),
+                        termination_grace: Duration::from_secs(5),
+                    },
+                    context,
+                )
+                .await?;
+            if verify.exit_code != 0 {
+                return Err(AppRecipeExecutionError::new(
+                    "postcondition_failed",
+                    bounded(if verify.stderr.is_empty() {
+                        "The native package launcher failed its version check."
+                    } else {
+                        &verify.stderr
+                    }),
+                    false,
+                ));
+            }
+            let mut files = walk_owned_files(&extracted)?;
+            if !files.iter().any(|file| file == "managed-app.json") {
+                files.push("managed-app.json".to_string());
+            }
+            write_native_package_manifest(
+                &extracted,
+                &target,
+                &context.app_id,
+                package,
+                package_version,
+                version,
+                &integrity,
+                launch_path,
+                &files,
+            )?;
+            replace_managed_native_package(&target, &extracted)?;
+            Ok(bounded(if verify.stdout.is_empty() {
+                &verify.stderr
+            } else {
+                &verify.stdout
+            }))
+        }
+        .await;
+        let _ = fs::remove_dir_all(&staging);
+        result
+    }
+
     async fn archive(
         &self,
         operation: AppManagementOperation,
@@ -565,13 +815,13 @@ impl AppRecipeExecutor {
         install_root: &Path,
         context: &AppRecipeExecutionContext,
     ) -> Result<StagedArchive, AppRecipeExecutionError> {
-        if !url.starts_with("https://")
+        if !Url::parse(url).ok().as_ref().is_some_and(valid_https_url)
             || expected_sha256.len() != 64
             || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
             return Err(AppRecipeExecutionError::new(
                 "invalid_builtin_recipe",
-                "Archive recipes require HTTPS and a SHA-256 checksum.",
+                "Archive recipes require a canonical HTTPS URL and a SHA-256 checksum.",
                 false,
             ));
         }
@@ -608,13 +858,18 @@ impl AppRecipeExecutor {
         expected_sha256: &str,
         context: &AppRecipeExecutionContext,
     ) -> Result<(), AppRecipeExecutionError> {
-        let response = reqwest::Client::new()
+        let response = artifact_http_client()?
             .get(url)
             .send()
             .await
-            .map_err(|error| {
-                AppRecipeExecutionError::new("download_failed", error.to_string(), true)
-            })?;
+            .map_err(artifact_request_error)?;
+        if !valid_https_url(response.url()) {
+            return Err(AppRecipeExecutionError::new(
+                "invalid_builtin_recipe",
+                "The artifact redirected to an unsafe URL.",
+                false,
+            ));
+        }
         if !response.status().is_success() {
             return Err(AppRecipeExecutionError::new(
                 "download_failed",
@@ -643,9 +898,7 @@ impl AppRecipeExecutor {
         let mut hash = Sha256::new();
         let mut received = 0_u64;
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|error| {
-                AppRecipeExecutionError::new("download_failed", error.to_string(), true)
-            })?;
+            let chunk = chunk.map_err(artifact_stream_error)?;
             received = received.saturating_add(chunk.len() as u64);
             if received > MAX_ARCHIVE_BYTES {
                 return Err(AppRecipeExecutionError::new(
@@ -682,6 +935,93 @@ impl AppRecipeExecutor {
         Ok(())
     }
 
+    async fn download_native_package(
+        &self,
+        url: &str,
+        destination: &Path,
+        integrity: &NativePackageIntegrity,
+        context: &AppRecipeExecutionContext,
+    ) -> Result<(), AppRecipeExecutionError> {
+        let response = artifact_http_client()?
+            .get(url)
+            .send()
+            .await
+            .map_err(artifact_request_error)?;
+        if !valid_https_url(response.url()) {
+            return Err(AppRecipeExecutionError::new(
+                "invalid_builtin_recipe",
+                "The npm registry redirected to an unsafe URL.",
+                false,
+            ));
+        }
+        if !response.status().is_success() {
+            return Err(AppRecipeExecutionError::new(
+                "download_failed",
+                format!("Artifact download failed with HTTP {}.", response.status()),
+                true,
+            ));
+        }
+        let declared = response.content_length();
+        if declared.is_some_and(|length| length > MAX_ARCHIVE_BYTES) {
+            return Err(AppRecipeExecutionError::new(
+                "artifact_too_large",
+                "Artifact exceeds the managed download limit.",
+                false,
+            ));
+        }
+        let mut file = tokio::fs::File::create(destination)
+            .await
+            .map_err(storage_error)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = tokio::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o600))
+                .await;
+        }
+        let mut stream = response.bytes_stream();
+        let mut sha256 = Sha256::new();
+        let mut sha512 = Sha512::new();
+        let mut received = 0_u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(artifact_stream_error)?;
+            received = received.saturating_add(chunk.len() as u64);
+            if received > MAX_ARCHIVE_BYTES {
+                return Err(AppRecipeExecutionError::new(
+                    "artifact_too_large",
+                    "Artifact exceeds the managed download limit.",
+                    false,
+                ));
+            }
+            sha256.update(&chunk);
+            sha512.update(&chunk);
+            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                .await
+                .map_err(storage_error)?;
+            phase_with_progress(
+                context,
+                "download",
+                Some(AppManagementProgress {
+                    current: Some(received),
+                    total: declared.filter(|total| *total > 0),
+                    unit: Some("bytes".to_string()),
+                }),
+            );
+        }
+        tokio::io::AsyncWriteExt::flush(&mut file)
+            .await
+            .map_err(storage_error)?;
+        let sha256 = sha256.finalize();
+        let sha512 = sha512.finalize();
+        if !integrity.matches(&sha256, &sha512) {
+            return Err(AppRecipeExecutionError::new(
+                "checksum_mismatch",
+                "Artifact integrity does not match the built-in native package recipe.",
+                false,
+            ));
+        }
+        Ok(())
+    }
+
     async fn run_command(
         &self,
         command: AppRecipeCommand,
@@ -707,6 +1047,443 @@ struct StagedArchive {
     staging: PathBuf,
     extracted: PathBuf,
     files: Vec<String>,
+}
+
+fn npm_registry_from_env(env: &BTreeMap<String, String>) -> Option<&str> {
+    env.iter()
+        .find(|(name, _)| {
+            name.eq_ignore_ascii_case("npm_config_registry")
+                || name.eq_ignore_ascii_case("NPM_CONFIG_REGISTRY")
+        })
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalized_npm_registry(value: &str) -> Option<String> {
+    normalized_https_url(value).map(|value| value.trim_end_matches('/').to_string())
+}
+
+fn npm_registry_candidates(preferred: Option<&str>, env: &BTreeMap<String, String>) -> Vec<String> {
+    let preferred = match preferred {
+        Some(value) => normalized_npm_registry(value),
+        None => npm_registry_from_env(env).and_then(normalized_npm_registry),
+    };
+    let mut candidates = Vec::new();
+    for candidate in preferred
+        .into_iter()
+        .chain(DEFAULT_NPM_REGISTRIES.iter().map(|value| value.to_string()))
+    {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
+fn write_recipe_log(context: &AppRecipeExecutionContext, stream: &str, message: &str) {
+    if let Some(hook) = context.on_output.as_ref() {
+        hook(stream, &format!("{message}\n"));
+    }
+}
+
+async fn probe_npm_package_url(url: &str) -> Result<(), AppRecipeExecutionError> {
+    let response = artifact_http_client()?
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .timeout(NPM_REGISTRY_PROBE_TIMEOUT)
+        .send()
+        .await
+        .map_err(artifact_request_error)?;
+    if !response.status().is_success() {
+        return Err(AppRecipeExecutionError::new(
+            "npm_registry_unavailable",
+            format!("HTTP {}", response.status()),
+            true,
+        ));
+    }
+    Ok(())
+}
+
+async fn select_native_package_url(
+    tarball_url: Option<&str>,
+    registry: Option<&str>,
+    package: &str,
+    package_version: &str,
+    env: &BTreeMap<String, String>,
+    context: &AppRecipeExecutionContext,
+) -> Result<String, AppRecipeExecutionError> {
+    if let Some(value) = tarball_url {
+        return normalized_https_url(value).ok_or_else(|| {
+            AppRecipeExecutionError::new(
+                "invalid_builtin_recipe",
+                "The native package tarball URL must use HTTPS.",
+                false,
+            )
+        });
+    }
+    let candidates = npm_registry_candidates(registry, env);
+    if candidates.is_empty() {
+        return Err(AppRecipeExecutionError::new(
+            "invalid_builtin_recipe",
+            "The npm registry must be a valid HTTPS URL.",
+            false,
+        ));
+    }
+    let mut failures = Vec::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let url = npm_tarball_url(Some(candidate), package, package_version).ok_or_else(|| {
+            AppRecipeExecutionError::new(
+                "invalid_builtin_recipe",
+                "The npm registry must be a valid HTTPS URL.",
+                false,
+            )
+        })?;
+        match probe_npm_package_url(&url).await {
+            Ok(()) => {
+                write_recipe_log(
+                    context,
+                    "stdout",
+                    &format!(
+                        "{} {candidate}",
+                        if index > 0 {
+                            "Using fallback npm source"
+                        } else {
+                            "Using npm source"
+                        }
+                    ),
+                );
+                return Ok(url);
+            }
+            Err(error) => {
+                write_recipe_log(
+                    context,
+                    "stderr",
+                    &format!("npm source {candidate} unavailable: {}", error.message),
+                );
+                failures.push(format!("{candidate}: {}", error.message));
+            }
+        }
+    }
+    Err(AppRecipeExecutionError::new(
+        "npm_registry_unavailable",
+        format!(
+            "No npm source responded within {}ms: {}",
+            NPM_REGISTRY_PROBE_TIMEOUT.as_millis(),
+            failures.join("; ")
+        ),
+        true,
+    ))
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn verify_native_package(
+    root: &Path,
+    launch_path: &str,
+) -> Result<PathBuf, AppRecipeExecutionError> {
+    if !valid_native_launch_path(launch_path) {
+        return Err(AppRecipeExecutionError::new(
+            "invalid_builtin_recipe",
+            "The native package launcher path must be a safe relative path.",
+            false,
+        ));
+    }
+    let candidate = root.join(launch_path);
+    let root = fs::canonicalize(root).map_err(storage_error)?;
+    let metadata = fs::symlink_metadata(&candidate).map_err(|_| {
+        AppRecipeExecutionError::new(
+            "postcondition_failed",
+            "The native package has no usable launcher inside its install root.",
+            false,
+        )
+    })?;
+    let candidate = fs::canonicalize(&candidate).map_err(storage_error)?;
+    if !metadata.file_type().is_file() || !candidate.starts_with(&root) {
+        return Err(AppRecipeExecutionError::new(
+            "postcondition_failed",
+            "The native package has no usable launcher inside its install root.",
+            false,
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&candidate, fs::Permissions::from_mode(0o755))
+            .map_err(storage_error)?;
+    }
+    Ok(candidate)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_native_package_manifest(
+    staging: &Path,
+    install_root: &Path,
+    app_id: &str,
+    package: &str,
+    package_version: &str,
+    version: &str,
+    integrity: &NativePackageIntegrity,
+    launch_path: &str,
+    files: &[String],
+) -> Result<(), AppRecipeExecutionError> {
+    let integrity = match integrity {
+        NativePackageIntegrity::Sha256(digest) => {
+            format!(
+                "sha256-{}",
+                base64::engine::general_purpose::STANDARD.encode(digest)
+            )
+        }
+        NativePackageIntegrity::Sha512(digest) => {
+            format!(
+                "sha512-{}",
+                base64::engine::general_purpose::STANDARD.encode(digest)
+            )
+        }
+    };
+    let manifest = NativeAppManifest {
+        schema_version: 1,
+        app_id: app_id.to_string(),
+        version: version.to_string(),
+        package: package.to_string(),
+        package_version: package_version.to_string(),
+        integrity,
+        install_root: install_root.to_path_buf(),
+        launch_path: launch_path.to_string(),
+        files: files.to_vec(),
+    };
+    let mut bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| {
+        AppRecipeExecutionError::new("app_operation_failed", error.to_string(), false)
+    })?;
+    bytes.push(b'\n');
+    controlled_instance_core::atomic::write_atomic(
+        &staging.join("managed-app.json"),
+        &bytes,
+        Some(0o600),
+    )
+    .map_err(storage_error)
+}
+
+fn replace_managed_native_package(
+    target: &Path,
+    staging: &Path,
+) -> Result<(), AppRecipeExecutionError> {
+    let parent = target.parent().ok_or_else(|| {
+        AppRecipeExecutionError::new(
+            "invalid_builtin_recipe",
+            "The native package install root has no parent directory.",
+            false,
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(storage_error)?;
+    let previous = parent.join(format!(".previous-{}", uuid::Uuid::new_v4()));
+    if target.exists() {
+        fs::rename(target, &previous).map_err(storage_error)?;
+    }
+    if let Err(error) = fs::rename(staging, target) {
+        if target.exists() {
+            let _ = fs::remove_dir_all(target);
+        }
+        if previous.exists() {
+            let _ = fs::rename(&previous, target);
+        }
+        return Err(storage_error(error));
+    }
+    let _ = fs::remove_dir_all(previous);
+    Ok(())
+}
+
+fn native_tar_entry_path(path: &str) -> Result<Option<String>, AppRecipeExecutionError> {
+    let path = path.trim_end_matches('/');
+    if path == "package" {
+        return Ok(None);
+    }
+    let Some(path) = path.strip_prefix("package/") else {
+        return Err(AppRecipeExecutionError::new(
+            "unsafe_archive",
+            "The npm package tarball must contain a single package root.",
+            false,
+        ));
+    };
+    Ok(Some(path.to_string()))
+}
+
+fn inspect_native_tarball(path: &Path) -> Result<(), AppRecipeExecutionError> {
+    use std::collections::BTreeSet;
+
+    let file = fs::File::open(path).map_err(storage_error)?;
+    let mut archive = tar::Archive::new(GzDecoder::new(file));
+    let mut seen = BTreeSet::new();
+    let mut entries = 0_usize;
+    let mut total = 0_u64;
+    for (index, entry) in archive
+        .entries()
+        .map_err(archive_inspection_error)?
+        .enumerate()
+    {
+        if index >= MAX_ARCHIVE_ENTRIES {
+            return Err(AppRecipeExecutionError::new(
+                "archive_too_large",
+                "Artifact contains too many entries.",
+                false,
+            ));
+        }
+        let entry = entry.map_err(archive_inspection_error)?;
+        let header = entry.header();
+        let kind = header.entry_type();
+        if kind.is_symlink() || kind.is_hard_link() {
+            return Err(AppRecipeExecutionError::new(
+                "unsafe_archive",
+                "The built-in artifact contains an unsafe link.",
+                false,
+            ));
+        }
+        if !kind.is_file() && !kind.is_dir() {
+            return Err(AppRecipeExecutionError::new(
+                "unsafe_archive",
+                "The npm package tarball contains an unsupported entry type.",
+                false,
+            ));
+        }
+        let raw = entry
+            .path()
+            .map_err(archive_inspection_error)?
+            .to_str()
+            .ok_or_else(|| {
+                AppRecipeExecutionError::new(
+                    "unsafe_archive",
+                    "The npm package tarball contains a non-UTF-8 path.",
+                    false,
+                )
+            })?
+            .to_string();
+        let Some(relative) = native_tar_entry_path(&raw)? else {
+            entries += 1;
+            continue;
+        };
+        let validated = validate_archive_paths([(relative.as_str(), false)])?;
+        let [relative] = validated.as_slice() else {
+            unreachable!()
+        };
+        if !seen.insert(relative.clone()) {
+            return Err(AppRecipeExecutionError::new(
+                "unsafe_archive",
+                format!("Archive contains duplicate path: {relative}"),
+                false,
+            ));
+        }
+        entries += 1;
+        total = total.saturating_add(header.size().unwrap_or(0));
+        if total > MAX_EXTRACTED_BYTES {
+            return Err(AppRecipeExecutionError::new(
+                "archive_too_large",
+                "Extracted artifact exceeds the managed size limit.",
+                false,
+            ));
+        }
+    }
+    if entries == 0 {
+        return Err(AppRecipeExecutionError::new(
+            "unsafe_archive",
+            "The npm package tarball is empty.",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+fn extract_native_tarball(path: &Path, destination: &Path) -> Result<(), AppRecipeExecutionError> {
+    let file = fs::File::open(path).map_err(storage_error)?;
+    let mut archive = tar::Archive::new(GzDecoder::new(file));
+    let mut total = 0_u64;
+    for (index, entry) in archive
+        .entries()
+        .map_err(archive_extraction_error)?
+        .enumerate()
+    {
+        if index >= MAX_ARCHIVE_ENTRIES {
+            return Err(AppRecipeExecutionError::new(
+                "archive_too_large",
+                "Artifact contains too many entries.",
+                false,
+            ));
+        }
+        let mut entry = entry.map_err(archive_extraction_error)?;
+        let header = entry.header();
+        let kind = header.entry_type();
+        if kind.is_symlink() || kind.is_hard_link() {
+            return Err(AppRecipeExecutionError::new(
+                "unsafe_archive",
+                "The built-in artifact contains an unsafe link.",
+                false,
+            ));
+        }
+        if !kind.is_file() && !kind.is_dir() {
+            return Err(AppRecipeExecutionError::new(
+                "unsafe_archive",
+                "The npm package tarball contains an unsupported entry type.",
+                false,
+            ));
+        }
+        let raw = entry
+            .path()
+            .map_err(archive_extraction_error)?
+            .to_str()
+            .ok_or_else(|| {
+                AppRecipeExecutionError::new(
+                    "unsafe_archive",
+                    "The npm package tarball contains a non-UTF-8 path.",
+                    false,
+                )
+            })?
+            .to_string();
+        let Some(relative) = native_tar_entry_path(&raw)? else {
+            continue;
+        };
+        let validated = validate_archive_paths([(relative.as_str(), false)])?;
+        let [relative] = validated.as_slice() else {
+            unreachable!()
+        };
+        if relative.split('/').count() > 100 {
+            return Err(archive_extraction_error(
+                "Archive path exceeds the maximum extraction depth of 100.",
+            ));
+        }
+        let target = destination.join(relative);
+        if kind.is_dir() {
+            fs::create_dir_all(&target).map_err(archive_extraction_error)?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(archive_extraction_error)?;
+        }
+        let mut output = fs::File::create(&target).map_err(archive_extraction_error)?;
+        let mode = header.mode().unwrap_or(0o644);
+        let copied = std::io::copy(&mut entry, &mut output).map_err(archive_extraction_error)?;
+        total = total.saturating_add(copied);
+        if total > MAX_EXTRACTED_BYTES {
+            return Err(AppRecipeExecutionError::new(
+                "archive_too_large",
+                "Extracted artifact exceeds the managed size limit.",
+                false,
+            ));
+        }
+        output.flush().map_err(archive_extraction_error)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = (mode & 0o755) | 0o600;
+            let _ = fs::set_permissions(&target, fs::Permissions::from_mode(mode));
+        }
+    }
+    Ok(())
 }
 
 fn create_archive_staging(
@@ -1801,6 +2578,262 @@ fn uninstall_archive(
 mod tests {
     use super::*;
     use controlled_instance_protocol::FinalComputerArch;
+
+    fn write_native_tarball(path: &Path, entries: &[(&str, &[u8])], include_link: bool) {
+        let file = fs::File::create(path).expect("tarball");
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for (entry_path, contents) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, entry_path, *contents)
+                .expect("tar entry");
+        }
+        if include_link {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            header.set_cksum();
+            builder
+                .append_link(&mut header, "package/bin/link", "/bin/sh")
+                .expect("tar link");
+        }
+        builder
+            .into_inner()
+            .expect("tar encoder")
+            .finish()
+            .expect("gzip");
+    }
+
+    #[test]
+    fn native_package_metadata_validates_sri_urls_and_launcher_paths() {
+        let integrity = NativePackageIntegrity::parse(
+            "sha512-FotDc7bVHwaommtsdDP8PPrH0a5IwC/t8H/LhdEcH4EBqgeYFRCtptiHcuwgvNRCLbTbOyFE/Ur6GzYCljgaSQ==",
+        )
+        .expect("sha512 integrity");
+        assert!(matches!(integrity, NativePackageIntegrity::Sha512(_)));
+        assert!(NativePackageIntegrity::parse("sha512-not-base64!").is_none());
+        assert!(NativePackageIntegrity::parse("md5-AAAA").is_none());
+        assert_eq!(
+            npm_tarball_url(
+                Some("https://registry.example.test/"),
+                "@openai/codex",
+                "0.165.0-linux-x64"
+            )
+            .as_deref(),
+            Some("https://registry.example.test/@openai/codex/-/codex-0.165.0-linux-x64.tgz")
+        );
+        assert!(npm_tarball_url(Some("http://registry.example.test"), "codex", "1.0.0").is_none());
+        assert!(valid_native_launch_path("vendor/bin/codex"));
+        assert!(!valid_native_launch_path("../codex"));
+        assert!(!valid_native_launch_path("vendor\\codex"));
+        assert!(!valid_native_launch_path("/usr/bin/codex"));
+    }
+
+    #[test]
+    fn native_package_sources_prefer_the_policy_then_use_official_and_china_fallbacks() {
+        let env = BTreeMap::new();
+        assert_eq!(
+            npm_registry_candidates(Some("https://registry.example.test/npm/"), &env),
+            vec![
+                "https://registry.example.test/npm".to_string(),
+                "https://registry.npmjs.org".to_string(),
+                "https://registry.npmmirror.com".to_string(),
+            ]
+        );
+        assert_eq!(
+            npm_registry_candidates(Some("https://registry.npmmirror.com"), &env),
+            vec![
+                "https://registry.npmmirror.com".to_string(),
+                "https://registry.npmjs.org".to_string(),
+            ]
+        );
+        assert_eq!(
+            npm_registry_candidates(Some("https://registry.npmjs.org"), &env),
+            vec![
+                "https://registry.npmjs.org".to_string(),
+                "https://registry.npmmirror.com".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_package_sources_use_the_environment_before_builtin_fallbacks() {
+        let env = BTreeMap::from([
+            (
+                "npm_config_registry".to_string(),
+                "https://registry.example.test/team/".to_string(),
+            ),
+            (
+                "unrelated".to_string(),
+                "https://registry.example.test/ignored".to_string(),
+            ),
+        ]);
+        assert_eq!(
+            npm_registry_candidates(None, &env),
+            vec![
+                "https://registry.example.test/team".to_string(),
+                "https://registry.npmjs.org".to_string(),
+                "https://registry.npmmirror.com".to_string(),
+            ]
+        );
+        assert_eq!(
+            npm_registry_candidates(None, &BTreeMap::new()),
+            vec![
+                "https://registry.npmjs.org".to_string(),
+                "https://registry.npmmirror.com".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_package_sources_reject_non_https_or_credentialed_registries() {
+        for value in [
+            "http://registry.example.test",
+            "https://user:secret@registry.example.test",
+            "https://registry.example.test/path?token=secret",
+            "https://registry.example.test/path#fragment",
+        ] {
+            assert!(normalized_npm_registry(value).is_none(), "{value}");
+        }
+        assert_eq!(
+            normalized_npm_registry("https://registry.example.test/path/").as_deref(),
+            Some("https://registry.example.test/path")
+        );
+    }
+
+    #[test]
+    fn artifact_redirects_must_remain_https_and_bounded() {
+        assert!(artifact_redirect_allowed(
+            &Url::parse("https://registry.example.test/package.tgz").unwrap(),
+            0
+        ));
+        assert!(!artifact_redirect_allowed(
+            &Url::parse("http://registry.example.test/package.tgz").unwrap(),
+            0
+        ));
+        assert!(!artifact_redirect_allowed(
+            &Url::parse("https://registry.example.test/package.tgz").unwrap(),
+            MAX_ARTIFACT_REDIRECTS
+        ));
+        for value in [
+            "https://user:secret@registry.example.test/package.tgz",
+            "https://registry.example.test/package.tgz?token=secret",
+            "https://registry.example.test/package.tgz#fragment",
+        ] {
+            assert!(
+                !artifact_redirect_allowed(&Url::parse(value).unwrap(), 0),
+                "{value}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn native_package_uninstall_requires_a_strict_ownership_manifest() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let target = managed_native_app_root(temporary.path(), "native-tool");
+        let launcher = target.join("vendor/bin/tool");
+        fs::create_dir_all(launcher.parent().expect("launcher parent")).expect("launcher parent");
+        fs::write(&launcher, "#!/bin/sh\nexit 0\n").expect("launcher");
+        let manifest_path = target.join("managed-app.json");
+        let manifest = |install_root: &str, files: serde_json::Value| {
+            serde_json::json!({
+                "schemaVersion": 1,
+                "appId": "native-tool",
+                "version": "1.2.3",
+                "package": "native-tool",
+                "packageVersion": "1.2.3-linux-x64",
+                "integrity": "sha512-FotDc7bVHwaommtsdDP8PPrH0a5IwC/t8H/LhdEcH4EBqgeYFRCtptiHcuwgvNRCLbTbOyFE/Ur6GzYCljgaSQ==",
+                "installRoot": install_root,
+                "launchPath": "vendor/bin/tool",
+                "files": files,
+            })
+            .to_string()
+        };
+        let recipe = InstallRecipe::NativePackage {
+            platforms: vec![FinalComputerPlatform::Linux],
+            arches: Some(vec![FinalComputerArch::X64]),
+            privilege: Some(AppInstallPrivilege::User),
+            libc: None,
+            package: "native-tool".to_string(),
+            package_version: "1.2.3-linux-x64".to_string(),
+            version: "1.2.3".to_string(),
+            integrity: "sha512-FotDc7bVHwaommtsdDP8PPrH0a5IwC/t8H/LhdEcH4EBqgeYFRCtptiHcuwgvNRCLbTbOyFE/Ur6GzYCljgaSQ==".to_string(),
+            launch_path: "vendor/bin/tool".to_string(),
+            tarball_url: None,
+        };
+        let context = AppRecipeExecutionContext {
+            app_id: "native-tool".to_string(),
+            capabilities: FinalComputerCapabilities {
+                platform: FinalComputerPlatform::Linux,
+                arch: FinalComputerArch::X64,
+                installers: Vec::new(),
+                privilege: AppInstallPrivilege::User,
+                installer_access: None,
+            },
+            on_phase: None,
+            on_command: None,
+            on_output: None,
+        };
+        let executor = AppRecipeExecutor::new(temporary.path(), temporary.path().join("state"));
+        for invalid in [
+            manifest("native/native-tool", serde_json::json!(["vendor/bin/tool"])),
+            manifest(
+                target.to_string_lossy().as_ref(),
+                serde_json::json!(["vendor/bin/tool", "../escape"]),
+            ),
+        ] {
+            fs::write(&manifest_path, invalid).expect("manifest");
+            let error = executor
+                .execute(AppManagementOperation::Uninstall, &recipe, &context)
+                .await
+                .expect_err("unsafe manifest must not uninstall");
+            assert_eq!(error.code, "ownership_manifest_missing");
+            assert!(launcher.is_file());
+        }
+    }
+
+    #[test]
+    fn npm_tarballs_strip_one_package_root_and_reject_links_and_escape_paths() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let archive = temporary.path().join("package.tgz");
+        write_native_tarball(&archive, &[("package/bin/tool", b"#!/bin/sh\n")], false);
+        inspect_native_tarball(&archive).expect("valid package");
+        let extracted = temporary.path().join("root");
+        fs::create_dir_all(&extracted).expect("extract root");
+        extract_native_tarball(&archive, &extracted).expect("extract");
+        assert_eq!(
+            fs::read_to_string(extracted.join("bin/tool")).expect("launcher"),
+            "#!/bin/sh\n"
+        );
+        let launcher = verify_native_package(&extracted, "bin/tool").expect("verified launcher");
+        assert_eq!(
+            launcher,
+            fs::canonicalize(extracted.join("bin/tool")).unwrap()
+        );
+
+        let escaped = temporary.path().join("escaped.tgz");
+        write_native_tarball(&escaped, &[("outside/bin/tool", b"#!/bin/sh\n")], false);
+        assert_eq!(
+            inspect_native_tarball(&escaped)
+                .expect_err("outside package root")
+                .code,
+            "unsafe_archive"
+        );
+
+        let linked = temporary.path().join("linked.tgz");
+        write_native_tarball(&linked, &[("package/bin/tool", b"#!/bin/sh\n")], true);
+        assert_eq!(
+            inspect_native_tarball(&linked)
+                .expect_err("archive link")
+                .code,
+            "unsafe_archive"
+        );
+    }
 
     #[test]
     fn node_package_names_and_archive_paths_reject_unsafe_values() {

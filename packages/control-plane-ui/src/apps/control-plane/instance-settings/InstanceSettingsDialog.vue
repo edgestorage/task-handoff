@@ -244,12 +244,14 @@
                 <div v-else-if="!appManagement" class="instance-settings-state">{{ t("instances.settings.noSnapshot") }}</div>
                 <Tabs v-else v-model="appView" class="instance-app-views">
                   <TabsList class="instance-app-view-tabs" :aria-label="t('instances.settings.appViews')">
-                    <TabsTrigger value="catalog">{{ t("instances.settings.appCatalog") }}</TabsTrigger>
+                    <TabsTrigger value="catalog">{{ t("instances.settings.appCatalog") }}<span class="instance-app-task-count">{{ appManagement.apps.length }}</span></TabsTrigger>
                     <TabsTrigger ref="appTasksTab" value="tasks">{{ t("instances.settings.appTasks") }}<span v-if="appManagement.activeJobs.length" class="instance-app-task-count">{{ appManagement.activeJobs.length }}</span></TabsTrigger>
+                    <TabsTrigger v-if="installEnvironmentSupported" ref="appEnvironmentTab" value="environment">{{ t("instances.settings.installSettings") }}</TabsTrigger>
                   </TabsList>
                   <TabsContent value="catalog" class="instance-app-view-content">
                     <div v-if="primaryAppTask" class="instance-app-task-summary">
-                      <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="14" aria-hidden="true" />
+                      <LoaderCircle v-if="primaryAppTask.state === 'running'" class="animate-spin motion-reduce:animate-none" :size="14" aria-hidden="true" />
+                      <Clock3 v-else :size="14" aria-hidden="true" />
                       <span class="instance-app-task-summary-copy" role="status">{{ appTaskSummary }}<span v-if="appManagement.activeJobs.length > 1"> · {{ t("instances.settings.otherAppTasks", { count: appManagement.activeJobs.length - 1 }) }}</span></span>
                       <Button size="sm" variant="ghost" @click="openAppTask(primaryAppTask.id)">{{ t("instances.settings.viewAppTasks") }}<ChevronRight :size="14" aria-hidden="true" /></Button>
                     </div>
@@ -283,7 +285,9 @@
                             <div class="instance-app-controls">
                               <Badge :variant="managedAppBadgeVariant(app.state)">{{ managedAppStateLabel(app.state) }}</Badge>
                               <Button v-if="activeJob(app)" size="sm" variant="outline" @click="openAppTask(activeJob(app)!.id)">
-                                {{ t("instances.settings.viewAppTasks") }}
+                                <LoaderCircle v-if="activeJob(app)!.state === 'running'" class="animate-spin motion-reduce:animate-none" :size="13" aria-hidden="true" />
+                                <Clock3 v-else :size="13" aria-hidden="true" />
+                                {{ t(appTaskStatusKey(activeJob(app)!)) }}<ChevronRight :size="13" aria-hidden="true" />
                               </Button>
                               <Button v-else-if="app.canInstall" size="sm" :disabled="operationSubmitting === app.id" @click="openAppConfirmation(app, 'install')">{{ t("instances.settings.install") }}</Button>
                               <DropdownMenu v-else-if="hasAppMenuActions(app)">
@@ -309,52 +313,27 @@
                   <TabsContent value="tasks" class="instance-app-view-content">
                     <AppManagementTasks v-model:selected-job-id="selectedAppTaskId" :snapshot="appManagement" :submitting="operationSubmitting" @retry="retryAppTask" />
                   </TabsContent>
+                  <TabsContent v-if="installEnvironmentSupported" value="environment" force-mount :hidden="appView !== 'environment'" class="instance-app-view-content">
+                    <div class="instance-app-environment-content">
+                      <AppInstallEnvironmentCard
+                        :instance-id="instance.id"
+                        :environment="appManagement.installEnvironment"
+                        :apt-supported="installEnvironmentCapabilities.aptSources"
+                        :node-toolchain-supported="installEnvironmentCapabilities.nodeToolchain"
+                        @refresh="refreshApps"
+                      />
+                    </div>
+                  </TabsContent>
                 </Tabs>
               </div>
             </section>
 
-            <section v-if="installEnvironmentSupported && appView === 'catalog'" class="instance-settings-card instance-settings-group">
-              <AppInstallEnvironmentCard
-                :instance-id="instance.id"
-                :environment="appManagement?.installEnvironment"
-                :apt-supported="installEnvironmentCapabilities.aptSources"
-                :node-toolchain-supported="installEnvironmentCapabilities.nodeToolchain"
-                @refresh="refreshApps"
-              />
-            </section>
-
-            <section v-if="appView === 'catalog'" class="instance-settings-card instance-settings-group">
-              <div class="instance-app-heading">
-                <div class="instance-settings-section-heading">
-                  <h3>{{ t("instances.settings.customLaunchers") }}</h3>
-                  <p>{{ t("instances.settings.customLaunchersDescription") }}</p>
-                </div>
-                <Badge :variant="inventoryBadgeVariant">{{ inventoryStateLabel }}</Badge>
-              </div>
-              <p v-if="instance.appInventory" class="instance-settings-observed">{{ t("instances.settings.inventoryObserved", { time: formatObservedAt(instance.appInventory.observedAt) }) }}</p>
-              <div class="instance-app-directory instance-settings-surface">
-                <div v-if="!customInventoryApps.length" class="instance-settings-state instance-settings-empty-state">{{ t("instances.settings.noCustomLaunchers") }}</div>
-                <div v-else class="instance-app-list instance-directory-list">
-                  <article v-for="app in customInventoryApps" :key="app.id" class="instance-app-row instance-custom-app-row">
-                    <div class="instance-directory-identity">
-                      <span class="instance-app-icon" aria-hidden="true"><Boxes :size="16" /></span>
-                      <div><strong>{{ app.name }}</strong><code>{{ app.id }} · {{ app.kind }}</code><small v-if="app.diagnosticCode">{{ t("instances.settings.executableMissing") }}</small></div>
-                    </div>
-                    <Badge :variant="app.availability === 'available' ? 'default' : 'secondary'">{{ app.availability }}</Badge>
-                  </article>
-                </div>
-                <div v-if="instance.appInventory?.issues.length" class="instance-app-issues" role="status">
-                  <strong>{{ t("instances.settings.inventoryDiagnostics") }}</strong>
-                  <p v-for="issue in instance.appInventory.issues" :key="issue.code">{{ issue.message }} <code>{{ issue.code }}</code></p>
-                </div>
-              </div>
-            </section>
           </TabsContent>
         </ScrollArea>
       </Tabs>
 
       <AlertDialog :open="Boolean(appConfirmation)" @update:open="(value) => { if (!value && !operationSubmitting) appConfirmation = undefined; }">
-        <AlertDialogContent>
+        <AlertDialogContent @close-auto-focus="handleAppConfirmationFocus">
           <AlertDialogHeader>
             <AlertDialogTitle>{{ appConfirmationTitle }}</AlertDialogTitle>
             <AlertDialogDescription>{{ appConfirmationDescription }}</AlertDialogDescription>
@@ -364,6 +343,11 @@
             <span><small>{{ t("instances.settings.target") }}</small><strong>{{ instance?.name }}</strong></span>
             <span><small>{{ t("instances.settings.privilege") }}</small><strong>{{ appManagement?.capabilities.privilege || t("instances.settings.notReported") }}</strong></span>
           </div>
+          <div v-if="appConfirmation && appConfirmation.operation !== 'uninstall' && installEnvironmentSupported" class="instance-app-confirmation-sources">
+            <div><span>{{ t("instances.settings.installSourceProfile") }}</span><span>{{ installSourceLabel }}</span></div>
+            <Button size="sm" variant="ghost" :disabled="Boolean(operationSubmitting)" @click="editInstallSettings">{{ t("instances.settings.changeInstallSettings") }}<ChevronRight :size="14" aria-hidden="true" /></Button>
+          </div>
+          <p v-if="appOperationError" class="instance-app-confirmation-error" role="alert">{{ appOperationError }}</p>
           <AlertDialogFooter>
             <AlertDialogCancel :disabled="Boolean(operationSubmitting)">{{ t("instances.settings.cancel") }}</AlertDialogCancel>
             <Button type="button" :disabled="Boolean(operationSubmitting)" @click="confirmAppOperation">
@@ -380,7 +364,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Bot, Boxes, ChevronRight, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import { Bot, Boxes, ChevronRight, Clock3, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import { controlledInstanceAppInstallEnvironmentCapabilities, supportsAiSessionFileSizeLimitSettings, supportsControlledInstanceAppInstallEnvironment, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
@@ -472,16 +456,19 @@ const savingModels = ref(false);
 const operationSubmitting = ref("");
 const checkingApps = reactive(new Set<string>());
 const appConfirmation = ref<{ app: ManagedAppProjection; operation: AppManagementOperation }>();
+const appOperationError = ref("");
+const focusEnvironmentAfterConfirmation = ref(false);
 const appFilter = ref<AppFilter>("all");
 const appView = ref("catalog");
 const appTasksTab = ref<InstanceType<typeof TabsTrigger>>();
+const appEnvironmentTab = ref<InstanceType<typeof TabsTrigger>>();
 const selectedAppTaskId = ref("");
 const primaryAppTask = computed(() => props.appManagement ? appTaskGroups(props.appManagement).active[0] : undefined);
 const appTaskSummary = computed(() => {
   const job = primaryAppTask.value;
   if (!job) return "";
   const name = props.appManagement?.apps.find((app) => app.id === job.appId)?.name || job.appId;
-  return `${name} · ${t(appTaskStatusKey(job))}`;
+  return `${name} · ${t(appTaskStatusKey(job), { operation: operationNoun(job.operation) })}`;
 });
 function openAppTask(jobId: string) {
   selectedAppTaskId.value = jobId;
@@ -492,6 +479,24 @@ function retryAppTask(job: AppManagementJob) {
   if (!props.appManagement || operationSubmitting.value) return;
   const app = retryableAppTask(props.appManagement, job);
   if (app) openAppConfirmation(app, job.operation);
+}
+const installSourceLabel = computed(() => {
+  const profile = props.appManagement?.installEnvironment?.settings.profile;
+  return profile ? t(`instances.settings.${{
+    environment: "installSourceEnvironment", official: "installSourceOfficial",
+    china: "installSourceChina", custom: "installSourceCustom",
+  }[profile]}`) : t("instances.settings.notReported");
+});
+function editInstallSettings() {
+  focusEnvironmentAfterConfirmation.value = true;
+  appConfirmation.value = undefined;
+  appView.value = "environment";
+}
+function handleAppConfirmationFocus(event: Event) {
+  if (!focusEnvironmentAfterConfirmation.value) return;
+  focusEnvironmentAfterConfirmation.value = false;
+  event.preventDefault();
+  if (props.open) void nextTick(() => appEnvironmentTab.value?.$el?.focus());
 }
 const noGitCredentialValue = "__none__";
 const selectedGitCredentialId = ref(noGitCredentialValue);
@@ -700,22 +705,6 @@ const legacyModelSelectionNeedsUpgrade = computed(() => {
 });
 const modelsChanged = computed(() => legacyModelSelectionNeedsUpgrade.value
   || JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
-const inventoryState = computed<"current" | "stale" | "not-reported" | "empty" | "degraded">(() => {
-  const inventory = props.instance?.appInventory;
-  if (!inventory) return "not-reported";
-  if (inventory.issues.length) return "degraded";
-  if (props.instance?.connectionStatus !== "online") return "stale";
-  return inventory.items.length ? "current" : "empty";
-});
-const inventoryStateLabel = computed(() => ({
-  current: t("instances.settings.inventoryCurrent"),
-  stale: t("instances.settings.inventoryStale"),
-  "not-reported": t("instances.settings.notReported"),
-  empty: t("instances.settings.inventoryEmpty"),
-  degraded: t("instances.settings.inventoryDegraded"),
-})[inventoryState.value]);
-const inventoryBadgeVariant = computed<"default" | "secondary" | "destructive">(() => inventoryState.value === "current" ? "default" : inventoryState.value === "degraded" ? "destructive" : "secondary");
-const customInventoryApps = computed(() => props.instance?.appInventory?.items.filter((app) => app.source === "custom") || []);
 const installableAppCount = computed(() => props.appManagement?.apps.filter((app) => app.canInstall).length || 0);
 const installedAppCount = computed(() => props.appManagement?.apps.filter((app) => app.state === "installed").length || 0);
 const appFilters = computed(() => [
@@ -923,6 +912,8 @@ function hasAppMenuActions(app: ManagedAppProjection) {
 }
 
 function openAppConfirmation(app: ManagedAppProjection, operation: AppManagementOperation) {
+  appOperationError.value = "";
+  focusEnvironmentAfterConfirmation.value = false;
   appConfirmation.value = { app, operation };
 }
 
@@ -979,6 +970,7 @@ async function confirmAppOperation() {
   if (!props.instance || !appConfirmation.value || operationSubmitting.value) return;
   const { app, operation } = appConfirmation.value;
   operationSubmitting.value = app.id;
+  appOperationError.value = "";
   try {
     await props.manageApp(props.instance.id, app.id, operation);
     showControlPlaneToast(t("instances.settings.operationQueued", {
@@ -987,7 +979,7 @@ async function confirmAppOperation() {
     }), "success");
     appConfirmation.value = undefined;
   } catch (cause) {
-    showControlPlaneToast(translateApiError(cause, t), "error");
+    appOperationError.value = translateApiError(cause, t);
   } finally {
     operationSubmitting.value = "";
   }
@@ -1370,10 +1362,15 @@ async function confirmAppOperation() {
 }
 
 .instance-app-views { min-width: 0; }
-.instance-app-view-tabs { display: flex; width: fit-content; max-width: calc(100% - 20px); margin: 10px; }
-.instance-app-view-tabs :deep(button) { min-height: 30px; font-size: 12px; font-weight: 500; }
-.instance-app-task-count { margin-left: 6px; color: var(--text-muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.instance-app-view-tabs { display: inline-flex; flex-wrap: nowrap; align-items: center; width: fit-content; max-width: calc(100% - 24px); height: 32px; min-height: 32px; margin: 10px 12px; padding: 2px; overflow-x: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-inset); scrollbar-width: none; }
+.instance-app-view-tabs::-webkit-scrollbar { display: none; }
+.instance-app-view-tabs :deep(button) { flex: 0 0 auto; min-width: 0; height: 26px; min-height: 26px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 500; white-space: nowrap; box-shadow: none; }
+.instance-app-view-tabs :deep(button:not([data-state="active"]):hover) { background: var(--surface-hover); color: var(--text-strong); }
+.instance-app-view-tabs :deep(button[data-state="active"]) { background: var(--surface-active); color: var(--text-strong); box-shadow: none; }
+.instance-app-task-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-left: 5px; padding: 0 4px; border-radius: 4px; background: var(--surface-raised); color: var(--text); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .instance-app-view-content { margin-top: 0; }
+.instance-app-view-content[hidden] { display: none; }
+.instance-app-environment-content { padding: 16px; }
 .instance-app-task-summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-block: 1px solid var(--line); background: var(--surface-inset); color: var(--text); font-size: 12px; }
 .instance-app-task-summary > svg { flex-shrink: 0; color: var(--brand-accent-muted); }
 .instance-app-task-summary-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -1530,18 +1527,24 @@ async function confirmAppOperation() {
 
 .instance-app-confirmation-summary small {
   color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .instance-app-confirmation-summary strong {
   overflow: hidden;
   color: var(--text-strong);
   font-size: 12px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.instance-app-confirmation-sources { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; color: var(--text); font-size: 12px; }
+.instance-app-confirmation-sources > div { display: grid; gap: 4px; }
+.instance-app-confirmation-sources > div > span:first-child { color: var(--text-muted); }
+.instance-app-confirmation-sources button { font-size: 12px; font-weight: 400; }
+.instance-app-confirmation-error { margin: 0; color: var(--status-danger); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 
 .instance-app-row code,
 .instance-app-issues code {
@@ -1684,6 +1687,8 @@ async function confirmAppOperation() {
 }
 
 @media (max-width: 680px) {
+  .instance-app-view-tabs { max-width: calc(100% - 20px); margin: 10px; }
+  .instance-app-environment-content { padding: 12px; }
   .instance-settings-grid {
     grid-template-columns: 1fr;
   }

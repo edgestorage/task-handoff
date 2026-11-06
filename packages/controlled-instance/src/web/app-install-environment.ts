@@ -89,6 +89,7 @@ export type AppInstallEnvironmentManagerOptions = {
 export type AppInstallExecutionPolicy = {
   revision: number;
   effective: AppInstallEffectiveSources;
+  npmRegistry?: string;
   prepareNodeRuntime: () => Promise<NodeRuntime>;
   nodeEnvironment: (base: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   aptSourceConfiguration: () => AptSourceConfiguration | undefined;
@@ -756,6 +757,7 @@ export class AppInstallEnvironmentManager {
     return {
       revision: this.stored.revision,
       effective,
+      ...(effective.npmRegistry ? { npmRegistry: effective.npmRegistry } : {}),
       prepareNodeRuntime: () => self.prepareNodeRuntime(effective),
       nodeEnvironment(base: NodeJS.ProcessEnv) {
         const runtime = self.privateRuntime();

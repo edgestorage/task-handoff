@@ -29,6 +29,7 @@ const {
   builtinManagedAppDefinitions,
   publicManagedAppDefinitions,
 } = require("../packages/app-runtime/src/catalog.ts");
+const { managedAppLauncherPath } = require("../packages/app-runtime/src/managed-node-apps.ts");
 const {
   builtinManagedAppRegistry,
   createManagedAppRegistry,
@@ -477,31 +478,37 @@ test("builtin definitions are the single launcher source and custom launchers ar
   assert.deepEqual(thctl.distribution.recipes[0].packages, ["@task-handoff/thctl"]);
   assert.equal(definitions.find((entry) => entry.launcher.id === "chromium").distribution.recipes[0].type, "system-package");
   const codex = definitions.find((entry) => entry.launcher.id === "codex");
-  assert.equal(codex.distribution.recipes[0].type, "node-package");
-  assert.equal(codex.distribution.recipes[0].installer, "npm");
-  assert.deepEqual(codex.distribution.recipes[0].packages, ["@openai/codex"]);
-  assert.equal(codex.distribution.recipes[0].managed, true);
+  assert.equal(codex.distribution.recipes.every((recipe) => recipe.type === "native-package"), true);
+  assert.equal(codex.distribution.recipes.every((recipe) => recipe.package === "@openai/codex"), true);
   assert.equal(codex.distribution.recipes[0].version, "0.165.0");
-  assert.equal(codex.distribution.recipes.length, 1);
-  assert.deepEqual(codex.distribution.recipes[0].platforms, ["linux", "darwin", "win32"]);
-  assert.deepEqual(codex.distribution.recipes[0].arches, ["x64", "arm64"]);
+  assert.equal(codex.distribution.recipes.length, 6);
+  assert.deepEqual(codex.distribution.recipes.map((recipe) => `${recipe.platforms[0]}-${recipe.arches[0]}`), [
+    "linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64",
+  ]);
+  assert.equal(codex.distribution.recipes.every((recipe) => recipe.integrity.startsWith("sha512-")), true);
+  assert.equal(codex.distribution.recipes.every((recipe) => recipe.launchPath.startsWith("vendor/") && recipe.launchPath.includes("/bin/codex")), true);
+  assert.equal(codex.distribution.recipes.some((recipe) => Object.hasOwn(recipe, "installer") || Object.hasOwn(recipe, "managed")), false);
   const opencode = definitions.find((entry) => entry.launcher.id === "opencode");
-  assert.equal(opencode.distribution.recipes[0].managed, true);
+  assert.equal(opencode.distribution.recipes.every((recipe) => recipe.type === "native-package"), true);
+  assert.equal(opencode.distribution.recipes.length, 8);
   assert.equal(opencode.distribution.recipes[0].version, "1.18.30");
+  assert.equal(opencode.distribution.recipes.filter((recipe) => recipe.libc === "musl").length, 2);
+  assert.equal(opencode.distribution.recipes.some((recipe) => Object.hasOwn(recipe, "installer") || Object.hasOwn(recipe, "managed")), false);
   const claude = definitions.find((entry) => entry.launcher.id === "claude");
-  assert.equal(claude.distribution.recipes[0].type, "node-package");
-  assert.equal(claude.distribution.recipes[0].installer, "npm");
-  assert.deepEqual(claude.distribution.recipes[0].packages, ["@anthropic-ai/claude-code"]);
-  assert.deepEqual(claude.distribution.recipes[0].platforms, ["linux", "darwin", "win32"]);
-  assert.deepEqual(claude.distribution.recipes[0].arches, ["x64", "arm64"]);
+  assert.equal(claude.distribution.recipes.every((recipe) => recipe.type === "native-package"), true);
+  assert.equal(claude.distribution.recipes.length, 8);
+  assert.equal(claude.distribution.recipes[0].version, "2.1.286");
+  assert.equal(claude.distribution.recipes.every((recipe) => recipe.package.startsWith("@anthropic-ai/claude-code-")), true);
+  assert.equal(claude.distribution.recipes.filter((recipe) => recipe.libc === "musl").length, 2);
+  assert.equal(claude.distribution.recipes.filter((recipe) => recipe.platforms[0] === "win32").every((recipe) => recipe.launchPath === "claude.exe"), true);
+  assert.equal(claude.distribution.recipes.filter((recipe) => recipe.platforms[0] !== "win32").every((recipe) => recipe.launchPath === "claude"), true);
+  assert.equal(claude.distribution.recipes.some((recipe) => Object.hasOwn(recipe, "installer") || Object.hasOwn(recipe, "managed")), false);
   assert.equal(selectInstallRecipe(claude, {
     platform: "linux", arch: "x64", installers: ["npm"], privilege: "passwordless-sudo", installerAccess: { npmGlobalWritable: true },
   }).recipe.privilege, "user");
   assert.equal(selectInstallRecipe(claude, {
-    platform: "linux", arch: "x64", installers: ["npm"], privilege: "passwordless-sudo", installerAccess: { npmGlobalWritable: false },
-  }).recipe.privilege, "user");
-  assert.equal(claude.distribution.recipes[0].managed, true);
-  assert.equal(claude.distribution.recipes[0].version, "2.1.286");
+    platform: "linux", arch: "x64", installers: [], privilege: "user",
+  }, { libc: "musl" }).recipe.package, "@anthropic-ai/claude-code-linux-x64-musl");
   assert.equal(selectInstallRecipe(claude, {
     platform: "freebsd", arch: "x64", installers: ["npm"], privilege: "root",
   }).reason.code, "UNSUPPORTED_PLATFORM");
@@ -513,7 +520,7 @@ test("builtin definitions are the single launcher source and custom launchers ar
   });
   assert.equal(codexProjection.canUninstall, true);
   const missingCodexProjection = managedAppProjection(codex, { state: "not-installed", executablePaths: [] }, {
-    platform: "linux", arch: "arm64", installers: ["npm"], privilege: "user", installerAccess: { npmGlobalWritable: true },
+    platform: "linux", arch: "arm64", installers: [], privilege: "user",
   });
   assert.equal(missingCodexProjection.canInstall, true);
   const readOnlyCodexProjection = managedAppProjection(codex, { state: "not-installed", executablePaths: [] }, {
@@ -620,19 +627,29 @@ test("controlled Claude launch relies on materialized settings instead of a mode
 });
 
 
-test("managed node apps resolve from the instance root and do not fall back to PATH", (context) => {
+test("managed native and node apps resolve from the instance root and do not fall back to PATH", (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-app-resolver-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const app = { id: "codex", name: "Codex", kind: "tty", command: "codex" };
-  const options = { managedAppRoot: path.join(root, "managed-apps"), managedAppIds: new Set(["codex"]) };
+  const managedAppRoot = path.join(root, "managed-apps");
+  const definition = builtinManagedAppDefinitions().find((entry) => entry.launcher.id === "codex");
+  const target = managedAppLauncherPath(managedAppRoot, definition);
+  const staleBin = path.join(managedAppRoot, "node-package", "codex", "node_modules", ".bin");
+  fs.mkdirSync(staleBin, { recursive: true });
+  fs.writeFileSync(path.join(staleBin, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+  const unprojected = resolveApp(app, { PATH: "" }, { managedAppRoot, managedAppIds: new Set(["codex"]) });
+  assert.equal(unprojected.executable, undefined);
+  assert.equal(unprojected.app.command, "codex");
+
+  const options = { managedAppRoot, managedAppIds: new Set(["codex"]), managedAppTargets: new Map([["codex", target]]) };
 
   const missing = resolveApp(app, { PATH: "" }, options);
   assert.equal(missing.executable, undefined);
-  assert.equal(missing.app.command, path.join(root, "managed-apps", "node-package", "codex", "node_modules", ".bin", "codex"));
+  assert.equal(missing.app.command, target);
 
-  const bin = path.join(root, "managed-apps", "node-package", "codex", "node_modules", ".bin");
-  fs.mkdirSync(bin, { recursive: true });
-  const executable = path.join(bin, "codex");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const executable = target;
   fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const resolved = resolveApp(app, { PATH: "" }, options);
   assert.equal(resolved.executable, executable);

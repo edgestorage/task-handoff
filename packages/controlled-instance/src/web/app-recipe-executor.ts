@@ -6,7 +6,8 @@ import { createGunzip } from "node:zlib";
 import type { AppManagementOperation, AppManagementProgress, FinalComputerCapabilities } from "@task-handoff/protocol/control-plane";
 import { resolveExecutable } from "@task-handoff/core/core/executable-resolver";
 import { commandInvocation, quoteCommandInterpreterArgument } from "@task-handoff/core/core/command-invocation";
-import type { ArchiveInstallRecipe, InstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
+import { managedNativeAppRoot, readNativeAppManifest, validNativePackageIntegrity, type NativeAppManifest } from "@task-handoff/app-runtime";
+import type { ArchiveInstallRecipe, InstallRecipe, NativePackageInstallRecipe, NodePackageInstallRecipe, SystemPackageInstallRecipe } from "@task-handoff/app-runtime/types";
 import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
 import type { AppInstallEnvironmentManager, AppInstallExecutionPolicy } from "./app-install-environment";
@@ -15,10 +16,17 @@ const MAX_LOG_CHARS = 8_192;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 100_000;
 const MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_ARTIFACT_REDIRECTS = 8;
+const ARTIFACT_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const NPM_REGISTRY_PROBE_TIMEOUT_MS = 3_000;
+const DOWNLOAD_TOTAL_TIMEOUT_MS = 10 * 60_000;
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+const DEFAULT_NPM_REGISTRIES = ["https://registry.npmjs.org", "https://registry.npmmirror.com"] as const;
 const PACKAGE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9+._:@/-]{0,199}$/;
 const NODE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]{0,99}\/)?[a-z0-9][a-z0-9._-]{0,99}$/i;
 const NODE_PACKAGE_VERSION = /^[a-zA-Z0-9][a-zA-Z0-9+._-]{0,120}$/;
 const MANAGED_NODE_PACKAGE_DIR = "node-package";
+const MANAGED_NATIVE_PACKAGE_DIR = "native";
 
 export class AppRecipeExecutionError extends Error {
   readonly code: string;
@@ -65,6 +73,8 @@ export type AppRecipeExecutorOptions = {
   env?: NodeJS.ProcessEnv;
   commandRunner?: (command: AppRecipeCommand, hooks?: AppRecipeCommandHooks) => Promise<AppRecipeCommandResult>;
   fetcher?: typeof fetch;
+  downloadTimeoutMs?: number;
+  downloadIdleTimeoutMs?: number;
 };
 
 function bounded(value: string) {
@@ -274,30 +284,129 @@ function controlledPath(baseDir: string, relativePath: string) {
   return resolved;
 }
 
-async function downloadArtifact(url: string, destination: string, expectedSha256: string, fetcher: typeof fetch, onProgress?: AppRecipeExecutionContext["onPhase"]) {
-  if (!url.startsWith("https://") || !/^[a-f0-9]{64}$/i.test(expectedSha256)) {
-    throw new AppRecipeExecutionError("invalid_builtin_recipe", "Archive recipes require HTTPS and a SHA-256 checksum.");
-  }
-  const response = await fetcher(url, { redirect: "follow" });
-  if (!response.ok || !response.body) throw new AppRecipeExecutionError("download_failed", `Artifact download failed with HTTP ${response.status}.`, true);
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_ARCHIVE_BYTES) throw new AppRecipeExecutionError("artifact_too_large", "Artifact exceeds the managed download limit.");
-  const fd = fs.openSync(destination, "wx", 0o600);
-  const hash = crypto.createHash("sha256");
-  let received = 0;
+function managedHttpsUrl(value: string | URL) {
   try {
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+    const url = value instanceof URL ? new URL(value.toString()) : new URL(value.trim());
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password || url.search || url.hash) return undefined;
+    return url;
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchHttpsArtifact(url: string, fetcher: typeof fetch, init: RequestInit = {}) {
+  let current = managedHttpsUrl(url);
+  if (!current) throw new AppRecipeExecutionError("invalid_builtin_recipe", "Managed artifacts require a canonical HTTPS URL without credentials, query strings, or fragments.");
+  for (let redirects = 0; ; redirects += 1) {
+    let response: Response;
+    try {
+      response = await fetcher(current.toString(), { ...init, redirect: "manual" });
+    } catch (error) {
+      throw new AppRecipeExecutionError("download_failed", error instanceof Error ? error.message : String(error), true);
+    }
+    if (response.url) {
+      if (!managedHttpsUrl(response.url)) {
+        throw new AppRecipeExecutionError("invalid_builtin_recipe", "Managed artifacts must not redirect to an unsafe URL.");
+      }
+    }
+    if (!ARTIFACT_REDIRECT_STATUSES.has(response.status)) return response;
+    if (redirects >= MAX_ARTIFACT_REDIRECTS) {
+      throw new AppRecipeExecutionError("download_failed", "The artifact download exceeded the redirect limit.", true);
+    }
+    const location = response.headers.get("location");
+    if (!location) throw new AppRecipeExecutionError("download_failed", "The artifact download returned a redirect without a location.", true);
+    let next: URL;
+    try {
+      next = new URL(location, current);
+    } catch {
+      throw new AppRecipeExecutionError("download_failed", "The artifact download returned an invalid redirect location.", true);
+    }
+    current = managedHttpsUrl(next);
+    if (!current) throw new AppRecipeExecutionError("invalid_builtin_recipe", "Managed artifacts must not redirect to an unsafe URL.");
+  }
+}
+
+async function downloadArtifact(
+  url: string,
+  destination: string,
+  verification: { sha256?: string; integrity?: string },
+  fetcher: typeof fetch,
+  onProgress?: AppRecipeExecutionContext["onPhase"],
+  timeouts: { totalMs: number; idleMs: number } = { totalMs: DOWNLOAD_TOTAL_TIMEOUT_MS, idleMs: DOWNLOAD_IDLE_TIMEOUT_MS },
+) {
+  if (verification.integrity && !validNativePackageIntegrity(verification.integrity)) {
+    throw new AppRecipeExecutionError("invalid_builtin_recipe", "The managed artifact integrity value is invalid.");
+  }
+  const integrityMatch = verification.integrity?.match(/^(sha256|sha512)-(.+)$/);
+  const algorithm = integrityMatch?.[1] || "sha256";
+  const expected = integrityMatch?.[2] || verification.sha256;
+  if (!expected || (!integrityMatch && !/^[a-f0-9]{64}$/i.test(expected))) {
+    throw new AppRecipeExecutionError("invalid_builtin_recipe", "Managed artifacts require HTTPS and an exact SHA-256 or SRI checksum.");
+  }
+  const controller = new AbortController();
+  let timedOut: "total" | "idle" | undefined;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let rejectTimeout = (_error: AppRecipeExecutionError) => {};
+  const timeout = new Promise<never>((_resolve, reject) => { rejectTimeout = reject; });
+  const timeoutError = () => new AppRecipeExecutionError(
+    "download_timeout",
+    timedOut === "idle"
+      ? `Artifact download received no data for ${timeouts.idleMs}ms.`
+      : `Artifact download timed out after ${timeouts.totalMs}ms.`,
+    true,
+  );
+  const fail = (kind: "total" | "idle") => {
+    if (timedOut) return;
+    timedOut = kind;
+    controller.abort();
+    rejectTimeout(timeoutError());
+  };
+  const totalTimer = setTimeout(() => fail("total"), Math.max(1, timeouts.totalMs));
+  totalTimer.unref?.();
+  const resetIdle = () => {
+    if (timedOut) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => fail("idle"), Math.max(1, timeouts.idleMs));
+    idleTimer.unref?.();
+  };
+  resetIdle();
+  let fd: number | undefined;
+  let iterator: AsyncIterator<Uint8Array> | undefined;
+  try {
+    const response = await Promise.race([fetchHttpsArtifact(url, fetcher, { signal: controller.signal }), timeout]);
+    if (!response.ok || !response.body) throw new AppRecipeExecutionError("download_failed", `Artifact download failed with HTTP ${response.status}.`, true);
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_ARCHIVE_BYTES) throw new AppRecipeExecutionError("artifact_too_large", "Artifact exceeds the managed download limit.");
+    fd = fs.openSync(destination, "wx", 0o600);
+    const hash = crypto.createHash(algorithm);
+    let received = 0;
+    iterator = (response.body as unknown as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+    for (;;) {
+      resetIdle();
+      const next = await Promise.race([iterator.next(), timeout]);
+      resetIdle();
+      if (next.done) break;
+      const chunk = next.value;
       received += chunk.byteLength;
       if (received > MAX_ARCHIVE_BYTES) throw new AppRecipeExecutionError("artifact_too_large", "Artifact exceeds the managed download limit.");
       fs.writeSync(fd, chunk);
       hash.update(chunk);
       onProgress?.("download", { current: received, ...(Number.isFinite(declaredLength) && declaredLength > 0 ? { total: declaredLength } : {}), unit: "bytes" });
     }
+    const actual = integrityMatch ? hash.digest("base64") : hash.digest("hex");
+    if (integrityMatch ? actual !== expected : actual.toLowerCase() !== expected.toLowerCase()) {
+      throw new AppRecipeExecutionError("checksum_mismatch", "Artifact checksum does not match the built-in recipe.");
+    }
+  } catch (error) {
+    if (timedOut) throw timeoutError();
+    throw error;
   } finally {
-    fs.closeSync(fd);
-  }
-  if (hash.digest("hex") !== expectedSha256.toLowerCase()) {
-    throw new AppRecipeExecutionError("checksum_mismatch", "Artifact checksum does not match the built-in recipe.");
+    clearTimeout(totalTimer);
+    if (idleTimer) clearTimeout(idleTimer);
+    if (timedOut) {
+      try { void iterator?.return?.().catch(() => undefined); } catch {}
+    }
+    if (fd !== undefined) fs.closeSync(fd);
   }
 }
 
@@ -313,7 +422,7 @@ function walkOwnedFiles(root: string, current = root): string[] {
     const stat = fs.lstatSync(absolute);
     if (stat.isSymbolicLink()) throw new AppRecipeExecutionError("unsafe_archive", "Extracted archive contains a symbolic link.");
     if (stat.isDirectory()) values.push(...walkOwnedFiles(root, absolute));
-    else if (stat.isFile()) values.push(relative);
+    else if (stat.isFile()) values.push(relative.split(path.sep).join("/"));
     else throw new AppRecipeExecutionError("unsafe_archive", "Extracted archive contains an unsupported file type.");
   }
   return values;
@@ -496,7 +605,10 @@ async function stageArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExec
   const extracted = path.join(staging, "root");
   try {
     context.onPhase?.("download");
-    await downloadArtifact(recipe.url, artifact, recipe.sha256, options.fetcher, context.onPhase);
+    await downloadArtifact(recipe.url, artifact, { sha256: recipe.sha256 }, options.fetcher, context.onPhase, {
+      totalMs: options.downloadTimeoutMs ?? DOWNLOAD_TOTAL_TIMEOUT_MS,
+      idleMs: options.downloadIdleTimeoutMs ?? DOWNLOAD_IDLE_TIMEOUT_MS,
+    });
     context.onPhase?.("inspect");
     try {
       await inspectArchive(recipe, artifact);
@@ -637,6 +749,245 @@ function replaceManagedNodePackage(installBaseDir: string, appId: string, stagin
   fs.rmSync(previous, { recursive: true, force: true });
 }
 
+function npmTarballUrl(registry: string | undefined, packageName: string, packageVersion: string) {
+  const base = (registry || process.env.npm_config_registry || process.env.NPM_CONFIG_REGISTRY || "https://registry.npmjs.org").replace(/\/+$/, "");
+  if (!base.startsWith("https://")) throw new AppRecipeExecutionError("invalid_builtin_recipe", "The npm registry must use HTTPS.");
+  const leaf = packageName.split("/").at(-1);
+  if (!leaf) throw new AppRecipeExecutionError("invalid_builtin_recipe", "The native package name is invalid.");
+  return `${base}/${packageName}/-/${leaf}-${packageVersion}.tgz`;
+}
+
+function normalizedNpmRegistry(value: string | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password || url.search || url.hash) return undefined;
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+function npmRegistryCandidates(primary: string | undefined, env: NodeJS.ProcessEnv) {
+  const preferred = normalizedNpmRegistry(primary)
+    || normalizedNpmRegistry(env.npm_config_registry)
+    || normalizedNpmRegistry(env.NPM_CONFIG_REGISTRY);
+  const candidates: string[] = [];
+  for (const value of [preferred, ...DEFAULT_NPM_REGISTRIES]) {
+    if (value && !candidates.includes(value)) candidates.push(value);
+  }
+  return candidates;
+}
+
+async function probeNpmPackageUrl(url: string, fetcher: typeof fetch) {
+  const response = await fetchHttpsArtifact(url, fetcher, {
+    method: "GET",
+    headers: { range: "bytes=0-0" },
+    signal: AbortSignal.timeout(NPM_REGISTRY_PROBE_TIMEOUT_MS),
+  });
+  try {
+    if (!response.ok) throw new AppRecipeExecutionError("npm_registry_unavailable", `HTTP ${response.status}`, true);
+  } finally {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
+async function selectNpmPackageSource(
+  recipe: NativePackageInstallRecipe,
+  registry: string | undefined,
+  env: NodeJS.ProcessEnv,
+  fetcher: typeof fetch,
+  context: AppRecipeExecutionContext,
+) {
+  if (recipe.tarballUrl) {
+    const tarballUrl = managedHttpsUrl(recipe.tarballUrl);
+    if (!tarballUrl) throw new AppRecipeExecutionError("invalid_builtin_recipe", "The native package tarball URL must be canonical HTTPS without credentials, query strings, or fragments.");
+    return tarballUrl.toString();
+  }
+  const candidates = npmRegistryCandidates(registry, env);
+  if (!candidates.length) throw new AppRecipeExecutionError("invalid_builtin_recipe", "The npm registry must be a valid HTTPS URL.");
+  const failures: string[] = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const url = npmTarballUrl(candidate, recipe.package, recipe.packageVersion);
+    try {
+      await probeNpmPackageUrl(url, fetcher);
+      context.onOutput?.("stdout", `${index > 0 ? "Using fallback npm source" : "Using npm source"} ${candidate}\n`);
+      return url;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`${candidate}: ${message}`);
+      context.onOutput?.("stderr", `npm source ${candidate} unavailable: ${message}\n`);
+    }
+  }
+  throw new AppRecipeExecutionError(
+    "npm_registry_unavailable",
+    `No npm source responded within ${NPM_REGISTRY_PROBE_TIMEOUT_MS}ms: ${failures.join("; ")}`,
+    true,
+  );
+}
+
+function validateNativeRecipe(recipe: NativePackageInstallRecipe) {
+  if (!NODE_PACKAGE_NAME.test(recipe.package) || !NODE_PACKAGE_VERSION.test(recipe.packageVersion) || !NODE_PACKAGE_VERSION.test(recipe.version)) {
+    throw new AppRecipeExecutionError("invalid_builtin_recipe", "The native package recipe contains an invalid package or version.");
+  }
+  if (!validNativePackageIntegrity(recipe.integrity)) throw new AppRecipeExecutionError("invalid_builtin_recipe", "The native package recipe contains an invalid integrity value.");
+  const launchPath = safeRelativeArchivePath(recipe.launchPath);
+  if (!launchPath || launchPath !== recipe.launchPath.replaceAll("\\", "/")) {
+    throw new AppRecipeExecutionError("invalid_builtin_recipe", "The native package launcher path must be a safe relative path.");
+  }
+}
+
+async function pipeNpmTarball(artifact: string, target: NodeJS.WritableStream, timeoutMs: number) {
+  const source = fs.createReadStream(artifact).pipe(createGunzip());
+  const timer = setTimeout(() => source.destroy(new Error(`Package decompression timed out after ${timeoutMs}ms.`)), timeoutMs);
+  timer.unref?.();
+  try {
+    await consumeArchiveStream(source, target);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function createNpmPackageValidator() {
+  const validate = createArchiveValidator();
+  return (entry: ReadEntry) => {
+    if (!entry.meta && !entry.path.startsWith("package/")) {
+      throw new AppRecipeExecutionError("unsafe_archive", "The npm package tarball must contain a single package root.");
+    }
+    return validate(entry);
+  };
+}
+
+async function inspectNpmPackage(artifact: string) {
+  const validate = createNpmPackageValidator();
+  const parser = listTar({ strict: true, maxMetaEntrySize: 1024 * 1024, filter: (_entryPath, entry) => validate(entry as ReadEntry) });
+  await pipeNpmTarball(artifact, parser, 60_000);
+}
+
+async function extractNpmPackage(artifact: string, destination: string) {
+  const validate = createNpmPackageValidator();
+  const unpack = extractTar({
+    cwd: destination,
+    strict: true,
+    preservePaths: false,
+    preserveOwner: false,
+    strip: 1,
+    maxDepth: 100,
+    unlink: true,
+    maxMetaEntrySize: 1024 * 1024,
+    filter: (_entryPath, entry) => validate(entry as ReadEntry),
+  });
+  await pipeNpmTarball(artifact, unpack, 5 * 60_000);
+}
+
+function nativePackageRoot(installBaseDir: string, appId: string) {
+  return managedNativeAppRoot(installBaseDir, appId);
+}
+
+function nativePackageStaging(installBaseDir: string, appId: string) {
+  return path.join(installBaseDir, MANAGED_NATIVE_PACKAGE_DIR, ".staging", `${appId}-${crypto.randomUUID()}`);
+}
+
+function verifyNativePackage(staging: string, recipe: NativePackageInstallRecipe) {
+  const candidate = path.resolve(staging, recipe.launchPath);
+  let file: fs.Stats | undefined;
+  try { file = fs.lstatSync(candidate); } catch { file = undefined; }
+  const root = fs.realpathSync(staging);
+  const realCandidate = file?.isFile() ? fs.realpathSync(candidate) : undefined;
+  if (!file?.isFile() || !realCandidate || !pathInsideRoot(realCandidate, root)) {
+    throw new AppRecipeExecutionError("postcondition_failed", "The native package has no usable launcher inside its install root.");
+  }
+  if (process.platform !== "win32") fs.chmodSync(candidate, 0o755);
+  return candidate;
+}
+
+function writeNativePackageManifest(staging: string, installRoot: string, appId: string, recipe: NativePackageInstallRecipe, files: string[]) {
+  const manifest: NativeAppManifest = {
+    schemaVersion: 1,
+    appId,
+    version: recipe.version,
+    package: recipe.package,
+    packageVersion: recipe.packageVersion,
+    integrity: recipe.integrity,
+    installRoot,
+    launchPath: recipe.launchPath,
+    files,
+  };
+  fs.writeFileSync(path.join(staging, "managed-app.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+}
+
+function replaceNativePackage(installBaseDir: string, appId: string, staging: string) {
+  const target = nativePackageRoot(installBaseDir, appId);
+  const previous = `${target}.previous-${crypto.randomUUID()}`;
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  if (fs.existsSync(target)) fs.renameSync(target, previous);
+  try {
+    fs.renameSync(staging, target);
+  } catch (error) {
+    if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+    if (fs.existsSync(previous)) fs.renameSync(previous, target);
+    throw error;
+  }
+  fs.rmSync(previous, { recursive: true, force: true });
+}
+
+async function executeNativePackage(
+  operation: AppManagementOperation,
+  recipe: NativePackageInstallRecipe,
+  context: AppRecipeExecutionContext,
+  options: Required<Pick<AppRecipeExecutorOptions, "commandRunner" | "fetcher">> & AppRecipeExecutorOptions,
+  registry: string | undefined,
+) {
+  validateNativeRecipe(recipe);
+  const target = nativePackageRoot(options.installBaseDir, context.appId);
+  context.onPhase?.(operation === "install" ? "install-native-package" : operation === "update" ? "update-native-package" : "uninstall-native-package");
+  if (operation === "uninstall") {
+    const manifest = readNativeAppManifest(options.installBaseDir, context.appId);
+    if (!manifest || manifest.appId !== context.appId || path.resolve(manifest.installRoot) !== path.resolve(target)) {
+      throw new AppRecipeExecutionError("ownership_manifest_missing", "The native package ownership manifest is missing or invalid.");
+    }
+    fs.rmSync(target, { recursive: true, force: true });
+    return { log: "" };
+  }
+  const staging = nativePackageStaging(options.installBaseDir, context.appId);
+  fs.rmSync(staging, { recursive: true, force: true });
+  fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+  const artifact = path.join(staging, "artifact.tgz");
+  const extracted = path.join(staging, "root");
+  try {
+    context.onPhase?.("download");
+    const artifactUrl = await selectNpmPackageSource(recipe, registry, options.env || process.env, options.fetcher, context);
+    await downloadArtifact(artifactUrl, artifact, { integrity: recipe.integrity }, options.fetcher, context.onPhase, {
+      totalMs: options.downloadTimeoutMs ?? DOWNLOAD_TOTAL_TIMEOUT_MS,
+      idleMs: options.downloadIdleTimeoutMs ?? DOWNLOAD_IDLE_TIMEOUT_MS,
+    });
+    context.onPhase?.("inspect");
+    await inspectNpmPackage(artifact);
+    fs.mkdirSync(extracted, { recursive: true });
+    context.onPhase?.("extract");
+    await extractNpmPackage(artifact, extracted);
+    const launcher = verifyNativePackage(extracted, recipe);
+    context.onPhase?.("verify");
+    const verifyCommand = {
+      executable: launcher,
+      args: ["--version"],
+      env: options.env || process.env,
+      timeoutMs: 15_000,
+    };
+    context.onCommand?.({ executable: verifyCommand.executable, args: [...verifyCommand.args] });
+    const verify = await options.commandRunner(verifyCommand, { onOutput: context.onOutput });
+    if (verify.exitCode !== 0) throw new AppRecipeExecutionError("postcondition_failed", bounded(verify.stderr) || "The native package launcher failed its version check.");
+    const files = [...new Set([...walkOwnedFiles(extracted), "managed-app.json"])];
+    writeNativePackageManifest(extracted, target, context.appId, recipe, files);
+    fs.rmSync(artifact, { force: true });
+    replaceNativePackage(options.installBaseDir, context.appId, extracted);
+    return { log: bounded(verify.stdout || verify.stderr) };
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
   const resolved = {
     ...options,
@@ -719,6 +1070,9 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
       }
       if (result.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(result.stderr) || "The Node package manager failed.", true);
       return { log: bounded(result.stdout || result.stderr) };
+    }
+    if (recipe.type === "native-package") {
+      return executeNativePackage(operation, recipe, context, resolved, sourcePolicy?.npmRegistry);
     }
     if (operation === "uninstall") uninstallArchive(recipe, context, resolved);
     else if (operation === "update") await updateArchive(recipe, context, resolved);

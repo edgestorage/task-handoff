@@ -33,6 +33,8 @@ const {
   supportsAiSessionWorkspaceSelection,
 } = require("../packages/protocol/src/control-plane.ts");
 const { INSTANCE_SHELL_PROTOCOL_VERSION } = require("../packages/protocol/src/instance-shell.ts");
+const { builtinManagedAppDefinitions } = require("../packages/app-runtime/src/catalog.ts");
+const { managedAppLauncherPath } = require("../packages/app-runtime/src/managed-node-apps.ts");
 
 function storagePaths(root) {
   const paths = {
@@ -93,7 +95,8 @@ test("runtime diagnostics ignore global managed commands and reflect private ins
   const read = () => runtimeDiagnostics(paths).commands.find((command) => command.name === "claude");
   assert.equal(read().available, false);
   assert.equal(fs.existsSync(path.join(root, "managed-apps")), false, "diagnostic reads must not materialize launchers");
-  const command = path.join(root, "managed-apps", "node-package", "claude", "node_modules", ".bin", process.platform === "win32" ? "claude.cmd" : "claude");
+  const definition = builtinManagedAppDefinitions().find((entry) => entry.launcher.id === "claude");
+  const command = managedAppLauncherPath(path.join(root, "managed-apps"), definition);
   fs.mkdirSync(path.dirname(command), { recursive: true });
   fs.writeFileSync(command, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   assert.equal(read().available, true);

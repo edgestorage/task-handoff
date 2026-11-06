@@ -73,6 +73,7 @@ const DEVICE_TRUST_RETRY_INITIAL_MS = 2_000;
 const DEVICE_TRUST_RETRY_MAX_MS = 30_000;
 const MOBILE_SESSION_RENEWAL_WINDOW_MS = 7 * 24 * 60 * 60_000;
 const MINIMUM_MOBILE_SESSION_RENEWAL_DELAY_MS = 60_000;
+export const MOBILE_BACKGROUND_CONNECTION_GRACE_MS = 30_000;
 
 export class MobileControlPlaneConnectionCoordinator {
   currentCapabilities: ControlPlanePublicCapabilities;
@@ -87,6 +88,8 @@ export class MobileControlPlaneConnectionCoordinator {
   private connectTimer?: ReturnType<typeof setTimeout>;
   private stableTimer?: ReturnType<typeof setTimeout>;
   private deviceTrustTimer?: ReturnType<typeof setTimeout>;
+  private backgroundGraceTimer?: ReturnType<typeof setTimeout>;
+  private backgroundGraceStartedAt?: number;
   private epoch = 0;
   private connectionSequence = 0;
   private foreground = false;
@@ -97,6 +100,7 @@ export class MobileControlPlaneConnectionCoordinator {
   private desiredSignature = '';
   private reconcileQueued = false;
   private pendingReconcileMode: 'domains' | 'environment' = 'environment';
+  private pendingReconcileForce = false;
   private domainSyncPending = false;
   private mobileSessionRenewalSupported = true;
   private deviceTrustValue?: CloudClientTrustOutcome;
@@ -146,9 +150,15 @@ export class MobileControlPlaneConnectionCoordinator {
 
   setEnvironment(input: { foreground?: boolean; connected?: boolean; carPlayConnected?: boolean }) {
     const previousCarPlayConnected = this.carPlayConnected;
-    if (input.foreground !== undefined) this.foreground = input.foreground;
+    if (input.foreground === true) this.resumeForeground();
+    else if (input.foreground === false) this.beginBackgroundGrace();
     if (input.connected !== undefined) this.connected = input.connected;
     if (input.carPlayConnected !== undefined) this.carPlayConnected = input.carPlayConnected;
+    if (this.carPlayConnected && this.backgroundGraceTimer) {
+      this.clearBackgroundGrace();
+      this.foreground = false;
+      diagnosticLog.info('runtime.background_grace.skipped', { reason: 'carplay' });
+    }
     if (previousCarPlayConnected !== this.carPlayConnected) {
       for (const listener of this.listeners) listener();
     }
@@ -166,6 +176,7 @@ export class MobileControlPlaneConnectionCoordinator {
     this.deviceTrustRetryAttempt = 0;
     this.epoch += 1;
     this.clearTimers();
+    this.clearBackgroundGrace();
     this.abortController?.abort();
     this.abortController = undefined;
     this.connection?.close();
@@ -189,19 +200,65 @@ export class MobileControlPlaneConnectionCoordinator {
     return true;
   }
 
-  private queueReconcile(mode: 'domains' | 'environment' = 'environment') {
+  private queueReconcile(mode: 'domains' | 'environment' = 'environment', force = false) {
     if (this.reconcileQueued) {
       if (mode === 'environment') this.pendingReconcileMode = 'environment';
+      if (force) this.pendingReconcileForce = true;
       return;
     }
     this.reconcileQueued = true;
     this.pendingReconcileMode = mode;
+    this.pendingReconcileForce = force;
     queueMicrotask(() => {
       const pendingMode = this.pendingReconcileMode;
+      const pendingForce = this.pendingReconcileForce;
       this.reconcileQueued = false;
       this.pendingReconcileMode = 'environment';
-      this.reconcile(false, pendingMode);
+      this.pendingReconcileForce = false;
+      this.reconcile(pendingForce, pendingMode);
     });
+  }
+
+  private beginBackgroundGrace() {
+    if (!this.foreground || this.backgroundGraceTimer) return;
+    if (this.carPlayConnected) {
+      this.foreground = false;
+      return;
+    }
+    const startedAt = Date.now();
+    this.backgroundGraceStartedAt = startedAt;
+    diagnosticLog.info('runtime.background_grace.start', { graceMs: MOBILE_BACKGROUND_CONNECTION_GRACE_MS });
+    this.backgroundGraceTimer = setTimeout(() => {
+      this.backgroundGraceTimer = undefined;
+      this.backgroundGraceStartedAt = undefined;
+      if (!this.foreground) return;
+      this.foreground = false;
+      diagnosticLog.info('runtime.background_grace.expired', {
+        graceMs: MOBILE_BACKGROUND_CONNECTION_GRACE_MS,
+        elapsedMs: Date.now() - startedAt,
+      });
+      this.queueReconcile('environment');
+    }, MOBILE_BACKGROUND_CONNECTION_GRACE_MS);
+  }
+
+  private resumeForeground() {
+    const startedAt = this.backgroundGraceStartedAt;
+    const graceExpired = startedAt !== undefined
+      && Date.now() - startedAt >= MOBILE_BACKGROUND_CONNECTION_GRACE_MS;
+    this.clearBackgroundGrace();
+    this.foreground = true;
+    if (!graceExpired) return;
+    diagnosticLog.info('runtime.background_grace.expired_while_suspended', {
+      graceMs: MOBILE_BACKGROUND_CONNECTION_GRACE_MS,
+      elapsedMs: Date.now() - startedAt,
+    });
+    this.queueReconcile('environment', true);
+  }
+
+  private clearBackgroundGrace() {
+    if (this.backgroundGraceTimer) clearTimeout(this.backgroundGraceTimer);
+    this.backgroundGraceTimer = undefined;
+    this.backgroundGraceStartedAt = undefined;
   }
 
   private reconcile(force = false, mode: 'domains' | 'environment' = 'environment') {

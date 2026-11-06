@@ -1,5 +1,6 @@
 <template>
   <div class="app-tasks">
+    <p v-if="groups.active.length" class="app-tasks-hint">{{ t("instances.settings.appTasksBackground") }}</p>
     <p v-if="!groups.active.length && !groups.recent.length" class="app-tasks-empty">{{ t("instances.settings.noAppTasks") }}</p>
     <section v-for="group in taskSections" v-show="group.jobs.length" :key="group.id" class="app-task-group" :aria-label="group.label">
       <h4>{{ group.label }} <span>{{ group.jobs.length }}</span></h4>
@@ -36,18 +37,16 @@
               <div v-if="job.startedAt"><dt>{{ t("instances.settings.taskDuration") }}</dt><dd>{{ durationLabel(job) }}</dd></div>
             </dl>
             <p v-if="job.error" class="app-task-error">{{ job.error.message }}</p>
-            <Collapsible v-if="job.command || job.logTail" class="app-task-output">
-              <CollapsibleTrigger class="app-task-output-trigger">
+            <section v-if="job.command || job.logTail" class="app-task-output">
+              <div class="app-task-output-heading">
                 <TerminalSquare :size="14" aria-hidden="true" />
-                {{ job.state === "running" ? t("instances.settings.liveInstallerOutput") : t("instances.settings.installerOutput") }}<template v-if="job.logTruncated"> · {{ t("instances.settings.latestLog") }}</template>
-                <ChevronDown :size="14" class="app-task-output-chevron" aria-hidden="true" />
-              </CollapsibleTrigger>
-              <CollapsibleContent>
+                <span>{{ job.state === "running" ? t("instances.settings.liveInstallerOutput") : t("instances.settings.installerOutput") }}</span>
+                <span v-if="job.logTruncated" class="app-task-log-note">{{ t("instances.settings.latestLog") }}</span>
+              </div>
                 <ScrollArea class="app-task-log" :horizontal="false" tabindex="0" role="region" :aria-label="t('instances.settings.installerOutput')">
                   <pre>{{ executionOutput(job) }}</pre>
                 </ScrollArea>
-              </CollapsibleContent>
-            </Collapsible>
+            </section>
             <p v-else class="app-task-note">{{ job.state === 'queued' || job.state === 'running' ? t("instances.settings.waitingInstaller") : t("instances.settings.noInstallerOutput") }}</p>
           </div>
         </CollapsibleContent>
@@ -57,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { CheckCircle2, ChevronDown, CircleAlert, CircleX, Clock3, LoaderCircle, TerminalSquare } from "@lucide/vue";
 import type { AppManagementJob, AppManagementSnapshot } from "../../../api/types";
@@ -79,6 +78,11 @@ const taskSections = computed(() => [
   { id: "active", label: t("instances.settings.activeAppTasks"), jobs: groups.value.active },
   { id: "recent", label: t("instances.settings.recentAppTasks"), jobs: groups.value.recent },
 ]);
+
+onMounted(() => {
+  const jobs = [...groups.value.active, ...groups.value.recent];
+  if (!jobs.some((job) => job.id === selectedJobId.value)) selectedJobId.value = jobs[0]?.id || "";
+});
 
 function appName(job: AppManagementJob) {
   return props.snapshot.apps.find((app) => app.id === job.appId)?.name || job.appId;
@@ -108,10 +112,12 @@ function executionOutput(job: AppManagementJob) {
 
 <style scoped>
 .app-tasks { min-width: 0; }
+.app-tasks-hint { margin: 0; padding: 10px 12px; color: var(--text-muted); font-size: 12px; line-height: 1.5; border-bottom: 1px solid var(--line); }
 .app-tasks-empty { margin: 0; padding: 24px 12px; color: var(--text-muted); font-size: 13px; text-align: center; }
 .app-task-group h4 { display: flex; gap: 8px; margin: 0; padding: 10px 12px; background: var(--surface-inset); color: var(--text); font-size: 12px; font-weight: 500; }
 .app-task-group h4 span { color: var(--text-muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 .app-task-group + .app-task-group, .app-task { border-top: 1px solid var(--line); }
+.app-task[data-state="open"] { background: var(--surface-inset); }
 .app-task-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px; }
 .app-task-row > svg { flex-shrink: 0; margin-top: 3px; }
 .app-task-icon { color: var(--brand-accent-muted); }
@@ -133,10 +139,9 @@ function executionOutput(job: AppManagementJob) {
 .app-task-detail dd { color: var(--text); margin: 0; overflow-wrap: anywhere; }
 .app-task-detail p { margin: 0; }
 .app-task-output { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-inset); }
-.app-task-output-trigger { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 10px; color: var(--text); font-size: 12px; font-weight: 400; text-align: left; }
-.app-task-output-chevron { margin-left: auto; flex-shrink: 0; }
-.app-task-output-trigger[data-state="open"] .app-task-output-chevron { transform: rotate(180deg); }
-.app-task-log { height: 180px; border-top: 1px solid var(--line); }
+.app-task-output-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; color: var(--text); font-size: 12px; font-weight: 400; }
+.app-task-log-note { margin-left: auto; color: var(--text-muted); }
+.app-task-log { height: 220px; border-top: 1px solid var(--line); background: var(--surface-raised); }
 .app-task-log pre { margin: 0; padding: 10px; color: var(--text); font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 680px) {
   .app-task-row { flex-wrap: wrap; }
