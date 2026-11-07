@@ -11,13 +11,16 @@ const matrixPath = path.join(root, "controlled-instance-rs", "docs", "http-route
 const BASELINE_HEADING = "## `v0.0.46` compatibility baseline";
 const TARGET_HEADING = "## Target-current Node extensions after `v0.0.46`";
 const BASELINE_ROUTE_COUNT = 201;
-const TARGET_ROUTE_COUNT = 206;
+const TARGET_ROUTE_COUNT = 209;
 const POST_BASELINE_ROUTES = new Set([
   "GET /api/internal/instance-shell",
   "GET /api/apps/install-environment",
   "PUT /api/apps/install-environment",
   "POST /api/apps/install-environment/test",
   "POST /api/apps/install-environment/prepare",
+  "GET /api/ai-sessions/{}/repository/files/content",
+  "GET /api/apps/sessions/{}/repository/files/content",
+  "GET /api/ai-sessions/{}/turns/{}/tool-activity",
 ]);
 const WEB_PROXY_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"];
 const WEB_PROXY_ALIAS_PATH = "/api/apps/sessions/{}/web/";
@@ -52,7 +55,14 @@ function staticRoutePaths(expression, sourceFile) {
   if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return [expression.text];
   if (!ts.isTemplateExpression(expression) || expression.templateSpans.length !== 1) return [];
   const span = expression.templateSpans[0];
-  if (span.expression.getText(sourceFile) !== "base") return [];
+  const variable = span.expression.getText(sourceFile);
+  if (variable === "segment" && expression.head.text === "/api/") {
+    return [
+      `/api/ai-sessions${span.literal.text}`,
+      `/api/apps/sessions${span.literal.text}`,
+    ];
+  }
+  if (variable !== "base") return [];
   return [
     `/api/ai-sessions/:id/repository${expression.head.text}${span.literal.text}`,
     `/api/apps/sessions/:id/repository${expression.head.text}${span.literal.text}`,
@@ -100,6 +110,28 @@ function collectMethodVariables(sourceFile) {
   return methodVariables;
 }
 
+function collectRouteReceivers(sourceFile) {
+  const receivers = new Set(["app"]);
+  const visit = (node) => {
+    if (ts.isCallExpression(node)
+      && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression)
+      && node.expression.expression.text === "app"
+      && node.expression.name.text === "register") {
+      for (const argument of node.arguments) {
+        if ((ts.isArrowFunction(argument) || ts.isFunctionExpression(argument))
+          && argument.parameters[0]
+          && ts.isIdentifier(argument.parameters[0].name)) {
+          receivers.add(argument.parameters[0].name.text);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return receivers;
+}
+
 function resolveMethods(expression, methodVariables) {
   if (ts.isIdentifier(expression) && methodVariables.has(expression.text)) return methodVariables.get(expression.text);
   if (ts.isStringLiteral(expression)) return [expression.text.toUpperCase()];
@@ -130,6 +162,7 @@ function nodeRouteSurface() {
     const source = fs.readFileSync(file, "utf8");
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const methodVariables = collectMethodVariables(sourceFile);
+    const routeReceivers = collectRouteReceivers(sourceFile);
     const relativeFile = path.relative(root, file);
 
     const recordUnresolved = (node, detail) => {
@@ -141,7 +174,7 @@ function nodeRouteSurface() {
       if (ts.isCallExpression(node)
         && ts.isPropertyAccessExpression(node.expression)
         && ts.isIdentifier(node.expression.expression)
-        && node.expression.expression.text === "app") {
+        && routeReceivers.has(node.expression.expression.text)) {
         const methodName = node.expression.name.text;
 
         if (["get", "post", "put", "patch", "delete", "all"].includes(methodName)) {

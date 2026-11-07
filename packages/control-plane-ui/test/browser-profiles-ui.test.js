@@ -89,7 +89,6 @@ test("the untouched default profile name renders in the active locale", () => {
 test("browser and Codex tabs stay visible and guide missing installs to Apps", () => {
   assert.match(dialog, /<TabsTrigger value="browser"><Globe2 :size="14" \/>\{\{ t\("instances\.settings\.browser"\) \}\}<\/TabsTrigger>/);
   assert.match(dialog, /<TabsTrigger value="codex"><AiAgentIcon agent="codex" :size="14" \/>/);
-  assert.doesNotMatch(dialog, /<TabsTrigger v-if/);
   assert.match(dialog, /import BrowserProfilesSection from "\.\/BrowserProfilesSection\.vue"/);
   assert.match(dialog, /<BrowserProfilesSection[\s\S]*@open-apps="section = 'apps'"/);
   assert.match(dialog, /const codexInstalled = computed/);

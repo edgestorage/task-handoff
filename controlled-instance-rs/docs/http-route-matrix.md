@@ -1,6 +1,6 @@
 # Controlled Instance HTTP and WebSocket Route Matrix
 
-This matrix separates the frozen `v0.0.46` compatibility baseline from the target-current Node route surface. The only target-current extension is the Node Agent instance-shell WebSocket route added after `v0.0.46`. Migration compatibility claims still use `v0.0.46`; the extension is implemented and tracked separately so it cannot silently expand the baseline. Both sections are frozen from Node route registrations and are the source checklist for Rust registration and differential tests.
+This matrix separates the frozen `v0.0.46` compatibility baseline from the target-current Node route surface. Target-current extensions added after `v0.0.46` are tracked separately so they cannot silently expand the compatibility baseline. Both sections are frozen from Node route registrations and are the source checklist for Rust registration and differential tests.
 
 ## Authority and scope
 
@@ -243,7 +243,7 @@ This section freezes 201 explicit Node registrations at tag `v0.0.46`, including
 
 ## Target-current Node extensions after `v0.0.46`
 
-This section contains target-current routes that are not part of the `v0.0.46` compatibility baseline. It currently has five routes.
+This section contains target-current routes that are not part of the `v0.0.46` compatibility baseline. It currently has eight routes.
 
 | Method | Path | Auth | Transport | Success / notes |
 | --- | --- | --- | --- | --- |
@@ -252,6 +252,9 @@ This section contains target-current routes that are not part of the `v0.0.46` c
 | `PUT` | `/api/apps/install-environment` | Web | JSON | 200; post-`v0.0.46` only |
 | `POST` | `/api/apps/install-environment/test` | Web | JSON | 200; post-`v0.0.46` only |
 | `POST` | `/api/apps/install-environment/prepare` | Web | JSON | 200; post-`v0.0.46` only |
+| `GET` | `/api/ai-sessions/:id/repository/files/content` | Web | JSON | 200; post-`v0.0.46` only |
+| `GET` | `/api/apps/sessions/:id/repository/files/content` | Web | JSON | 200; post-`v0.0.46` only |
+| `GET` | `/api/ai-sessions/:id/turns/:turnId/tool-activity` | Web | JSON | 200; post-`v0.0.46` only |
 
 ## Additional contract families
 
@@ -270,7 +273,7 @@ This section contains target-current routes that are not part of the `v0.0.46` c
 - HTTP, WebSocket, Node Agent, private model/config, agent-tool, App Runtime, repository, Trigger, Config Sync, Story and Git credential domains have Rust handlers and contract tests in their owning crates.
 - AI Session message and Timeline deltas use the same 20-50ms coalescing window (32ms default), insertion order, authoritative-event flush and `event-source-close` behavior as Node. Diagnostics expose the live coalescer counters instead of placeholders.
 - Non-`/api` paths use the frozen UI's `index.html` with HTTP `200` for SPA route refreshes; unmatched `/api/*` paths remain structured `404` responses.
-- The route matrix now records both the 201-route `v0.0.46` baseline and the 206-route target-current Node surface. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
+- The route matrix now records both the 201-route `v0.0.46` baseline and the 209-route target-current Node surface. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
 
 ## Remaining fixture work
 

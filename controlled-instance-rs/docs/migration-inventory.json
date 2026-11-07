@@ -202,7 +202,7 @@
       ]
     },
     {
-      "source": "packages/ai-session-runtime/src/{ai-session-attachment-draft-streams,ai-session-attachments,ai-session-close,ai-session-control,ai-session-conversation-attachment-store,ai-session-create,ai-session-discovery,ai-session-fork,ai-session-history-lifecycle,ai-session-history-store,ai-session-open-app,ai-session-persistence-settings,ai-session-provider-registry,ai-session-registry,ai-session-resume,ai-session-title,ai-session-turns,claude-control-sock,codex-app-server-protocol,codex-app-server,index,opencode,session-history,session-title-coordinator}.ts",
+      "source": "packages/ai-session-runtime/src/{ai-session-attachment-draft-streams,ai-session-attachments,ai-session-close,ai-session-control,ai-session-conversation-attachment-store,ai-session-create,ai-session-discovery,ai-session-fork,ai-session-history-lifecycle,ai-session-history-store,ai-session-open-app,ai-session-persistence-settings,ai-session-provider-registry,ai-session-registry,ai-session-resume,ai-session-title,ai-session-tool-activity-window,ai-session-turns,claude-control-sock,codex-app-server-protocol,codex-app-server,index,opencode,session-history,session-title-coordinator}.ts",
       "rust": [
         "controlled-instance-rs/crates/ai-session/src/lib.rs",
         "controlled-instance-rs/crates/ai-session/src/history.rs",
@@ -268,7 +268,7 @@
       ]
     },
     {
-      "source": "packages/app-runtime/src/{catalog,codex-app-server-proxy,index,log-retention,managed-apps,managed-node-apps,runtime-utils,runtime,terminal-screen-state,types}.ts",
+      "source": "packages/app-runtime/src/{catalog,codex-app-server-proxy,index,log-retention,managed-apps,managed-node-apps,native-package,runtime-utils,runtime,terminal-screen-state,types}.ts",
       "rust": [
         "controlled-instance-rs/crates/app-runtime/src/runtime.rs",
         "controlled-instance-rs/crates/app-runtime/src/managed.rs",
