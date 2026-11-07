@@ -9,6 +9,7 @@ import {
   MasterDetailLayout,
   masterDetailMetrics,
 } from '../src/components/MasterDetailLayout';
+import { useDetailSpace } from '../src/components/detail-space';
 import { AdaptiveContentWidthProvider, useAdaptiveContentLayout } from '../src/components/adaptive-layout';
 
 const initialWindowMetrics = Dimensions.get('window');
@@ -139,10 +140,31 @@ test('keeps the list mounted and its local state intact across a breakpoint resi
 
   await act(async () => { setViewportWidth(390); });
   const screen = await render(<MasterDetailLayout detail={<Text>Detail</Text>} list={<StableList />} />);
-  fireEvent.press(screen.getByText('count:0'));
+  await fireEvent.press(screen.getByText('count:0'));
   await act(async () => { setViewportWidth(1032); });
 
   expect(screen.getByText('count:1')).toBeTruthy();
   expect(screen.getByText('Detail')).toBeTruthy();
   expect(mountCount).toBe(1);
+});
+
+// A detail workspace can borrow the list's width without losing either pane's state.
+test('resource layout demand hides and restores the list without remounting it', async () => {
+  let listMounts = 0;
+  function StableList() {
+    useEffect(() => { listMounts += 1; }, []);
+    return <Text>Preserved list</Text>;
+  }
+  function DetailDemand() {
+    const [open, setOpen] = useState(false);
+    useDetailSpace(open ? 860 : undefined);
+    return <Pressable testID="toggle-demand" onPress={() => setOpen((value) => !value)}><Text>Resource demand</Text></Pressable>;
+  }
+  await act(async () => { setViewportWidth(1032); });
+  const screen = await render(<MasterDetailLayout detail={<DetailDemand />} list={<StableList />} />);
+  await fireEvent.press(screen.getByTestId('toggle-demand'));
+  expect(StyleSheet.flatten(screen.getByTestId('master-detail-layout-list', { includeHiddenElements: true }).props.style).display).toBe('none');
+  await fireEvent.press(screen.getByTestId('toggle-demand'));
+  expect(StyleSheet.flatten(screen.getByTestId('master-detail-layout-list').props.style).display).toBe('flex');
+  expect(listMounts).toBe(1);
 });

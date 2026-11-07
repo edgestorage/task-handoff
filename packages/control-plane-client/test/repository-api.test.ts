@@ -197,3 +197,29 @@ test("repository client surfaces incompatible responses instead of an empty proj
   const invalidPreflight = fixture(() => ({ worktreeId: "worktree_two", canMove: "yes", mainWorktreeId: "worktree_one" }));
   await assert.rejects(() => invalidPreflight.api.moveWorktreeToMainPreflight(target, { worktreeId: "worktree_two" }));
 });
+
+test('repository reads share Web/mobile paths, abort signals and future-field sanitization', async () => {
+  const signal = new AbortController().signal;
+  const { api, requests } = fixture((path) => path.includes('/directories?') ? {
+    path: 'src', snapshotId: 'snapshot_one', future: true,
+    entries: [{ name: 'a.ts', path: 'src/a.ts', kind: 'file', traversable: false, editable: true, future: { extra: true } }],
+  } : {
+    path: 'src/a.ts', content: 'const x = 1;', byteLength: 12, version: 'version_000000001', mode: { executable: false, future: true }, future: true,
+  });
+  const target: RepositorySessionTarget = { instanceId: 'instance with space', sessionKind: 'ai-session', sessionId: 'session:opaque' };
+  const listing = await api.directory(target, 'src', { signal });
+  assert.equal(listing.entries.length, 1);
+  assert.equal('future' in listing, false);
+  assert.equal('future' in listing.entries[0]!, false);
+  const file = await api.file(target, 'src/a.ts', { signal });
+  assert.equal(file.content, 'const x = 1;');
+  assert.equal('future' in file.mode, false);
+  assert.match(requests[0]!.path, /instance%20with%20space\/api\/ai-sessions\/session%3Aopaque\/repository\/directories\?path=src$/);
+  assert.equal(requests[0]!.init?.signal, signal);
+  assert.match(requests[1]!.path, /files\?path=src%2Fa.ts$/);
+});
+
+test('repository response compatibility does not accept invalid declared fields', async () => {
+  const { api } = fixture(() => ({ path: '', entries: [], snapshotId: 123, future: true }));
+  await assert.rejects(api.directory({ instanceId: 'instance_one', sessionKind: 'ai-session', sessionId: 'session_one' }));
+});

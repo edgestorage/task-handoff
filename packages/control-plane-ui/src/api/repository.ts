@@ -85,7 +85,7 @@ export function repositoryTargetBasePath(target: RepositorySessionTarget) {
 }
 
 export function getRepositoryContext(target: RepositorySessionTarget, options?: { signal?: AbortSignal }) {
-  return getUrlData<RepositoryContext>(`${repositoryTargetBasePath(target)}/context`, options);
+  return controlPlaneRepository.context(target, options);
 }
 
 export async function getRepositoryWorktrees(target: RepositorySessionTarget, options?: { signal?: AbortSignal }) {
@@ -148,11 +148,11 @@ function repositoryUrlWithQuery(target: RepositorySessionTarget, resource: strin
 }
 
 export function getRepositoryDirectory(target: RepositorySessionTarget, path = "", options?: { signal?: AbortSignal }) {
-  return getUrlData<RepositoryDirectoryListing>(repositoryUrlWithQuery(target, "directories", { path }), options);
+  return controlPlaneRepository.directory(target, path, options);
 }
 
 export function getRepositoryFile(target: RepositorySessionTarget, path: string, options?: { signal?: AbortSignal }) {
-  return getUrlData<RepositoryFileContent>(repositoryUrlWithQuery(target, "files", { path }), options);
+  return controlPlaneRepository.file(target, path, options);
 }
 
 export function repositoryFileContentUrl(target: RepositorySessionTarget, path: string) {
@@ -203,7 +203,7 @@ export function deleteRepositoryFile(
 }
 
 export function getRepositoryChanges(target: RepositorySessionTarget, options?: { signal?: AbortSignal }) {
-  return getUrlData<RepositoryChanges>(`${repositoryTargetBasePath(target)}/changes`, options);
+  return controlPlaneRepository.changes(target, options);
 }
 
 export type RepositoryVersionedPath = { path: string; expectedVersion: string };
@@ -248,13 +248,7 @@ export function getRepositoryDiff(
   input: { path: string; scope: RepositoryChangeScope; byteLimit?: number; includeContext?: boolean; contextLines?: number },
   options?: { signal?: AbortSignal },
 ) {
-  return getUrlData<RepositoryDiff>(repositoryUrlWithQuery(target, "diff", {
-    path: input.path,
-    scope: input.scope,
-    byteLimit: input.byteLimit || 512 * 1024,
-    ...(input.includeContext ? { includeContext: "true" } : {}),
-    ...(input.contextLines ? { contextLines: input.contextLines } : {}),
-  }), options);
+  return controlPlaneRepository.diff(target, input, options);
 }
 
 export function useRepositoryDiffQuery(

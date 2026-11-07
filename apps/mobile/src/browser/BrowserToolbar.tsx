@@ -14,6 +14,7 @@ type Props = {
   connected: boolean;
   creating: boolean;
   pane: boolean;
+  resource?: boolean;
   tabs: AnchoredSelectOption[];
   selectedTabId: string;
   moreOptions: AnchoredSelectOption[];
@@ -34,17 +35,19 @@ export function BrowserToolbar(props: Props) {
         <View style={[styles.separator, { backgroundColor: colors.workbenchCardBorder }]} />
         <NavigationButton disabled={!props.connected || !props.canGoForward} label={t('browser.forward')} onPress={props.onForward} direction="forward" />
       </View>
-      <View style={styles.slot}><ToolbarAction busy={props.creating} disabled={!props.connected || props.creating} label={t('browser.newTab')} onPress={props.onNew} primary>
-        {props.creating ? <ActivityIndicator color={colors.primary} size="small" /> : <Icon color={colors.primary} name="add" size={26} />}
-      </ToolbarAction></View>
-      <View style={styles.slot}><NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onSelectTab} options={props.tabs} selectedValue={props.selectedTabId} title={t('browser.tabs')}>
-        {(onPress) => <ToolbarAction label={t('browser.tabsCount', { count: props.tabs.length })} onPress={onPress}>
-          <View style={styles.tabGlyph}>
-            <View style={[styles.tabBehind, { borderColor: colors.text }]} />
-            <View style={[styles.tabFront, { backgroundColor: colors.surface, borderColor: colors.text }]}><Text style={[styles.tabCount, { color: colors.text }]}>{props.tabs.length > 99 ? '99+' : props.tabs.length}</Text></View>
-          </View>
-        </ToolbarAction>}
-      </NewSessionContextMenu></View>
+      {props.resource ? null : <>
+        <View style={styles.slot}><ToolbarAction busy={props.creating} disabled={!props.connected || props.creating} label={t('browser.newTab')} onPress={props.onNew} primary>
+          {props.creating ? <ActivityIndicator color={colors.primary} size="small" /> : <Icon color={colors.primary} name="add" size={26} />}
+        </ToolbarAction></View>
+        <View style={styles.slot}><NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onSelectTab} options={props.tabs} selectedValue={props.selectedTabId} title={t('browser.tabs')}>
+          {(onPress) => <ToolbarAction label={t('browser.tabsCount', { count: props.tabs.length })} onPress={onPress}>
+            <View style={styles.tabGlyph}>
+              <View style={[styles.tabBehind, { borderColor: colors.text }]} />
+              <View style={[styles.tabFront, { backgroundColor: colors.surface, borderColor: colors.text }]}><Text style={[styles.tabCount, { color: colors.text }]}>{props.tabs.length > 99 ? '99+' : props.tabs.length}</Text></View>
+            </View>
+          </ToolbarAction>}
+        </NewSessionContextMenu></View>
+      </>}
       <View style={styles.slot}><NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.creating} options={props.moreOptions} selectedValue="" title={t('browser.browser')} onSelect={props.onMore}>
         {(onPress) => <ToolbarAction disabled={props.creating} label={t('browser.more')} onPress={onPress}>
           <Icon color={colors.text} name="ellipsis-horizontal" size={23} />

@@ -12,6 +12,7 @@ import { EmbeddedPaneHeaderOptions } from '../components/EmbeddedPaneHeader';
 import { MenuView, type MenuAction } from '../components/MenuView';
 import { useMobileToast } from '../components/MobileToast';
 import { SessionRenameModal } from '../components/SessionRenameModal';
+import { useResourcePresentation } from '../components/use-resource-presentation';
 import { useMobileTheme } from '../components/theme';
 import type { MobileAppSessionTtyConnection } from '../control-plane/transport';
 import { useI18n } from '../i18n';
@@ -30,25 +31,31 @@ type TerminalSnapshot = TerminalGrid & { data: string; pendingEscape: string };
 
 export function AppSessionDetailScreen({
   embeddedHeader = false,
+  resource = false,
+  active = true,
   instanceId,
   onClosed,
   pane = false,
   sessionId,
 }: {
   embeddedHeader?: boolean;
+  /** Embedded resource content owns no navigation header. */
+  resource?: boolean;
+  active?: boolean;
   instanceId: string;
   onClosed?(): void;
   pane?: boolean;
   sessionId: string;
 }) {
   const router = useRouter();
-  const { closeSession, createAccess, renameSession, revokeAccess, state, transport } = useActiveAppSessions();
+  const { closeSession, controlPlaneId, createAccess, renameSession, revokeAccess, state, transport } = useActiveAppSessions();
+  const canPresent = useResourcePresentation(JSON.stringify(['app-session', controlPlaneId, instanceId, sessionId]), active);
   const aiSessionsSnapshot = useActiveAiSessionsSnapshot();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const toast = useMobileToast();
   const headerHeight = useHeaderHeight();
-  const paneTopInset = appSessionPaneTopInset(Platform.OS, embeddedHeader, headerHeight);
+  const paneTopInset = resource ? 0 : appSessionPaneTopInset(Platform.OS, embeddedHeader, headerHeight);
   const terminal = useRef<TerminalViewRef>(null);
   const terminalInput = useRef(new AppSessionTerminalInputNormalizer());
   const connection = useRef<MobileAppSessionTtyConnection | undefined>(undefined);
@@ -71,11 +78,11 @@ export function AppSessionDetailScreen({
     .find((entry) => entry.instanceId === instanceId)
     ?.aiSessions.sessions.find((entry) => entry.appSessionId === sessionId);
   const renameSupported = !linkedAiSession || linkedAiSession.actions?.rename === true;
-  const activeAccess = session?.status === 'running' && access?.instanceId === instanceId && access.sessionId === sessionId ? access : undefined;
+  const activeAccess = canPresent && session?.status === 'running' && access?.instanceId === instanceId && access.sessionId === sessionId ? access : undefined;
 
   useEffect(() => {
-    if (!transport || !instanceId || !sessionId || session?.kind !== 'tty' || session.status !== 'running') return;
-    const active = transport.connectAppSessionTty(instanceId, sessionId, {
+    if (!canPresent || !transport || !instanceId || !sessionId || session?.kind !== 'tty' || session.status !== 'running') return;
+    const ttyConnection = transport.connectAppSessionTty(instanceId, sessionId, {
       onOpen: () => setStatus('connected'),
       onSnapshot: (data, pendingEscape, cols, rows) => {
         const grid = terminalGrid.current;
@@ -101,17 +108,17 @@ export function AppSessionDetailScreen({
       },
       onClose: () => setStatus((current) => current === 'exited' ? current : 'closed'),
     });
-    connection.current = active;
-    if (terminalGrid.current) active.resize(terminalGrid.current.cols, terminalGrid.current.rows);
+    connection.current = ttyConnection;
+    if (terminalGrid.current) ttyConnection.resize(terminalGrid.current.cols, terminalGrid.current.rows);
     return () => {
       connection.current = undefined;
       pendingTerminalSnapshot.current = undefined;
-      active.close();
+      ttyConnection.close();
     };
-  }, [instanceId, session?.kind, session?.status, sessionId, transport]);
+  }, [canPresent, instanceId, session?.kind, session?.status, sessionId, transport]);
 
   useEffect(() => {
-    if (!instanceId || !sessionId || accessMode !== 'vnc' || session?.status !== 'running') return;
+    if (!canPresent || !instanceId || !sessionId || accessMode !== 'vnc' || session?.status !== 'running') return;
     let foreground = false;
     let previousPhase: string | undefined;
     let previousConnected: boolean | undefined;
@@ -152,7 +159,7 @@ export function AppSessionDetailScreen({
       unsubscribeNetwork();
       leases.stop();
     };
-  }, [accessMode, createAccess, instanceId, revokeAccess, session?.status, sessionId, t]);
+  }, [canPresent, accessMode, createAccess, instanceId, revokeAccess, session?.status, sessionId, t]);
 
   const title = session?.title || session?.appId || t('nav.appSessions');
   const closeDisabled = closing || state.sync.phase !== 'ready' || session?.status === 'stopping';
@@ -218,7 +225,9 @@ export function AppSessionDetailScreen({
       <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
     </Pressable>
   </MenuView> : undefined;
-  const header = embeddedHeader
+  const header = resource
+    ? <View style={[styles.resourceToolbar, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}><Text numberOfLines={1} style={[styles.resourceTitle, { color: colors.text }]}>{title}</Text>{menu}</View>
+    : embeddedHeader
     ? <EmbeddedPaneHeaderOptions enabled headerRight={menu} title={title} />
     : <><Stack.Screen options={pane
       ? { headerRight: menu ? () => menu : undefined }
@@ -235,11 +244,13 @@ export function AppSessionDetailScreen({
     ref={terminal}
     fontSize={APP_SESSION_TERMINAL_FONT_SIZE}
     onInput={({ nativeEvent }) => {
+      if (!canPresent) return;
       const input = terminalInput.current.push(nativeEvent.text);
       if (input) connection.current?.sendInput(input);
     }}
     onResize={({ nativeEvent }) => {
       terminalGrid.current = nativeEvent;
+      if (!canPresent) return;
       const snapshot = pendingTerminalSnapshot.current;
       if (snapshot && snapshot.cols === nativeEvent.cols && snapshot.rows === nativeEvent.rows) {
         pendingTerminalSnapshot.current = undefined;
@@ -308,6 +319,8 @@ function sameOriginOrLocalDocument(url: string, accessUrl: string) {
 }
 
 const styles = StyleSheet.create({
+  resourceToolbar: { alignItems: 'center', flexDirection: 'row', minHeight: 44, borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
+  resourceTitle: { flex: 1, fontSize: 14, fontWeight: '500' },
   screen: { flex: 1 },
   terminal: { flex: 1 },
   webView: { flex: 1 },

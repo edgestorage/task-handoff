@@ -1,6 +1,11 @@
 import { z } from "zod";
 import {
   RepositoryBranchesSchema,
+  RepositoryDirectoryListingSchema,
+  RepositoryFileContentSchema,
+  RepositoryChangesSchema,
+  RepositoryDiffSchema,
+  type RepositoryChangeScope,
   RepositoryCreateWorktreeRequestSchema,
   RepositoryCreateWorktreeResultSchema,
   RepositoryMoveWorktreePreflightRequestSchema,
@@ -24,6 +29,7 @@ import {
   type RepositoryWorktrees,
 } from "@task-handoff/protocol/repository";
 import type { ControlPlaneClientTransport } from "./transport.ts";
+import { responseSchema } from "@task-handoff/protocol/response-validation";
 import { jsonRequest } from "./json-request.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
@@ -61,7 +67,7 @@ export function repositoryWorkspaceResource(target: RepositoryWorkspaceTarget, r
 
 export function createControlPlaneRepositoryApi(transport: ControlPlaneClientTransport) {
   const requestData = async <T>(path: string, schema: z.ZodType<T>, init?: RequestInit) => (
-    (await transport.request(path, DataSchema(schema), init)).data
+    (await transport.request(path, responseSchema(DataSchema(schema)), init)).data
   );
   const workspaceFallback = <T>(target: RepositoryWorkspaceTarget, run: (session: RepositorySessionTarget) => Promise<T>) => (
     async (error: unknown) => {
@@ -78,6 +84,24 @@ export function createControlPlaneRepositoryApi(transport: ControlPlaneClientTra
      */
     async context(target: RepositorySessionTarget, options?: { signal?: AbortSignal }) {
       return await requestData(`${repositorySessionBasePath(target)}/context`, RepositoryContextSchema, { signal: options?.signal });
+    },
+    async directory(target: RepositorySessionTarget, path = "", options?: { signal?: AbortSignal }) {
+      return requestData(repositoryReadUrl(target, "directories", { path }), RepositoryDirectoryListingSchema, { signal: options?.signal });
+    },
+    async file(target: RepositorySessionTarget, path: string, options?: { signal?: AbortSignal }) {
+      return requestData(repositoryReadUrl(target, "files", { path }), RepositoryFileContentSchema, { signal: options?.signal });
+    },
+    async changes(target: RepositorySessionTarget, options?: { signal?: AbortSignal }) {
+      return requestData(`${repositorySessionBasePath(target)}/changes`, RepositoryChangesSchema, { signal: options?.signal });
+    },
+    async diff(target: RepositorySessionTarget, input: RepositoryDiffInput, options?: { signal?: AbortSignal }) {
+      return requestData(repositoryReadUrl(target, "diff", {
+        path: input.path,
+        scope: input.scope,
+        byteLimit: input.byteLimit ?? 512 * 1024,
+        ...(input.includeContext ? { includeContext: "true" } : {}),
+        ...(input.contextLines !== undefined ? { contextLines: input.contextLines } : {}),
+      }), RepositoryDiffSchema, { signal: options?.signal });
     },
     async worktrees(target: RepositoryWorkspaceTarget, options?: { signal?: AbortSignal }) {
       try {
@@ -138,3 +162,15 @@ export type ControlPlaneRepositoryBranches = RepositoryBranches;
 export type ControlPlaneRepositoryCreateWorktreeResult = RepositoryCreateWorktreeResult;
 export type ControlPlaneRepositoryRemoveWorktreeResult = RepositoryRemoveWorktreeResult;
 export type ControlPlaneRepositoryMoveWorktreeResult = RepositoryMoveWorktreeResult;
+
+export type RepositoryDiffInput = {
+  path: string;
+  scope: RepositoryChangeScope;
+  byteLimit?: number;
+  includeContext?: boolean;
+  contextLines?: number;
+};
+
+function repositoryReadUrl(target: RepositorySessionTarget, resource: string, query: Record<string, string | number>) {
+  return `${repositorySessionBasePath(target)}/${resource}?${new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]))}`;
+}

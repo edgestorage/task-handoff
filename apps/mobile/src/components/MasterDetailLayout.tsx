@@ -1,7 +1,8 @@
-import { useContext, useEffect, useMemo, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { BackHandler, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
+import { DetailSpaceContext } from './detail-space';
 import { AdaptiveContentWidthProvider } from './adaptive-layout';
 import { EmptyState } from './EmptyState';
 import type { NativeSplitPaneOptions } from './NativeSplitMasterDetail';
@@ -77,22 +78,44 @@ export function MasterDetailLayout({
   const { colors } = useMobileTheme();
   const insets = useContext(SafeAreaInsetsContext);
   const metrics = useMasterDetailLayout();
+  const [demands, setDemands] = useState<Record<string, number>>({});
+  const request = useCallback((id: string, minimumWidth?: number) => {
+    setDemands((current) => {
+      if (current[id] === minimumWidth) return current;
+      const next = { ...current };
+      if (minimumWidth === undefined) delete next[id];
+      else next[id] = minimumWidth;
+      return next;
+    });
+  }, []);
+  const requiredDetailWidth = Math.max(0, ...Object.values(demands));
+  const [measuredDetail, setMeasuredDetail] = useState<{ total: number; width: number }>();
+  const visibleDetailWidth = measuredDetail?.total === metrics.availableWidth ? measuredDetail.width : metrics.detailWidth;
+  const listHidden = metrics.wide && requiredDetailWidth > visibleDetailWidth;
+  const onDetailWidthChange = useCallback((width: number) => {
+    if (listHidden || width <= 0) return;
+    setMeasuredDetail((current) => current?.total === metrics.availableWidth && current.width === width
+      ? current : { total: metrics.availableWidth, width });
+  }, [listHidden, metrics.availableWidth]);
+  const detailSpace = useMemo(() => ({ availableWidth: metrics.availableWidth, request }), [metrics.availableWidth, request]);
   if (nativeSplitOptions && Platform.OS === 'ios' && metrics.wide) {
     const { NativeSplitMasterDetail } = require('./NativeSplitMasterDetail') as typeof import('./NativeSplitMasterDetail');
-    return <NativeSplitMasterDetail
+    return <DetailSpaceContext.Provider value={detailSpace}><NativeSplitMasterDetail
+      listHidden={listHidden}
+      onDetailWidthChange={onDetailWidthChange}
       detail={detail ?? emptyDetail}
       detailMinWidth={MASTER_DETAIL_DETAIL_MIN_WIDTH}
       detailOptions={nativeSplitOptions.detail}
-      detailWidth={metrics.detailWidth}
+      detailWidth={listHidden ? metrics.availableWidth : metrics.detailWidth}
       list={list}
       listMaxWidth={metrics.listMaxWidth}
       listMinWidth={MASTER_DETAIL_LIST_MIN_WIDTH}
       listOptions={nativeSplitOptions.list}
       listWidth={metrics.listWidth}
       testID={testID}
-    />;
+    /></DetailSpaceContext.Provider>;
   }
-  return <View
+  return <DetailSpaceContext.Provider value={detailSpace}><View
     collapsable={false}
     style={[
       styles.root,
@@ -105,18 +128,18 @@ export function MasterDetailLayout({
     testID={testID}
   >
     <View
-      style={[styles.listPane, { backgroundColor: colors.background }, metrics.wide ? { width: metrics.listWidth } : styles.compactPane]}
+      style={[styles.listPane, { backgroundColor: colors.background }, metrics.wide ? { width: metrics.listWidth, display: listHidden ? 'none' : 'flex' } : styles.compactPane]}
       testID={`${testID}-list`}
     >
       <AdaptiveContentWidthProvider availableWidth={metrics.wide ? metrics.listWidth : undefined}>{list}</AdaptiveContentWidthProvider>
     </View>
     {metrics.wide ? <>
-      <View style={[styles.divider, { backgroundColor: colors.border }]} />
+      <View style={[styles.divider, { backgroundColor: colors.border }, listHidden && { display: 'none' }]} />
       <View style={[styles.detailPane, { backgroundColor: colors.background }]} testID={`${testID}-detail`}>
-        <AdaptiveContentWidthProvider availableWidth={metrics.detailWidth}>{detail ?? emptyDetail}</AdaptiveContentWidthProvider>
+        <AdaptiveContentWidthProvider availableWidth={listHidden ? metrics.availableWidth : metrics.detailWidth}>{detail ?? emptyDetail}</AdaptiveContentWidthProvider>
       </View>
     </> : null}
-  </View>;
+  </View></DetailSpaceContext.Provider>;
 }
 
 export function MasterDetailEmptyState({ icon, message, testID }: { icon: IconName; message: string; testID?: string }) {

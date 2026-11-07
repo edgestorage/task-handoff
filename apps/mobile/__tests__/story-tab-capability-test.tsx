@@ -12,6 +12,9 @@ let mockWide = false;
 let mockNativeSplitOptions: NativeSplitPaneOptions | undefined;
 const mockOpenDrawer = jest.fn();
 
+// These tests exercise the outer Story list/header, not the native resource detail.
+jest.mock('../src/ai-sessions/AiSessionDetailScreen', () => ({ AiSessionDetailScreen: () => null }));
+
 jest.mock('expo-router', () => ({ router: { push: jest.fn() }, useFocusEffect: jest.fn() }));
 jest.mock('../src/components/MasterDetailLayout', () => ({
   ...jest.requireActual<typeof import('../src/components/MasterDetailLayout')>('../src/components/MasterDetailLayout'),

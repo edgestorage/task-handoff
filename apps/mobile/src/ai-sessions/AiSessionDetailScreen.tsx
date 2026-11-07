@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Stack, useNavigation, useRouter } from 'expo-router';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { useHeaderHeight } from 'expo-router/react-navigation';
+import { AccessibilityInfo, Alert, findNodeHandle, Platform, Pressable, StyleSheet, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import { MenuView, type MenuAction } from '../components/MenuView';
 
+import { clearRepositoryViewProfile } from '../repository/view-memory';
+import { SessionResourceLayout } from './SessionResourceLayout';
+import { SessionResourcePanel } from './SessionResourcePanel';
+import { mobileResourceWorkspaceStore, resourceContextKey } from './resource-workspace-model';
 import { SessionWorkspace } from './SessionWorkspace';
 import type { SessionDetailMode } from './SessionDetail';
 import { workspaceLabel } from './InboxModel';
@@ -47,6 +52,40 @@ export function AiSessionDetailScreen({
   const directories = useActiveDirectories();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const contextKey = resourceContextKey(controlPlaneId || '', instanceId, sessionId);
+  const resourceState = useSyncExternalStore(
+    useCallback((listener) => mobileResourceWorkspaceStore.subscribe(contextKey, listener), [contextKey]),
+    useCallback(() => mobileResourceWorkspaceStore.snapshot(contextKey), [contextKey]),
+  );
+  useLayoutEffect(() => mobileResourceWorkspaceStore.enterContext(contextKey), [contextKey]);
+  const resourceExpanded = Boolean(resourceState.expanded && mobileResourceWorkspaceStore.isCurrentContext(contextKey));
+  const fullscreen = Boolean(resourceState.fullscreen);
+  const fraction = resourceState.fraction ?? 0.4;
+  const resourceButton = useRef<View>(null);
+  const headerHeight = useHeaderHeight();
+  const previousProfile = useRef(controlPlaneId);
+  useEffect(() => {
+    if (previousProfile.current && previousProfile.current !== controlPlaneId) {
+      mobileResourceWorkspaceStore.clearProfile(previousProfile.current);
+      clearRepositoryViewProfile(previousProfile.current);
+    }
+    previousProfile.current = controlPlaneId;
+  }, [controlPlaneId]);
+  const setFullscreen = useCallback((value: boolean) => {
+    mobileResourceWorkspaceStore.update(contextKey, { ...mobileResourceWorkspaceStore.snapshot(contextKey), fullscreen: value });
+  }, [contextKey]);
+  const closeResources = useCallback(() => {
+    mobileResourceWorkspaceStore.update(contextKey, { ...mobileResourceWorkspaceStore.snapshot(contextKey), expanded: false, fullscreen: false });
+    requestAnimationFrame(() => {
+      const node = findNodeHandle(resourceButton.current);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    });
+  }, [contextKey]);
+  const changeFraction = useCallback((value: number | ((current: number) => number)) => {
+    const current = mobileResourceWorkspaceStore.snapshot(contextKey);
+    const next = typeof value === 'function' ? value(current.fraction ?? 0.4) : value;
+    mobileResourceWorkspaceStore.update(contextKey, { ...current, fraction: Math.max(0.25, Math.min(0.75, next)) });
+  }, [contextKey]);
   const taskStatus = useTaskStatusSettings();
   const triggers = useActiveTriggers();
   const sessionView = useActiveAiSessionView(controlPlaneId, instanceId, sessionId);
@@ -188,10 +227,21 @@ export function AiSessionDetailScreen({
       <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
     </Pressable>
   </MenuView>;
-  const menuRef = useRef<ReactNode>(menu);
-  useLayoutEffect(() => { menuRef.current = menu; });
+  const headerActions = <View style={styles.headerActions}>
+    <Pressable ref={resourceButton} accessibilityRole="button" accessibilityLabel={t(resourceExpanded ? 'sessionResources.collapse' : 'sessionResources.expand')}
+      accessibilityState={{ expanded: resourceExpanded }} onPress={() => {
+        if (resourceExpanded) closeResources();
+        else mobileResourceWorkspaceStore.update(contextKey, { ...mobileResourceWorkspaceStore.snapshot(contextKey), expanded: true });
+      }} style={({ pressed }) => [styles.resourceButton, resourceExpanded && { backgroundColor: colors.primarySoft }, pressed && styles.menuButtonPressed]} testID="session-resource-toggle">
+      <Icon color={colors.primary} name="albums-outline" size={22} />
+    </Pressable>{menu}
+  </View>;
+  const menuRef = useRef<ReactNode>(headerActions);
+  useLayoutEffect(() => { menuRef.current = headerActions; });
   const embeddedHeaderRight = useCallback(() => menuRef.current, []);
   const headerMenuKey = [
+    resourceExpanded,
+    contextKey,
     detailMode,
     canRename,
     renaming,
@@ -238,9 +288,13 @@ export function AiSessionDetailScreen({
     workspaceName={workspaceName}
   />;
   return <>
-    {embeddedHeader ? null : <Stack.Screen options={pane ? { headerRight: () => menu } : { title, headerRight: () => menu }} />}
+    {embeddedHeader ? null : <Stack.Screen options={pane ? { headerRight: () => headerActions } : { title, headerRight: () => headerActions }} />}
     {embeddedHeader ? null : <PaneHeaderRestore pane={pane} />}
-    <View style={styles.workspace}>{workspace}</View>
+    <SessionResourceLayout topInset={embeddedHeader && Platform.OS === 'ios' ? headerHeight : 0} expanded={resourceExpanded} fullscreen={fullscreen} fraction={fraction} onClose={closeResources} onFractionChange={changeFraction}
+      panel={<SessionResourcePanel key={contextKey} contextKey={contextKey} controlPlaneId={controlPlaneId || ''} expanded={resourceExpanded} fullscreen={fullscreen}
+        instance={instance} instanceId={instanceId} sessionId={sessionId} session={session} syncReady={sessionView.syncPhase === 'ready'}
+        onClose={closeResources} onFullscreenChange={setFullscreen} onFractionChange={changeFraction} />}
+    >{workspace}</SessionResourceLayout>
     <SessionRenameModal
       busy={renaming}
       error={renameError}
@@ -253,7 +307,8 @@ export function AiSessionDetailScreen({
 }
 
 const styles = StyleSheet.create({
-  workspace: { flex: 1 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  resourceButton: { alignItems: 'center', justifyContent: 'center', width: 44, height: 44, borderRadius: 10 },
   menuButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
   menuButtonPressed: { opacity: 0.65 },
 });

@@ -18,22 +18,24 @@ const PaneNavigator = createNativeStackNavigator<{ Pane: undefined }>();
 const PaneContentContext = createContext<{
   content: ReactNode;
   horizontalInsets?: Partial<AdaptiveHorizontalInsets>;
+  onWidthChange?(width: number): void;
 }>({ content: null });
 
 function PaneContent() {
-  const { content, horizontalInsets } = useContext(PaneContentContext);
+  const { content, horizontalInsets, onWidthChange } = useContext(PaneContentContext);
   const [width, setWidth] = useState(0);
   return <View
     collapsable={false}
-    onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+    onLayout={(event) => { setWidth(event.nativeEvent.layout.width); onWidthChange?.(event.nativeEvent.layout.width); }}
     style={styles.fill}
   >
     <AdaptiveContentWidthProvider availableWidth={width || undefined} horizontalInsets={horizontalInsets}>{content}</AdaptiveContentWidthProvider>
   </View>;
 }
 
-function PaneNavigation({ children, horizontalInsets, options, testID }: {
+function PaneNavigation({ children, horizontalInsets, onWidthChange, options, testID }: {
   children: ReactNode;
+  onWidthChange?(width: number): void;
   horizontalInsets?: Partial<AdaptiveHorizontalInsets>;
   options: NativeStackNavigationOptions;
   testID: string;
@@ -62,7 +64,7 @@ function PaneNavigation({ children, horizontalInsets, options, testID }: {
     headerTitleStyle: { color: colors.text, fontSize: 17, fontWeight: '600' },
     ...options,
   }), [colors, options]);
-  const contentContext = useMemo(() => ({ content: children, horizontalInsets }), [children, horizontalInsets]);
+  const contentContext = useMemo(() => ({ content: children, horizontalInsets, onWidthChange }), [children, horizontalInsets, onWidthChange]);
 
   return <NavigationIndependentTree>
     <NavigationContainer theme={theme}>
@@ -81,7 +83,9 @@ export function NativeSplitMasterDetail({
   detail,
   detailOptions,
   detailWidth,
+  onDetailWidthChange,
   listMaxWidth,
+  listHidden = false,
   list,
   listOptions,
   listMinWidth,
@@ -93,7 +97,9 @@ export function NativeSplitMasterDetail({
   detailMinWidth: number;
   detailOptions: NativeStackNavigationOptions;
   detailWidth: number;
+  onDetailWidthChange?(width: number): void;
   list: ReactNode;
+  listHidden?: boolean;
   listMaxWidth: number;
   listMinWidth: number;
   listOptions: NativeStackNavigationOptions;
@@ -103,7 +109,7 @@ export function NativeSplitMasterDetail({
   const [ready, setReady] = useState(false);
   const insets = useSafeAreaInsets();
   const listHorizontalInsets = useMemo(() => ({ left: insets.left }), [insets.left]);
-  const detailHorizontalInsets = useMemo(() => ({ right: insets.right }), [insets.right]);
+  const detailHorizontalInsets = useMemo(() => ({ left: listHidden ? insets.left : 0, right: insets.right }), [insets.left, insets.right, listHidden]);
   useEffect(() => {
     const frame = requestAnimationFrame(() => setReady(true));
     return () => cancelAnimationFrame(frame);
@@ -119,7 +125,7 @@ export function NativeSplitMasterDetail({
       preferredSecondaryColumnWidthOrFraction: detailWidth,
     }}
     displayModeButtonVisibility="never"
-    preferredDisplayMode="oneBesideSecondary"
+    preferredDisplayMode={listHidden ? "secondaryOnly" : "oneBesideSecondary"}
     preferredSplitBehavior="tile"
     presentsWithGesture={false}
     primaryBackgroundStyle="none"
@@ -130,7 +136,7 @@ export function NativeSplitMasterDetail({
       <PaneNavigation horizontalInsets={listHorizontalInsets} options={listOptions} testID={`${testID}-list`}>{list}</PaneNavigation>
     </Split.Column>
     <Split.Column>
-      <PaneNavigation horizontalInsets={detailHorizontalInsets} options={detailOptions} testID={`${testID}-detail`}>{detail}</PaneNavigation>
+      <PaneNavigation onWidthChange={onDetailWidthChange} horizontalInsets={detailHorizontalInsets} options={detailOptions} testID={`${testID}-detail`}>{detail}</PaneNavigation>
     </Split.Column>
   </Split.Host>;
 }

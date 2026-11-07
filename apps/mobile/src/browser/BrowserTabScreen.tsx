@@ -16,6 +16,7 @@ import { fromBrowserTransportAddress, normalizeBrowserAddress, toBrowserTranspor
 import type { AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { EmbeddedPaneHeaderOptions } from '../components/EmbeddedPaneHeader';
 import { Icon } from '../components/Icon';
+import { useResourcePresentation } from '../components/use-resource-presentation';
 import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useI18n } from '../i18n';
@@ -27,6 +28,8 @@ const INITIAL_VIEW: TabViewState = { loading: false, progress: 0, error: '', can
 
 export function BrowserTabScreen({
   browserTabId,
+  resource = false,
+  active = true,
   embeddedHeader = false,
   instanceId,
   onClosed,
@@ -34,6 +37,8 @@ export function BrowserTabScreen({
   pane = false,
 }: {
   browserTabId: string;
+  resource?: boolean;
+  active?: boolean;
   embeddedHeader?: boolean;
   instanceId: string;
   onClosed?(): void;
@@ -42,6 +47,7 @@ export function BrowserTabScreen({
 }) {
   const router = useRouter();
   const runtime = useMobileControlPlaneRuntime();
+  const canPresent = useResourcePresentation(JSON.stringify(['browser', runtime.controlPlaneId, instanceId]), active);
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const callbacks = useRef({ onClosed, onSelectTab });
@@ -80,6 +86,7 @@ export function BrowserTabScreen({
   }, [router]);
 
   useEffect(() => {
+    if (!canPresent) return;
     if (!requestedTab) {
       if (tab) activateTab(tab);
       else if (callbacks.current.onClosed) callbacks.current.onClosed();
@@ -87,12 +94,12 @@ export function BrowserTabScreen({
       return;
     }
     mobileBrowserTabStore.activate(tab.controlPlaneId, tab.instanceId, tab.id);
-  }, [activateTab, instanceTabs, requestedTab, router, snapshot.activeTabId, tab]);
+  }, [activateTab, canPresent, instanceTabs, requestedTab, router, snapshot.activeTabId, tab]);
 
   useFocusEffect(useCallback(() => {
     const diagnostic = { controlPlaneId: tabControlPlaneId, instanceId: tabInstanceId };
     diagnosticLog.info('browser.view.focus', { ...diagnostic, hasApi: !!runtime.api, hasProfile: !!runtime.profile });
-    if (!tabControlPlaneId || !tabInstanceId || !runtime.api || !runtime.profile) {
+    if (!canPresent || !tabControlPlaneId || !tabInstanceId || !runtime.api || !runtime.profile) {
       diagnosticLog.warn('browser.view.runtime-unavailable', diagnostic);
       return;
     }
@@ -127,7 +134,7 @@ export function BrowserTabScreen({
       unsubscribeNetwork();
       void mobileBrowserController.suspend(tabControlPlaneId, tabInstanceId);
     };
-  }, [runtime.api, runtime.profile, setRouteError, t, tabControlPlaneId, tabInstanceId]));
+  }, [canPresent, runtime.api, runtime.profile, setRouteError, t, tabControlPlaneId, tabInstanceId]));
 
   useEffect(() => {
     diagnosticLog.info('browser.view.context', { controlPlaneId: tabControlPlaneId, instanceId: tabInstanceId, tabId: tab?.id, contextId, preparing: !contextId });
@@ -232,7 +239,7 @@ export function BrowserTabScreen({
   }));
 
   return <SafeAreaView edges={[]} style={[styles.root, { backgroundColor: colors.background }]}>
-    {embeddedHeader
+    {resource ? null : embeddedHeader
       ? <EmbeddedPaneHeaderOptions enabled title={tab.title || t('browser.browser')} />
       : pane ? null : <Stack.Screen options={{ headerLargeTitle: false, title: tab.title || t('browser.browser') }} />}
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.content}>
@@ -272,7 +279,7 @@ export function BrowserTabScreen({
         <ToolbarButton label={t('browser.reload')} disabled={!contextId || isBlank} onPress={() => runViewAction(() => activeView()!.reload())}><Icon color={colors.error} name="refresh" size={18} /></ToolbarButton>
       </View> : null}
       <View style={styles.webViewHost}>
-      {contextId ? instanceTabs.map((candidate) => {
+      {contextId && canPresent ? instanceTabs.map((candidate) => {
         const active = candidate.id === tab.id;
         return <View key={candidate.id} accessibilityElementsHidden={!active || showLibrary} importantForAccessibility={active && !showLibrary ? 'auto' : 'no-hide-descendants'} pointerEvents={active && !showLibrary ? 'auto' : 'none'} style={[styles.webViewLayer, !active && styles.hiddenWebViewLayer]}>
           <TaskHandoffBrowserView
@@ -318,6 +325,7 @@ export function BrowserTabScreen({
         connected={Boolean(contextId)}
         creating={creatingTab}
         pane={pane}
+        resource={resource}
         tabs={tabMenuOptions}
         selectedTabId={tab.id}
         moreOptions={moreOptions}
@@ -357,5 +365,4 @@ const styles = StyleSheet.create({
   loading: { alignItems: 'center', flex: 1, gap: 12, justifyContent: 'center' }, connecting: { fontSize: 14, lineHeight: 20 },
   toolbarButton: { alignItems: 'center', minHeight: 44, justifyContent: 'center', minWidth: 44, borderRadius: 12 },
   disabledButton: { opacity: 0.3 }, pressed: { opacity: 0.5 },
-
 });

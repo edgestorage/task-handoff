@@ -47,7 +47,7 @@ test('mobile Browser keeps one mounted native view per instance tab and suspends
   expect(browserScreen).toMatch(/const requestedTab = instanceTabs\.find/);
   expect(browserScreen).toMatch(/const tab = requestedTab \|\| instanceTabs\.find\(\(candidate\) => candidate\.id === snapshot\.activeTabId\)/);
   expect(browserScreen).toMatch(/return \(\) => \{[\s\S]*?mobileBrowserController\.suspend\(tabControlPlaneId, tabInstanceId\)/);
-  expect(browserScreen).toMatch(/\{contextId \? instanceTabs\.map/);
+  expect(browserScreen).toMatch(/\{contextId && canPresent \? instanceTabs\.map/);
 });
 
 test('Android Browser Tunnel processes inbound binary frames through one FIFO consumer', () => {

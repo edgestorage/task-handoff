@@ -3,6 +3,7 @@ import { act, fireEvent, render } from '@testing-library/react-native';
 const mockLoadUrl = jest.fn(async () => undefined);
 const mockGoBack = jest.fn(async () => undefined);
 jest.mock('expo-router', () => ({ Stack: { Screen: () => null }, useRouter: () => ({ setParams: jest.fn(), back: jest.fn() }), useFocusEffect: () => undefined }));
+jest.mock('expo-router/react-navigation', () => ({ useIsFocused: () => true }));
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: () => ({ controlPlaneId: 'cp', api: {}, profile: {} }) }));
 jest.mock('../src/browser/controller', () => ({ mobileBrowserController: { contextId: () => 'context', subscribe: () => () => undefined, activate: jest.fn(), suspend: jest.fn(), create: jest.fn(), close: jest.fn() } }));
 jest.mock('../src/components/EmbeddedPaneHeader', () => ({ EmbeddedPaneHeaderOptions: () => null }));
