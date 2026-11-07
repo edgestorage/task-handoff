@@ -13,6 +13,13 @@ export function safeMarkdownLink(raw: string) {
   }
 }
 
+export function embeddedBrowserLink(raw: string) {
+  const url = safeMarkdownLink(raw);
+  if (!url) return undefined;
+  const protocol = new URL(url).protocol;
+  return protocol === 'http:' || protocol === 'https:' ? url : undefined;
+}
+
 export function markdownFileLinkPath(raw: string) {
   const value = raw.trim();
   if (!value) return undefined;

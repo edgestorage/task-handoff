@@ -17,3 +17,15 @@ Remove this patch only after upgrading to an upstream release that provides the 
 `react-native-screens@4.26.2.patch` applies the native change from upstream pull request [#5014](https://github.com/software-mansion/react-native-screens/pull/5014). Reattaching a screen or `ScrollViewMarker` to its container resets an explicitly configured scroll-edge effect back to `automatic`; on iOS 27 that renders as a hard edge, so switching tabs or returning from a pushed screen can change the header treatment.
 
 Remove this patch after upgrading to a release that reapplies non-automatic scroll-edge effects from both `RNSScreenView` and `ScrollViewMarker` in `didMoveToWindow`, and after verifying transparent-header soft edges across tab switches, push/pop, and list remounts on iOS 26 and iOS 27.
+
+The split host also follows TaskHandoff's width-based master/detail contract:
+`MasterDetailLayout` mounts it only when both panes fit, and unmounts it for compact
+navigation. On iOS 17+, its horizontal size class is explicitly regular through
+`traitOverrides` (iOS 16.4 uses the parent child-trait override API). An iPhone 17
+in landscape otherwise inherits compact traits;
+UIKit then loops while collapsing the nested navigation controllers, blocking the
+main thread and leaving the launch screen visible. The override is local to the
+split host and does not alter the window, native tabs, or compact screens.
+Keep this local adaptation until the native split supports nested stacks under
+compact traits or the app replaces this width-based split integration. Validate
+landscape cold launch and rotation through the breakpoint on dependency upgrades.

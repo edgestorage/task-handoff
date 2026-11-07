@@ -37,7 +37,6 @@ import { nodeDisplayName } from '../directories/presentation';
 import { useI18n } from '../i18n';
 import {
   groupStoryTreeSessions,
-  mergeStoryTreeSnapshot,
   replaceVisibleStoryOrder,
   sortStoryTree,
   storyDragRowHeight,
@@ -50,7 +49,7 @@ import {
   unassignedStoryRootInstanceIds,
 } from './story-tree-model';
 import { getStoryViewPreferences, subscribeStoryViewPreferences, updateStoryViewPreferences } from './story-view-preferences';
-import { useStoryEvents } from './use-story-events';
+import { useActiveStories } from './use-active-stories';
 import { useStoryNodeFilter } from './use-story-node-filter';
 
 type StoryInboxProps = {
@@ -75,8 +74,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const aiSessionRuntime = useActiveAiSessionsRuntime();
   const { filter: nodeFilter } = useStoryNodeFilter();
   const preferences = useSyncExternalStore(subscribeStoryViewPreferences, getStoryViewPreferences, getStoryViewPreferences);
-  const [stories, setStories] = useState<Story[]>([]);
-  const [unavailableNodeIds, setUnavailableNodeIds] = useState<string[]>([]);
+  const { controller: storyList, state: storyState } = useActiveStories();
+  const { stories, unavailableNodeIds, phase, error } = storyState;
   const [expandedStoryKeys, setExpandedStoryKeys] = useState<Set<string>>(() => new Set());
   const [expandedDocumentKeys, setExpandedDocumentKeys] = useState<Set<string>>(() => new Set());
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set());
@@ -100,8 +99,6 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     baseManualOrder: string[];
     targets: { key: string; center: number; height: number }[];
   } | undefined>(undefined);
-  const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
-  const [error, setError] = useState<string>();
   const [renamingDocument, setRenamingDocument] = useState<{ story: Story; document: StoryDocument; title: string }>();
   const nodesById = useMemo(() => new Map(directory.nodes.map((node) => [node.id, node])), [directory.nodes]);
   const nodeLabel = useCallback((nodeId: string) => {
@@ -150,24 +147,9 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
       : sortStoryTree(stories, locale, preferences.sortMode, sessionsByStory).map(storyTreeKey);
     if (!sameStringOrder(manualKeys, preferences.manualKeys)) updateStoryViewPreferences({ manualKeys });
   }, [locale, manualOrderPreview, preferences.manualKeys, preferences.sortMode, sessionsByStory, stories]);
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    if (!runtime.api) return;
-    setPhase('loading');
-    setError(undefined);
-    try {
-      const result = await runtime.api.stories.list(undefined, signal);
-      if (signal?.aborted) return;
-      setStories((current) => mergeStoryTreeSnapshot(current, result.stories, result.unavailableNodeIds));
-      setUnavailableNodeIds(result.unavailableNodeIds);
-      setPhase('ready');
-    } catch (cause) {
-      if (signal?.aborted) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setPhase('error');
-    }
-  }, [runtime.api]);
+  const refresh = useCallback(async () => { await storyList?.refresh().catch(() => undefined); }, [storyList]);
   const pullToRefresh = usePullToRefresh(refresh);
-  const replaceStory = useCallback((updated: Story) => setStories((current) => current.map((story) => storyTreeKey(story) === storyTreeKey(updated) ? updated : story)), []);
+  const replaceStory = useCallback((updated: Story) => storyList?.replaceStory(updated), [storyList]);
   const toggleArchive = useCallback(async (story: Story) => {
     if (!runtime.api) return;
     try { replaceStory(story.archivedAt ? await runtime.api.stories.restore(story.id, story.ownerNodeId) : await runtime.api.stories.archive(story.id, story.ownerNodeId)); }
@@ -175,8 +157,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   }, [replaceStory, runtime.api, t]);
   const removeStory = useCallback((story: Story) => Alert.alert(t('stories.deleteTitle', { name: story.title }), t('stories.deleteDescription'), [
     { text: t('common.cancel'), style: 'cancel' },
-    { text: t('common.remove'), style: 'destructive', onPress: () => { void runtime.api?.stories.remove(story.id, story.ownerNodeId).then(() => setStories((current) => current.filter((candidate) => storyTreeKey(candidate) !== storyTreeKey(story)))).catch((cause) => Alert.alert(t('stories.saveError'), cause instanceof Error ? cause.message : String(cause))); } },
-  ]), [runtime.api, t]);
+    { text: t('common.remove'), style: 'destructive', onPress: () => { void runtime.api?.stories.remove(story.id, story.ownerNodeId).then(() => storyList?.removeStory(story)).catch((cause) => Alert.alert(t('stories.saveError'), cause instanceof Error ? cause.message : String(cause))); } },
+  ]), [runtime.api, storyList, t]);
   const removeDocument = useCallback((story: Story, document: StoryDocument) => Alert.alert(t('stories.deleteDocumentTitle', { name: document.title }), t('stories.deleteDocumentDescription'), [
     { text: t('common.cancel'), style: 'cancel' },
     { text: t('common.remove'), style: 'destructive', onPress: () => { void runtime.api?.stories.removeDocument(story.id, story.ownerNodeId, document.storyPath).then(() => refresh()).catch((cause) => Alert.alert(t('stories.saveError'), cause instanceof Error ? cause.message : String(cause))); } },
@@ -288,9 +270,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     settleDraggedStory(key, drag.translationY);
   };
 
-  useStoryEvents(refresh);
 
-  const loadingInitialStories = stories.length === 0 && (phase === 'idle' || phase === 'loading');
+  const loadingInitialStories = stories.length === 0 && (phase === 'idle' || phase === 'loading' || phase === 'offline');
   const emptyUnavailable = sortedStories.length === 0 && visibleUnavailableNodeIds.length > 0;
   const emptyError = phase === 'error' || emptyUnavailable;
   if (loadingInitialStories) return <InitialSyncLoading

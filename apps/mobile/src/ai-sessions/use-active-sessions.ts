@@ -83,6 +83,7 @@ function ActiveAiSessionsBoundary({ children }: { children: ReactNode }) {
     if (!runtime.coordinator || !controller) return;
     return runtime.coordinator.register({
       key: 'ai-sessions',
+      snapshotTopics: ['ai.sessions'],
       topics: ['ai.sessions'],
       background: true,
       start: (signal) => controller.start(signal, { managed: true }),

@@ -522,7 +522,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from "vue";
+import { computed, nextTick, onBeforeUnmount, provide, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { Archive, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleHelp, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pause, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
@@ -588,6 +588,7 @@ import { defaultAgentOrchestrationId, isDefaultAgentOrchestrationId } from "@tas
 import type { StoryAgentEntrySet } from "@task-handoff/protocol/story-agent-authorization";
 import { storySelectionKey, type StorySelection } from "./storySelection";
 import { storyDecisionSessionInstance } from "./storyDecisionSession";
+import { storyBrowserRequestKey } from "./storyBrowser";
 import type { HeaderDensity } from "../useWorkbenchLayoutPreferences";
 
 const props = withDefaults(defineProps<{
@@ -618,11 +619,13 @@ const emit = defineEmits<{
   "update:selection": [selection: StorySelection | undefined];
   instanceContextMenuCommand: [event: InstanceContextMenuCommandEvent];
   "launch-app": [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
+  "open-browser": [instanceId: string, url: string];
   "open-session": [instance: InstanceWithAiSessions, session: AiSessionSummary | undefined];
   "open-repository-workspace": [target: RepositoryWorkspaceTabTarget & { instanceId: string }];
   "open-settings": [instanceId: string, section?: "apps" | "models"];
   "run-action": [story: Story, action: StoryAction, onCreated: (instanceId: string, sessionId: string) => void];
 }>();
+provide(storyBrowserRequestKey, (instanceId, url) => emit("open-browser", instanceId, url));
 type StorySessionRecord = AiSessionSummary & { instanceId: string };
 type SessionEntry = { instance: InstanceWithAiSessions; session: AiSessionSummary; depth?: number; hasChildren?: boolean };
 type StoryHistoryEntry = { instance: InstanceWithAiSessions; item: AiSessionHistoryItem };

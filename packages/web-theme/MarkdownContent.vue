@@ -389,19 +389,24 @@ onBeforeUnmount(() => {
   width: fit-content;
   max-width: 100%;
   margin: 0.75em 0;
+  padding: 4px;
   overflow-x: auto;
-  border: 1px solid var(--markdown-table-border, var(--line, currentColor));
-  border-radius: 9px;
-  background: var(--markdown-table-bg, var(--surface-raised, transparent));
-  box-shadow: var(--shadow-soft, 0 1px 3px rgb(0 0 0 / 12%));
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .markdown-content :deep(table) {
   width: max-content;
   max-width: none;
   margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--markdown-table-border, var(--line, currentColor));
+  border-radius: 9px;
   border-collapse: separate;
   border-spacing: 0;
+  background: var(--markdown-table-bg, var(--surface-raised, transparent));
+  box-shadow: var(--shadow-soft, 0 1px 3px rgb(0 0 0 / 12%));
   font-size: 0.95em;
 }
 
@@ -421,9 +426,27 @@ onBeforeUnmount(() => {
     var(--markdown-table-head-bg, var(--surface-inset, rgb(127 127 127 / 16%))),
     color-mix(in srgb, var(--markdown-table-head-bg, var(--surface-inset, rgb(127 127 127 / 16%))) 78%, transparent)
   );
+  border-bottom: 0;
+  box-shadow: inset 0 -1px 0 var(--markdown-table-border, var(--line, currentColor));
   color: inherit;
   font-weight: 750;
   white-space: nowrap;
+}
+
+.markdown-content :deep(thead tr:first-child > th:first-child) {
+  border-top-left-radius: 8px;
+}
+
+.markdown-content :deep(thead tr:first-child > th:last-child) {
+  border-top-right-radius: 8px;
+}
+
+.markdown-content :deep(tbody tr:last-child > td:first-child) {
+  border-bottom-left-radius: 8px;
+}
+
+.markdown-content :deep(tbody tr:last-child > td:last-child) {
+  border-bottom-right-radius: 8px;
 }
 
 .markdown-content :deep(tr > :last-child) {

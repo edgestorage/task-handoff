@@ -2,6 +2,7 @@ import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { CloudClientTrustOutcome } from '@task-handoff/cloud-contracts/mobile';
 
 import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
+import { MobileStoryListController } from '../src/stories/list-controller';
 import { MobileDeviceTrustError } from '../src/control-plane/device-trust-error';
 import {
   MOBILE_BACKGROUND_CONNECTION_GRACE_MS,
@@ -36,6 +37,7 @@ function domain(key: string, topics: string[], background = false): MobileContro
   return {
     key,
     topics,
+    snapshotTopics: topics,
     background,
     start: jest.fn().mockResolvedValue(undefined),
     stop: jest.fn(),
@@ -120,6 +122,110 @@ function trustOutcome(state: CloudClientTrustOutcome['state'], overrides: Partia
 describe('MobileControlPlaneConnectionCoordinator', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
+
+  test('releases each topic loading state after its snapshot, independently of slower domains and socket open', async () => {
+    const runtime = harness();
+    let openSocket: (() => void) | undefined;
+    let failSocket: (() => void) | undefined;
+    runtime.connectEvents.mockImplementation((handlers) => {
+      openSocket = handlers.onOpen;
+      failSocket = () => handlers.onError(new MobileControlPlaneTransportError('DISCONNECTED', 'Disconnected', true));
+      return { close: runtime.close, updateTopics: runtime.updateTopics, updateAiSessionTransient: runtime.updateAiSessionTransient };
+    });
+    let finishSlow: (() => void) | undefined;
+    const slow = domain('apps', ['app.sessions']);
+    slow.start = jest.fn(() => new Promise<void>((resolve) => { finishSlow = resolve; }));
+    runtime.coordinator.register(domain('ai', ['ai.sessions']));
+    runtime.coordinator.register(slow);
+    runtime.coordinator.setEnvironment({ foreground: true });
+    const listener = jest.fn();
+    runtime.coordinator.subscribe(listener);
+    await flushCoordinator();
+
+    expect(runtime.coordinator.snapshot().phase).toBe('loading');
+    expect(runtime.coordinator.isTopicSyncing('ai.sessions')).toBe(false);
+    expect(runtime.coordinator.isTopicSyncing('app.sessions')).toBe(true);
+    expect(runtime.connectEvents).not.toHaveBeenCalled();
+    listener.mockClear();
+    finishSlow?.();
+    await flushCoordinator();
+    expect(listener).toHaveBeenCalled();
+    expect(runtime.connectEvents).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.snapshot().phase).toBe('loading');
+    expect(runtime.coordinator.isTopicSyncing('app.sessions')).toBe(false);
+
+    openSocket?.();
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    failSocket?.();
+    expect(runtime.coordinator.snapshot().phase).toBe('reconnecting');
+    expect(runtime.coordinator.isTopicSyncing('ai.sessions')).toBe(true);
+    expect(runtime.coordinator.isTopicSyncing('app.sessions')).toBe(true);
+    runtime.coordinator.stop();
+  });
+
+  test('Story list readiness does not wait for approval or detail consumers of the same event topic', async () => {
+    const runtime = harness();
+    let finishApproval!: () => void;
+    const list = domain('stories-list', ['stories']);
+    const approval = domain('mobile-approval-center', ['stories']);
+    approval.snapshotTopics = undefined;
+    approval.start = jest.fn(() => new Promise<void>((resolve) => { finishApproval = resolve; }));
+    const detail = domain('story-detail', ['stories']);
+    detail.snapshotTopics = undefined;
+    runtime.coordinator.register(list);
+    runtime.coordinator.register(approval);
+    runtime.coordinator.register(detail);
+    runtime.coordinator.setEnvironment({ foreground: true });
+    await flushCoordinator();
+    expect(runtime.coordinator.snapshot().phase).toBe('loading');
+    expect(runtime.coordinator.isTopicSyncing('stories')).toBe(false);
+    finishApproval();
+    await flushCoordinator();
+    runtime.coordinator.stop();
+  });
+
+  test('shared Story ownership survives an immediate consumer remount without another snapshot request', async () => {
+    const runtime = harness();
+    const list = jest.fn().mockResolvedValue({ stories: [], unavailableNodeIds: [] });
+    const stories = new MobileStoryListController({ stories: { list } } as unknown as ControlPlaneClient);
+    const release = stories.acquire(runtime.coordinator);
+    runtime.coordinator.setEnvironment({ foreground: true });
+    await flushCoordinator();
+    expect(list).toHaveBeenCalledTimes(1);
+    release();
+    const releaseAgain = stories.acquire(runtime.coordinator);
+    await flushCoordinator();
+    expect(stories.snapshot().phase).toBe('ready');
+    expect(list).toHaveBeenCalledTimes(1);
+    releaseAgain();
+    await flushCoordinator();
+    expect(stories.snapshot().phase).toBe('offline');
+    runtime.coordinator.stop();
+  });
+
+  test('a suspended snapshot completion cannot finish the next foreground recovery', async () => {
+    const runtime = harness();
+    const completions: (() => void)[] = [];
+    const ai = domain('ai', ['ai.sessions']);
+    ai.start = jest.fn(() => new Promise<void>((resolve) => { completions.push(resolve); }));
+    runtime.coordinator.register(ai);
+    runtime.coordinator.setEnvironment({ foreground: true });
+    await flushCoordinator();
+    expect(completions).toHaveLength(1);
+    runtime.coordinator.setEnvironment({ foreground: false });
+    jest.advanceTimersByTime(MOBILE_BACKGROUND_CONNECTION_GRACE_MS);
+    await flushCoordinator();
+    runtime.coordinator.setEnvironment({ foreground: true });
+    await flushCoordinator();
+    expect(completions).toHaveLength(2);
+    completions[0]();
+    await flushCoordinator();
+    expect(runtime.coordinator.isTopicSyncing('ai.sessions')).toBe(true);
+    completions[1]();
+    await flushCoordinator();
+    expect(runtime.coordinator.isTopicSyncing('ai.sessions')).toBe(false);
+    runtime.coordinator.stop();
+  });
 
   test('starts multiple domains through one authentication and event connection', async () => {
     const runtime = harness();

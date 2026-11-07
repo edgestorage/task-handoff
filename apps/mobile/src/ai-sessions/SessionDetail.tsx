@@ -3,10 +3,11 @@ import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type La
 import * as Clipboard from 'expo-clipboard';
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
 import { Check, ChevronRight, Copy, Split, Timer } from 'lucide-react-native';
-import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
-import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessionTimelineItem, type AiSessionTurn } from '@task-handoff/protocol/ai-sessions';
+import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
+import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessionTimelineItem, type AiSessionTurn, type AiSessionConversationAttachment } from '@task-handoff/protocol/ai-sessions';
 
 import { SafeMarkdown } from '../components/SafeMarkdown';
+import { MarkdownContent } from '../components/MarkdownContent';
 import { Icon } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingState } from '../components/LoadingState';
@@ -25,9 +26,12 @@ import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { SessionContextRow } from './SessionContextRow';
 import { translate, useI18n, type Translate } from '../i18n';
 import { TimelineActivityGroup } from './TimelineActivityGroup';
+import type { MobileToolActivityWindow } from './use-tool-activity-window';
 import { formatSessionTurnTime } from '../session-time';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
 import { AnimatedDisclosure, DisclosureChevron } from './AnimatedDisclosure';
+
+import { MessageAttachments, SessionAttachmentContext } from './MessageAttachments';
 
 const english: Translate = (key, params) => translate('en-US', key, params);
 const SCROLL_BOTTOM_THRESHOLD = 48;
@@ -46,6 +50,8 @@ type DetailItem = {
   streamKey?: string;
   streaming?: boolean;
   text?: string;
+  messageId?: string;
+  attachments?: AiSessionConversationAttachment[];
   activities?: AiSessionTimelineActivity[];
   history?: DetailItem[];
   historyStatus?: MobileTurnTimelineState['status'];
@@ -57,14 +63,20 @@ type DetailItem = {
 export type SessionDetailMode = 'conversation' | 'turn';
 
 export function SessionDetail({
+  client,
+  instanceId,
   session,
   messages,
   timelines = {},
+  toolActivityWindows = {},
   timelineEnabled = false,
   timelineHistoryEnabled = timelineEnabled,
   onLoadTimeline,
+  onLoadToolActivity,
   onRetryTimeline,
   onContinueFromTurn,
+  onAddToConversation,
+  onOpenBuiltinBrowser,
   onVisible,
   turnIndex,
   pendingTurnIndex,
@@ -82,14 +94,20 @@ export function SessionDetail({
   instanceName,
   workspaceName,
 }: {
+  client?: ControlPlaneClient;
+  instanceId?: string;
   session?: ControlPlaneAiSessionSummary;
   messages: readonly MobileStreamingMessage[];
   timelines?: Readonly<Record<string, MobileTurnTimelineState>>;
+  toolActivityWindows?: Readonly<Record<string, MobileToolActivityWindow>>;
   timelineEnabled?: boolean;
   timelineHistoryEnabled?: boolean;
   onLoadTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
+  onLoadToolActivity?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onRetryTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onContinueFromTurn?(turn: DetailTurn): void;
+  onAddToConversation?(text: string): void;
+  onOpenBuiltinBrowser?(url: string): void | Promise<void>;
   onVisible?(): void;
   turnIndex?: number;
   pendingTurnIndex?: number;
@@ -134,8 +152,8 @@ export function SessionDetail({
   const activityText = session ? sessionActivityText(session, t) : undefined;
   const timelineVisible = timelineEnabled || Object.values(timelines).some((timeline) => timeline.items.length > 0);
   const items = useMemo(() => contentLoading ? [] : selectedMode === 'conversation'
-    ? conversationDetailItems(session, messages, t, timelines, timelineVisible, timelineHistoryEnabled)
-    : detailItems(session, messages, selectedIndex, t, timelines, timelineVisible, timelineHistoryEnabled), [contentLoading, session, messages, selectedIndex, selectedMode, t, timelineHistoryEnabled, timelineVisible, timelines]);
+    ? conversationDetailItems(session, messages, t, timelines, timelineVisible, timelineHistoryEnabled, toolActivityWindows)
+    : detailItems(session, messages, selectedIndex, t, timelines, timelineVisible, timelineHistoryEnabled, toolActivityWindows), [contentLoading, session, messages, selectedIndex, selectedMode, t, timelineHistoryEnabled, timelineVisible, timelines, toolActivityWindows]);
   const projectionId = `${session?.id || ''}:${selectedMode}`;
   const trimEndItemIds = useMemo(() => new Set(items
     .filter((item, index) => items[index + 1]?.role === 'current')
@@ -296,8 +314,9 @@ export function SessionDetail({
   const listEmptyComponent = contentLoading ? null : <EmptyState icon="chatbubble-outline" iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />;
   const renderDetailItem = ({ item }: { item: DetailItem }) => <View
     testID={`session-detail-item-${item.role}`}
-  ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onContinueFromTurn={onContinueFromTurn} onLoadTimeline={onLoadTimeline} onRetryTimeline={onRetryTimeline} trimEnd={trimEndItemIds.has(item.id)} /></View>;
+  ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onAddToConversation={onAddToConversation} onContinueFromTurn={onContinueFromTurn} onLoadTimeline={onLoadTimeline} onLoadToolActivity={onLoadToolActivity} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onRetryTimeline={onRetryTimeline} trimEnd={trimEndItemIds.has(item.id)} /></View>;
   return (
+    <SessionAttachmentContext.Provider value={instanceId && session ? { client, instanceId, sessionId: session.id } : undefined}>
     <Profiler id="detail" onRender={recordDetailRender}>
       <>
         {selectedMode === 'conversation' ? <LegendList
@@ -386,6 +405,7 @@ export function SessionDetail({
         ) : null}
       </>
     </Profiler>
+    </SessionAttachmentContext.Provider>
   );
 }
 
@@ -418,6 +438,7 @@ export function detailItems(
   timelines: Readonly<Record<string, MobileTurnTimelineState>> = {},
   timelineEnabled = Object.keys(timelines).length > 0,
   timelineHistoryEnabled = timelineEnabled,
+  toolActivityWindows: Readonly<Record<string, MobileToolActivityWindow>> = {},
 ): DetailItem[] {
   if (!session) return [];
   const turns = aiSessionDisplayTurns(session);
@@ -442,6 +463,7 @@ export function detailItems(
       const fallbackResponseIndex = items.findLastIndex((item) => item.role === 'assistant');
       const responseIndex = hasStreamedText && hasTimeline ? streamedItemIndex : fallbackResponseIndex;
       const responseItem: DetailItem = {
+        ...(responseIndex >= 0 ? items[responseIndex] : undefined),
         id: hasStreamedText ? `timeline:${streamed!.itemId}` : `${turn.id}:assistant`,
         role: 'assistant',
         streamKey: hasStreamedText ? `${turn.id}:${streamed!.itemId}` : undefined,
@@ -457,7 +479,7 @@ export function detailItems(
       else items.push(responseItem);
     }
     if (isLatest && session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: session.error || t('sessions.failedWithoutDiagnostic') });
-    let projected = hasTimeline ? compactMobileTimeline(items, turn) : items;
+    let projected = hasTimeline ? compactMobileTimeline(items, turn, active) : items;
     if ((!active || timelineEnabled) && !projected.some((item) => item.role === 'history')) {
       const responseIndex = projected.findIndex((item) => item.role === 'assistant');
       projected.splice(responseIndex < 0 ? Math.min(1, projected.length) : responseIndex, 0, {
@@ -470,7 +492,7 @@ export function detailItems(
       });
     }
     const currentActivity = isLatest ? sessionActivityText(session, t) : undefined;
-    const withCurrentActivity = timelineEnabled && currentActivity ? appendCurrentActivity(projected, currentActivity, turn, session.status === 'running') : projected;
+    const withCurrentActivity = timelineEnabled && currentActivity ? appendCurrentActivity(projected, currentActivity, turn, session.status === 'running', toolActivityWindows[turn.id]) : projected;
     return placeRetryWarningBeforeResponse(withCurrentActivity);
   }
   const items: DetailItem[] = [];
@@ -480,10 +502,10 @@ export function detailItems(
   return items;
 }
 
-export function conversationDetailItems(session: ControlPlaneAiSessionSummary | undefined, messages: readonly MobileStreamingMessage[], t: Translate = english, timelines: Readonly<Record<string, MobileTurnTimelineState>> = {}, timelineEnabled = Object.keys(timelines).length > 0, timelineHistoryEnabled = timelineEnabled): DetailItem[] {
+export function conversationDetailItems(session: ControlPlaneAiSessionSummary | undefined, messages: readonly MobileStreamingMessage[], t: Translate = english, timelines: Readonly<Record<string, MobileTurnTimelineState>> = {}, timelineEnabled = Object.keys(timelines).length > 0, timelineHistoryEnabled = timelineEnabled, toolActivityWindows: Readonly<Record<string, MobileToolActivityWindow>> = {}): DetailItem[] {
   const turns = aiSessionDisplayTurns(session);
   if (!turns.length) return detailItems(session, messages, undefined, t);
-  return turns.flatMap((_turn, index) => detailItems(session, messages, index, t, timelines, timelineEnabled, timelineHistoryEnabled));
+  return turns.flatMap((_turn, index) => detailItems(session, messages, index, t, timelines, timelineEnabled, timelineHistoryEnabled, toolActivityWindows));
 }
 
 function turnTimelineDetailItems(turn: DetailTurn, timeline: readonly AiSessionTimelineItem[]): DetailItem[] {
@@ -503,24 +525,31 @@ function turnTimelineDetailItems(turn: DetailTurn, timeline: readonly AiSessionT
       id: `timeline:${item.id}`,
       role: item.type === 'user-message' ? 'user' : 'assistant',
       text: item.text,
+      messageId: item.id,
+      attachments: item.type === 'user-message' ? item.attachments : undefined,
       actions: item.type === 'user-message' ? { timestamp: turn.startedAt } : undefined,
     });
   }
   return items;
 }
 
-function compactMobileTimeline(items: DetailItem[], turn: DetailTurn) {
+function compactMobileTimeline(items: DetailItem[], turn: DetailTurn, active: boolean) {
   const primaryUserIndex = items.findIndex((item) => item.role === 'user');
   const latestResponseIndex = items.findLastIndex((item) => item.role === 'assistant');
   const retryWarning = items.findLast((item) => item.role === 'warning');
-  if (latestResponseIndex < 0) return items;
+  if (latestResponseIndex < 0 && active) return items;
   const primaryUser = primaryUserIndex >= 0 ? items[primaryUserIndex] : undefined;
-  const history = items.slice(0, latestResponseIndex).filter((item, index) => index !== primaryUserIndex && item.role !== 'warning');
-  const trailing = items.slice(latestResponseIndex + 1).filter((item, offset) => latestResponseIndex + 1 + offset !== primaryUserIndex && item.role !== 'warning');
+  // Like Web's active-only tool disclosure, only the active latest turn owns
+  // trailing activity. Keep terminal activity in process history, even when
+  // the live timeline has not received the final assistant message yet.
+  const history = items.filter((item, index) => index !== primaryUserIndex && index !== latestResponseIndex
+    && item.role !== 'warning' && item.role !== 'error' && (!active || index < latestResponseIndex));
+  const trailing = items.filter((item, index) => index !== primaryUserIndex && index > latestResponseIndex
+    && item.role !== 'warning' && (active || item.role === 'error'));
   return [
     ...(primaryUser ? [primaryUser] : []),
     ...(history.length ? [{ id: `${turn.id}:timeline-history`, role: 'history' as const, history, turn }] : []),
-    items[latestResponseIndex],
+    ...(latestResponseIndex >= 0 ? [items[latestResponseIndex]] : []),
     ...trailing,
     ...(retryWarning ? [retryWarning] : []),
   ];
@@ -539,15 +568,20 @@ function placeRetryWarningBeforeResponse(items: DetailItem[]) {
   ];
 }
 
-function appendCurrentActivity(items: DetailItem[], text: string, turn: DetailTurn, running: boolean) {
+function appendCurrentActivity(items: DetailItem[], text: string, turn: DetailTurn, running: boolean, window?: MobileToolActivityWindow) {
   const responseIndex = items.findLastIndex((item) => item.role === 'assistant');
   const historyIndex = items.findIndex((item) => item.role === 'history');
   const splitIndex = responseIndex >= 0 ? responseIndex + 1 : historyIndex >= 0 ? historyIndex + 1 : Math.min(1, items.length);
   const trailing = items.slice(splitIndex).filter((item) => item.role !== 'error' && item.role !== 'warning');
   const notices = items.slice(splitIndex).filter((item) => item.role === 'error' || item.role === 'warning');
+  const activityHistory: DetailItem[] = window
+    ? window.status === 'ready' && window.items.length
+      ? [{ id: `${turn.id}:tool-window`, role: 'activity', activities: [...window.items] }]
+      : []
+    : trailing;
   return [
     ...items.slice(0, splitIndex),
-    { id: `${turn.id}:current-activity`, role: 'current' as const, text, history: trailing, interactive: true, streaming: running, turn },
+    { id: `${turn.id}:current-activity`, role: 'current' as const, text, history: activityHistory, interactive: true, streaming: running, turn },
     ...notices,
   ];
 }
@@ -555,16 +589,22 @@ function appendCurrentActivity(items: DetailItem[], text: string, turn: DetailTu
 function DetailItemContent({
   conversation,
   item,
+  onAddToConversation,
   onContinueFromTurn,
   onLoadTimeline,
+  onLoadToolActivity,
+  onOpenBuiltinBrowser,
   onRetryTimeline,
   timelineNested = false,
   trimEnd = false,
 }: {
   conversation: boolean;
   item: DetailItem;
+  onAddToConversation?(text: string): void;
   onContinueFromTurn?(turn: DetailTurn): void;
   onLoadTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
+  onLoadToolActivity?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
+  onOpenBuiltinBrowser?(url: string): void | Promise<void>;
   onRetryTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   timelineNested?: boolean;
   trimEnd?: boolean;
@@ -572,14 +612,19 @@ function DetailItemContent({
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   if (item.role === 'activity') return <TimelineActivityGroup activities={item.activities ?? []} />;
-  if (item.role === 'history') return <TimelineHistory error={item.historyError} items={item.history ?? []} onLoad={item.turn && onLoadTimeline ? () => onLoadTimeline(item.turn!) : undefined} onRetry={item.turn && onRetryTimeline ? () => onRetryTimeline(item.turn!) : undefined} status={item.historyStatus} turn={item.turn} />;
-  if (item.role === 'current') return <TimelineCurrentActivity item={item} />;
-  if (conversation && item.role === 'user') return <View style={styles.userMessage}><View style={[styles.conversationUser, { backgroundColor: colors.workbenchSelectionBackground }]} testID="session-user-message"><SafeMarkdown nativeSelectable={false} trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
-  if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
-  if (item.role === 'user') return <View style={styles.userMessage}><View style={[styles.promptBlock, { backgroundColor: colors.workbenchSelectionBackground }]} testID="session-user-message"><SafeMarkdown nativeSelectable={false} trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
-  if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
+  if (item.role === 'history') return <TimelineHistory error={item.historyError} items={item.history ?? []} onAddToConversation={onAddToConversation} onLoad={item.turn && onLoadTimeline ? () => onLoadTimeline(item.turn!) : undefined} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onRetry={item.turn && onRetryTimeline ? () => onRetryTimeline(item.turn!) : undefined} status={item.historyStatus} turn={item.turn} />;
+  if (item.role === 'current') return <TimelineCurrentActivity item={item} onLoad={item.turn && onLoadToolActivity ? () => onLoadToolActivity(item.turn!) : undefined} onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} />;
+  if (item.role === 'user') return <View style={styles.userMessage}>
+    {item.messageId && item.attachments?.length ? <MessageAttachments attachments={item.attachments} messageId={item.messageId} /> : null}
+    {item.text?.trim() ? <View style={[conversation ? styles.conversationUser : styles.promptBlock, { backgroundColor: colors.workbenchSelectionBackground }]} testID="session-user-message">
+      <SafeMarkdown nativeSelectable={false} onOpenBuiltinBrowser={onOpenBuiltinBrowser} trimEnd>{item.text}</SafeMarkdown>
+    </View> : null}
+    <MessageActions item={item} onContinueFromTurn={onContinueFromTurn} />
+  </View>;
+  if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</MarkdownContent></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
+  if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</MarkdownContent></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (item.role === 'warning') return <RetryWarning text={item.text ?? ''} />;
-  return <View style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><Icon color={colors.error} name="alert-circle" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>{t('sessions.error')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
+  return <View style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><Icon color={colors.error} name="alert-circle" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>{t('sessions.error')}</Text><MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser}>{item.text ?? ''}</MarkdownContent></View></View>;
 }
 
 function MessageActions({ item, onContinueFromTurn }: { item: DetailItem; onContinueFromTurn?(turn: DetailTurn): void }) {
@@ -616,14 +661,18 @@ function MessageActions({ item, onContinueFromTurn }: { item: DetailItem; onCont
 function TimelineHistory({
   error,
   items,
+  onAddToConversation,
   onLoad,
+  onOpenBuiltinBrowser,
   onRetry,
   status = 'ready',
   turn,
 }: {
   error?: string;
   items: readonly DetailItem[];
+  onAddToConversation?(text: string): void;
   onLoad?(): void;
+  onOpenBuiltinBrowser?(url: string): void | Promise<void>;
   onRetry?(): void;
   status?: MobileTurnTimelineState['status'];
   turn?: DetailTurn;
@@ -660,7 +709,7 @@ function TimelineHistory({
       <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel}</Text>
     </Pressable>
     <AnimatedDisclosure expanded={expanded} spacing={mobileWebMetric(12)}>
-      <View style={[styles.timelineHistoryItems, { borderLeftColor: colors.border }]} testID="session-timeline-history-items">{items.map((item) => <DetailItemContent conversation={false} item={item} key={item.id} timelineNested />)}</View>
+      <View style={[styles.timelineHistoryItems, { borderLeftColor: colors.border }]} testID="session-timeline-history-items">{items.map((item) => <DetailItemContent conversation={false} item={item} key={item.id} onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} timelineNested />)}</View>
     </AnimatedDisclosure>
   </View>;
 }
@@ -692,7 +741,7 @@ export function processedDurationLabel(turn: DetailTurn | undefined, t: Translat
   });
 }
 
-function TimelineCurrentActivity({ item }: { item: DetailItem }) {
+function TimelineCurrentActivity({ item, onLoad, onAddToConversation, onOpenBuiltinBrowser }: { item: DetailItem; onLoad?(): void; onAddToConversation?(text: string): void; onOpenBuiltinBrowser?(url: string): void | Promise<void> }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
@@ -703,11 +752,11 @@ function TimelineCurrentActivity({ item }: { item: DetailItem }) {
     <ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={Boolean(item.streaming)} textStyle={styles.currentActivityText}>{item.text ?? ''}</ToolActivityText>
   </>;
   return <View style={styles.currentActivity}>
-    {interactive ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.currentActivityHeader}>{content}</Pressable>
+    {interactive ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => { if (!expanded) onLoad?.(); setExpanded((value) => !value); }} style={styles.currentActivityHeader}>{content}</Pressable>
       : <View style={styles.currentActivityHeader}>{content}</View>}
     <AnimatedDisclosure expanded={expanded} spacing={mobileWebMetric(10)}><View style={styles.currentActivityItems} testID="session-current-activity-items">{nodes.length ? nodes.map((node) => node.role === 'activity'
       ? <TimelineActivityGroup activities={node.activities ?? []} key={node.id} summaryVisible={false} />
-      : <DetailItemContent conversation={false} item={node} key={node.id} timelineNested />) : <Text style={[styles.currentActivityEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoActivities')}</Text>}</View></AnimatedDisclosure>
+      : <DetailItemContent conversation={false} item={node} key={node.id} onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} timelineNested />) : <Text style={[styles.currentActivityEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoActivities')}</Text>}</View></AnimatedDisclosure>
   </View>;
 }
 

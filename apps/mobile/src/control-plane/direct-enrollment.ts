@@ -153,7 +153,7 @@ export async function probeDirectControlPlane(
   const origin = normalizeDirectControlPlaneOrigin(input, options);
   let document;
   try {
-    document = await publicAuthApi(origin, options.fetchImpl ?? fetch).identity();
+    document = await publicAuthApi(origin, options.fetchImpl ?? fetch).identity({ extendedCapabilities: true });
   } catch (cause) {
     if (cause instanceof DirectEnrollmentError) throw cause;
     throw new DirectEnrollmentError('DIRECT_TLS_OR_NETWORK_FAILED', 'Could not connect to the Control Plane.', true);

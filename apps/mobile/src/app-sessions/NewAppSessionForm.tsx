@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { controlPlaneLocalFolderDisplayName, type ControlPlaneInstanceResourceEntry, type ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 import type { ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
@@ -7,7 +7,7 @@ import { NewSessionContextMenu } from '../ai-sessions/NewSessionContextMenu';
 import type { AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { Screen } from '../components/Screen';
 import { Icon, type IconName } from '../components/Icon';
-import { sfSymbolForIcon } from '../components/sf-symbols';
+import { useAdaptiveContentLayout } from '../components/adaptive-layout';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { instanceSelectOptions } from '../directories/instance-select-options';
@@ -21,7 +21,10 @@ type Props = {
   selectedInstance?: ControlPlaneInstanceResourceEntry;
   apps?: readonly ControlPlaneInstanceResourceEntry['availableApps'][number][];
   selectedAppId: string;
+  appsLoading?: boolean;
   folders: readonly ControlPlaneNodeLocalFolder[];
+  foldersLoading?: boolean;
+  foldersError?: boolean;
   selectedFolderId?: string;
   busy: boolean;
   disabled: boolean;
@@ -29,129 +32,111 @@ type Props = {
   onInstanceChange(value: string): void;
   onAppChange(value: string): void;
   onFolderChange(value?: string): void;
+  onRetryFolders?(): void;
   onCreate(): void;
 };
 
 export function NewAppSessionForm(props: Props) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
-  const [selectionRowWidth, setSelectionRowWidth] = useState<number>();
+  const adaptive = useAdaptiveContentLayout(640);
   const apps = props.apps ?? props.selectedInstance?.availableApps ?? [];
   const selectedApp = apps.find((app) => app.id === props.selectedAppId);
   const selectedFolder = props.folders.find((folder) => folder.id === props.selectedFolderId);
   const showFolders = selectedApp?.supportsCwdSelection && props.selectedInstance?.runtime.type === 'local';
   const instanceOptions = instanceSelectOptions(props.instances, props.nodes);
-  const appOptions: AnchoredSelectOption[] = apps.map((app) => ({
-    label: app.name,
-    systemImage: sfSymbolForIcon(appLaunchIcon(app.id)),
-    value: app.id,
-  }));
+  const node = props.nodes.find((candidate) => candidate.id === props.selectedInstance?.nodeId);
   const folderOptions: AnchoredSelectOption[] = [
-    { label: t('appSessions.defaultWorkspace'), systemImage: 'folder', value: DEFAULT_WORKSPACE_VALUE },
+    { label: t('appSessions.defaultWorkspace'), description: props.selectedInstance?.workspace.path, systemImage: 'folder', value: DEFAULT_WORKSPACE_VALUE },
     ...props.folders.map((folder) => ({ description: folder.path, label: controlPlaneLocalFolderDisplayName(folder, locale), systemImage: 'folder' as const, value: folder.id })),
   ];
+  const unavailable = props.busy || props.disabled;
+  const selectorWidth = Math.max(0, adaptive.contentWidth - 32);
+  const launchLabel = props.busy ? t('appSessions.creating') : selectedApp ? t('appSessions.launchNamed', { name: selectedApp.name }) : t('appSessions.create');
 
-  return <Screen alwaysBounceVertical={false} automaticallyAdjustKeyboardInsets={false} contentContainerStyle={styles.screenContent}>
-    <View style={styles.intro}>
-      <Text style={[styles.heading, { color: colors.text }]}>{t('appSessions.new')}</Text>
-      <Text style={[styles.description, { color: colors.textMuted }]}>{t('appSessions.newDescription')}</Text>
-    </View>
+  return <View style={[styles.root, { backgroundColor: colors.background }]}>
+    <Screen alwaysBounceVertical={false} automaticallyAdjustKeyboardInsets={false} maxContentWidth={640} contentContainerStyle={styles.screenContent}>
+      <View style={styles.intro}>
+        <Text accessibilityRole="header" style={[styles.heading, { color: colors.text }]}>{t('appSessions.new')}</Text>
+        <Text style={[styles.description, { color: colors.textMuted }]}>{t('appSessions.newDescription')}</Text>
+      </View>
+      <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={props.onInstanceChange} options={instanceOptions} selectedValue={props.selectedInstance?.id ?? ''} title={t('sessions.instance')}>
+        {(onPress) => <SelectionRow width={selectorWidth} disabled={props.busy || !instanceOptions.length} icon="server-outline" label={t('sessions.instance')}
+          value={props.selectedInstance?.name || t('sessions.selectInstance')} description={node?.name} onPress={onPress} />}
+      </NewSessionContextMenu>
 
-    <View
-      onLayout={(event) => setSelectionRowWidth(event.nativeEvent.layout.width - 28)}
-      style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
-      testID="new-app-session-selection-card"
-    >
-      <NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onInstanceChange} options={instanceOptions} selectedValue={props.selectedInstance?.id ?? ''} title={t('sessions.instance')}>
-        {(onPress) => <SelectionRow
-          disabled={!instanceOptions.length}
-          icon="server-outline"
-          label={t('sessions.instance')}
-          value={props.selectedInstance?.name || t('sessions.selectInstance')}
-          width={selectionRowWidth}
-          onPress={onPress}
-        />}
-      </NewSessionContextMenu>
-      <View style={[styles.divider, { backgroundColor: colors.border }]} />
-      <NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onAppChange} options={appOptions} selectedValue={props.selectedAppId} title={t('appSessions.app')}>
-        {(onPress) => <SelectionRow
-          disabled={!appOptions.length}
-          icon={appLaunchIcon(selectedApp?.id)}
-          label={t('appSessions.app')}
-          value={selectedApp?.name || t('appSessions.selectApp')}
-          width={selectionRowWidth}
-          onPress={onPress}
-        />}
-      </NewSessionContextMenu>
-      {showFolders ? <>
-        <View style={[styles.divider, { backgroundColor: colors.border }]} />
-        <NewSessionContextMenu
-          cancelLabel={t('common.cancel')}
-          onSelect={(value) => props.onFolderChange(value === DEFAULT_WORKSPACE_VALUE ? undefined : value)}
-          options={folderOptions}
-          selectedValue={props.selectedFolderId ?? DEFAULT_WORKSPACE_VALUE}
-          title={t('sessions.folder')}
-        >
-          {(onPress) => <SelectionRow
-            icon="folder-outline"
-            label={t('sessions.folder')}
-            value={selectedFolder?.name || t('appSessions.defaultWorkspace')}
-            width={selectionRowWidth}
-            onPress={onPress}
-          />}
+      <View style={styles.section}>
+        <Text accessibilityRole="header" style={[styles.sectionTitle, { color: colors.textMuted }]}>{t('appSessions.selectApp')}</Text>
+        {apps.length ? <View style={styles.appList}>
+          {apps.map((app) => {
+            const selected = app.id === props.selectedAppId;
+            return <Pressable key={app.id} accessibilityLabel={app.name} accessibilityRole="radio" accessibilityState={{ checked: selected, disabled: props.busy }} disabled={props.busy}
+              onPress={() => props.onAppChange(app.id)} style={({ pressed }) => [styles.appRow, { backgroundColor: selected ? colors.primarySoft : colors.surface, borderColor: selected ? colors.primary : colors.workbenchCardBorder }, props.busy && styles.disabled, pressed && styles.pressed]}>
+              <View style={[styles.appIcon, { backgroundColor: selected ? colors.surface : colors.surfaceInset }]}><Icon color={selected ? colors.primary : colors.textMuted} name={appLaunchIcon(app.id)} size={23} /></View>
+              <View style={styles.rowText}>
+                <Text style={[styles.rowValue, { color: colors.text }]}>{app.name}</Text>
+                <Text style={[styles.secondary, { color: colors.textMuted }]}>{t(app.kind === 'tty' ? 'appSessions.kindTerminal' : app.kind === 'web' ? 'appSessions.kindWeb' : 'appSessions.kindDesktop')}</Text>
+              </View>
+              <Icon color={selected ? colors.primary : colors.border} name={selected ? 'checkmark-circle' : 'ellipse-outline'} size={22} />
+            </Pressable>;
+          })}
+        </View> : !props.appsLoading && !props.error ? <Text style={[styles.description, { color: colors.textMuted }]}>{t('appSessions.noApps')}</Text> : null}
+        {props.appsLoading ? <View accessibilityLiveRegion="polite" style={styles.status}><ActivityIndicator color={colors.textMuted} /><Text style={[styles.secondary, { color: colors.textMuted }]}>{t('appSessions.checkingApps')}</Text></View> : null}
+      </View>
+
+      {showFolders ? <View style={styles.section}>
+        <Text accessibilityRole="header" style={[styles.sectionTitle, { color: colors.textMuted }]}>{t('sessions.folder')}</Text>
+        <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy || props.foldersLoading || props.foldersError}
+          onSelect={(value) => props.onFolderChange(value === DEFAULT_WORKSPACE_VALUE ? undefined : value)} options={folderOptions} selectedValue={props.selectedFolderId ?? DEFAULT_WORKSPACE_VALUE} title={t('sessions.folder')}>
+          {(onPress) => <SelectionRow width={selectorWidth} disabled={props.busy || props.foldersLoading || props.foldersError} icon="folder-outline" label={t('sessions.folder')}
+            value={selectedFolder ? controlPlaneLocalFolderDisplayName(selectedFolder, locale) : t('appSessions.defaultWorkspace')}
+            description={selectedFolder?.path || props.selectedInstance?.workspace.path} onPress={onPress} />}
         </NewSessionContextMenu>
-      </> : null}
-    </View>
-
-    {props.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, color: colors.error }]}>{props.error}</Text> : null}
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled: props.disabled }}
-      disabled={props.disabled}
-      onPress={props.onCreate}
-      style={({ pressed }) => [styles.createButton, { backgroundColor: colors.primaryButton }, props.disabled && styles.disabled, pressed && styles.pressed]}
-    >
-      <Icon color="#fff" name={props.busy ? 'hourglass-outline' : 'play'} size={18} />
-      <Text style={styles.createLabel}>{props.busy ? t('appSessions.creating') : t('appSessions.create')}</Text>
-    </Pressable>
-  </Screen>;
+        {props.foldersLoading ? <View accessibilityLiveRegion="polite" style={styles.status}><ActivityIndicator color={colors.textMuted} /><Text style={[styles.secondary, { color: colors.textMuted }]}>{t('sessions.loadingFolders')}</Text></View> : null}
+        {props.foldersError ? <View accessibilityLiveRegion="polite" style={styles.status}>
+          <Text style={[styles.statusText, styles.secondary, { color: colors.error }]}>{t('appSessions.foldersError')}</Text>
+          <Pressable accessibilityRole="button" disabled={props.busy} accessibilityState={{ disabled: props.busy }} onPress={props.onRetryFolders} style={({ pressed }) => [styles.retry, pressed && styles.pressed]}><Text style={[styles.secondary, { color: colors.primary }]}>{t('common.retry')}</Text></Pressable>
+        </View> : null}
+      </View> : null}
+      {props.error ? <View accessibilityLiveRegion="polite" style={[styles.guidance, { backgroundColor: colors.surfaceInset }]}><Icon color={colors.textMuted} name="information-circle-outline" size={20} /><Text style={[styles.statusText, styles.description, { color: colors.textMuted }]}>{props.error}</Text></View> : null}
+    </Screen>
+    <SafeAreaView edges={['bottom']} style={[styles.footer, { backgroundColor: colors.surface, borderTopColor: colors.workbenchCardBorder }]}>
+      <View style={[styles.footerContent, { paddingLeft: 16 + adaptive.contentInsets.left, paddingRight: 16 + adaptive.contentInsets.right }]}>
+        <Pressable accessibilityLabel={launchLabel} accessibilityRole="button" accessibilityState={{ disabled: unavailable, busy: props.busy }} disabled={unavailable} onPress={props.onCreate}
+          style={({ pressed }) => [styles.createButton, { backgroundColor: colors.primaryButton }, unavailable && styles.disabled, pressed && styles.pressed]}>
+          {props.busy ? <ActivityIndicator color="#fff" /> : <Icon color="#fff" name="play" size={18} />}
+          <Text style={styles.createLabel}>{launchLabel}</Text>
+        </Pressable>
+      </View>
+    </SafeAreaView>
+  </View>;
 }
 
-function SelectionRow({ disabled, icon, label, value, width, onPress }: { disabled?: boolean; icon: IconName; label: string; value: string; width?: number; onPress?: () => void }) {
+function SelectionRow({ disabled, icon, label, value, description, width, onPress }: { disabled?: boolean; icon: IconName; label: string; value: string; description?: string; width: number; onPress?: () => void }) {
   const { colors } = useMobileTheme();
-  return <Pressable
-    accessibilityLabel={`${label}: ${value}`}
-    accessibilityRole="button"
-    accessibilityState={{ disabled: Boolean(disabled) }}
-    disabled={disabled}
-    onPress={onPress}
-    style={({ pressed }) => [styles.row, width === undefined ? styles.rowBeforeLayout : { width }, disabled && styles.disabled, pressed && styles.pressed]}
-  >
-    <View style={[styles.icon, { backgroundColor: colors.surface }]}><Icon color={colors.primary} name={icon} size={19} /></View>
+  return <Pressable accessibilityLabel={`${label}: ${value}`} accessibilityHint={description} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress}
+    style={({ pressed }) => [styles.contextRow, { width, backgroundColor: colors.surface, borderColor: colors.workbenchCardBorder }, disabled && styles.disabled, pressed && styles.pressed]}>
+    <Icon color={colors.textMuted} name={icon} size={20} />
     <View style={styles.rowText}>
-      <Text style={[styles.rowLabel, { color: colors.textMuted }]}>{label}</Text>
-      <Text numberOfLines={1} style={[styles.rowValue, { color: colors.text }]}>{value}</Text>
+      <Text style={[styles.rowValue, { color: colors.text }]}>{value}</Text>
+      {description ? <Text numberOfLines={2} style={[styles.secondary, { color: colors.textMuted }]}>{description}</Text> : null}
     </View>
-    <Icon color={colors.textMuted} name="chevron-down" size={13} />
+    <Icon color={colors.textMuted} name="chevron-down" size={14} />
   </Pressable>;
 }
 
 const styles = StyleSheet.create({
-  screenContent: { alignSelf: 'center', justifyContent: 'center', maxWidth: 640, paddingVertical: 24, width: '100%' },
-  intro: { alignItems: 'center', gap: 8, marginBottom: 8, marginTop: 20, paddingHorizontal: 20 },
-  heading: { fontSize: 28, fontWeight: '700', letterSpacing: -0.6, lineHeight: 34, textAlign: 'center' },
-  description: { fontSize: 15, lineHeight: 22, textAlign: 'center' },
-  card: { borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden', paddingHorizontal: 14 },
-  row: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 72 },
-  rowBeforeLayout: { alignSelf: 'stretch' },
-  icon: { alignItems: 'center', borderRadius: 10, height: 38, justifyContent: 'center', width: 38 },
-  rowText: { flex: 1, gap: 2 },
-  rowLabel: { fontSize: 12, fontWeight: '600', lineHeight: 16 },
-  rowValue: { fontSize: 15, fontWeight: '600', lineHeight: 21 },
-  divider: { height: StyleSheet.hairlineWidth, marginLeft: 50 },
-  createButton: { alignItems: 'center', borderRadius: 14, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 50 },
-  createLabel: { color: '#fff', fontSize: 16, fontWeight: '700', lineHeight: 22 },
-  disabled: { opacity: 0.4 },
-  pressed: { opacity: 0.72 },
-  error: { borderRadius: 12, fontSize: 13, lineHeight: 19, padding: 12 },
+  root: { flex: 1 }, screenContent: { paddingTop: 24, paddingBottom: 24, gap: 24 },
+  intro: { gap: 8 }, heading: { fontSize: 24, fontWeight: '500', lineHeight: 30 }, description: { fontSize: 14, lineHeight: 21 },
+  section: { gap: 10 }, sectionTitle: { fontSize: 13, fontWeight: '500', lineHeight: 18 },
+  appList: { gap: 8 }, appRow: { alignItems: 'center', borderRadius: 14, borderWidth: 1, flexDirection: 'row', gap: 12, minHeight: 76, padding: 14 },
+  appIcon: { alignItems: 'center', borderRadius: 12, height: 44, justifyContent: 'center', width: 44 }, rowText: { flex: 1, gap: 3 },
+  contextRow: { alignItems: 'center', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 64, padding: 14 },
+  rowValue: { fontSize: 15, fontWeight: '500', lineHeight: 21 }, secondary: { fontSize: 12, lineHeight: 18 },
+  status: { alignItems: 'center', flexDirection: 'row', gap: 10 }, statusText: { flex: 1 }, retry: { justifyContent: 'center', minHeight: 44, minWidth: 44, paddingHorizontal: 8 },
+  guidance: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 10, padding: 14 },
+  footer: { borderTopWidth: StyleSheet.hairlineWidth }, footerContent: { paddingVertical: 12 },
+  createButton: { alignItems: 'center', borderRadius: 14, flexDirection: 'row', gap: 10, justifyContent: 'center', minHeight: 50, paddingHorizontal: 16, paddingVertical: 12 },
+  createLabel: { color: '#fff', flexShrink: 1, fontSize: 16, fontWeight: '500', lineHeight: 22, textAlign: 'center' },
+  disabled: { opacity: 0.4 }, pressed: { opacity: 0.72 },
 });

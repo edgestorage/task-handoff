@@ -49,7 +49,7 @@ export const sessions = {
     openFile: "Open in built-in file manager",
     openDesktopFile: "Open in desktop file manager",
     copyPath: "Copy file path",
-    openBuiltinBrowser: "Open in built-in browser",
+    openBuiltinBrowser: "Open in embedded browser",
     openDefaultBrowser: "Open in default browser",
     copyLink: "Copy link",
   },

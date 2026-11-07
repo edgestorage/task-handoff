@@ -3,6 +3,9 @@ export type WebSocketLike = {
   OPEN?: number;
   bufferedAmount?: number;
   send: (data: unknown, options?: { binary?: boolean; compress?: boolean }) => void;
+  sendAsync?: (data: unknown, options?: { binary?: boolean; compress?: boolean }) => Promise<void>;
+  pause?: () => void;
+  resume?: () => void;
   close: (code?: number, reason?: string) => void;
   on: (event: "open" | "message" | "close" | "error", listener: (...args: unknown[]) => void) => void;
 };
@@ -131,6 +134,7 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
       openTimer = undefined;
     }
   };
+  const asyncWrites = new Map<WebSocketLike, { bytes: number; tail: Promise<void> }>();
   const forward = (socket: WebSocketLike, frame: WebSocketFrame) => {
     const bytes = frame.bytes;
     if ((socket.bufferedAmount ?? 0) + bytes > maxBufferedBytes) {
@@ -139,7 +143,23 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
       return false;
     }
     try {
-      sendFrame(socket, frame);
+      if (socket.sendAsync) {
+        const source = socket === client ? upstream : client;
+        const writes = asyncWrites.get(socket) ?? { bytes: 0, tail: Promise.resolve() };
+        if (writes.bytes + frame.bytes > maxBufferedBytes) throw new Error("WebSocket asynchronous queue limit exceeded.");
+        asyncWrites.set(socket, writes);
+        writes.bytes += frame.bytes;
+        source.pause?.();
+        writes.tail = writes.tail.then(async () => {
+          if (isOpen(socket)) await socket.sendAsync!(frame.data, { binary: frame.isBinary, compress: false });
+        }).catch(() => {
+          closeWebSocket(client, 1011, "WebSocket asynchronous send failed.");
+          closeWebSocket(upstream, 1011, "WebSocket asynchronous send failed.");
+        }).finally(() => {
+          writes.bytes -= frame.bytes;
+          if (!writes.bytes && isOpen(source)) source.resume?.();
+        });
+      } else sendFrame(socket, frame);
       return true;
     } catch {
       closeWebSocket(client, 1011, "WebSocket bridge send failed.");

@@ -202,3 +202,41 @@ index c0fb133..3c521e7 100644
  #if RNS_IPHONE_OS_VERSION_AVAILABLE(26_0)
  + (void)configureEffect:(UIScrollEdgeEffect *)edgeEffect
                 withEnum:(RNSScrollEdgeEffect)effectEnum API_AVAILABLE(ios(26.0))
+diff --git a/ios/gamma/split/RNSSplitHostController.swift b/ios/gamma/split/RNSSplitHostController.swift
+--- a/ios/gamma/split/RNSSplitHostController.swift
++++ b/ios/gamma/split/RNSSplitHostController.swift
+@@ -54,12 +54,34 @@
+     self.fixedColumnsCount = numberOfColumns
+
+     super.init(style: RNSSplitHostController.styleByNumberOfColumns(numberOfColumns))
++
++    // TaskHandoff mounts Split.Host only while its usable width fits both panes;
++    // MasterDetailLayout owns the compact transition by unmounting this host.
++    // iPhone landscape can still inherit a compact horizontal size class. UIKit
++    // then tries to collapse our nested navigation stacks into one another,
++    // looping in _collapseViewController before the first frame is committed.
++    // Keep this wide-only container expanded using the public trait override.
++    #if !os(tvOS)
++      if #available(iOS 17.0, *) {
++        traitOverrides.horizontalSizeClass = .regular
++      }
++    #endif
+
+     delegate = self
+   }
+
+   required init?(coder aDecoder: NSCoder) {
+     return nil
++  }
++
++  override public func didMove(toParent parent: UIViewController?) {
++    super.didMove(toParent: parent)
++    #if !os(tvOS)
++      if #unavailable(iOS 17.0) {
++        parent?.setOverrideTraitCollection(
++          UITraitCollection(horizontalSizeClass: .regular), forChild: self)
++      }
++    #endif
+   }
+
+   // MARK: Signals

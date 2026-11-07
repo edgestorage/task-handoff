@@ -35,6 +35,7 @@ module.exports = () => {
     ...(baseConfig.plugins || []),
     'expo-apple-authentication',
     './modules/task-handoff-browser/plugin/withTaskHandoffBrowser',
+    './plugins/with-task-handoff-native-markdown',
     ...(taskStatusWidgetsEnabled ? [[
       'expo-widgets',
       {

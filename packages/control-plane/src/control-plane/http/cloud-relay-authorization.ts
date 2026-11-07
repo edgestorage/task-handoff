@@ -39,15 +39,6 @@ function cloudOperationApprovalRoute(method: string, path: string) {
   return method === "POST" && /^\/api\/operation-approvals\/(?:[^/]+|:id)\/decision$/.test(path);
 }
 
-/** Binding, credential and Cloud-sharing lifecycle stays with the owner identity. */
-export function cloudOwnerOnlyRoute(url: string) {
-  const path = url.split("?")[0] || "/";
-  return path === "/api/cloud-account"
-    || path.startsWith("/api/cloud-account/")
-    || path === "/api/cloud-connectivity"
-    || path.startsWith("/api/cloud-connectivity/");
-}
-
 const EVENT_PERMISSION_PREFIXES: ReadonlyArray<readonly [string, ControlPlanePermissionId]> = [
   ["ai-session", "ai-sessions:read"],
   ["ai.session", "ai-sessions:read"],
@@ -78,11 +69,10 @@ export function cloudEventPermission(event: Pick<EventEnvelope, "type">): Contro
   return EVENT_PERMISSION_PREFIXES.find(([prefix]) => type.startsWith(prefix))?.[1];
 }
 
-export function cloudEventAllowed(actor: Pick<ControlPlaneCloudAccountActor, "permissionIds" | "ownerUserId">, event: Pick<EventEnvelope, "type" | "topic">) {
-  // Operation approvals are a shared administrator queue. A Cloud actor must
-  // still have a server-resolved local owner mapping for audit attribution.
+export function cloudEventAllowed(actor: Pick<ControlPlaneCloudAccountActor, "permissionIds">, event: Pick<EventEnvelope, "type" | "topic">) {
+  // The shared administrator queue follows the same permission as its HTTP routes.
   if (event.type === "operation-approval.changed") {
-    return Boolean(actor.ownerUserId) && actor.permissionIds.includes(OPERATION_APPROVAL_PERMISSION);
+    return actor.permissionIds.includes(OPERATION_APPROVAL_PERMISSION);
   }
   const permission = cloudEventPermission(event);
   return Boolean(permission && actor.permissionIds.includes(permission));
@@ -166,7 +156,7 @@ export function routeAuthorization(method: string, url: string): { action: Contr
     return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
   }
   if (path.startsWith("/api/controlled-instances")) {
-    if (/^\/api\/controlled-instances\/[^/]+\/shell$/.test(path)) return { action: "interactive-access", resource: { type: "instance" } };
+    if (/^\/api\/controlled-instances\/[^/]+\/(?:shell|browser-access)$/.test(path)) return { action: "interactive-access", resource: { type: "instance" } };
     if (/\/apps\/sessions\/[^/]+\/access$/.test(path)) return { action: "interactive-access", resource: { type: "app-session" } };
     // 自定义应用目录可能携带启动环境变量；读取与写入都要求实例 update 权限，不能按普通 read 放开。
     if (/\/apps\/catalog\/custom$/.test(path)) return { action: "update", resource: { type: "instance" } };

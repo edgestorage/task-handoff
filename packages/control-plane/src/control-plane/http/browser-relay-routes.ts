@@ -1,14 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { BrowserAccessHandshakeSchema } from "@task-handoff/protocol/browser-access";
-import { supportsBrowserTunnel } from "@task-handoff/protocol/control-plane";
+import { BrowserRelayService } from "../instances/browser-relay-service.ts";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneAuth } from "../auth/service.ts";
-import { assertCan } from "../auth/authorization.ts";
 import type { AuthorizationConnectionRegistry } from "../auth/authorization-connections.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import { BrowserAccessService } from "../instances/browser-access-service.ts";
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
-import { assertRequestInstanceVisible } from "./access-projection.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
 import { IdParamsSchema } from "./route-params.ts";
 
@@ -19,23 +17,18 @@ export type RegisterBrowserRelayRoutesOptions = {
   authorizationConnections: AuthorizationConnectionRegistry;
   events: ControlPlaneEventBus;
   browserAccess?: BrowserAccessService;
+  browserRelay?: BrowserRelayService;
 };
 
 export function registerBrowserRelayRoutes(options: RegisterBrowserRelayRoutesOptions) {
   const { app, service, auth, authorizationConnections, events } = options;
   const browserAccess = options.browserAccess || new BrowserAccessService();
+  const browserRelay = options.browserRelay || new BrowserRelayService(service, events);
 
   app.post("/api/controlled-instances/:id/browser-access", async (request) => {
     const { id } = IdParamsSchema.parse(request.params);
     const actor = requireUserActor(request);
-    const instance = await assertRequestInstanceVisible(service, request, id);
-    assertCan(actor, "interactive-access", { type: "instance", id, instanceId: id, nodeId: instance.nodeId });
-    if (!supportsBrowserTunnel(instance.capabilities)) {
-      throw Object.assign(new Error("The controlled instance does not support Browser Tunnel."), {
-        statusCode: 409,
-        code: "BROWSER_TUNNEL_UNSUPPORTED",
-      });
-    }
+    await browserRelay.authorize(actor, id);
     const access = browserAccess.create({
       instanceId: id,
       authorization: { userId: actor.userId, authorizationRevision: actor.authorizationRevision },
@@ -69,7 +62,7 @@ export function registerBrowserRelayRoutes(options: RegisterBrowserRelayRoutesOp
       releaseAccess = browserAccess.track(access, close);
       releaseAuthorization = authorizationConnections.track(access.authorization, close);
       socket.on("close", () => { releaseAccess?.(); releaseAuthorization?.(); });
-      await service.proxyInstanceWebSocket(access.instanceId, socket as any, "/api/browser-tunnel", [], {});
+      await browserRelay.attach(access.instanceId, socket as any);
       socket.off("message", bufferMessage);
       for (const [data, isBinary] of bufferedMessages.splice(0)) socket.emit("message", data, isBinary);
     } catch {

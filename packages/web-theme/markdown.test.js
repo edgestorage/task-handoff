@@ -131,6 +131,13 @@ test("MarkdownContent delegates external links to a new browsing context", async
   assert.match(component, /event\.preventDefault\(\);\s*window\.open\(anchor\.href, "_blank", "noopener,noreferrer"\);/);
 });
 
+test("MarkdownContent keeps table chrome inside the horizontal scroll content", async () => {
+  const component = await readFile(new URL("./MarkdownContent.vue", import.meta.url), "utf8");
+  assert.match(component, /\.markdown-content :deep\(\.markdown-table-wrapper\)\s*\{[\s\S]*padding: 4px;[\s\S]*box-shadow: none;/);
+  assert.match(component, /\.markdown-content :deep\(table\)\s*\{[\s\S]*border: 1px solid var\(--markdown-table-border[\s\S]*box-shadow: var\(--shadow-soft/);
+  assert.match(component, /\.markdown-content :deep\(th\)\s*\{[\s\S]*border-bottom: 0;[\s\S]*box-shadow: inset 0 -1px 0 var\(--markdown-table-border/);
+});
+
 test("handleMarkdownCodeCopy contains clipboard permission failures", async () => {
   const OriginalElement = globalThis.Element;
   const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");

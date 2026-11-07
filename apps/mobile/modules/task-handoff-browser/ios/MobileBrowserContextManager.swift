@@ -24,30 +24,43 @@ internal actor MobileBrowserContextManager {
   private var releasedContexts = 0
 
   @available(iOS 17.0, *)
-  func prepare(_ input: PrepareBrowserContextRecord) async throws -> String {
+  func prepare(_ input: PrepareBrowserContextRecord, diagnostic: @escaping @Sendable (String) -> Void = { _ in }, onClosed: @escaping @Sendable (String, String, Error?) -> Void = { _, _, _ in }) async throws -> String {
+    diagnostic("context.manager.enter")
     let key = "\(input.controlPlaneId)\u{0}\(input.instanceId)"
     if let id = contextIdByKey[key], var context = contextsById[id] {
       context.references += 1
       contextsById[id] = context
       browserDiagnostic("context reused id=\(id) references=\(context.references)")
+      diagnostic("context.reused")
       return id
     }
 
     // The token remains in this stack frame only. The tunnel consumes it while
     // establishing the relay and never includes it in the opaque context id.
-    guard !input.token.isEmpty, let relayURL = URL(string: input.relayUrl), ["ws", "wss"].contains(relayURL.scheme?.lowercased()) else {
-      throw BrowserContextUnavailableException()
+    let transport: any BrowserMessageTransport
+    diagnostic("transport.resolve")
+    if !input.transportId.isEmpty {
+      transport = try await BrowserTransportRegistry.shared.require(input.transportId)
+    } else {
+      guard !input.token.isEmpty, let relayURL = URL(string: input.relayUrl), ["ws", "wss"].contains(relayURL.scheme?.lowercased()) else {
+        throw BrowserContextUnavailableException()
+      }
+      transport = BrowserWebSocketTransport(url: relayURL, token: input.token)
     }
-    let channel = BrowserTunnelChannel(url: relayURL, token: input.token)
-    try await channel.connect()
+    let id = UUID().uuidString.lowercased()
+    let channel = BrowserTunnelChannel(transport: transport, diagnostic: diagnostic, onClosed: { source, error in onClosed(id, source, error) })
+    do { try await channel.connect() } catch { await channel.close(); throw error }
     let socks = BrowserSocksServer(channel: channel)
     let address: BrowserSocksServer.Address
     do {
+      diagnostic("socks.start")
       address = try await socks.start()
+      diagnostic("socks.ready")
     } catch {
       await channel.close()
       throw error
     }
+    diagnostic("proxy.configure")
     let dataStore = await MainActor.run {
       let store = WKWebsiteDataStore(forIdentifier: profileIdentifier(key))
       var proxy = ProxyConfiguration(socksv5Proxy: .hostPort(host: address.host, port: address.port))
@@ -56,7 +69,7 @@ internal actor MobileBrowserContextManager {
       browserDiagnostic("iOS WebView SOCKS proxy configured host=\(address.host) port=\(address.port) profile=\(profileIdentifier(key))")
       return store
     }
-    let id = UUID().uuidString.lowercased()
+    diagnostic("proxy.ready")
     let context = Context(id: id, key: key, dataStore: dataStore, channel: channel, socks: socks, references: 1)
     contextsById[id] = context
     contextIdByKey[key] = id

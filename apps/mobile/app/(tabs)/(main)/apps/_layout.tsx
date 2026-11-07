@@ -9,6 +9,7 @@ export default function AppsLayout() {
   const { wide } = useMasterDetailLayout();
   const { headerRight, headerRightItems, openNewSession } = useAppSessionInboxHeaderActions();
   return <PrimaryTabStack
+    scopeSyncTopic="app.sessions"
     addAccessibilityLabel={t('appSessions.newAccessibility')}
     headerShown={!(Platform.OS === 'ios' && wide)}
     headerRight={headerRight}

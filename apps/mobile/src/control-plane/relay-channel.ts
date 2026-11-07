@@ -1,3 +1,4 @@
+import { encodeRelayBrowserData, decodeRelayBrowserData, isRelayBrowserData, type RelayBrowserData } from "@task-handoff/protocol/relay-browser-channel";
 import '../platform/random-values';
 import * as Crypto from 'expo-crypto';
 import { deflateSync, inflateSync } from 'fflate';
@@ -272,6 +273,12 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
    * Chunks skip deflate: they are usually already-compressed file bytes, and
    * the sender window keeps the socket far below its backpressure limit.
    */
+  sendBrowser(frame: RelayBrowserData) {
+    if (this.socket.readyState !== 1 || (this.socket.bufferedAmount ?? 0) > 1024 * 1024) throw relayError('BROWSER_CHANNEL_BACKPRESSURE', true);
+    const sealed = nacl.secretbox(encodeRelayBrowserData(frame), nonce(1, this.sendCounter++), this.key);
+    this.socket.send(encodeRelayFrame({ kind: 'data', sequence: this.sendSequence++, payload: sealed }));
+  }
+
   sendBody(frame: RelayBodyFrame) {
     if (this.socket.readyState !== 1) throw relayError('RELAY_CHANNEL_CLOSED', true);
     if ((this.socket.bufferedAmount ?? 0) > 2 * 1024 * 1024) throw relayError('RELAY_BACKPRESSURE_LIMIT', true);
@@ -379,6 +386,11 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
       const opened = nacl.secretbox.open(frame.payload, nonce(2, this.receiveCounter++), this.key);
       if (!opened) throw relayError('RELAY_E2E_DECRYPT_FAILED');
       const plaintext = unpackRelayPayload(opened, frame.flags ?? 0, (input) => inflateSync(input));
+      if (isRelayBrowserData(plaintext)) {
+        const browserData = decodeRelayBrowserData(plaintext);
+        for (const listener of this.listeners) listener({ type: 'browser-channel-data', browserData });
+        return;
+      }
       if (isRelayResponseFrame(plaintext)) {
         const chunk = decodeRelayResponseFrame(plaintext);
         const envelope = { type: 'response-chunk', responseId: chunk.responseId, offset: chunk.offset, bytes: chunk.bytes, final: chunk.final };

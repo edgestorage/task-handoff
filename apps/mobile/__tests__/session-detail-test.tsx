@@ -11,7 +11,7 @@ import { AiSessionDetailSchema, AiSessionTurnIndexSchema } from '@task-handoff/p
 import { ControlPlaneInstanceDirectoryCapabilitiesSchema } from '@task-handoff/protocol/control-plane-directory';
 
 import { conversationDetailItems, conversationListOptions, detailItems, isSessionScrollNearBottom, processedDurationLabel, SessionDetail } from '../src/ai-sessions/SessionDetail';
-import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, OFFLINE_NOTICE_DELAY_MS, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
+import { appendConversationText, COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, OFFLINE_NOTICE_DELAY_MS, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { advanceStreamingMarkdownBlocks, CHARACTER_FADE_MS, hasUnclosedMarkdownFence, initialStreamingText, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText, streamingMarkdownStableCutoff } from '../src/components/SafeMarkdown';
 import { mobileMarkdownLinkTarget } from '../src/components/markdown-link-target';
@@ -72,6 +72,14 @@ test('mobile timeline activities use the latest Web activity-kind icons', () => 
   expect(timelineActivityIcon('skillLoad')).toBe(Brain);
   expect(timelineActivityIcon('exitedPlanMode')).toBe(ClipboardCheck);
   expect(timelineActivityIcon('unknown')).toBeUndefined();
+});
+
+test('selected Markdown text appends to the composer draft without losing existing text', () => {
+  expect(appendConversationText('', '  selected text  ')).toBe('selected text');
+  expect(appendConversationText('  ', 'selected text')).toBe('selected text');
+  expect(appendConversationText('Keep this', 'and this')).toBe('Keep this\n\nand this');
+  expect(appendConversationText('Keep this\n\n', 'and this')).toBe('Keep this\n\nand this');
+  expect(appendConversationText('Keep this', '   \n')).toBe('Keep this');
 });
 
 test('a missing session stays in recovery until the snapshot is authoritative', async () => {
@@ -873,6 +881,58 @@ test('compact workspace does not render the list summary before the initial Turn
   mobileAiSessionStore.clearProfile(controlPlaneId);
 });
 
+test.each(['idle', 'failed'] as const)('terminal %s session folds trailing tools into process history', async (status) => {
+  const running = ControlPlaneAiSessionSummarySchema.parse({
+    ...session, subAgents: [],
+    turns: [{ ...session.turns![0], lastMessage: 'Final answer' }],
+  });
+  const timelines = {
+    'turn-1': {
+      status: 'ready' as const,
+      items: [
+        { id: 'draft', turnId: 'turn-1', type: 'ai-message' as const, text: 'Interim answer' },
+        { id: 'tail', turnId: 'turn-1', type: 'activity' as const, activityKind: 'commandExecution', title: 'Command', status: 'completed' as const, input: 'tail-command' },
+      ],
+    },
+  };
+  const terminal = ControlPlaneAiSessionSummarySchema.parse({
+    ...running, status, error: status === 'failed' ? 'Provider failed' : undefined,
+    turns: [{ ...running.turns![0], status: status === 'idle' ? 'completed' : 'failed' }],
+  });
+  const projected = detailItems(terminal, [], 0, undefined, timelines);
+  expect(projected.map((item) => item.role)).toEqual(['user', 'history', 'assistant', ...(status === 'failed' ? ['error'] : [])]);
+  expect(projected[1].history?.flatMap((item) => item.activities ?? []).map((item) => item.id)).toEqual(['tail']);
+  const screen = await render(<SessionDetail messages={[]} session={running} timelineEnabled timelines={timelines} />);
+  expect(screen.getByRole('button', { name: 'shell · pnpm test' })).toBeTruthy();
+  await screen.rerender(<SessionDetail messages={[]} session={terminal} timelineEnabled timelines={timelines} />);
+  expect(screen.queryByText('shell · pnpm test')).toBeNull();
+  expect(screen.queryByText('1 activities')).toBeNull();
+  screen.getByText('Final answer');
+  await fireEvent.press(screen.getByRole('button', { name: 'Process details' }));
+  await waitFor(() => screen.getByText('· tail-command'));
+});
+
+test('inactive turns retain tools in history before a final timeline message arrives', () => {
+  const completed = ControlPlaneAiSessionSummarySchema.parse({
+    ...session, status: 'idle', subAgents: [],
+    turns: [{ ...session.turns![0], status: 'completed' }],
+  });
+  const timelines = {
+    'turn-1': {
+      status: 'ready' as const,
+      items: [{ id: 'tail', turnId: 'turn-1', type: 'activity' as const, activityKind: 'commandExecution', title: 'Command', status: 'completed' as const }],
+    },
+  };
+  const projected = detailItems(completed, [], 0, undefined, timelines);
+  expect(projected.map((item) => item.role)).toEqual(['user', 'history']);
+  expect(projected[1].history?.[0].activities?.[0].id).toBe('tail');
+  const nextTurn = { ...session.turns![0], id: 'turn-2' };
+  const nextRunning = { ...session, turns: [...completed.turns!, nextTurn] };
+  const conversation = conversationDetailItems(nextRunning, [], undefined, timelines);
+  expect(conversation.filter((item) => item.role === 'activity')).toEqual([]);
+  expect(conversation.filter((item) => item.role === 'current').map((item) => item.turn?.id)).toEqual(['turn-2']);
+});
+
 test('timeline detail follows the Web three-part layout around the final AI response', async () => {
   const timelineSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
@@ -1539,6 +1599,76 @@ test('markdown web links expose open and copy actions on long press', async () =
   await waitFor(() => expect(write).toHaveBeenCalledWith('https://example.com/docs'));
   await screen.unmount();
   write.mockRestore();
+});
+
+test('markdown web links can open in the embedded browser when available', async () => {
+  const openBuiltinBrowser = jest.fn();
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SafeMarkdown onOpenBuiltinBrowser={openBuiltinBrowser}>{'[docs](https://example.com/docs)'}</SafeMarkdown>
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  fireEvent(screen.getByRole('link', { name: 'docs' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
+  await waitFor(() => screen.getByText('Open in embedded browser'));
+  await fireEvent.press(screen.getByText('Open in embedded browser'));
+  expect(openBuiltinBrowser).toHaveBeenCalledWith('https://example.com/docs');
+  await screen.unmount();
+});
+
+test('markdown web links omit the embedded browser action without an opener', async () => {
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SafeMarkdown>{'[docs](https://example.com/docs)'}</SafeMarkdown>
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  fireEvent(screen.getByRole('link', { name: 'docs' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
+  await waitFor(() => screen.getByText('Open link'));
+  expect(screen.queryByText('Open in embedded browser')).toBeNull();
+  await screen.unmount();
+});
+
+test('markdown mail links do not offer the embedded web browser action', async () => {
+  const openBuiltinBrowser = jest.fn();
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SafeMarkdown onOpenBuiltinBrowser={openBuiltinBrowser}>{'[mail](mailto:test@example.com)'}</SafeMarkdown>
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  fireEvent(screen.getByRole('link', { name: 'mail' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
+  await waitFor(() => screen.getByText('Open link'));
+  expect(screen.queryByText('Open in embedded browser')).toBeNull();
+  await screen.unmount();
+});
+
+test('session markdown forwards the embedded browser action', async () => {
+  const openBuiltinBrowser = jest.fn();
+  const linkedSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    subAgents: [],
+    turns: [{ ...session.turns![0], lastMessage: 'Done.', status: 'completed', userPrompt: '[docs](https://example.com/docs)' }],
+  });
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SessionDetail messages={[]} onOpenBuiltinBrowser={openBuiltinBrowser} session={linkedSession} />
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  fireEvent(screen.getByRole('link', { name: 'docs' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
+  await waitFor(() => screen.getByText('Open in embedded browser'));
+  await fireEvent.press(screen.getByText('Open in embedded browser'));
+  expect(openBuiltinBrowser).toHaveBeenCalledWith('https://example.com/docs');
+  await screen.unmount();
 });
 
 test('markdown link menus still open when iOS omits long-press coordinates', async () => {
@@ -2265,4 +2395,36 @@ test('blurring the mobile composer cancels a queued message edit and restores th
   await act(async () => { await jest.runOnlyPendingTimersAsync(); });
   await screen.unmount();
   jest.useRealTimers();
+});
+
+test('activity disclosure reads its bounded window without requesting full timeline history', async () => {
+  const running = ControlPlaneAiSessionSummarySchema.parse({ ...session, subAgents: [] });
+  const toolActivity = jest.fn().mockResolvedValue({
+    sessionId: running.id, turnId: running.turns![0].id, revision: 'activity-r1',
+    items: [{ id: 'window-command', turnId: running.turns![0].id, type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'running', input: 'bounded-window-command' }],
+    total: 80, truncated: true, generatedAt: running.updatedAt,
+  });
+  const turnTimeline = jest.fn();
+  const syncTurnTimeline = jest.fn();
+  const client = { aiSessions: { toolActivity, turnTimeline, syncTurnTimeline } } as unknown as ControlPlaneClient;
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <SessionWorkspace
+      client={client}
+      controlPlaneId="cp-activity-window-integration"
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: ['codex'], toolActivityAgents: ['codex'] } }}
+      instanceId="instance-activity-window"
+      messages={[]}
+      session={running}
+    />
+  </SafeAreaProvider>);
+  expect(toolActivity).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByRole('button', { name: 'shell · pnpm test' }));
+  await waitFor(() => screen.getByText('· bounded-window-command'));
+  expect(toolActivity).toHaveBeenCalledWith('instance-activity-window', running.id, running.turns![0].id);
+  expect(turnTimeline).not.toHaveBeenCalled();
+  expect(syncTurnTimeline).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByRole('button', { name: 'shell · pnpm test' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'shell · pnpm test' }));
+  expect(toolActivity).toHaveBeenCalledTimes(1);
+  await screen.unmount();
 });

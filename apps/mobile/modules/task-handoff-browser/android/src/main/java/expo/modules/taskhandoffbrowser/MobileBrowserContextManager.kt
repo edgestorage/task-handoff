@@ -32,29 +32,38 @@ internal object MobileBrowserContextManager {
   private var releasedContexts = 0
   private var activeContextId: String? = null
 
-  suspend fun prepare(input: PrepareBrowserContextRecord): String = mutex.withLock {
+  suspend fun prepare(input: PrepareBrowserContextRecord, diagnostic: (String) -> Unit = {}, onClosed: (String, String, Throwable?) -> Unit = { _, _, _ -> }): String = mutex.withLock {
+    diagnostic("context.lock-acquired")
     requireCapabilities()
     val relay = runCatching { URI(input.relayUrl) }.getOrNull()
-    if (input.controlPlaneId.isBlank() || input.instanceId.isBlank() || input.token.isBlank() || relay?.scheme !in setOf("ws", "wss")) {
+    if (input.controlPlaneId.isBlank() || input.instanceId.isBlank() || (input.transportId.isBlank() && (input.token.isBlank() || relay?.scheme !in setOf("ws", "wss")))) {
       throw BrowserContextUnavailableException()
     }
     val key = "${input.controlPlaneId}\u0000${input.instanceId}"
     contextIdByKey[key]?.let { id ->
       contextsById[id]?.let { context ->
         context.references += 1
+        diagnostic("context.reused")
         return id
       }
     }
-    val channel = BrowserTunnelChannel(input.relayUrl, input.token)
+    diagnostic("transport.resolve")
+    val transport = if (input.transportId.isNotBlank()) BrowserTransportRegistry.require(input.transportId) else BrowserWebSocketTransport(input.relayUrl, input.token)
+    val id = UUID.randomUUID().toString()
+    val channel = BrowserTunnelChannel(transport, diagnostic) { source, error -> onClosed(id, source, error) }
     var socks: BrowserSocksServer? = null
     try {
       channel.connect()
+      diagnostic("socks.start")
       socks = BrowserSocksServer(channel)
       val port = socks.start()
+      diagnostic("socks.ready")
       val profileName = deriveProfileName(key)
+      diagnostic("profile.configure")
       withContext(Dispatchers.Main) { ProfileStore.getInstance().getOrCreateProfile(profileName) }
+      diagnostic("proxy.configure")
       setProxy(port)
-      val id = UUID.randomUUID().toString()
+      diagnostic("proxy.ready")
       val context = Context(id, key, profileName, port, channel, socks, 1)
       contextsById[id] = context
       contextIdByKey[key] = id

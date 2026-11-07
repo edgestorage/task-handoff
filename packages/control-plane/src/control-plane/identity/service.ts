@@ -76,10 +76,13 @@ export class ControlPlaneIdentityService {
     this.privateKey();
   }
 
-  publicDocument(authentication: "required" | "disabled", now = Date.now()) {
+  publicDocument(authentication: "required" | "disabled", now = Date.now(), extendedCapabilities = false) {
     const identity = this.identity.get();
     const capabilities: ControlPlanePublicCapabilities = {
       authentication,
+      // Compatibility for mobile-v0.0.12 / v0.0.49: legacy clients reconstruct
+      // signed identities through a fixed schema. Only opt-in clients see this.
+      ...(extendedCapabilities ? { browserTunnel: { direct: true, cloudRelay: true } } : {}),
       aiSessions: true,
       nodes: true,
       instanceBoard: true,

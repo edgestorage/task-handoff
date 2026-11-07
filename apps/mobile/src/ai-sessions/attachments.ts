@@ -46,6 +46,8 @@ export type MobilePendingAttachment = {
   textPresentation?: AiSessionPastedTextPresentation;
   retryLocal?: MobileLocalFile;
   retained?: boolean;
+  previewUri?: string;
+  previewTemporary?: boolean;
 };
 
 const PASTED_IMAGE_MIMES: Record<string, string> = {
@@ -117,6 +119,7 @@ export function uploadingMobileAttachment(file: MobileLocalFile, maxFileAttachme
     phase: 'uploading',
     progress: 0,
     retryLocal: validated,
+    previewUri: validated.kind === 'image' ? validated.uri : undefined,
     size: validated.size,
     textPresentation: validated.textPresentation,
   };
@@ -126,7 +129,7 @@ export async function uploadMobileAttachment(
   client: ControlPlaneClient,
   identity: { instanceId: string; sessionId: string; scopeType?: 'session' | 'create-request' },
   local: MobileLocalFile,
-  options: { readChunks?(uri: string): AsyncIterable<Uint8Array>; removeTemporary?(uri: string): Promise<void> | void; now?: number; maxFileAttachmentBytes?: number; onProgress?(progress: number): void } = {},
+  options: { readChunks?(uri: string): AsyncIterable<Uint8Array>; removeTemporary?(uri: string): Promise<void> | void; now?: number; maxFileAttachmentBytes?: number; retainImagePreview?: boolean; onProgress?(progress: number): void } = {},
 ): Promise<MobilePendingAttachment> {
   const startedAt = Date.now();
   let phase: 'read' | 'request' = 'read';
@@ -147,15 +150,17 @@ export async function uploadMobileAttachment(
     return {
       localId, kind: uploaded.kind, name: uploaded.name, mime: uploaded.mime, size: uploaded.size,
       phase: 'uploaded', expiresAt: uploaded.expiresAt,
+      previewUri: file.kind === 'image' && options.retainImagePreview ? file.uri : undefined,
+      previewTemporary: file.kind === 'image' && options.retainImagePreview ? file.temporary : undefined,
       textPresentation: file.textPresentation,
       uploadRef: { id: uploaded.id, kind: uploaded.kind, source: { type: 'upload-ref' } },
     };
   } catch (cause) {
     const uncertain = cause && typeof cause === 'object' && ((cause as { retryable?: unknown }).retryable === true || (cause as { code?: unknown }).code === 'DIRECT_NETWORK_FAILED');
     diagnosticLog.warn('attachment.upload.failed', { kind: file.kind, size: file.size, phase, durationMs: Date.now() - startedAt, uncertain, ...diagnosticErrorDetails(cause) });
-    return { localId, kind: file.kind, name: file.name, mime: file.mime, size: file.size, phase: uncertain ? 'result-unknown' : 'failed', error: uncertain ? 'Upload result unknown. Retry this attachment before sending.' : cause instanceof Error ? cause.message : 'Upload failed.', retryLocal: file, textPresentation: file.textPresentation };
+    return { localId, kind: file.kind, name: file.name, mime: file.mime, size: file.size, phase: uncertain ? 'result-unknown' : 'failed', error: uncertain ? 'Upload result unknown. Retry this attachment before sending.' : cause instanceof Error ? cause.message : 'Upload failed.', retryLocal: file, previewUri: file.kind === 'image' ? file.uri : undefined, textPresentation: file.textPresentation };
   } finally {
-    if (completed && file.temporary) {
+    if (completed && file.temporary && !(file.kind === 'image' && options.retainImagePreview)) {
       try {
         if (options.removeTemporary) await options.removeTemporary(file.uri);
         else new File(file.uri).delete();

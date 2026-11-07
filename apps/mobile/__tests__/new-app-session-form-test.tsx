@@ -1,5 +1,4 @@
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { StyleSheet } from 'react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 import type { ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
 import type { ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
@@ -18,31 +17,51 @@ const instance = {
 } as ControlPlaneInstanceResourceEntry;
 const node = { id: 'node-1', name: 'Mac Studio' } as ControlPlaneNodeDirectoryEntry;
 
-test('new App session uses full-width anchored selectors for instance, App, and workspace', async () => {
-  const screen = await render(<NewAppSessionForm
-    busy={false}
-    disabled={false}
-    folders={[{ id: 'folder-1', nodeId: 'node-1', name: 'Mobile', path: '/workspace/mobile', labels: {}, createdAt: '2026-08-09T00:00:00.000Z', updatedAt: '2026-08-09T00:00:00.000Z' }]}
-    instances={[instance]}
-    nodes={[node]}
-    selectedAppId="terminal-tty"
-    selectedInstance={instance}
-    onAppChange={jest.fn()}
-    onCreate={jest.fn()}
-    onFolderChange={jest.fn()}
-    onInstanceChange={jest.fn()}
-  />);
+const browser = { id: 'embedded-browser', name: 'Browser', kind: 'web' as const, supportsCwdSelection: false };
+const formProps = () => ({
+  busy: false, disabled: false, folders: [], instances: [instance], nodes: [node],
+  apps: [...instance.availableApps, browser], selectedAppId: 'terminal-tty', selectedInstance: instance,
+  onAppChange: jest.fn(), onCreate: jest.fn(), onFolderChange: jest.fn(), onInstanceChange: jest.fn(), onRetryFolders: jest.fn(),
+});
 
-  await fireEvent(screen.getByTestId('new-app-session-selection-card'), 'layout', { nativeEvent: { layout: { height: 216, width: 362, x: 0, y: 0 } } });
-  const instanceButton = screen.getByRole('button', { name: 'Instance: Local workspace' });
-  const appButton = screen.getByRole('button', { name: 'App: Terminal' });
-  const folderButton = screen.getByRole('button', { name: 'Folder: Default workspace' });
-  await waitFor(() => {
-    expect(StyleSheet.flatten(instanceButton.props.style).width).toBe(334);
-    expect(StyleSheet.flatten(appButton.props.style).width).toBe(334);
-    expect(StyleSheet.flatten(folderButton.props.style).width).toBe(334);
-  });
-  await screen.unmount();
+test('apps are directly selectable and workspace is only shown for an App supporting it', async () => {
+  const props = formProps();
+  const screen = await render(<NewAppSessionForm {...props} />);
+  expect(screen.getByRole('radio', { name: 'Terminal' }).props.accessibilityState.checked).toBe(true);
+  expect(screen.getByText('Mac Studio')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Folder: Default workspace' })).toBeTruthy();
+  expect(screen.getByText('/workspace/mobile')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Launch Terminal' })).toBeTruthy();
+  await fireEvent.press(screen.getByRole('radio', { name: 'Browser' }));
+  expect(props.onAppChange).toHaveBeenCalledWith('embedded-browser');
+  await screen.rerender(<NewAppSessionForm {...props} selectedAppId="embedded-browser" />);
+  expect(screen.queryByRole('button', { name: 'Folder: Default workspace' })).toBeNull();
+  expect(screen.getByRole('radio', { name: 'Browser' }).props.accessibilityState.checked).toBe(true);
+  expect(screen.getByRole('button', { name: 'Launch Browser' })).toBeTruthy();
+});
+
+test('launching locks every selector and the primary action even if disabled was not supplied', async () => {
+  const props = formProps();
+  const screen = await render(<NewAppSessionForm {...props} busy />);
+  for (const button of [...screen.getAllByRole('button'), ...screen.getAllByRole('radio')]) {
+    expect(button.props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(button);
+  }
+  expect(props.onAppChange).not.toHaveBeenCalled();
+  expect(props.onInstanceChange).not.toHaveBeenCalled();
+  expect(props.onFolderChange).not.toHaveBeenCalled();
+  expect(props.onCreate).not.toHaveBeenCalled();
+});
+
+test('workspace failures have an explicit retry and capability loading does not flash an empty state', async () => {
+  const props = formProps();
+  const screen = await render(<NewAppSessionForm {...props} foldersError />);
+  expect(screen.getByText('Could not load workspaces. Retry or launch in the default workspace.')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+  expect(props.onRetryFolders).toHaveBeenCalledTimes(1);
+  await screen.rerender(<NewAppSessionForm {...props} apps={[]} selectedAppId="" appsLoading />);
+  expect(screen.getByText('Checking available apps')).toBeTruthy();
+  expect(screen.queryByText('No apps are available on this instance')).toBeNull();
 });
 
 test('new App session instance options carry node group labels without subtitles', () => {

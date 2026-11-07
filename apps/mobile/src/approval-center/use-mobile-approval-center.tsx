@@ -12,6 +12,7 @@ import { AccessibilityInfo, Keyboard } from 'react-native';
 
 import { approvalCenterPendingCount, type ApprovalCenterItem } from '@task-handoff/control-plane-client';
 import type { MobileApprovalCenterState } from './controller';
+import { useActiveStories } from '../stories/use-active-stories';
 import { mobileAiSessionStore } from '../ai-sessions/store';
 import { mobileDirectoryStore } from '../directories/store';
 import {
@@ -111,6 +112,7 @@ function MobileApprovalCenterStateProvider({
   const [occlusions, setOcclusions] = useState<readonly OcclusionRegistration[]>([]);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
+  const { controller: stories } = useActiveStories();
   const controlPlaneId = runtime.controlPlaneId;
   const emptyAi = mobileAiSessionStore.profile(controlPlaneId || '__inactive__');
   const emptyDirectory = mobileDirectoryStore.profile(controlPlaneId || '__inactive__');
@@ -125,8 +127,9 @@ function MobileApprovalCenterStateProvider({
     () => emptyDirectory,
   );
 
-  const controller = useMemo(() => controlPlaneId && runtime.api
+  const controller = useMemo(() => controlPlaneId && runtime.api && stories
     ? new MobileApprovalCenterController(controlPlaneId, runtime.api, {
+      stories,
       aiSessions: () => mobileAiSessionStore.profile(controlPlaneId),
       directory: () => mobileDirectoryStore.profile(controlPlaneId),
       supportsAiSessions: runtime.aiSessionsCapability,
@@ -135,6 +138,7 @@ function MobileApprovalCenterStateProvider({
     })
     : undefined, [
     controlPlaneId,
+    stories,
     runtime.aiSessionsCapability,
     runtime.api,
     runtime.nodeCapability,

@@ -414,7 +414,15 @@ done
 test "$converged" -eq 1
 
 printf 'health=%s\n' "$health"
-printf 'instances=%s\n' "$instances"
+# Node Agent owns private registration/configuration fields in this response.
+# Deployment evidence must project only readiness/version facts, never dump it.
+printf '%s' "$instances" | node -e '
+  let input = "";
+  process.stdin.on("data", (chunk) => input += chunk).on("end", () => {
+    const data = (JSON.parse(input).data || []).map(({ id, nodeId, status, ready, runtimeVersion }) => ({ id, nodeId, status, ready, runtimeVersion }));
+    console.log(`instances=${JSON.stringify({ data })}`);
+  });
+'
 printf 'ui_assets='
 curl -fsS http://127.0.0.1:8081/ | grep -oE 'assets/[^" ]+\.(js|css)' | sort -u | tr '\n' ','
 printf '\n'

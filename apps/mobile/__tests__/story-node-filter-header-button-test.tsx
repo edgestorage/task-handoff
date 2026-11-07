@@ -2,6 +2,11 @@ import { fireEvent, render } from '@testing-library/react-native';
 
 import { StoryNodeFilterHeaderButton } from '../src/stories/StoryNodeFilterHeaderButton';
 
+jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({
+  useMobileControlPlaneRuntime: () => ({ phase: 'connected' }),
+  useMobileControlPlaneTopicSyncing: () => false,
+}));
+
 jest.mock('../src/directories/use-directories', () => ({
   useActiveDirectories: () => ({ state: { instances: [], nodes: [] } }),
 }));

@@ -52,7 +52,7 @@ export const sessions = {
     openFile: "在内置文件管理器中打开",
     openDesktopFile: "在桌面文件管理器中打开",
     copyPath: "复制文件路径",
-    openBuiltinBrowser: "在内置浏览器中打开",
+    openBuiltinBrowser: "在内嵌浏览器中打开",
     openDefaultBrowser: "在默认浏览器中打开",
     copyLink: "复制链接",
   },

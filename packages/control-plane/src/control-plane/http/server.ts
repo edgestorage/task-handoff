@@ -1,3 +1,5 @@
+import { BrowserRelayService } from "../instances/browser-relay-service.ts";
+import { CONTROL_PLANE_CAPABILITY_HEADER, requestsExtendedControlPlaneCapabilities } from "@task-handoff/protocol/control-plane-access";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -44,7 +46,7 @@ import { migrateLegacyIdentityProviderSecrets } from "../persistence/database/le
 import { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
 import { assertCan, assertCanAccessResolvedResource, cloudAccountAuthorization, instanceScopeAllows, type ControlPlaneActor } from "../auth/authorization.ts";
-import { cloudEventAllowed, cloudOwnerOnlyRoute, cloudRelayRouteReachable, routeAuthorization } from "./cloud-relay-authorization.ts";
+import { cloudEventAllowed, cloudRelayRouteReachable, routeAuthorization } from "./cloud-relay-authorization.ts";
 import { resolveRequestResourceScopes } from "../auth/resource-scope.ts";
 import { controlPlaneRequestActor, setControlPlaneRequestActor } from "./request-actor.ts";
 import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
@@ -496,7 +498,7 @@ function cliApprover(request: FastifyRequest) {
   return { userId: actor.userId, identityId: actor.identityId };
 }
 
-export { cloudEventAllowed, cloudOwnerOnlyRoute, cloudRelayRouteReachable, routeAuthorization } from "./cloud-relay-authorization.ts";
+export { cloudEventAllowed, cloudRelayRouteReachable, routeAuthorization } from "./cloud-relay-authorization.ts";
 
 function requestLogSerializer(request: FastifyRequest) {
   return {
@@ -538,6 +540,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   app.addHook("onClose", async () => operationApprovals.close());
   const authorizationConnections = new AuthorizationConnectionRegistry();
   const browserAccess = new BrowserAccessService();
+
   const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
   let diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
   const diagnosticLogger = createControlPlaneDiagnosticLogger(paths.logsDir, () => diagnosticLogsEnabled, app.log);
@@ -625,7 +628,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const cloudConnectivity = new CloudConnectivityService({ statePath: paths.cloudConnectivityPath, identity, serviceOrigin: cloudServiceOrigin });
   const cloudAccountSession = new CloudAccountSessionService({ statePath: paths.cloudAccountSessionPath, serviceOrigin: cloudServiceOrigin });
   const cloudRelayActors = new Map<string, ControlPlaneActor>();
+  const browserRelay = new BrowserRelayService(service, events);
   const cloudRelayBridge = {
+    openBrowser: (actor: ControlPlaneActor, instanceId: string, handlers: import("@task-handoff/protocol/relay-browser-channel").BrowserChannelHandlers) => browserRelay.open(actor, instanceId, handlers),
     async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean }) {
       const method = String(input?.method || "GET").toUpperCase();
       const requestPath = String(input?.path || "");
@@ -633,7 +638,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       if (!requestPath.startsWith("/api/") || !cloudRelayRouteReachable(method, requestPath)) {
         throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       }
-      if (actor.type === "cloud-account" && cloudOwnerOnlyRoute(requestPath) && actor.accessMode !== "owner") throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       if (authorization) assertCan(actor, authorization.action, authorization.resource);
       const token = crypto.randomBytes(32).toString("base64url");
       cloudRelayActors.set(token, actor);
@@ -1060,7 +1064,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       setControlPlaneRequestActor(request, cloudActor);
       const authorization = routeAuthorization(request.method, securityUrl);
       if (!cloudRelayRouteReachable(request.method, securityUrl)) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
-      if (cloudActor.type === "cloud-account" && cloudOwnerOnlyRoute(securityUrl) && cloudActor.accessMode !== "owner") throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       if (authorization) assertCan(cloudActor, authorization.action, authorization.resource);
       return;
     }
@@ -1155,8 +1158,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     },
   }));
 
-  app.get("/api/control-plane/identity", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async () => (
-    identity.publicDocument(auth.enabled() ? "required" : "disabled")
+  app.get("/api/control-plane/identity", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => (
+    identity.publicDocument(auth.enabled() ? "required" : "disabled", Date.now(), requestsExtendedControlPlaneCapabilities(request.headers[CONTROL_PLANE_CAPABILITY_HEADER]))
   ));
 
   const requireCloudConnectivityAdmin = async (request: FastifyRequest) => {
@@ -1851,7 +1854,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   registerInstanceProxyRoutes({ app, service, auth, authorizationConnections });
   registerInstanceShellRoutes({ app, service, authorizationConnections, events });
-  registerBrowserRelayRoutes({ app, service, auth, authorizationConnections, events, browserAccess });
+  registerBrowserRelayRoutes({ app, service, auth, authorizationConnections, events, browserAccess, browserRelay });
 
   app.get("*", { config: PUBLIC_CONTROL_PLANE_UI_ROUTE }, async (_request, reply) =>
     fs.existsSync(staticDir)

@@ -12,6 +12,26 @@ import kotlinx.coroutines.launch
 class TaskHandoffBrowserModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("TaskHandoffBrowser")
+    Events("onBrowserTransportMessage", "onBrowserTransportClose", "onBrowserDiagnostic")
+    AsyncFunction("createBrowserTransport") { BrowserTransportRegistry.create { event, body -> sendEvent(event, body) } }
+    AsyncFunction("receiveBrowserTransportMessage") { id: String, bytes: ByteArray, binary: Boolean, promise: Promise ->
+      appContext.modulesQueue.launch {
+        runCatching { BrowserTransportRegistry.require(id).deliver(BrowserTransportMessage(bytes, binary)) }
+          .onSuccess { promise.resolve(null) }.onFailure { promise.reject("BROWSER_TRANSPORT_CLOSED", it.message, it) }
+      }
+    }
+    AsyncFunction("acknowledgeBrowserTransportSend") { id: String, sequence: Int, error: String?, promise: Promise ->
+      appContext.modulesQueue.launch {
+        runCatching { BrowserTransportRegistry.require(id).acknowledge(sequence, error) }
+          .onSuccess { promise.resolve(null) }.onFailure { promise.resolve(null) }
+      }
+    }
+    AsyncFunction("closeBrowserTransport") { id: String, promise: Promise ->
+      appContext.modulesQueue.launch { BrowserTransportRegistry.close(id); promise.resolve(null) }
+    }
+    OnDestroy {
+      appContext.modulesQueue.launch { BrowserTransportRegistry.closeAll(); MobileBrowserContextManager.releaseAll() }
+    }
 
     AsyncFunction("browserCapabilities") {
       val proxyOverride = WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)
@@ -31,9 +51,26 @@ class TaskHandoffBrowserModule : Module() {
 
     AsyncFunction("prepareBrowserContext") { input: PrepareBrowserContextRecord, promise: Promise ->
       appContext.modulesQueue.launch {
-        runCatching { MobileBrowserContextManager.prepare(input) }
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        val diagnostic: (String) -> Unit = { stage ->
+          sendEvent("onBrowserDiagnostic", mapOf("controlPlaneId" to input.controlPlaneId, "instanceId" to input.instanceId,
+            "stage" to stage, "elapsedMs" to (android.os.SystemClock.elapsedRealtime() - startedAt)))
+        }
+        diagnostic("context.prepare.start")
+        runCatching { MobileBrowserContextManager.prepare(input, diagnostic) { id, source, error ->
+          val event = mutableMapOf<String, Any>("controlPlaneId" to input.controlPlaneId, "instanceId" to input.instanceId,
+            "contextId" to id, "stage" to "tunnel.closed", "closeSource" to source,
+            "elapsedMs" to (android.os.SystemClock.elapsedRealtime() - startedAt))
+          error?.let { event["errorDomain"] = it.javaClass.simpleName }
+          sendEvent("onBrowserDiagnostic", event)
+        } }
+          .onSuccess { diagnostic("context.prepare.ready") }
           .onSuccess { promise.resolve(mapOf("contextId" to it)) }
-          .onFailure { promise.reject("BROWSER_CONTEXT_PREPARE_FAILED", it.message, it) }
+          .onFailure {
+            sendEvent("onBrowserDiagnostic", mapOf("controlPlaneId" to input.controlPlaneId, "instanceId" to input.instanceId,
+              "stage" to "context.prepare.failed", "elapsedMs" to (android.os.SystemClock.elapsedRealtime() - startedAt), "errorDomain" to it.javaClass.simpleName))
+            promise.reject("BROWSER_CONTEXT_PREPARE_FAILED", it.message, it)
+          }
       }
     }
 
@@ -89,6 +126,7 @@ internal class PrepareBrowserContextRecord : Record {
   @Field val instanceId: String = ""
   @Field val relayUrl: String = ""
   @Field val token: String = ""
+  @Field val transportId: String = ""
 }
 
 internal class BrowserPlatformUnsupportedException(reason: String) : CodedException(reason)

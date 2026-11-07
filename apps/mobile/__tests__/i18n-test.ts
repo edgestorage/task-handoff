@@ -38,8 +38,15 @@ describe('mobile i18n', () => {
     expect(resolveThemeDark('light', 'dark')).toBe(false);
     expect(resolveThemeDark('dark', 'light')).toBe(true);
     expect(mobileLightColors.background).toBe('#f8f8fa');
+    expect(mobileLightColors.surfaceInset).toBe('#ecf2f4');
+    expect(mobileLightColors.surfaceRaised).toBe('#f9fbfb');
+    expect(mobileLightColors.surfaceHover).toBe('#e9f0f2');
+    expect(mobileLightColors.tableStripe).toBe('#fcfcfc');
     expect(mobileDarkColors.background).toBe('#101012');
     expect(mobileDarkColors.surface).toBe('#17181c');
+    expect(mobileDarkColors.surfaceInset).toBe('#101012');
+    expect(mobileDarkColors.surfaceRaised).toBe('#17181c');
+    expect(mobileDarkColors.surfaceHover).toBe('#23252a');
     expect(mobileDarkColors.border).toBe('#2a2c32');
     expect(mobileDarkColors.workbenchSelectionBackground).toBe('#23252a');
     expect(mobileDarkColors.workbenchSelectionBorder).toBe('#2a2c32');

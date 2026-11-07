@@ -60,6 +60,7 @@ function ActiveDirectoriesBoundary({ children }: { children: ReactNode }) {
     if (!runtime.coordinator || !controller) return;
     return runtime.coordinator.register({
       key: 'directories',
+      snapshotTopics: ['instances'],
       topics: ['instances', 'node.state', 'nodes'],
       start: (signal) => controller.start(signal, { managed: true }),
       stop: () => controller.stop(),

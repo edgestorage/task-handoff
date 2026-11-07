@@ -38,6 +38,7 @@ import { NewSessionBranchPicker } from './NewSessionBranchPicker';
 import { NewSessionContextMenu } from './NewSessionContextMenu';
 import { NewSessionWorktreePicker } from './NewSessionWorktreePicker';
 import { AttachmentMenu, ModelSettingsMenu } from './SessionComposerMenus';
+import { AttachmentImage } from './AttachmentImage';
 import { formatMobileAttachmentBytes, formatMobileTextLength } from './attachments';
 import { instanceSelectOptions } from '../directories/instance-select-options';
 import { repositoryWorktreeLabel } from '../repository/worktree-presentation';
@@ -128,7 +129,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
 
         {props.attachments.length ? <View style={styles.attachments}>
           {props.attachments.map((attachment) => <View key={attachment.id} style={[styles.attachment, { backgroundColor: colors.surface }]}>
-            <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={15} />
+            {attachment.kind === 'image' && attachment.previewUri ? <AttachmentImage name={attachment.name} uri={attachment.previewUri} /> : <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={15} />}
             <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size || 0, locale)}` : attachment.name} style={styles.attachmentCopy}>
               <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>
               {attachment.textPresentation ? <>

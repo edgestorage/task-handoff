@@ -94,8 +94,9 @@ async function openDefaultBrowser(url: string) {
 
 <style>
 .markdown-link-context-menu.markdown-link-context-menu {
-  min-width: 190px;
-  padding: 6px;
+  border: 1px solid var(--ai-board-column-border);
+  -webkit-backdrop-filter: blur(16px) saturate(1.16);
+  backdrop-filter: blur(16px) saturate(1.16);
 }
 
 .markdown-link-context-menu .markdown-link-context-menu-item {

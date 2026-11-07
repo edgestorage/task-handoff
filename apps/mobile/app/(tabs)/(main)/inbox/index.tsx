@@ -46,7 +46,7 @@ export default function InboxRoute() {
     detail: iosSplitDetailHeaderOptions(dark, t('nav.aiSession')),
     list: {
       ...iosSplitListHeaderOptions(dark, t('nav.aiSessions')),
-      headerLeft: () => <InstanceScopeHeaderButton onPress={openDrawer} />,
+      headerLeft: () => <InstanceScopeHeaderButton syncTopic="ai.sessions" onPress={openDrawer} />,
       unstable_headerRightItems: inboxHeader.headerRightItems,
     },
   } : undefined;

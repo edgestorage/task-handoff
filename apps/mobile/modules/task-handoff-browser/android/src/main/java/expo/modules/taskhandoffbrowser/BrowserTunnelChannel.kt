@@ -10,19 +10,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import okio.ByteString
 import org.json.JSONObject
 import java.io.Closeable
 
 internal class BrowserTunnelChannel(
-  url: String,
-  token: String,
-  client: OkHttpClient = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+  private val transport: BrowserMessageTransport,
+  private val diagnostic: (String) -> Unit = {},
+  private val onClosed: (String, Throwable?) -> Unit = { _, _ -> },
 ) : Closeable {
   private data class Stream(
     val id: Long,
@@ -39,26 +33,46 @@ internal class BrowserTunnelChannel(
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val mutex = Mutex()
   private val ready = CompletableDeferred<Unit>()
-  // DATA frames are flow-controlled per stream; keep a bounded queue large enough
-  // for every stream's initial window without treating temporary callback backpressure
-  // as a relay failure.
-  private val inboundFrames = Channel<BrowserTunnelProtocol.Frame>(capacity = 2048)
   private val streams = mutableMapOf<Long, Stream>()
   private var nextStreamId = 1L
   private var initialWindow = BrowserTunnelProtocol.INITIAL_WINDOW
   private var closed = false
-  private val webSocket = client.newWebSocket(
-    Request.Builder().url(url).header("Authorization", "Browser $token").build(),
-    Listener()
-  )
   private val inboundConsumer = scope.launch {
-    for (frame in inboundFrames) {
-      try {
-        handle(frame)
-      } catch (_: Throwable) {
-        closeNow()
-        break
+    var operation = "transport.connect"
+    try {
+      diagnostic("transport.connect")
+      transport.connect()
+      operation = "hello.send"
+      diagnostic("hello.send")
+      transport.send(BrowserTransportMessage(BrowserTunnelProtocol.hello().toByteArray(), false))
+      diagnostic("ready.receive")
+      while (!closed) {
+        operation = "receive"
+        val message = transport.receive()
+        if (!ready.isCompleted) {
+          operation = "ready.validate"
+          diagnostic("ready.validate")
+          check(!message.binary)
+          val value = JSONObject(String(message.bytes, Charsets.UTF_8))
+          check(value.getString("type") == "browser-tunnel.ready")
+          check(value.getString("protocolVersion") == BrowserTunnelProtocol.VERSION)
+          initialWindow = value.getInt("initialWindowBytes").also { check(it in 1..BrowserTunnelProtocol.MAX_WINDOW) }
+          ready.complete(Unit)
+          diagnostic("tunnel.ready")
+        } else {
+          operation = "frame.validate"
+          check(message.binary)
+          operation = "frame.decode"
+          val frame = BrowserTunnelProtocol.decode(message.bytes)
+          operation = "frame.handle"
+          handle(frame)
+        }
+        operation = "frame.consume"
+        transport.consumed()
       }
+    } catch (error: Throwable) {
+      ready.completeExceptionally(error)
+      closeNow(operation, error)
     }
   }
 
@@ -166,25 +180,25 @@ internal class BrowserTunnelChannel(
     }
   }
 
-  private suspend fun closeNow() {
+  private suspend fun closeNow(source: String = "local", error: Throwable? = null) {
     val active = mutex.withLock {
       if (closed) return
       closed = true
       streams.values.toList().also { streams.clear() }
     }
+    onClosed(source, error)
     ready.completeExceptionally(IllegalStateException("Browser relay closed."))
-    inboundFrames.close()
+
     for (stream in active) {
       stream.opened.completeExceptionally(IllegalStateException("Browser relay closed."))
       stream.creditSignal.close()
       runCatching { stream.onClose() }
     }
-    webSocket.close(1001, "Browser context closed")
+    transport.close()
   }
 
-  private fun send(data: ByteArray) {
-    check(webSocket.queueSize() + data.size <= 16L * 1024 * 1024)
-    check(webSocket.send(ByteString.of(*data)))
+  private suspend fun send(data: ByteArray) {
+    transport.send(BrowserTransportMessage(data, true))
   }
 
   private fun allocateStreamId(): Long {
@@ -192,33 +206,4 @@ internal class BrowserTunnelChannel(
     return nextStreamId.also { nextStreamId = if (it == 0xffffffffL) 1 else it + 1 }
   }
 
-  private inner class Listener : WebSocketListener() {
-    override fun onOpen(webSocket: WebSocket, response: Response) {
-      if (!webSocket.send(BrowserTunnelProtocol.hello())) ready.completeExceptionally(IllegalStateException("Browser relay hello failed."))
-    }
-
-    override fun onMessage(webSocket: WebSocket, text: String) {
-      if (!ready.isCompleted) {
-        runCatching {
-          val value = JSONObject(text)
-          check(value.getString("type") == "browser-tunnel.ready")
-          check(value.getString("protocolVersion") == BrowserTunnelProtocol.VERSION)
-          initialWindow = value.getInt("initialWindowBytes").also { check(it in 1..BrowserTunnelProtocol.MAX_WINDOW) }
-        }.onSuccess { ready.complete(Unit) }.onFailure { ready.completeExceptionally(it); close() }
-      } else close()
-    }
-
-    override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-      if (!ready.isCompleted) { close(); return }
-      val frame = runCatching { BrowserTunnelProtocol.decode(bytes.toByteArray()) }.getOrElse { close(); return }
-      if (inboundFrames.trySend(frame).isFailure) close()
-    }
-
-    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-      ready.completeExceptionally(t)
-      close()
-    }
-
-    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { close() }
-  }
 }

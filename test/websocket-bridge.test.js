@@ -7,6 +7,27 @@ const WebSocket = require("ws");
 
 const { TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS, bridgeWebSockets, closeWebSocket } = require("../packages/protocol/src/websocket-bridge.ts");
 
+test("an asynchronous browser destination pauses its upstream and resumes only after queued bytes drain", async () => {
+  const client = new MockWebSocket();
+  const upstream = new MockWebSocket();
+  let paused = 0;
+  let resumed = 0;
+  let release;
+  const drain = new Promise((resolve) => { release = resolve; });
+  upstream.pause = () => { paused++; };
+  upstream.resume = () => { resumed++; };
+  client.sendAsync = async (data, options) => { await drain; client.sent.push({ data, options }); };
+  bridgeWebSockets(client, upstream);
+  upstream.emit("message", Buffer.from([1, 2]), true);
+  assert.equal(paused, 1);
+  assert.equal(resumed, 0);
+  assert.equal(client.sent.length, 0);
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resumed, 1);
+  assert.equal(client.sent[0].options.binary, true);
+});
+
 class MockWebSocket extends EventEmitter {
   constructor() {
     super();

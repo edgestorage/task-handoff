@@ -294,6 +294,7 @@ test("browser resources survive AI Session switches and remain session scoped", 
   sidebar.openBrowser("instance-a", "https://example.com");
   const browser = sidebar.resources.value.find((resource) => resource.kind === "embedded-browser");
   assert.ok(browser);
+  assert.equal(browser.initialUrl, "https://example.com");
   assert.equal(sidebar.visible.value, true);
 
   aiSessionId.value = "ai-b";

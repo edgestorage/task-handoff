@@ -14,8 +14,9 @@ export type BrowserNativeCapabilities = {
 export type PrepareBrowserContextInput = {
   controlPlaneId: string;
   instanceId: string;
-  relayUrl: string;
-  token: string;
+  relayUrl?: string;
+  token?: string;
+  transportId?: string;
 };
 
 export type PreparedBrowserContext = {
@@ -57,4 +58,15 @@ export type BrowserViewProps = {
   ref?: Ref<BrowserViewRef>;
   style?: StyleProp<ViewStyle>;
   children?: ReactNode;
+};
+/** Native module diagnostics; never sent over the browser tunnel. */
+export type BrowserDiagnosticEvent = {
+  controlPlaneId: string;
+  instanceId: string;
+  stage: string;
+  contextId?: string;
+  closeSource?: string;
+  elapsedMs: number;
+  errorDomain?: string;
+  errorCode?: number;
 };

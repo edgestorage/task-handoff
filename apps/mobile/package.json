@@ -107,5 +107,10 @@
       "node_modules/(?!(.pnpm|(jest-)?react-native|react-native-svg|lucide-react-native|lowlight|highlight.js|devlop|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|@task-handoff/.*))"
     ]
   },
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
+  },
   "private": true
 }

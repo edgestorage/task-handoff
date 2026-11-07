@@ -1,3 +1,9 @@
+import { MobileBrowserController } from '../src/browser/controller';
+import { MobileBrowserTabStore } from '../src/browser/store';
+import { fromBrowserTransportAddress, normalizeBrowserAddress, toBrowserTransportAddress } from '../src/browser/url';
+import { activateMobileBrowserContext, prepareMobileBrowserContext, releaseBrowserContext } from '../src/control-plane/browser-context';
+import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
+
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 
 jest.mock('../src/control-plane/browser-context', () => ({
@@ -6,11 +12,6 @@ jest.mock('../src/control-plane/browser-context', () => ({
   releaseBrowserContext: jest.fn(async () => undefined),
 }));
 
-import { MobileBrowserController } from '../src/browser/controller';
-import { MobileBrowserTabStore } from '../src/browser/store';
-import { fromBrowserTransportAddress, normalizeBrowserAddress, toBrowserTransportAddress } from '../src/browser/url';
-import { activateMobileBrowserContext, prepareMobileBrowserContext, releaseBrowserContext } from '../src/control-plane/browser-context';
-import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
 
 const profile: MobileControlPlaneProfile = {
   version: 1,
@@ -59,6 +60,26 @@ test('profile cleanup removes only its tabs and releases each instance context',
   await controller.clearProfile('cp_1');
   expect(store.tabsFor('cp_1')).toEqual([]);
   expect(releaseBrowserContext).toHaveBeenCalledTimes(2);
+});
+
+test('Relay loss releases the old context, preserves tabs, and creates a fresh tunnel on activation', async () => {
+  jest.mocked(prepareMobileBrowserContext)
+    .mockResolvedValueOnce({ contextId: 'before_rekey' })
+    .mockResolvedValueOnce({ contextId: 'after_rekey' });
+  const store = new MobileBrowserTabStore(() => 'retained_tab', () => '2026-11-07T00:00:00.000Z');
+  const controller = new MobileBrowserController(store);
+  const tab = await controller.create({ api, profile, instanceId: 'instance_1', initialUrl: 'http://localhost:3000' });
+  const oldConnection = jest.mocked(prepareMobileBrowserContext).mock.calls[0][0];
+  oldConnection.onClose?.(new Error('Relay rekey'));
+  expect(controller.contextId('cp_1', 'instance_1')).toBeUndefined();
+  expect(store.tabsFor('cp_1', 'instance_1')).toEqual([tab]);
+  await controller.activate(api, profile, 'instance_1');
+  expect(releaseBrowserContext).toHaveBeenCalledWith('before_rekey');
+  expect(controller.contextId('cp_1', 'instance_1')).toBe('after_rekey');
+  // A late notification from the old Relay must not release its replacement.
+  oldConnection.onClose?.();
+  expect(controller.contextId('cp_1', 'instance_1')).toBe('after_rekey');
+  await controller.clearProfile('cp_1');
 });
 
 test('a context that resolves after profile cleanup is released instead of resurrected', async () => {
@@ -118,4 +139,86 @@ test('browser tabs retain loading state for the session list', () => {
   expect(tab.loading).toBe(false);
   expect(store.update('cp_1', 'instance_1', tab.id, { loading: true })).toBe(true);
   expect(store.snapshot().tabs[0]?.loading).toBe(true);
+});
+
+describe('foreground browser recovery', () => {
+  const flush = async () => { for (let i = 0; i < 25; i++) await Promise.resolve(); };
+  beforeEach(() => { jest.useFakeTimers(); jest.spyOn(Math, 'random').mockReturnValue(0.5); });
+  afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); jest.restoreAllMocks(); });
+
+  test('a close rebuilds without a lifecycle event, after old cleanup, and ignores old notifications', async () => {
+    jest.mocked(prepareMobileBrowserContext).mockResolvedValueOnce({ contextId: 'old' }).mockResolvedValueOnce({ contextId: 'new' });
+    const store = new MobileBrowserTabStore(() => 'retained', () => 'now');
+    const controller = new MobileBrowserController(store);
+    const tab = await controller.create({ api, profile, instanceId: 'inst', initialUrl: 'http://localhost:3000/' });
+    await controller.activate(api, profile, 'inst');
+    const old = jest.mocked(prepareMobileBrowserContext).mock.calls[0][0];
+    let finishRelease!: () => void;
+    jest.mocked(releaseBrowserContext).mockImplementationOnce(() => new Promise((resolve) => { finishRelease = resolve; }));
+    old.onClose?.();
+    await flush();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(prepareMobileBrowserContext).toHaveBeenCalledTimes(1);
+    expect(controller.contextId('cp_1', 'inst')).toBeUndefined();
+    finishRelease(); await flush();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(controller.contextId('cp_1', 'inst')).toBe('new');
+    expect(store.tabsFor('cp_1', 'inst')).toEqual([tab]);
+    old.onClose?.(); await flush();
+    expect(controller.contextId('cp_1', 'inst')).toBe('new');
+    expect(prepareMobileBrowserContext).toHaveBeenCalledTimes(2);
+    await controller.clearProfile('cp_1');
+  });
+
+  test.each(['suspend', 'suspendAll', 'close', 'clearProfile'] as const)('%s cancels recovery before its retry runs', async (action) => {
+    const store = new MobileBrowserTabStore(() => 'tab', () => 'now');
+    const controller = new MobileBrowserController(store);
+    const tab = await controller.create({ api, profile, instanceId: 'inst' });
+    await controller.activate(api, profile, 'inst');
+    jest.mocked(prepareMobileBrowserContext).mock.calls[0][0].onClose?.();
+    await flush();
+    if (action === 'suspend') await controller.suspend('cp_1', 'inst');
+    if (action === 'suspendAll') await controller.suspendAll();
+    if (action === 'close') await controller.close('cp_1', 'inst', tab.id);
+    if (action === 'clearProfile') await controller.clearProfile('cp_1');
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(prepareMobileBrowserContext).toHaveBeenCalledTimes(1);
+    await controller.clearProfile('cp_1');
+  });
+
+  test('failed attempts and rapid successful closes share the existing exponential backoff', async () => {
+    const controller = new MobileBrowserController(new MobileBrowserTabStore(() => 'tab', () => 'now'));
+    await controller.create({ api, profile, instanceId: 'inst' });
+    await controller.activate(api, profile, 'inst');
+    jest.mocked(prepareMobileBrowserContext).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ contextId: 'replacement' });
+    jest.mocked(prepareMobileBrowserContext).mock.calls[0][0].onClose?.();
+    await flush(); await jest.advanceTimersByTimeAsync(0);
+    expect(prepareMobileBrowserContext).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(249);
+    expect(prepareMobileBrowserContext).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(controller.contextId('cp_1', 'inst')).toBe('replacement');
+    jest.mocked(prepareMobileBrowserContext).mock.calls[2][0].onClose?.();
+    await flush(); await jest.advanceTimersByTimeAsync(499);
+    expect(prepareMobileBrowserContext).toHaveBeenCalledTimes(3);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(prepareMobileBrowserContext).toHaveBeenCalledTimes(4);
+    await controller.clearProfile('cp_1');
+  });
+
+  test('profile removal during a recovery handshake releases its late result without resurrecting the context', async () => {
+    const controller = new MobileBrowserController(new MobileBrowserTabStore(() => 'tab', () => 'now'));
+    await controller.create({ api, profile, instanceId: 'inst' });
+    await controller.activate(api, profile, 'inst');
+    let finish!: (value: { contextId: string }) => void;
+    jest.mocked(prepareMobileBrowserContext).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    jest.mocked(prepareMobileBrowserContext).mock.calls[0][0].onClose?.();
+    await flush(); await jest.advanceTimersByTimeAsync(0);
+    const clearing = controller.clearProfile('cp_1');
+    finish({ contextId: 'late' }); await clearing; await flush();
+    expect(releaseBrowserContext).toHaveBeenCalledWith('late');
+    expect(controller.contextId('cp_1', 'inst')).toBeUndefined();
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(prepareMobileBrowserContext).toHaveBeenCalledTimes(2);
+  });
 });

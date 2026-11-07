@@ -1,3 +1,4 @@
+import { CONTROL_PLANE_CAPABILITY_HEADER, CONTROL_PLANE_IDENTITY_EXTENSIONS_CAPABILITY } from "@task-handoff/protocol/control-plane-access";
 import { z } from "zod";
 import {
   ControlPlaneAuthenticatedUserSchema,
@@ -59,8 +60,9 @@ export function createControlPlaneAuthApi(transport: ControlPlaneClientTransport
     body: JSON.stringify(body),
   });
   return {
-    identity() {
-      return transport.request("/api/control-plane/identity", ControlPlanePublicIdentityDocumentSchema);
+    identity(options?: { extendedCapabilities?: boolean }) {
+      return transport.request("/api/control-plane/identity", ControlPlanePublicIdentityDocumentSchema,
+        options?.extendedCapabilities ? { headers: { [CONTROL_PLANE_CAPABILITY_HEADER]: CONTROL_PLANE_IDENTITY_EXTENSIONS_CAPABILITY } } : undefined);
     },
     session(signal?: AbortSignal) {
       return requestData("/api/auth/session", ControlPlaneAuthSessionSchema, { signal });

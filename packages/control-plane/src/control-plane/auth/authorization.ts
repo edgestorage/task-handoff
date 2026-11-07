@@ -123,7 +123,6 @@ export function canAccessResolvedResource(actor: ControlPlaneUserAuthorizationCo
 export function can(actor: ControlPlaneActor, action: ControlPlaneAction, resource: ControlPlaneResource) {
   if (actor.type === "system") return true;
   if (actor.type === "chat-bridge") return canChatBridge(action, resource);
-  if (actor.type === "cloud-account") return canCloudAccount(actor, action, resource);
   return userCan(actor, action, resource);
 }
 
@@ -132,26 +131,6 @@ type PermissionBearingActor = Pick<ControlPlaneUserAuthorizationContext, "permis
 function userCan(actor: PermissionBearingActor, action: ControlPlaneAction, resource: ControlPlaneResource) {
   const permission = permissionForControlPlaneOperation(action, resource.type);
   return Boolean(permission && actor.permissionIds.includes(permission));
-}
-
-const CLOUD_ACCOUNT_MANAGEMENT_PERMISSIONS = new Set<ControlPlanePermissionId>([
-  "users:manage",
-  "roles:manage",
-  "identity-providers:manage",
-  "chat-bridges:manage",
-  "settings:manage",
-  "secrets:manage",
-]);
-
-function canCloudAccount(actor: ControlPlaneCloudAccountActor, action: ControlPlaneAction, resource: ControlPlaneResource) {
-  const permission = permissionForControlPlaneOperation(action, resource.type);
-  if (!permission || !actor.permissionIds.includes(permission)) return false;
-  if (CLOUD_ACCOUNT_MANAGEMENT_PERMISSIONS.has(permission)) {
-    // Management follows the local administrator who created the current
-    // Cloud binding. A broad shared role cannot turn another account into an admin.
-    return actor.accessMode === "owner" && Boolean(actor.ownerUserId);
-  }
-  return true;
 }
 
 export type ControlPlaneCloudAccountActor = Extract<ControlPlaneActor, { type: "cloud-account" }>;

@@ -132,7 +132,7 @@ test("Control Plane administrators share the operation approval queue", async (t
   assert.equal(forbidden.statusCode, 403);
 
   const unmapped = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { "x-test-actor": JSON.stringify(ownerCloudActor()) } });
-  assert.equal(unmapped.statusCode, 403);
+  assert.equal(unmapped.statusCode, 200);
 
   const otherAdminDecision = await app.inject({
     method: "POST",
@@ -152,7 +152,8 @@ test("Control Plane administrators share the operation approval queue", async (t
   assert.equal(decision.statusCode, 200);
   assert.equal(decision.json().data.status, "approved");
   assert.deepEqual(approvals.snapshot().requests, []);
-  assert.equal(audit.at(-1).actorUserId, "user_owner");
+  assert.equal(audit.at(-1).actorUserId, undefined);
+  assert.deepEqual(audit.at(-1).details, { actorType: "cloud-account", accountId: "acct_owner", deviceSessionId: "device_owner" });
 });
 
 test("Cloud owner approval routes remain available when password authentication is disabled", async (t) => {
@@ -213,3 +214,21 @@ test("disabled local CLI operations gate, surface and consume approvals through 
   assert.deepEqual(approved.json(), { data: { removed: true } });
   assert.equal(executions(), 1);
 });
+
+for (const accessMode of ["owner", "shared"]) {
+  test(`${accessMode} cloud approvals follow permissions without a local owner identity`, async (t) => {
+    const { app, approvals, audit } = await harness();
+    t.after(async () => { approvals.close(); await app.close(); });
+    const pending = approvals.gate({ userId: "user_requester", sessionId: "cli_requester" }, "node.remove", "node_a", {});
+    const actor = { ...ownerCloudActor(), accessMode, accountId: "acct_actual_approver", roleIds: ["role_custom_approver"] };
+    const snapshot = await app.inject({ method: "GET", url: "/api/operation-approvals", headers: { "x-test-actor": JSON.stringify(actor) } });
+    assert.equal(snapshot.statusCode, 200, snapshot.body);
+    assert.equal(snapshot.json().data.requests[0].id, pending.id);
+    const denied = await app.inject({ method: "POST", url: `/api/operation-approvals/${pending.id}/decision`, headers: { "x-test-actor": JSON.stringify({ ...actor, permissionIds: [] }) }, payload: { decision: "approve" } });
+    assert.equal(denied.statusCode, 403);
+    const decision = await app.inject({ method: "POST", url: `/api/operation-approvals/${pending.id}/decision`, headers: { "x-test-actor": JSON.stringify(actor) }, payload: { decision: "approve" } });
+    assert.equal(decision.statusCode, 200, decision.body);
+    assert.equal(audit.at(-1).actorUserId, undefined);
+    assert.equal(audit.at(-1).details.accountId, actor.accountId);
+  });
+}

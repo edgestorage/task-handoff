@@ -9,8 +9,11 @@ import type { SessionDetailMode } from './SessionDetail';
 import { workspaceLabel } from './InboxModel';
 import { mobileAiSessionBusyKey } from './actions';
 import { useActiveAiSessionView, useActiveAiSessionsRuntime } from './use-active-sessions';
+import { openEmbeddedWebBrowserLink } from '../browser/link-opener';
 import { mobileDraftStore, mobilePermissionStore, mobileProfileStore, mobileSecureStore } from '../control-plane/runtime';
+import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
+import { browserTabDetailSelection } from '../master-detail/selection';
 import { useMobileTheme } from '../components/theme';
 import { Icon } from '../components/Icon';
 import { SessionRenameModal } from '../components/SessionRenameModal';
@@ -40,6 +43,7 @@ export function AiSessionDetailScreen({
   const router = useRouter();
   const navigation = useNavigation();
   const { actions, client, controlPlaneId, refresh } = useActiveAiSessionsRuntime();
+  const runtime = useMobileControlPlaneRuntime();
   const directories = useActiveDirectories();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
@@ -68,6 +72,25 @@ export function AiSessionDetailScreen({
     void client.aiSessions.markRead(instanceId, sessionId).catch(() => undefined);
   }, [client, controlPlaneId, instanceId, session?.unread, sessionId]);
   const title = session?.title || session?.agent || 'AI Session';
+  const openBuiltinBrowser = useCallback(async (url: string) => {
+    const target = await openEmbeddedWebBrowserLink({
+      api: runtime.api,
+      capabilities: instance?.capabilities,
+      profile: runtime.profile,
+      instanceId,
+      url,
+    });
+    if (target.kind === 'app-browser' || !runtime.profile) return;
+    browserTabDetailSelection.set({
+      browserTabId: target.tabId,
+      controlPlaneId: runtime.controlPlaneId || runtime.profile.identity.controlPlaneId,
+      instanceId,
+    });
+    router.push({
+      pathname: '/browser/[instanceId]/[browserTabId]',
+      params: { browserTabId: target.tabId, instanceId },
+    });
+  }, [instance?.capabilities, instanceId, router, runtime.api, runtime.controlPlaneId, runtime.profile]);
   const workspaceName = workspaceLabel(session?.cwd, t);
   const instanceName = instance?.name || instanceId;
   const trackedSession = taskStatus.trackedSession;
@@ -201,6 +224,7 @@ export function AiSessionDetailScreen({
     messages={messages}
     nodeId={instance?.nodeId}
     onVisible={markVisible}
+    onOpenBuiltinBrowser={openBuiltinBrowser}
     onOpenSession={(nextSessionId) => {
       if (onOpenSession) onOpenSession(instanceId, nextSessionId);
       else router.push({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId, sessionId: nextSessionId } });

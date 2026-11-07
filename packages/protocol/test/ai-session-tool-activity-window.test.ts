@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   AI_SESSION_TOOL_ACTIVITY_WINDOW_MAX_ITEMS,
   AiSessionToolActivityWindowSchema,
-} from "@task-handoff/protocol/ai-sessions";
+} from "../src/ai-sessions.ts";
 
 test("bounded tool activity windows stay strict and activity-only", () => {
   const activity = (index: number) => ({

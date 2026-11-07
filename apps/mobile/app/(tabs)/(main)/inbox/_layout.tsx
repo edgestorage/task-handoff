@@ -11,6 +11,7 @@ export default function InboxLayout() {
   const { headerRight, headerRightItems, openNewSession } = useAiSessionInboxHeaderActions();
 
   return <PrimaryTabStack
+    scopeSyncTopic="ai.sessions"
     addAccessibilityLabel={t('sessions.newAccessibility')}
     headerShown={!(Platform.OS === 'ios' && wide)}
     onAdd={openNewSession}

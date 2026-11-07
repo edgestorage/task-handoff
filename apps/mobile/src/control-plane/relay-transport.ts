@@ -1,3 +1,5 @@
+import { browserChannelError, RelayBrowserMultiplexer, type RelayBrowserData, type BrowserChannelHandlers } from '@task-handoff/protocol/relay-browser-channel';
+import { probeControlPlaneBrowserChannel } from '@task-handoff/control-plane-client';
 import type { z } from 'zod';
 import * as Crypto from 'expo-crypto';
 import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
@@ -26,7 +28,7 @@ import type { RelayPendingOperation, RelaySessionStore } from './relay-session-s
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 import { isMobileDeviceTrustError } from './device-trust-error';
 
-type RelayEnvelope = { type: string; id?: string; status?: number; body?: unknown; binaryResponse?: unknown; bodyId?: number; responseId?: number; offset?: number; bytes?: Uint8Array; final?: boolean; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
+type RelayEnvelope = { type: string; browserData?: RelayBrowserData; id?: string; status?: number; body?: unknown; binaryResponse?: unknown; bodyId?: number; responseId?: number; offset?: number; bytes?: Uint8Array; final?: boolean; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
 export type RelaySessionRenewal = { leaseExpiresAt: string; generation: number; committed: boolean };
 export type RelayControlNotice =
   | { type: 'renewed'; sessionId: string; generation: number; committed: boolean; leaseExpiresAt: string }
@@ -37,6 +39,7 @@ export interface EncryptedRelayChannel {
   readonly generation?: number;
   send(value: RelayEnvelope): void;
   sendBody(frame: RelayBodyFrame): void;
+  sendBrowser?(frame: RelayBrowserData): void;
   renew?(grant: RelaySessionGrant, proof: RelayRoleProof): Promise<RelaySessionRenewal>;
   subscribe(listener: (value: RelayEnvelope) => void, onClose: (error?: unknown) => void): () => void;
   subscribeControl?(listener: (value: RelayControlNotice) => void): () => void;
@@ -184,6 +187,8 @@ export interface RelayTransportOptions {
 export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   readonly profile: MobileCloudRelayControlPlaneProfile;
   readonly currentCapabilities: ControlPlanePublicCapabilities | undefined = undefined;
+  private browser?: RelayBrowserMultiplexer;
+  private browserSupport?: Promise<boolean>;
   private channel?: Promise<EncryptedRelayChannel>;
   private channelValue?: EncryptedRelayChannel;
   private session?: ActiveRelaySession;
@@ -1147,8 +1152,30 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     diagnosticLog.info('relay.winner-cache.saved', { attemptId, relayId: confirmed.relayId, rttMs: measured?.mobileRttMs ?? cached?.rttMs ?? 0 });
   }
 
+  async supportsBrowserChannel(): Promise<boolean> {
+    const channel = await this.ensureChannel();
+    if (!channel.sendBrowser) return false;
+    this.browserSupport ??= probeControlPlaneBrowserChannel(this, this.profile.identity.publicKeyFingerprint);
+    return this.browserSupport;
+  }
+
+  async openBrowserChannel(instanceId: string, handlers: BrowserChannelHandlers, signal?: AbortSignal) {
+    if (!await this.supportsBrowserChannel()) throw transportError('TRANSPORT_BROWSER_CHANNEL_UNAVAILABLE');
+    if (signal?.aborted || !this.browser) throw transportError('BROWSER_CHANNEL_CANCELLED');
+    return this.browser.open(instanceId, handlers, signal);
+  }
+
   private installChannel(channel: EncryptedRelayChannel, session: ActiveRelaySession) {
     const previous = this.channelValue;
+    this.browser?.close(browserChannelError('BROWSER_CHANNEL_REPLACED'));
+    this.browserSupport = undefined;
+    this.browser = new RelayBrowserMultiplexer({
+      control: (value) => this.sendOrReset(channel, value),
+      data: (value) => {
+        if (this.channelValue !== channel || !channel.sendBrowser) throw transportError('BROWSER_CHANNEL_CLOSED');
+        channel.sendBrowser(value);
+      },
+    });
     this.unsubscribeControl?.();
     this.channelValue = channel;
     this.channel = Promise.resolve(channel);
@@ -1156,7 +1183,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     this.deviceTrustRetry = false;
     this.e2eHandshakeTimeouts = 0;
     this.resumeFailures = 0;
-    channel.subscribe((value) => this.receive(value), (error) => this.channelClosed(channel, error));
+    channel.subscribe((value) => { if (this.channelValue === channel) this.receive(value); }, (error) => this.channelClosed(channel, error));
     this.unsubscribeControl = channel.subscribeControl?.((notice) => this.receiveControl(channel, notice));
     // A rotated or resumed channel starts empty: replay the demand the previous
     // transport carried without re-running the domain bootstrap.
@@ -1377,6 +1404,8 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   }
 
   private receive(value: RelayEnvelope) {
+    if (value.type === 'browser-channel-data' && value.browserData) { this.browser?.data(value.browserData); return; }
+    if (value.type.startsWith('browser-channel-')) { this.browser?.control(value); return; }
     if (value.type === 'response-chunk') {
       this.receiveBinaryChunk(value);
       return;
@@ -1541,6 +1570,9 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     this.cancelE2eRekey();
     this.unsubscribeControl?.();
     this.unsubscribeControl = undefined;
+    this.browser?.close(normalize(error));
+    this.browser = undefined;
+    this.browserSupport = undefined;
     this.channelValue?.close(4000, 'reset');
     this.channelValue = undefined;
     this.channel = undefined;

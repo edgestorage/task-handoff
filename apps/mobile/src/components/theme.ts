@@ -4,17 +4,19 @@ import { Appearance, useColorScheme, type ColorSchemeName } from 'react-native';
 import { setApplicationNightMode } from '../../modules/task-handoff-appearance/src';
 
 export const mobileLightColors = {
-  background: '#f8f8fa', surface: '#ffffff', text: '#000000', textMuted: '#636366', textPlaceholder: 'rgba(60, 60, 67, 0.30)', border: '#c6c6c8',
+  background: '#f8f8fa', surface: '#ffffff', surfaceInset: '#ecf2f4', surfaceRaised: '#f9fbfb', surfaceHover: '#e9f0f2', text: '#000000', textMuted: '#636366', textPlaceholder: 'rgba(60, 60, 67, 0.30)', border: '#c6c6c8',
+  tableBackground: '#ffffff', tableBorder: '#d1d1d6', tableHeaderBackground: '#f8f8fa', tableText: '#1c1c1e',
   sessionActivityMuted: '#636366', sessionActivityHighlight: '#1c1c1e', statusFilterSelectedBackground: '#ffffff',
   sessionRunningIndicator: 'rgba(0, 0, 0, 0.30)', sessionRunningTrack: 'rgba(0, 0, 0, 0.10)',
   primary: '#007aff', primaryButton: '#007aff', destructiveButton: '#c9342f', primarySoft: '#e5f1ff', notice: '#fff4ce', noticeText: '#7a4b00', error: '#c9342f', errorSoft: '#ffe9e7', code: '#1c1c1e', codeText: '#f2f2f7',
   workbenchCardBorder: '#e5e5ea', workbenchSelectionBackground: '#e9e9ef', workbenchSelectionBorder: '#60a7f6',
   sessionActive: '#0f9f8f', sessionActiveSoft: '#dff7f3', sessionWaiting: '#b76e00', sessionWaitingSoft: '#fff4ce', sessionIdle: '#7c7c80', sessionIdleSoft: '#eeeef2',
-  syntaxComment: '#6e7781', syntaxKeyword: '#cf222e', syntaxString: '#116329', syntaxNumber: '#9a6700', syntaxTitle: '#0969da', syntaxType: '#8250df', tableStripe: '#f8f8fa',
+  syntaxComment: '#6e7781', syntaxKeyword: '#cf222e', syntaxString: '#116329', syntaxNumber: '#9a6700', syntaxTitle: '#0969da', syntaxType: '#8250df', tableStripe: '#fcfcfc',
 } as const;
 
 export const mobileDarkColors = {
-  background: '#101012', surface: '#17181c', text: '#f2f2f7', textMuted: '#aeaeb2', textPlaceholder: 'rgba(235, 235, 245, 0.30)', border: '#2a2c32',
+  background: '#101012', surface: '#17181c', surfaceInset: '#101012', surfaceRaised: '#17181c', surfaceHover: '#23252a', text: '#f2f2f7', textMuted: '#aeaeb2', textPlaceholder: 'rgba(235, 235, 245, 0.30)', border: '#2a2c32',
+  tableBackground: '#17181c', tableBorder: '#2a2c32', tableHeaderBackground: '#101012', tableText: '#f2f2f7',
   sessionActivityMuted: '#8fa5ad', sessionActivityHighlight: '#f3fbfc', statusFilterSelectedBackground: '#101012',
   sessionRunningIndicator: 'rgba(255, 255, 255, 0.30)', sessionRunningTrack: 'rgba(255, 255, 255, 0.10)',
   primary: '#0a84ff', primaryButton: '#0a84ff', destructiveButton: '#b3261e', primarySoft: '#0c3158', notice: '#3b2f05', noticeText: '#ffd76a', error: '#ff6961', errorSoft: '#3f1715', code: '#1c1c1e', codeText: '#f2f2f7',

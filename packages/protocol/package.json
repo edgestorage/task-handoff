@@ -161,6 +161,10 @@
     "./websocket-bridge": {
       "types": "./src/websocket-bridge.ts",
       "default": "./src/websocket-bridge.ts"
+    },
+    "./relay-browser-channel": {
+      "types": "./src/relay-browser-channel.ts",
+      "default": "./src/relay-browser-channel.ts"
     }
   },
   "scripts": {

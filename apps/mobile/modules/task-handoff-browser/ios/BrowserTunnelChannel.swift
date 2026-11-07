@@ -27,33 +27,46 @@ internal actor BrowserTunnelChannel {
     }
   }
 
-  private let task: URLSessionWebSocketTask
+  private let transport: any BrowserMessageTransport
+  private let diagnostic: @Sendable (String) -> Void
+  private let onClosed: @Sendable (String, Error?) -> Void
   private var streams: [UInt32: Stream] = [:]
   private var nextStreamId: UInt32 = 1
   private var initialWindow = BrowserTunnelProtocol.initialWindow
   private var state = "connecting"
   private var receiveTask: Task<Void, Never>?
 
-  init(url: URL, token: String) {
-    var request = URLRequest(url: url)
-    request.setValue("Browser \(token)", forHTTPHeaderField: "Authorization")
-    task = URLSession(configuration: .ephemeral).webSocketTask(with: request)
+  init(transport: any BrowserMessageTransport, diagnostic: @escaping @Sendable (String) -> Void = { _ in }, onClosed: @escaping @Sendable (String, Error?) -> Void = { _, _ in }) {
+    self.transport = transport
+    self.diagnostic = diagnostic
+    self.onClosed = onClosed
   }
 
   func connect() async throws {
     guard state == "connecting" else { return }
-    task.resume()
-    try await task.send(.string(BrowserTunnelProtocol.hello()))
-    let message = try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
-      group.addTask { try await self.task.receive() }
-      group.addTask {
-        try await Task.sleep(for: .seconds(15))
-        throw BrowserTunnelProtocolError("Browser relay handshake timed out.")
+    diagnostic("transport.connect")
+    try await transport.connect()
+    diagnostic("hello.send")
+    try await transport.send(.string(BrowserTunnelProtocol.hello()))
+    diagnostic("ready.receive")
+    let message = try await withTaskCancellationHandler {
+      try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
+        group.addTask { try await self.transport.receive() }
+        group.addTask {
+          try await Task.sleep(for: .seconds(15))
+          // A bridged receive waits on a continuation, so task cancellation alone
+          // cannot release the group. Close the transport before waiting for it.
+          await self.transport.close()
+          throw BrowserTunnelProtocolError("Browser relay handshake timed out.")
+        }
+        let first = try await group.next()!
+        group.cancelAll()
+        return first
       }
-      let first = try await group.next()!
-      group.cancelAll()
-      return first
+    } onCancel: {
+      Task { await self.transport.close() }
     }
+    diagnostic("ready.validate")
     let readyData: Data
     switch message {
     case .string(let value): readyData = Data(value.utf8)
@@ -65,8 +78,11 @@ internal actor BrowserTunnelChannel {
           ready.initialWindowBytes > 0, ready.initialWindowBytes <= BrowserTunnelProtocol.maxWindow else {
       throw BrowserTunnelProtocolError("Browser relay protocol is incompatible.")
     }
+    diagnostic("ready.consume")
+    await transport.consumed()
     initialWindow = ready.initialWindowBytes
     state = "ready"
+    diagnostic("tunnel.ready")
     receiveTask = Task { await self.receiveLoop() }
   }
 
@@ -130,9 +146,10 @@ internal actor BrowserTunnelChannel {
     if notify, state == "ready" { try? await send(BrowserTunnelProtocol.encode(.init(type: .close, streamId: streamId, payload: Data()))) }
   }
 
-  func close() async {
+  func close(source: String = "local", error: Error? = nil) async {
     guard state != "closed" else { return }
     state = "closed"
+    onClosed(source, error)
     receiveTask?.cancel()
     receiveTask = nil
     let active = Array(streams.values)
@@ -142,18 +159,26 @@ internal actor BrowserTunnelChannel {
       for continuation in stream.creditContinuations { continuation.resume(throwing: BrowserTunnelProtocolError("Browser relay closed.")) }
       await stream.onClose()
     }
-    task.cancel(with: .goingAway, reason: nil)
+    await transport.close()
   }
 
   private func receiveLoop() async {
+    var operation = "receive"
     do {
       while state == "ready" {
-        let message = try await task.receive()
+        operation = "receive"
+        let message = try await transport.receive()
+        operation = "frame.validate"
         guard case .data(let data) = message else { throw BrowserTunnelProtocolError("Browser relay frames must be binary.") }
-        try await handle(BrowserTunnelProtocol.decode(data))
+        operation = "frame.decode"
+        let frame = try BrowserTunnelProtocol.decode(data)
+        operation = "frame.handle"
+        try await handle(frame)
+        operation = "frame.consume"
+        await transport.consumed()
       }
     } catch {
-      await close()
+      await close(source: operation, error: error)
     }
   }
 
@@ -195,7 +220,7 @@ internal actor BrowserTunnelChannel {
 
   private func send(_ data: Data) async throws {
     guard state != "closed" else { throw BrowserTunnelProtocolError("Browser relay is closed.") }
-    try await task.send(.data(data))
+    try await transport.send(.data(data))
   }
 
   private func allocateStreamId() -> UInt32 {

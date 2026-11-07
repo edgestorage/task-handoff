@@ -1,4 +1,5 @@
 import TaskHandoffBrowserModule from './TaskHandoffBrowserModule';
+export { subscribeBrowserDiagnostics } from './TaskHandoffBrowserModule';
 
 export { default as TaskHandoffBrowserView } from './TaskHandoffBrowserView';
 export * from './TaskHandoffBrowser.types';
@@ -10,3 +11,5 @@ export const prepareBrowserContext = TaskHandoffBrowserModule.prepareBrowserCont
 export const activateBrowserContext = TaskHandoffBrowserModule.activateBrowserContext.bind(TaskHandoffBrowserModule);
 export const releaseBrowserContext = TaskHandoffBrowserModule.releaseBrowserContext.bind(TaskHandoffBrowserModule);
 export const releaseAllBrowserContexts = TaskHandoffBrowserModule.releaseAllBrowserContexts.bind(TaskHandoffBrowserModule);
+
+export { createBridgedBrowserTransport, isBridgedBrowserTransportAvailable } from './bridged-browser-transport';

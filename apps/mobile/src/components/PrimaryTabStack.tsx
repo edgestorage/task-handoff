@@ -29,6 +29,7 @@ export function PrimaryTabStack({
   headerRight,
   headerRightItems,
   scopeControl,
+  scopeSyncTopic = 'instances',
 }: {
   title: string;
   addAccessibilityLabel?: string;
@@ -37,10 +38,11 @@ export function PrimaryTabStack({
   headerRight?: () => ReactNode;
   headerRightItems?: () => NativeStackHeaderItem[];
   scopeControl?: ReactNode;
+  scopeSyncTopic?: string;
 }) {
   useApprovalCenterHeaderInset();
   const { colors, dark } = useMobileTheme();
-  const scopeButton = scopeControl ?? <InstanceScopeHeaderButton />;
+  const scopeButton = scopeControl ?? <InstanceScopeHeaderButton syncTopic={scopeSyncTopic} />;
   const addItem = addAccessibilityLabel && onAdd ? {
     accessibilityLabel: addAccessibilityLabel,
     icon: { name: 'plus' as const, type: 'sfSymbol' as const },

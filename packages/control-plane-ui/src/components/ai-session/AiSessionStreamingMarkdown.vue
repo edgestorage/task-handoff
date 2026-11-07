@@ -19,7 +19,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, provide, ref, watch } from "vue";
+import { computed, inject, nextTick, provide, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import MarkdownRender, { enableKatex, enableMermaid, MermaidBlockNode, setCustomComponents, useSmoothMarkdownStream } from "markstream-vue";
 import type { MarkdownCodeTools } from "@task-handoff/web-theme/markdown";
@@ -31,6 +31,7 @@ import { aiSessionMarkdownCodeToolsKey, defaultAiSessionMarkdownCodeTools } from
 import MarkdownLinkContextMenu from "./MarkdownLinkContextMenu.vue";
 import type { MarkdownLinkTarget } from "./markdown-link-target";
 import { openDesktopExternalUrl } from "../../lib/desktopBridge";
+import { storyBrowserRequestKey } from "../../apps/control-plane/story/storyBrowser";
 import type { RepositoryContext } from "@task-handoff/protocol/repository";
 import { useThemePreference } from "../../utils/theme";
 
@@ -72,6 +73,7 @@ const emit = defineEmits<{
 }>();
 const { t } = useI18n();
 const theme = useThemePreference();
+const openStoryBrowser = inject(storyBrowserRequestKey, undefined);
 const menuLabels = computed(() => ({
   openFile: t("sessions.markdown.openFile"),
   openDesktopFile: t("sessions.markdown.openDesktopFile"),
@@ -82,6 +84,10 @@ const menuLabels = computed(() => ({
 }));
 function handleContextFile(target: Extract<MarkdownLinkTarget, { kind: "file" }>) { emit("openFile", target.href); }
 function openBuiltinBrowser(url: string) {
+  if (openStoryBrowser) {
+    openStoryBrowser(props.instanceId, url);
+    return;
+  }
   window.dispatchEvent(new CustomEvent("task-handoff:open-markdown-browser", { detail: { instanceId: props.instanceId, url } }));
 }
 
@@ -113,6 +119,10 @@ function handleLinkClick(event: MouseEvent) {
   if (!href) return;
   if (isWebHref(href)) {
     event.preventDefault();
+    if (openStoryBrowser) {
+      openStoryBrowser(props.instanceId, href);
+      return;
+    }
     void openExternalLink(href);
     return;
   }
@@ -350,25 +360,25 @@ watch(
   width: fit-content;
   max-width: 100%;
   margin: 0.75em 0;
+  padding: 4px;
   overflow-x: auto;
   scrollbar-gutter: auto;
-  border: 1px solid var(--markdown-table-border, var(--line, currentColor));
-  border-radius: 9px;
-  background: var(--markdown-table-bg, var(--surface-raised, transparent));
-  box-shadow: var(--shadow-soft, 0 1px 3px rgb(0 0 0 / 12%));
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .ai-session-streaming-markdown :deep(table.table-node) {
   width: max-content;
   max-width: none;
   margin: 0;
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
+  overflow: hidden;
+  border: 1px solid var(--markdown-table-border, var(--line, currentColor));
+  border-radius: 9px;
   border-collapse: separate;
   border-spacing: 0;
-  background: transparent;
-  box-shadow: none;
+  background: var(--markdown-table-bg, var(--surface-raised, transparent));
+  box-shadow: var(--shadow-soft, 0 1px 3px rgb(0 0 0 / 12%));
   font-size: 0.95em;
 }
 
@@ -387,9 +397,27 @@ watch(
     var(--markdown-table-head-bg, var(--surface-inset, rgb(127 127 127 / 16%))),
     color-mix(in srgb, var(--markdown-table-head-bg, var(--surface-inset, rgb(127 127 127 / 16%))) 78%, transparent)
   );
+  border-bottom: 0;
+  box-shadow: inset 0 -1px 0 var(--markdown-table-border, var(--line, currentColor));
   color: inherit;
   font-weight: 750;
   white-space: nowrap;
+}
+
+.ai-session-streaming-markdown :deep(.table-node thead tr:first-child > th:first-child) {
+  border-top-left-radius: 8px;
+}
+
+.ai-session-streaming-markdown :deep(.table-node thead tr:first-child > th:last-child) {
+  border-top-right-radius: 8px;
+}
+
+.ai-session-streaming-markdown :deep(.table-node tbody tr:last-child > td:first-child) {
+  border-bottom-left-radius: 8px;
+}
+
+.ai-session-streaming-markdown :deep(.table-node tbody tr:last-child > td:last-child) {
+  border-bottom-right-radius: 8px;
 }
 
 .ai-session-streaming-markdown :deep(.table-node tr > :last-child) {

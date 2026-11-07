@@ -60,18 +60,28 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
   app.get("/api/stories", async (request) => {
     const { nodeId } = NodeQuerySchema.parse(request.query);
     const nodes = nodeId ? [service.requireNode(nodeId)] : service.listNodes();
+    const startedAt = performance.now();
+    const logTiming = (details: Record<string, unknown>, event: string) => {
+      if (service.diagnosticLogsEnabled()) request.log.info({ requestId: request.id, ...details }, event);
+    };
+    logTiming({ nodeCount: nodes.length }, "stories.list.start");
     const stories = [] as Array<z.infer<typeof StorySchema>>;
     const unavailableNodeIds: string[] = [];
     await Promise.all(nodes.map(async (node) => {
+      const nodeStartedAt = performance.now();
+      logTiming({ nodeId: node.id, connectionMode: node.connectionMode }, "stories.list.node.start");
       try {
         const payload = await nodeJson(service, node.id, "/stories");
         const parsed = StoryListSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Invalid Story list response.");
         stories.push(...parsed.data.stories.map((story) => projectNodeAgentStory(node, story)));
+        logTiming({ nodeId: node.id, outcome: "completed", storyCount: parsed.data.stories.length, durationMs: Math.round(performance.now() - nodeStartedAt) }, "stories.list.node.end");
       } catch {
         unavailableNodeIds.push(node.id);
+        logTiming({ nodeId: node.id, outcome: "failed", durationMs: Math.round(performance.now() - nodeStartedAt) }, "stories.list.node.end");
       }
     }));
+    logTiming({ nodeCount: nodes.length, storyCount: stories.length, unavailableNodeIds, durationMs: Math.round(performance.now() - startedAt) }, "stories.list.end");
     return { data: { stories, unavailableNodeIds } };
   });
 

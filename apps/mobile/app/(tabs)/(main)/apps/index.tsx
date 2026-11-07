@@ -99,7 +99,7 @@ export default function AppsRoute() {
     detail: iosSplitDetailHeaderOptions(dark, detailTitle),
     list: {
       ...iosSplitListHeaderOptions(dark, t('nav.appSessions')),
-      headerLeft: () => <InstanceScopeHeaderButton onPress={openDrawer} />,
+      headerLeft: () => <InstanceScopeHeaderButton syncTopic="app.sessions" onPress={openDrawer} />,
       unstable_headerRightItems: appHeader.headerRightItems,
     },
   } : undefined;

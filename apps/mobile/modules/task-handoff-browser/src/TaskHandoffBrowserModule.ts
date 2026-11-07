@@ -1,6 +1,7 @@
 import { requireOptionalNativeModule } from 'expo';
 
 import type {
+  BrowserDiagnosticEvent,
   BrowserNativeCapabilities,
   BrowserNativeDiagnostics,
   PrepareBrowserContextInput,
@@ -8,6 +9,7 @@ import type {
 } from './TaskHandoffBrowser.types';
 
 type NativeBrowserModule = {
+  addListener?(name: 'onBrowserDiagnostic', listener: (event: BrowserDiagnosticEvent) => void): { remove(): void };
   browserCapabilities(): Promise<BrowserNativeCapabilities>;
   browserDiagnostics(): Promise<BrowserNativeDiagnostics>;
   prepareBrowserContext(input: PrepareBrowserContextInput): Promise<PreparedBrowserContext>;
@@ -17,6 +19,13 @@ type NativeBrowserModule = {
 };
 
 const native = requireOptionalNativeModule<NativeBrowserModule>('TaskHandoffBrowser');
+
+// Compatibility for mobile-v0.0.12: native diagnostics are optional when JS is
+// running on an older binary; registration must not block browser access.
+export function subscribeBrowserDiagnostics(listener: (event: BrowserDiagnosticEvent) => void) {
+  try { return native?.addListener?.('onBrowserDiagnostic', listener); }
+  catch { return undefined; }
+}
 
 export default native ?? {
   async browserCapabilities() {

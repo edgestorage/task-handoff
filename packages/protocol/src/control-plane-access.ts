@@ -9,6 +9,11 @@ import {
 export * from "./control-plane-users.ts";
 
 export const PUBLIC_CONTROL_PLANE_IDENTITY_VERSION = 1;
+export const CONTROL_PLANE_CAPABILITY_HEADER = "x-task-handoff-capabilities";
+export const CONTROL_PLANE_IDENTITY_EXTENSIONS_CAPABILITY = "control-plane-identity-extensions-v1";
+export function requestsExtendedControlPlaneCapabilities(header: unknown) {
+  return typeof header === "string" && header.split(",").some((token) => token.trim() === CONTROL_PLANE_IDENTITY_EXTENSIONS_CAPABILITY);
+}
 // 2026-10-01 起身份文档 capabilities 增加 cliSessions；兼容基线为当前版本，旧客户端需同步升级。
 export const CONTROL_PLANE_ACCESS_PROTOCOL_VERSION = "2026-10-01";
 
@@ -22,6 +27,7 @@ export const ControlPlanePublicCapabilitiesSchema = z.object({
   cliSessions: z.boolean().optional(),
   localCliSessions: z.boolean().optional(),
   accessManagement: ControlPlaneAccessManagementCapabilitySchema.optional(),
+  browserTunnel: z.object({ direct: z.boolean().optional(), cloudRelay: z.boolean().optional() }).optional(),
 }).strict();
 
 export function normalizeControlPlanePublicCapabilities(capabilities: unknown) {
@@ -57,7 +63,7 @@ export function supportsControlPlaneLocalCliSessions(capabilities: unknown) {
   return normalizeControlPlanePublicCapabilities(capabilities)?.localCliSessions === true;
 }
 
-export const ControlPlanePublicIdentityPayloadSchema = z.object({
+const ControlPlanePublicIdentityPayloadShape = z.object({
   version: z.literal(PUBLIC_CONTROL_PLANE_IDENTITY_VERSION),
   kind: z.literal("control-plane"),
   controlPlaneId: z.string().trim().min(1).max(160),
@@ -73,6 +79,22 @@ export const ControlPlanePublicIdentityPayloadSchema = z.object({
   expiresAt: z.string().datetime(),
 }).strict();
 
+// Signed payloads must retain every wire field and its order until verification.
+// Normalization is separate: stripping an unknown capability before verifying
+// changes the signed bytes (mobile-v0.0.12 used this lossy reconstruction).
+export const ControlPlanePublicIdentityPayloadSchema = z.unknown().transform((input, context) => {
+  const parsed = safeParseResponse(ControlPlanePublicIdentityPayloadShape, input);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) context.addIssue({ ...issue });
+    return z.NEVER;
+  }
+  return input as z.infer<typeof ControlPlanePublicIdentityPayloadShape>;
+});
+
+export function supportsControlPlaneBrowserChannel(capabilities: unknown) {
+  return normalizeControlPlanePublicCapabilities(capabilities)?.browserTunnel?.cloudRelay === true;
+}
+
 export const ControlPlanePublicIdentityDocumentSchema = z.object({
   data: z.object({
     payload: ControlPlanePublicIdentityPayloadSchema,
@@ -81,7 +103,8 @@ export const ControlPlanePublicIdentityDocumentSchema = z.object({
 }).strict();
 
 export function controlPlaneIdentitySigningInput(input: unknown) {
-  return JSON.stringify(ControlPlanePublicIdentityPayloadSchema.parse(input));
+  ControlPlanePublicIdentityPayloadSchema.parse(input);
+  return JSON.stringify(input);
 }
 
 export const ControlPlaneMobileDeviceSchema = z.object({

@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react';
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
@@ -24,6 +25,7 @@ import {
   MobileControlPlaneTransportError,
   mobileControlPlaneClosedErrorCode,
 } from './transport';
+import { traceDiagnosticTask } from '../observability/diagnostic-timing';
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 import { isMobileDeviceTrustError } from './device-trust-error';
 import type {
@@ -52,6 +54,8 @@ export type MobileControlPlaneRuntimePhase =
 export type MobileControlPlaneDomain = {
   key: string;
   topics: readonly string[];
+  /** Snapshot responsibility is separate from event subscription scope. */
+  snapshotTopics?: readonly string[];
   background?: boolean;
   start(signal: AbortSignal): Promise<unknown>;
   stop(): void;
@@ -81,6 +85,7 @@ export class MobileControlPlaneConnectionCoordinator {
   private readonly listeners = new Set<() => void>();
   private readonly transientDemands = new Map<symbol, AiSessionTransientSubscription>();
   private activeDomains: MobileControlPlaneDomain[] = [];
+  private readonly syncedDomains = new Set<MobileControlPlaneDomain>();
   private connection?: MobileControlPlaneEventConnection;
   private abortController?: AbortController;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -121,6 +126,15 @@ export class MobileControlPlaneConnectionCoordinator {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   };
+
+  // Snapshot readiness belongs to the domain start operation, independently of
+  // the shared event socket. Keep this process-local; it is not a wire field.
+  isTopicSyncing(topic: string) {
+    const phase = this.snapshotValue.phase;
+    if (phase !== 'verifying' && phase !== 'loading' && phase !== 'reconnecting' && phase !== 'approved-connecting') return false;
+    const domains = this.activeDomains.filter((domain) => domain.snapshotTopics?.includes(topic));
+    return !domains.length || domains.some((domain) => !this.syncedDomains.has(domain));
+  }
 
   register(domain: MobileControlPlaneDomain) {
     this.domains.set(domain.key, domain);
@@ -169,6 +183,7 @@ export class MobileControlPlaneConnectionCoordinator {
 
   stop() {
     this.desiredSignature = '';
+    this.syncedDomains.clear();
     this.domainSyncPending = false;
     this.controlPlaneClosed = false;
     this.deviceTrustValue = undefined;
@@ -291,17 +306,31 @@ export class MobileControlPlaneConnectionCoordinator {
       : [];
   }
 
+  private async startDomain(domain: MobileControlPlaneDomain, abortController: AbortController) {
+    await traceDiagnosticTask('runtime.domain.load', {
+      domainKey: domain.key, controlPlaneId: this.profile.identity.controlPlaneId,
+      connectionSequence: this.connectionSequence,
+    }, () => domain.start(abortController.signal), abortController.signal);
+    if (this.abortController !== abortController || abortController.signal.aborted
+      || this.domains.get(domain.key) !== domain || !this.activeDomains.includes(domain)) return;
+    this.syncedDomains.add(domain);
+    for (const listener of this.listeners) listener();
+  }
+
   private async startDomains(abortController: AbortController, started: Set<string>) {
     const desired = this.desiredDomains();
     const desiredKeys = new Set(desired.map((domain) => domain.key));
     for (const domain of this.activeDomains) {
-      if (!desiredKeys.has(domain.key)) domain.stop();
+      if (!desiredKeys.has(domain.key)) {
+        domain.stop();
+        this.syncedDomains.delete(domain);
+      }
     }
     this.activeDomains = desired;
     this.domainSyncPending = false;
     await Promise.all(desired.filter((domain) => !started.has(domain.key)).map(async (domain) => {
       started.add(domain.key);
-      await domain.start(abortController.signal);
+      await this.startDomain(domain, abortController);
     }));
   }
 
@@ -310,7 +339,10 @@ export class MobileControlPlaneConnectionCoordinator {
     const desiredKeys = new Set(desired.map((domain) => domain.key));
     const activeKeys = new Set(this.activeDomains.map((domain) => domain.key));
     for (const domain of this.activeDomains) {
-      if (!desiredKeys.has(domain.key)) domain.stop();
+      if (!desiredKeys.has(domain.key)) {
+        domain.stop();
+        this.syncedDomains.delete(domain);
+      }
     }
     const added = desired.filter((domain) => !activeKeys.has(domain.key));
     this.activeDomains = desired;
@@ -321,7 +353,7 @@ export class MobileControlPlaneConnectionCoordinator {
     this.connection?.updateTopics?.(topics);
     await Promise.all(added.map(async (domain) => {
       try {
-        await domain.start(abortController.signal);
+        await this.startDomain(domain, abortController);
       } catch (cause) {
         // A newly opened route must never tear down an otherwise healthy shared
         // connection. Its cached view stays visible and its own retry policy owns
@@ -335,6 +367,7 @@ export class MobileControlPlaneConnectionCoordinator {
 
   private async restart(desired: MobileControlPlaneDomain[]) {
     const epoch = ++this.epoch;
+    this.syncedDomains.clear();
     this.clearTimers();
     this.abortController?.abort();
     this.connection?.close();
@@ -402,7 +435,7 @@ export class MobileControlPlaneConnectionCoordinator {
         this.publish({ phase: 'session-expired', error: 'The mobile Control Plane session expired.' });
         return;
       }
-      const identity = await this.api.auth.identity?.().catch(() => undefined);
+      const identity = await this.api.auth.identity?.({ extendedCapabilities: true }).catch(() => undefined);
       if (!this.live(epoch, abortController)) return;
       const payload = identity?.data.payload;
       if (payload?.controlPlaneId === this.profile.identity.controlPlaneId
@@ -511,6 +544,8 @@ export class MobileControlPlaneConnectionCoordinator {
       this.handleDeviceTrustOutcome(cause.outcome, epoch, abortController);
       return;
     }
+    this.syncedDomains.clear();
+    for (const listener of this.listeners) listener();
     this.clearConnectTimer();
     if (this.stableTimer) clearTimeout(this.stableTimer);
     this.stableTimer = undefined;
@@ -815,4 +850,16 @@ export function useMobileControlPlaneRuntime() {
 
 export function useOptionalMobileControlPlaneRuntime() {
   return useContext(Context);
+}
+
+const noRuntimeSubscription = () => () => undefined;
+
+/** Whether this topic's authoritative snapshot is still recovering. */
+export function useMobileControlPlaneTopicSyncing(topic: string) {
+  const { coordinator } = useMobileControlPlaneRuntime();
+  return useSyncExternalStore(
+    coordinator?.subscribe ?? noRuntimeSubscription,
+    () => coordinator?.isTopicSyncing(topic) ?? false,
+    () => false,
+  );
 }

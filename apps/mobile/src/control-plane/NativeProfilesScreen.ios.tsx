@@ -68,6 +68,9 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
             <Button label={`${appearance === 'light' ? '✓ ' : ''}${t('appearance.light')}`} systemImage="sun.max" onPress={() => { void setAppearance('light'); }} />
             <Button label={`${appearance === 'dark' ? '✓ ' : ''}${t('appearance.dark')}`} systemImage="moon" onPress={() => { void setAppearance('dark'); }} />
           </Section>
+          {props.showMarkdownDemo ? <Section title={t('demo.title')}>
+            <Button label={t('demo.markdown')} systemImage="doc.richtext" onPress={props.onOpenMarkdownDemo} />
+          </Section> : null}
           <Section title={t('diagnostics.title')}>
             <Toggle
               isOn={diagnosticsEnabled}

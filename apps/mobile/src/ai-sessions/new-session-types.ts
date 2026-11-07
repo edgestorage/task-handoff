@@ -42,7 +42,7 @@ export type NewSessionFormProps = {
   embedded?: boolean;
   header?: ReactNode;
   attachmentsDisabled?: boolean;
-  attachments: readonly { id: string; kind: 'image' | 'file'; name: string; size?: number; textPresentation?: AiSessionPastedTextPresentation }[];
+  attachments: readonly { id: string; kind: 'image' | 'file'; name: string; size?: number; previewUri?: string; textPresentation?: AiSessionPastedTextPresentation }[];
   submitLabel?: string;
   submittingLabel?: string;
   visualBalanceInset?: number;

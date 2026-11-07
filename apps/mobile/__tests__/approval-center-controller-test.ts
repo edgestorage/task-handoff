@@ -1,5 +1,6 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 
+import { MobileStoryListController } from '../src/stories/list-controller';
 import { MobileApprovalCenterController } from '../src/approval-center/controller';
 import { mobileMetrics } from '../src/observability/mobile-metrics';
 import type { MobileAiSessionProfileState } from '../src/ai-sessions/store';
@@ -170,6 +171,7 @@ function createController(api = client(), options: Partial<{
   supportsNodes: boolean;
 }> = {}) {
   return new MobileApprovalCenterController('cp_a', api, {
+    stories: new MobileStoryListController(api),
     aiSessions: options.aiSessions ?? aiState,
     directory,
     supportsAiSessions: options.supportsAiSessions ?? true,
@@ -209,6 +211,7 @@ test('offline nodes do not mark accessible Story decisions as unavailable', asyn
     },
   });
   const controller = new MobileApprovalCenterController('cp_a', api, {
+    stories: new MobileStoryListController(api),
     aiSessions: () => ({ controlPlaneId: 'cp_a', messages: {}, sync: { phase: 'idle' } } as MobileAiSessionProfileState),
     directory: () => ({
       nodes: [
@@ -256,6 +259,7 @@ test('directory updates remap pending operation targets and node names without r
     instances: [],
   };
   const controller = new MobileApprovalCenterController('cp_a', api, {
+    stories: new MobileStoryListController(api),
     aiSessions: aiState,
     directory: () => currentDirectory,
     supportsAiSessions: true,
@@ -284,6 +288,7 @@ test('node trust is rescanned when the directory arrives after approval-center s
   const api = client();
   let currentDirectory: any = { nodes: [], instances: [] };
   const controller = new MobileApprovalCenterController('cp_a', api, {
+    stories: new MobileStoryListController(api),
     aiSessions: aiState,
     directory: () => currentDirectory,
     supportsAiSessions: true,
@@ -597,7 +602,7 @@ test('operation generation recovery accepts the newest register after one retry'
   ]);
 });
 
-test('Story refresh debounce accumulates every changed Story in one authoritative reload', async () => {
+test('Story decision refresh debounce reuses the shared snapshot for every changed Story', async () => {
   const stories = [
     story,
     { ...story, id: 'stry_b', title: 'Story B' },
@@ -626,7 +631,7 @@ test('Story refresh debounce accumulates every changed Story in one authoritativ
   }
   await new Promise((resolve) => setTimeout(resolve, 150));
 
-  expect(api.stories.list).toHaveBeenCalledTimes(1);
+  expect(api.stories.list).not.toHaveBeenCalled();
   expect((api.stories.listDecisions as jest.Mock).mock.calls.map(([storyId]) => storyId).sort()).toEqual(['stry_a', 'stry_b']);
 });
 
@@ -650,6 +655,7 @@ test('Node trust refresh debounce accumulates every changed online Node', async 
     instances: [],
   };
   const controller = new MobileApprovalCenterController('cp_a', api, {
+    stories: new MobileStoryListController(api),
     aiSessions: aiState,
     directory: () => twoNodes,
     supportsAiSessions: true,
@@ -701,6 +707,7 @@ test('node trust source is disabled solely by normalized capability absence', as
 test('offline nodes never trigger node trust reads', async () => {
   const api = client();
   const controller = new MobileApprovalCenterController('cp_a', api, {
+    stories: new MobileStoryListController(api),
     aiSessions: aiState,
     directory: () => ({
       nodes: [{
@@ -745,4 +752,39 @@ test('approval metrics contain source phases, counts and outcomes without approv
   expect(encoded).not.toContain(fingerprint);
   expect(encoded).not.toContain(deviceRequest.requestId);
   expect(encoded).not.toContain(deviceRequest.accountId);
+});
+
+test('approval startup shares the list request and later derives decisions from shared snapshot updates', async () => {
+  jest.useFakeTimers();
+  const api = client();
+  let resolveList!: (value: { stories: typeof story[]; unavailableNodeIds: string[] }) => void;
+  (api.stories.list as jest.Mock).mockImplementationOnce(() => new Promise((resolve) => { resolveList = resolve; }));
+  const stories = new MobileStoryListController(api);
+  const controller = new MobileApprovalCenterController('cp_a', api, {
+    stories, aiSessions: aiState, directory,
+    supportsAiSessions: true, supportsStories: true, supportsNodes: true,
+  });
+  try {
+    const listStart = stories.start(new AbortController().signal);
+    const approvalStart = controller.start(new AbortController().signal);
+    expect(api.stories.list).toHaveBeenCalledTimes(1);
+    resolveList({ stories: [story], unavailableNodeIds: [] });
+    await Promise.all([listStart, approvalStart]);
+    expect(controller.snapshot().sources['story-decision'].items).toHaveLength(1);
+    await jest.advanceTimersByTimeAsync(150);
+    expect(api.stories.listDecisions).toHaveBeenCalledTimes(1);
+    expect(api.stories.list).toHaveBeenCalledTimes(1);
+
+    // The list's next authoritative snapshot removes the Story. Approval must
+    // consume that removal without issuing an independent list request.
+    (api.stories.list as jest.Mock).mockResolvedValueOnce({ stories: [], unavailableNodeIds: [] });
+    await stories.refresh();
+    await jest.advanceTimersByTimeAsync(150);
+    expect(controller.snapshot().sources['story-decision'].items).toHaveLength(0);
+    expect(api.stories.list).toHaveBeenCalledTimes(2);
+  } finally {
+    controller.stop();
+    stories.stop();
+    jest.useRealTimers();
+  }
 });

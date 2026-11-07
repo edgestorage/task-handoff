@@ -23,6 +23,8 @@ import { createControlPlaneDeviceTrustApi } from "./device-trust.ts";
 
 export function createControlPlaneClient(transport: ControlPlaneClientTransport) {
   const compatibleTransport: ControlPlaneClientTransport = {
+    ...(transport.supportsBrowserChannel ? { supportsBrowserChannel: () => transport.supportsBrowserChannel!() } : {}),
+    ...(transport.openBrowserChannel ? { openBrowserChannel: (instanceId, handlers, signal) => transport.openBrowserChannel!(instanceId, handlers, signal) } : {}),
     request(path, schema, init, onUploadProgress) {
       return transport.request(path, responseSchema(schema), init, onUploadProgress);
     },

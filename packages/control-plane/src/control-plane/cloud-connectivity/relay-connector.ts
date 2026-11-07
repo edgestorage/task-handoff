@@ -1,3 +1,4 @@
+import { RelayBrowserMultiplexer, isRelayBrowserData, decodeRelayBrowserData, encodeRelayBrowserData, type BrowserChannel, type BrowserChannelHandlers, type RelayBrowserData } from "@task-handoff/protocol/relay-browser-channel";
 import WebSocket from "ws";
 import nacl from "tweetnacl";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
@@ -46,6 +47,7 @@ import type { TrustedDeviceSessionRegistry } from "../device-trust/trusted-devic
 
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: any; binaryResponse?: unknown; bodyId?: number; responseId?: number; offset?: number; event?: unknown; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null; sentAt?: string; receivedAt?: string };
 export type RelaySessionBridge = {
+  openBrowser?(actor: ControlPlaneActor, instanceId: string, handlers: BrowserChannelHandlers): Promise<BrowserChannel>;
   request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean }): Promise<{ status: number; body?: unknown; binary?: { bytes: Uint8Array; contentType?: string; filename?: string } }>;
   subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: EventEnvelope) => void, aiSessionTransient?: AiSessionTransientSubscription, resourceMetricInstanceIds?: string[]): () => void;
   openTty?(actor: ControlPlaneActor, input: { instanceId: string; sessionId: string }, listener: (message: RelayEnvelope) => void): Promise<{ send(data: string): void; resize(cols: number, rows: number): void; close(): void }>;
@@ -533,6 +535,7 @@ export class EncryptedControlPlaneRelaySession {
   private nextResponseId = 0;
   private closing = false;
   private pumpingResponses = false;
+  private readonly browser: RelayBrowserMultiplexer;
   private readonly ttys = new Map<string, { send(data: string): void; resize(cols: number, rows: number): void; close(): void }>();
   private readonly bodies = new Map<number, RelayBodyAssembly>();
   private readonly bodyByRequest = new Map<string, number>();
@@ -545,7 +548,16 @@ export class EncryptedControlPlaneRelaySession {
   private readonly bridge: RelaySessionBridge;
   private readonly trace?: RelayTraceRecorder;
   private readonly onPeerDetached?: () => void;
-  constructor(socket: WebSocket, channelId: string, key: Uint8Array, actor: ControlPlaneActor, bridge: RelaySessionBridge, trace?: RelayTraceRecorder, onPeerDetached?: () => void) { this.socket = socket; this.channelId = channelId; this.key = key; this.actor = actor; this.bridge = bridge; this.trace = trace; this.onPeerDetached = onPeerDetached; }
+  constructor(socket: WebSocket, channelId: string, key: Uint8Array, actor: ControlPlaneActor, bridge: RelaySessionBridge, trace?: RelayTraceRecorder, onPeerDetached?: () => void) { this.socket = socket; this.channelId = channelId; this.key = key; this.actor = actor; this.bridge = bridge; this.trace = trace; this.onPeerDetached = onPeerDetached;
+    this.browser = new RelayBrowserMultiplexer({
+      control: (value) => this.send(value),
+      data: (value) => this.sendBrowserData(value),
+      accept: async (instanceId, handlers) => {
+        if (!this.bridge.openBrowser) throw relayError("BROWSER_CHANNEL_UNSUPPORTED");
+        return this.bridge.openBrowser(this.actor, instanceId, handlers);
+      },
+    });
+  }
   start() {
     this.socket.on("message", (raw, isBinary) => { void this.receive(raw, isBinary).catch(() => this.socket.close(4400, "encrypted-protocol-error")); });
     this.socket.once("close", (code, reason) => {
@@ -561,6 +573,7 @@ export class EncryptedControlPlaneRelaySession {
       });
       this.unsubscribeSafely();
       this.closeTtys();
+      this.browser.close();
       for (const assembly of [...this.bodies.values()]) this.abortBody(assembly, "RELAY_CHANNEL_CLOSED");
       for (const response of [...this.responses.values()]) this.abortResponse(response, relayError("RELAY_CHANNEL_CLOSED"));
     });
@@ -569,6 +582,7 @@ export class EncryptedControlPlaneRelaySession {
     this.closing = true;
     this.unsubscribeSafely();
     this.closeTtys();
+    this.browser.close();
     for (const assembly of [...this.bodies.values()]) this.abortBody(assembly, "RELAY_CHANNEL_CLOSED");
     for (const response of [...this.responses.values()]) this.abortResponse(response, relayError("RELAY_CHANNEL_CLOSED"));
     if (this.socket.readyState < WebSocket.CLOSING) this.socket.close(1000, reason.slice(0, 120));
@@ -595,6 +609,10 @@ export class EncryptedControlPlaneRelaySession {
     const plaintext = unpackRelayPayload(opened, frame.flags ?? 0, (input) => inflateRawSync(input));
     // Binary bodies replace the base64 envelope for large payloads; the first
     // byte tells the two apart (`{` for JSON, the body magic otherwise).
+    if (isRelayBrowserData(plaintext)) {
+      this.browser.data(decodeRelayBrowserData(plaintext));
+      return;
+    }
     if (isRelayBodyFrame(plaintext)) {
       const chunk = decodeRelayBodyFrame(plaintext);
       this.trace?.record({ channelId: this.channelId, direction: "in", kind: "body", plaintext: Buffer.alloc(0), sealedBytes: frame.payload.byteLength, wireBytes: RELAY_FRAME_HEADER_BYTES + frame.payload.byteLength, detail: { bodyId: chunk.bodyId, offset: chunk.offset, bytes: chunk.bytes.byteLength, final: chunk.final } });
@@ -611,6 +629,7 @@ export class EncryptedControlPlaneRelaySession {
     await this.dispatch(envelope);
   }
   private async dispatch(value: RelayEnvelope) {
+    if (value.type.startsWith("browser-channel-")) { this.browser.control(value); return; }
     if (value.type === "response-ack") {
       const ack = RelayResponseAckSchema.safeParse(value);
       if (!ack.success) throw relayError("RELAY_RESPONSE_ACK_INVALID");
@@ -728,6 +747,11 @@ export class EncryptedControlPlaneRelaySession {
     // pays the secretbox MAC and the fixed frame header before it reaches the Relay.
     this.trace?.record({ channelId: this.channelId, direction: "out", kind: value.type, plaintext, sealedBytes: sealed.byteLength, wireBytes: wire.byteLength, detail: envelopeDetail(value) });
     this.socket.send(wire);
+  }
+  private sendBrowserData(value: RelayBrowserData) {
+    if (this.closing || this.socket.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 1024 * 1024) throw relayError("BROWSER_CHANNEL_BACKPRESSURE");
+    const sealed = nacl.secretbox(encodeRelayBrowserData(value), nonce(2, this.sendCounter++), this.key);
+    this.socket.send(encodeRelayFrame({ kind: "data", sequence: this.sendSequence++, payload: sealed }));
   }
   private unsubscribeSafely() {
     const unsubscribe = this.unsubscribe;

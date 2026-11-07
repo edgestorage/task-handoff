@@ -4,15 +4,15 @@ import { UITextView as SelectableText } from '@bsky.app/react-native-uitextview'
 import * as Clipboard from 'expo-clipboard';
 import { Check, Copy } from 'lucide-react-native';
 import Markdown, { AstRenderer, MarkdownIt, renderRules, type ASTNode, type RenderRules } from 'react-native-markdown-renderer';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { common, createLowlight } from 'lowlight';
 
 import { useI18n } from '../i18n';
 import { openSystemLink } from '../platform/links';
 import { splitGraphemes } from './graphemes';
-import { type FloatingMenuItem, type FloatingMenuPage } from './menu/menu-model';
-import { FloatingMenu, type FloatingMenuAnchor } from './menu/FloatingMenu';
-import { mobileMarkdownLinkTarget, safeMarkdownLink, type MobileMarkdownLinkTarget } from './markdown-link-target';
-import { useMobileToast } from './MobileToast';
+import { type FloatingMenuAnchor } from './menu/FloatingMenu';
+import { MarkdownLinkMenu } from './MarkdownLinkMenu';
+import { mobileMarkdownLinkTarget, safeMarkdownLink } from './markdown-link-target';
 import { useMobileTheme, type MobileThemeColors } from './theme';
 import { mobileWebMetric, mobileWebType } from './mobile-web-typography';
 import { useStreamingMarkdown } from './useStreamingMarkdown';
@@ -28,6 +28,90 @@ const markdownParser = MarkdownIt({
   typographer: true,
 });
 const codeHighlighter = createLowlight(common);
+const TABLE_FIRST_COLUMN_WIDTH = 148;
+const TABLE_COLUMN_WIDTH = 112;
+const TABLE_FADE_WIDTH = 18;
+
+function markdownTableColumnCount(node: ASTNode) {
+  let count = 0;
+  for (const section of node.children) {
+    if (section.type !== 'thead' && section.type !== 'tbody') continue;
+    for (const row of section.children) count = Math.max(count, row.children.length);
+  }
+  return count;
+}
+
+function markdownTableWidth(columnCount: number) {
+  return TABLE_FIRST_COLUMN_WIDTH + Math.max(0, columnCount - 1) * TABLE_COLUMN_WIDTH;
+}
+
+function MarkdownTableScroll({
+  children,
+  fadeColor,
+  styles,
+  width,
+}: {
+  children: ReactNode;
+  fadeColor: string;
+  styles: ReturnType<typeof markdownStyles>;
+  width: number;
+}) {
+  const [contentWidth, setContentWidth] = useState(0);
+  const [offsetX, setOffsetX] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const maxOffset = Math.max(0, contentWidth - viewportWidth);
+  const showLeftFade = maxOffset > 0.5 && offsetX > 0.5;
+  const showRightFade = maxOffset > 0.5 && offsetX < maxOffset - 0.5;
+
+  return (
+    <View
+      onLayout={(event) => setViewportWidth(event.nativeEvent.layout.width)}
+      style={styles.tableFrame}
+      testID="markdown-table-frame"
+    >
+      <ScrollView
+        contentContainerStyle={styles.tableScrollContent}
+        horizontal
+        onContentSizeChange={(value) => setContentWidth(value)}
+        onScroll={(event) => setOffsetX(event.nativeEvent.contentOffset.x)}
+        scrollEventThrottle={16}
+        showsHorizontalScrollIndicator={false}
+        style={styles.tableScroll}
+        testID="markdown-table-scroll"
+      >
+        <View style={[styles.tableShadow, { width: width + 2 }]}>
+          <View style={styles.table}>{children}</View>
+        </View>
+      </ScrollView>
+      {showLeftFade ? (
+        <View pointerEvents="none" style={styles.tableLeftFade} testID="markdown-table-left-fade">
+          <Svg height="100%" width="100%">
+            <Defs>
+              <LinearGradient id="markdown-table-left-fade" x1="0" x2="100%" y1="0" y2="0">
+                <Stop offset={0} stopColor={fadeColor} stopOpacity={0.96} />
+                <Stop offset={1} stopColor={fadeColor} stopOpacity={0} />
+              </LinearGradient>
+            </Defs>
+            <Rect fill="url(#markdown-table-left-fade)" height="100%" width="100%" />
+          </Svg>
+        </View>
+      ) : null}
+      {showRightFade ? (
+        <View pointerEvents="none" style={styles.tableRightFade} testID="markdown-table-right-fade">
+          <Svg height="100%" width="100%">
+            <Defs>
+              <LinearGradient id="markdown-table-right-fade" x1="0" x2="100%" y1="0" y2="0">
+                <Stop offset={0} stopColor={fadeColor} stopOpacity={0} />
+                <Stop offset={1} stopColor={fadeColor} stopOpacity={0.96} />
+              </LinearGradient>
+            </Defs>
+            <Rect fill="url(#markdown-table-right-fade)" height="100%" width="100%" />
+          </Svg>
+        </View>
+      ) : null}
+    </View>
+  );
+}
 
 /**
  * Normalize protocol text before parsing. HTML safety is enforced by the
@@ -146,6 +230,7 @@ export function SafeMarkdown({
   children,
   compact = false,
   nativeSelectable: allowNativeSelectable = true,
+  onOpenBuiltinBrowser,
   streamKey,
   streaming = false,
   trimEnd = false,
@@ -153,13 +238,13 @@ export function SafeMarkdown({
   children: string;
   compact?: boolean;
   nativeSelectable?: boolean;
+  onOpenBuiltinBrowser?(url: string): void | Promise<void>;
   streamKey?: string;
   streaming?: boolean;
   trimEnd?: boolean;
 }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const toast = useMobileToast();
   const styles = useMemo(() => markdownStyles(colors, compact), [colors, compact]);
   const reducedMotion = useReduceMotion(Boolean(streamKey));
   const source = sanitizeMarkdown(children);
@@ -176,7 +261,7 @@ export function SafeMarkdown({
     ? [...blocks.stable, blocks.tail]
     : [{ id: 0, source: paced.visible }];
   const deferFinalCodeHighlight = streaming && hasUnclosedMarkdownFence(blocks?.tail.source ?? paced.visible);
-  const [linkMenu, setLinkMenu] = useState<{ anchor: FloatingMenuAnchor; target: MobileMarkdownLinkTarget }>();
+  const [linkMenu, setLinkMenu] = useState<{ anchor: FloatingMenuAnchor; url: string }>();
   // The map is intentionally replaced when the authoritative stream identity changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const textStreamState = useMemo(() => new Map<string, string>(), [streamKey]);
@@ -185,56 +270,27 @@ export function SafeMarkdown({
     if (!target) return;
     const { pageX, pageY, target: reactTag } = event.nativeEvent as typeof event.nativeEvent & { target?: number };
     if (Number.isFinite(pageX) && Number.isFinite(pageY)) {
-      setLinkMenu({ anchor: { height: 0, point: { x: pageX, y: pageY }, width: 0, x: pageX, y: pageY }, target });
+      setLinkMenu({ anchor: { height: 0, point: { x: pageX, y: pageY }, width: 0, x: pageX, y: pageY }, url: raw });
       return;
     }
     const showFallback = () => {
       const { height, width } = Dimensions.get('window');
-      setLinkMenu({ anchor: { height: 0, width: 0, x: width / 2, y: height / 2 }, target });
+      setLinkMenu({ anchor: { height: 0, width: 0, x: width / 2, y: height / 2 }, url: raw });
     };
     // iOS UITextView long-press events only expose the native target. Measure
     // that text fragment so the menu still anchors to the pressed link.
     if (typeof reactTag === 'number' && reactTag > 0 && typeof UIManager.measureInWindow === 'function') {
       UIManager.measureInWindow(reactTag, (x, y, width, height) => {
-        if ([x, y, width, height].every(Number.isFinite)) setLinkMenu({ anchor: { height, width, x, y }, target });
+        if ([x, y, width, height].every(Number.isFinite)) setLinkMenu({ anchor: { height, width, x, y }, url: raw });
         else showFallback();
       });
     } else {
       showFallback();
     }
   }, []);
-  const copyLinkValue = useCallback(async (value: string) => {
-    try {
-      await Clipboard.setStringAsync(value);
-      toast.show({ title: t('sessions.linkActions.copied'), tone: 'success' });
-    } catch {
-      toast.show({ title: t('sessions.linkActions.copyFailed'), tone: 'error' });
-    }
-  }, [t, toast]);
-  const openLinkValue = useCallback((url: string) => {
-    void openSystemLink(url).catch(() => {
-      toast.show({ title: t('sessions.linkActions.openFailed'), tone: 'error' });
-    });
-  }, [t, toast]);
-  const linkMenuPage = useMemo<FloatingMenuPage | undefined>(() => {
-    if (!linkMenu) return undefined;
-    const { target } = linkMenu;
-    const items: FloatingMenuItem[] = target.kind === 'web'
-      ? [
-        { key: 'open', label: t('sessions.linkActions.open'), icon: 'open-outline', onPress: () => openLinkValue(target.url) },
-        { key: 'copy', label: t('sessions.linkActions.copyLink'), icon: 'copy-outline', onPress: () => { void copyLinkValue(target.url); } },
-      ]
-      : [
-        { key: 'copy', label: t('sessions.linkActions.copyPath'), icon: 'copy-outline', onPress: () => { void copyLinkValue(target.path); } },
-      ];
-    return {
-      title: t('sessions.linkActions.title'),
-      blocks: items.map((item) => ({ type: 'item', key: item.key, item })),
-    };
-  }, [copyLinkValue, linkMenu, openLinkValue, t]);
   const rules = useMemo(
-    () => createRules(paced.revealEnabled, reducedMotion, trimEnd, deferFinalCodeHighlight, nativeSelectable, openLinkMenu, t('sessions.linkActions.hint'), streamKey, textStreamState),
-    [deferFinalCodeHighlight, nativeSelectable, openLinkMenu, paced.revealEnabled, reducedMotion, streamKey, t, textStreamState, trimEnd],
+    () => createRules(paced.revealEnabled, reducedMotion, trimEnd, deferFinalCodeHighlight, nativeSelectable, openLinkMenu, t('sessions.linkActions.hint'), colors.background, streamKey, textStreamState),
+    [colors.background, deferFinalCodeHighlight, nativeSelectable, openLinkMenu, paced.revealEnabled, reducedMotion, streamKey, t, textStreamState, trimEnd],
   );
   const renderer = useMemo(() => new AstRenderer(
     { ...renderRules, ...rules },
@@ -260,10 +316,11 @@ export function SafeMarkdown({
           treeKey={`block:${block.id}`}
         />
       ))}
-      {linkMenu && linkMenuPage ? <FloatingMenu
+      {linkMenu ? <MarkdownLinkMenu
         anchor={linkMenu.anchor}
         onDismiss={() => setLinkMenu(undefined)}
-        page={linkMenuPage}
+        onOpenBuiltinBrowser={onOpenBuiltinBrowser}
+        url={linkMenu.url}
       /> : null}
     </View>
   );
@@ -488,11 +545,12 @@ function createRules(
   nativeSelectable: boolean,
   onLinkLongPress: (raw: string, event: GestureResponderEvent) => void,
   linkAccessibilityHint: string,
+  tableFadeColor: string,
   streamKey?: string,
   textStreamState?: Map<string, string>,
 ): RenderRules {
   const rules: Record<string, SafeRenderRule> = {
-    ...createFlowRules(nativeSelectable, onLinkLongPress, linkAccessibilityHint),
+    ...createFlowRules(nativeSelectable, onLinkLongPress, linkAccessibilityHint, tableFadeColor),
     code_block: (node, children, parentNodes, styles) => renderCodeBlock(
       node,
       children,
@@ -534,7 +592,7 @@ function MarkdownText({ nativeSelectable, ...props }: MarkdownTextProps) {
   return <Text {...props} selectable />;
 }
 
-function createFlowRules(nativeSelectable: boolean, onLinkLongPress: (raw: string, event: GestureResponderEvent) => void, linkAccessibilityHint: string): Record<string, SafeRenderRule> {
+function createFlowRules(nativeSelectable: boolean, onLinkLongPress: (raw: string, event: GestureResponderEvent) => void, linkAccessibilityHint: string, tableFadeColor: string): Record<string, SafeRenderRule> {
   return {
   heading1: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading1'),
   heading2: (node, children, parentNodes, styles) => renderHeading(node, children, parentNodes, styles, 'heading2'),
@@ -578,18 +636,14 @@ function createFlowRules(nativeSelectable: boolean, onLinkLongPress: (raw: strin
   code_inline: (node, children, parentNodes, styles) => renderInlineCode(node, children, parentNodes, styles, nativeSelectable),
   code_block: (node, children, parentNodes, styles) => renderCodeBlock(node, children, parentNodes, styles),
   fence: (node, children, parentNodes, styles) => renderCodeBlock(node, children, parentNodes, styles),
-  table: (node, children, _parentNodes, styles) => (
-    <ScrollView
-      contentContainerStyle={styles.tableScrollContent}
-      horizontal
-      key={node.key}
-      showsHorizontalScrollIndicator={false}
-      style={styles.tableScroll}
-      testID="markdown-table-scroll"
-    >
-      <View style={styles.table}>{children}</View>
-    </ScrollView>
-  ),
+  table: (node, children, _parentNodes, styles) => {
+    const width = markdownTableWidth(markdownTableColumnCount(node));
+    return (
+      <MarkdownTableScroll fadeColor={tableFadeColor} key={node.key} styles={styles} width={width}>
+        {children}
+      </MarkdownTableScroll>
+    );
+  },
   tr: (node, children, parentNodes, styles) => {
     const parent = parentNodes[0];
     const isBodyRow = parent?.type === 'tbody';
@@ -743,7 +797,8 @@ function renderTableCell(
   const isLastColumn = parent?.children.at(-1)?.key === node.key;
   return (
     <View key={node.key} style={[header ? styles.th : styles.td, node.index === 0 && styles.tableFirstColumn, isLastColumn && styles.tableLastColumn]}>
-      {children}
+      {header ? <View pointerEvents="none" style={styles.thGradient} /> : null}
+      {header ? <Text style={styles.thText}>{children}</Text> : <Text style={styles.tdText}>{children}</Text>}
     </View>
   );
 }
@@ -807,10 +862,10 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
     code_block: {},
     fence: {},
     codeBlockContainer: { backgroundColor: colors.surface, borderColor: colors.border, borderRadius: 7, borderWidth: StyleSheet.hairlineWidth, marginBottom: mobileWebMetric(14 * 0.75), overflow: 'hidden' },
-    codeBlockToolbar: { alignItems: 'center', borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: mobileWebMetric(34), paddingLeft: mobileWebMetric(12), paddingRight: mobileWebMetric(6) },
+    codeBlockToolbar: { alignItems: 'center', borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: mobileWebMetric(34), paddingLeft: mobileWebMetric(12), paddingRight: mobileWebMetric(10) },
     codeBlockLanguage: { color: colors.textMuted, flexShrink: 1, fontSize: mobileWebType.small, lineHeight: mobileWebMetric(16), marginRight: mobileWebMetric(12) },
-    codeBlockCopy: { alignItems: 'center', borderRadius: 6, flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebMetric(30), paddingHorizontal: mobileWebMetric(7) },
-    codeBlockCopyPressed: { backgroundColor: colors.surface },
+    codeBlockCopy: { alignItems: 'center', borderRadius: mobileWebMetric(5), flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebMetric(28), paddingHorizontal: mobileWebMetric(6) },
+    codeBlockCopyPressed: { backgroundColor: colors.surfaceHover },
     codeBlockCopyText: { color: colors.textMuted, fontSize: mobileWebType.small, lineHeight: mobileWebMetric(16) },
     codeBlockScroll: { flexGrow: 0, flexShrink: 0 },
     codeBlockScrollContent: { paddingHorizontal: mobileWebMetric(14), paddingVertical: mobileWebMetric(12) },
@@ -825,15 +880,22 @@ function markdownStyles(colors: MobileThemeColors, compact: boolean) {
     syntaxStrong: { fontWeight: '700' },
     pre: { marginBottom: mobileWebMetric(14 * 0.75) },
     hr: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth, marginBottom: mobileWebMetric(14), marginTop: mobileWebMetric(6) },
-    tableScroll: { alignSelf: 'stretch', flexGrow: 0, flexShrink: 0, marginBottom: mobileWebMetric(10), maxWidth: '100%', width: '100%' },
-    tableScrollContent: { flexGrow: 1 },
-    table: { alignSelf: 'flex-start', borderColor: colors.border, borderRadius: 9, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
-    thead: { backgroundColor: colors.surface },
+    tableFrame: { alignSelf: 'stretch', flexGrow: 0, flexShrink: 0, marginBottom: mobileWebMetric(10), maxWidth: '100%', width: '100%' },
+    tableScroll: { alignSelf: 'stretch', flexGrow: 0, flexShrink: 0, width: '100%' },
+    tableScrollContent: { alignItems: 'flex-start', flexGrow: 0, padding: 4 },
+    tableLeftFade: { bottom: 0, left: 0, position: 'absolute', top: 0, width: TABLE_FADE_WIDTH },
+    tableRightFade: { bottom: 0, position: 'absolute', right: 0, top: 0, width: TABLE_FADE_WIDTH },
+    tableShadow: { alignSelf: 'flex-start', borderRadius: 9, backgroundColor: colors.tableBackground, elevation: 1, shadowColor: '#000000', shadowOffset: { height: 1, width: 0 }, shadowOpacity: 0.12, shadowRadius: 3 },
+    table: { alignSelf: 'stretch', backgroundColor: colors.tableBackground, borderColor: colors.tableBorder, borderRadius: 9, borderWidth: 1, overflow: 'hidden' },
+    thead: { backgroundColor: colors.tableHeaderBackground },
     tbody: {},
-    th: { borderRightColor: colors.border, borderRightWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10, paddingVertical: 9, width: 112 },
-    tr: { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row' },
-    td: { borderRightColor: colors.border, borderRightWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10, paddingVertical: 9, width: 112 },
-    tableFirstColumn: { width: 148 },
+    th: { backgroundColor: colors.tableHeaderBackground, borderRightColor: colors.tableBorder, borderRightWidth: 1, paddingHorizontal: mobileWebMetric(11), paddingVertical: mobileWebMetric(8), width: TABLE_COLUMN_WIDTH },
+    thGradient: { backgroundColor: colors.tableBackground, bottom: 0, left: 0, opacity: 0.22, position: 'absolute', right: 0, top: '50%' },
+    thText: { color: colors.tableText, fontSize: bodySize, fontWeight: '700', lineHeight: bodyLineHeight },
+    tdText: { color: colors.tableText, fontSize: bodySize, lineHeight: bodyLineHeight },
+    tr: { borderBottomColor: colors.tableBorder, borderBottomWidth: 1, flexDirection: 'row' },
+    td: { borderRightColor: colors.tableBorder, borderRightWidth: 1, paddingHorizontal: mobileWebMetric(11), paddingVertical: mobileWebMetric(8), width: TABLE_COLUMN_WIDTH },
+    tableFirstColumn: { width: TABLE_FIRST_COLUMN_WIDTH },
     tableLastColumn: { borderRightWidth: 0 },
     tableLastRow: { borderBottomWidth: 0 },
     tableStripeRow: { backgroundColor: colors.tableStripe },

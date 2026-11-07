@@ -122,6 +122,7 @@ if [[ -n "${E2E_EMAIL:-}" && -n "${E2E_PASSWORD:-}" ]]; then
     maestro_test relay-data "$SCRIPT_DIR/flows/03-relay-data.yaml" \
       -e "E2E_EXPECTED_TEXT=$E2E_EXPECTED_TEXT"
   fi
+  maestro_test landscape "$SCRIPT_DIR/flows/04-landscape.yaml"
 elif [[ "${E2E_IOS_REQUIRE_RELAY:-0}" == "1" ]]; then
   echo "E2E_EMAIL and E2E_PASSWORD are required when E2E_IOS_REQUIRE_RELAY=1." >&2
   exit 1

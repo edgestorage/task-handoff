@@ -37,9 +37,7 @@ async function approvalApprover(request: FastifyRequest) {
   // Every administrator reviews the shared queue; the requester's CLI session
   // remains fenced separately when the approved operation is consumed.
   assertCan(actor, "manage-settings", { type: "control-plane-settings" });
-  const userId = actor.type === "user" ? actor.userId : actor.ownerUserId;
-  if (!userId) throw forbidden("A Control Plane administrator with a local identity is required.");
-  return { actor, userId };
+  return actor;
 }
 
 async function gateOperation(
@@ -124,7 +122,7 @@ export function registerOperationApprovalRoutes(app: FastifyInstance, auth: Cont
     const approver = await approvalApprover(request);
     const decision = DecisionSchema.parse(request.body).decision;
     const result = approvals.decide(IdSchema.parse(request.params).id, decision);
-    await auditOperationApproval(auth, app, { action: `operation-approval.${decision}`, userId: approver.userId, approvalId: result.id });
+    await auditOperationApproval(auth, app, { action: `operation-approval.${decision}`, ...(approver.type === "user" ? { userId: approver.userId } : { cloudAccountId: approver.accountId, deviceSessionId: approver.deviceSessionId }), approvalId: result.id });
     return { data: result };
   });
 }
@@ -132,13 +130,13 @@ export function registerOperationApprovalRoutes(app: FastifyInstance, auth: Cont
 export async function auditOperationApproval(
   auth: ControlPlaneAuth,
   app: FastifyInstance,
-  input: { action: string; userId: string; approvalId: string; operation?: ApprovalOperation; result?: "completed" | "incomplete" | "unknown" },
+  input: { action: string; userId?: string; cloudAccountId?: string; deviceSessionId?: string; approvalId: string; operation?: ApprovalOperation; result?: "completed" | "incomplete" | "unknown" },
 ) {
   try {
     await auth.users.store.audit.put({
       id: createId("uaudit"), action: input.action, actorUserId: input.userId,
       targetType: "operation-approval", targetId: input.approvalId,
-      details: { ...(input.operation ? { operation: input.operation } : {}), ...(input.result ? { result: input.result } : {}) },
+      details: { ...(input.cloudAccountId ? { actorType: "cloud-account", accountId: input.cloudAccountId, deviceSessionId: input.deviceSessionId } : {}), ...(input.operation ? { operation: input.operation } : {}), ...(input.result ? { result: input.result } : {}) },
       createdAt: new Date().toISOString(),
     });
   } catch (error) {

@@ -65,7 +65,7 @@ export default function NewAiSessionRoute() {
   const pastedTextSequence = useRef(0);
   useEffect(() => () => {
     for (const attachment of attachmentsRef.current) {
-      if (!attachment.local.temporary || attachment.uploaded?.phase === 'uploaded') continue;
+      if (!attachment.local.temporary) continue;
       try { new File(attachment.local.uri).delete(); } catch { /* Temporary picker or paste cache may already be gone. */ }
     }
   }, []);
@@ -240,7 +240,7 @@ export default function NewAiSessionRoute() {
       const client = createMobileControlPlaneClient(profile, mobileSecureStore).api;
       const uploadedAttachments = await Promise.all(attachments.map(async (attachment) => attachment.uploaded?.phase === 'uploaded'
         ? attachment.uploaded
-        : uploadMobileAttachment(client, { instanceId: selectedInstance.id, sessionId: requestId, scopeType: 'create-request' }, attachment.local, { maxFileAttachmentBytes })));
+        : uploadMobileAttachment(client, { instanceId: selectedInstance.id, sessionId: requestId, scopeType: 'create-request' }, attachment.local, { maxFileAttachmentBytes, retainImagePreview: true })));
       setAttachments((current) => current.map((attachment) => {
         const index = attachments.findIndex((candidate) => candidate.id === attachment.id);
         return index >= 0 ? { ...attachment, uploaded: uploadedAttachments[index] } : attachment;
@@ -310,7 +310,7 @@ export default function NewAiSessionRoute() {
     if (busy) return;
     setAttachments((current) => {
       const attachment = current.find((candidate) => candidate.id === id);
-      if (attachment?.local.temporary && attachment.uploaded?.phase !== 'uploaded') {
+      if (attachment?.local.temporary) {
         try { new File(attachment.local.uri).delete(); } catch { /* The picker cache may already be gone. */ }
       }
       return current.filter((candidate) => candidate.id !== id);
@@ -353,7 +353,7 @@ export default function NewAiSessionRoute() {
     selectedWorktreeLabel={workspaceMatchesSelection ? aiSessionWorkspaceSelectionLabel(workspaceState) : undefined}
     workspaceLoading={workspaceLoading}
     message={message}
-    attachments={attachments.map(({ id, local }) => ({ id, kind: local.kind, name: local.name, size: local.size, textPresentation: local.textPresentation }))}
+    attachments={attachments.map(({ id, local }) => ({ id, kind: local.kind, name: local.name, size: local.size, textPresentation: local.textPresentation, previewUri: local.kind === 'image' ? local.uri : undefined }))}
       permissionMode={permissionMode}
       permissionModes={permissionModes}
       modelGroups={modelGroups}

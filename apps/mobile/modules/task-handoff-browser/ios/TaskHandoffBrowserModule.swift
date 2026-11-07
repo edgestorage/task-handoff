@@ -38,7 +38,7 @@ public final class TaskHandoffBrowserModule: Module {
   public func definition() -> ModuleDefinition {
     Name("TaskHandoffBrowser")
 
-    Events("onRelaySocketOpen", "onRelaySocketMessage", "onRelaySocketError", "onRelaySocketClose")
+    Events("onRelaySocketOpen", "onRelaySocketMessage", "onRelaySocketError", "onRelaySocketClose", "onBrowserTransportMessage", "onBrowserTransportClose", "onBrowserDiagnostic")
 
     AsyncFunction("browserCapabilities") { () -> [String: Any] in
       if #available(iOS 17.0, *) {
@@ -97,14 +97,61 @@ public final class TaskHandoffBrowserModule: Module {
       socket.close(code: code ?? 1000, reason: reason ?? "")
     }.runOnQueue(relaySocketQueue)
 
+    AsyncFunction("createBrowserTransport") { () -> String in
+      await BrowserTransportRegistry.shared.create { [weak self] event, body in
+        DispatchQueue.main.async { self?.sendEvent(event, body) }
+      }
+    }
+    AsyncFunction("receiveBrowserTransportMessage") { (id: String, value: ArrayBuffer, binary: Bool) in
+      let transport = try await BrowserTransportRegistry.shared.require(id)
+      try await transport.deliver(value.data, binary: binary)
+    }
+    AsyncFunction("acknowledgeBrowserTransportSend") { (id: String, sequence: Int, error: String?) in
+      let transport = try? await BrowserTransportRegistry.shared.require(id)
+      await transport?.acknowledge(sequence, error: error)
+    }
+    AsyncFunction("closeBrowserTransport") { (id: String) in
+      await BrowserTransportRegistry.shared.close(id)
+    }
+
     OnDestroy {
+      Task { await BrowserTransportRegistry.shared.closeAll(); await MobileBrowserContextManager.shared.releaseAll() }
       for socket in self.takeRelaySockets() { socket.close(code: 1001, reason: "module-destroyed") }
     }
 
     AsyncFunction("prepareBrowserContext") { (input: PrepareBrowserContextRecord) -> [String: String] in
       guard #available(iOS 17.0, *) else { throw BrowserPlatformUnsupportedException() }
       NSLog("[task-handoff-browser] prepareBrowserContext instance=%@", input.instanceId)
-      let contextId = try await MobileBrowserContextManager.shared.prepare(input)
+      let controlPlaneId = input.controlPlaneId
+      let instanceId = input.instanceId
+      let startedAt = DispatchTime.now().uptimeNanoseconds
+      let diagnostic: @Sendable (String) -> Void = { [weak self] stage in
+        let elapsedMs = (DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+        DispatchQueue.main.async {
+          self?.sendEvent("onBrowserDiagnostic", ["controlPlaneId": controlPlaneId, "instanceId": instanceId, "stage": stage, "elapsedMs": elapsedMs])
+        }
+      }
+      diagnostic("context.prepare.start")
+      let contextId: String
+      do {
+        contextId = try await MobileBrowserContextManager.shared.prepare(input, diagnostic: diagnostic, onClosed: { [weak self] id, source, error in
+          var event: [String: Any] = ["controlPlaneId": controlPlaneId, "instanceId": instanceId, "contextId": id,
+            "stage": "tunnel.closed", "closeSource": source, "elapsedMs": (DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000]
+          if let error {
+            let failure = error as NSError
+            event["errorDomain"] = failure.domain
+            event["errorCode"] = failure.code
+          }
+          self?.sendEvent("onBrowserDiagnostic", event)
+        })
+      } catch {
+        let failure = error as NSError
+        let elapsedMs = (DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+        // Codes only: localizedDescription may contain URLs or peer data.
+        self.sendEvent("onBrowserDiagnostic", ["controlPlaneId": controlPlaneId, "instanceId": instanceId, "stage": "context.prepare.failed", "elapsedMs": elapsedMs, "errorDomain": failure.domain, "errorCode": failure.code])
+        throw error
+      }
+      diagnostic("context.prepare.ready")
       NSLog("[task-handoff-browser] prepareBrowserContext ready context=%@", contextId)
       return ["contextId": contextId]
     }
@@ -147,8 +194,9 @@ public final class TaskHandoffBrowserModule: Module {
 internal struct PrepareBrowserContextRecord: Record {
   @Field var controlPlaneId: String
   @Field var instanceId: String
-  @Field var relayUrl: String
-  @Field var token: String
+  @Field var relayUrl: String = ""
+  @Field var token: String = ""
+  @Field var transportId: String = ""
 }
 
 internal final class BrowserPlatformUnsupportedException: Exception {

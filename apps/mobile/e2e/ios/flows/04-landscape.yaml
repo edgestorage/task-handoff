@@ -1,0 +1,42 @@
+appId: com.taskhandoff.mobile.staging
+name: Landscape cold launch and workbench rotation
+---
+# Requires a saved Control Plane profile. Assert rendered content after every
+# transition: a successful launch command alone also passes when UIKit hangs.
+- setOrientation: LANDSCAPE_LEFT
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible:
+      id: ai-session-workbench
+    timeout: 30000
+- takeScreenshot: landscape-cold-launch
+- tapOn: "Stories|Story"
+- extendedWaitUntil:
+    visible:
+      id: story-workbench
+    timeout: 10000
+- tapOn: "App Sessions|App 会话"
+- extendedWaitUntil:
+    visible:
+      id: app-session-workbench
+    timeout: 10000
+- tapOn: "Instances|实例"
+- extendedWaitUntil:
+    visible:
+      id: instance-workbench
+    timeout: 10000
+- tapOn: "AI Sessions|AI 会话"
+- setOrientation: PORTRAIT
+- extendedWaitUntil:
+    visible:
+      id: ai-session-workbench
+    timeout: 10000
+- takeScreenshot: portrait-after-landscape
+- setOrientation: LANDSCAPE_RIGHT
+- extendedWaitUntil:
+    visible:
+      id: ai-session-workbench
+    timeout: 10000
+- takeScreenshot: landscape-right
+- setOrientation: PORTRAIT

@@ -717,6 +717,10 @@ export class MobileAiSessionStore {
     };
   }
 
+  realtimeTurnTimelineItems(controlPlaneId: string, instanceId: string, sessionId: string, turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>) {
+    return mergeAiSessionTimelineItems([], this.liveItemsForTurn(controlPlaneId, instanceId, sessionId, mobileTurnIdentities(turn)));
+  }
+
   recoverTimelines(controlPlaneId: string) {
     const affected = new Set<string>();
     for (const [key, state] of this.timelineStates) {

@@ -51,9 +51,8 @@ test('mobile Browser keeps one mounted native view per instance tab and suspends
 });
 
 test('Android Browser Tunnel processes inbound binary frames through one FIFO consumer', () => {
-  expect(kotlinChannel).toMatch(/inboundFrames = Channel<BrowserTunnelProtocol\.Frame>/);
-  expect(kotlinChannel).toMatch(/for \(frame in inboundFrames\)[\s\S]*?handle\(frame\)/);
-  expect(kotlinChannel).toMatch(/inboundFrames\.trySend\(frame\)/);
+  expect(kotlinChannel).toMatch(/private val inboundConsumer = scope\.launch/);
+  expect(kotlinChannel).toMatch(/while \(!closed\)[\s\S]*?transport\.receive\(\)[\s\S]*?val frame = BrowserTunnelProtocol\.decode\(message\.bytes\)[\s\S]*?handle\(frame\)[\s\S]*?transport\.consumed\(\)/);
   expect(kotlinChannel).not.toMatch(/scope\.launch \{ runCatching \{ handle\(/);
 });
 

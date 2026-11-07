@@ -13,6 +13,7 @@ import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/pro
 import { StoryDecisionChangedEventType, type StoryDecision } from '@task-handoff/protocol/stories';
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
+import { useToolActivityWindow } from './use-tool-activity-window';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
 import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
 import { pickDocument, pickImage, type MobileLocalFile } from '../platform/file-picker';
@@ -20,6 +21,7 @@ import { formatMobileAttachmentBytes, formatMobileTextLength, mobilePastedImage,
 import { useMobileTheme } from '../components/theme';
 import { ADAPTIVE_READING_MAX_WIDTH, useAdaptiveContentLayout } from '../components/adaptive-layout';
 import { Icon, type IconName } from '../components/Icon';
+import { AttachmentImage } from './AttachmentImage';
 import { SessionComposer } from './SessionComposer';
 import {
   SESSION_COMPOSER_COLLAPSED_HEIGHT,
@@ -40,6 +42,13 @@ import { isStoryDecisionResumePending, pendingStoryDecisionsForSession, type Sto
 export const OFFLINE_NOTICE_DELAY_MS = 2_000;
 
 const timelineSyncUnsupportedInstances = new Set<string>();
+
+export function appendConversationText(current: string, addition: string) {
+  const next = addition.trim();
+  if (!next) return current;
+  const existing = current.trimEnd();
+  return existing ? `${existing}\n\n${next}` : next;
+}
 
 function timelineSyncKey(controlPlaneId: string, instanceId: string) {
   return JSON.stringify([controlPlaneId, instanceId]);
@@ -74,6 +83,7 @@ export function SessionWorkspace({
   client,
   refresh,
   onVisible,
+  onOpenBuiltinBrowser,
   onOpenSession,
   detailMode: controlledDetailMode,
   onDetailModeChange,
@@ -99,6 +109,7 @@ export function SessionWorkspace({
   client?: ControlPlaneClient;
   refresh?(): Promise<void>;
   onVisible?(): void;
+  onOpenBuiltinBrowser?(url: string): void | Promise<void>;
   onOpenSession?(sessionId: string): void;
   detailMode?: SessionDetailMode;
   onDetailModeChange?(mode: SessionDetailMode): void;
@@ -138,8 +149,12 @@ export function SessionWorkspace({
   const [attachments, setAttachments] = useState<MobilePendingAttachment[]>([]);
   const attachmentsRef = useRef(attachments);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+  const previewTemporaryUris = useRef(new Set<string>());
   const pastedTextSequence = useRef(0);
   useEffect(() => () => {
+    for (const uri of previewTemporaryUris.current) {
+      try { new File(uri).delete(); } catch { /* The device may evict cache files. */ }
+    }
     for (const attachment of attachmentsRef.current) {
       if (!attachment.retryLocal?.temporary) continue;
       try { new File(attachment.retryLocal.uri).delete(); } catch { /* Temporary paste cache may already be gone. */ }
@@ -155,6 +170,15 @@ export function SessionWorkspace({
     previousAttachments: MobilePendingAttachment[];
     previousRuntimeCandidates: AiSessionMentionCandidate[];
   }>();
+  useEffect(() => {
+    const visibleUris = new Set([...attachments, ...(queueEdit?.previousAttachments ?? [])]
+      .map((attachment) => attachment.previewUri ?? attachment.retryLocal?.uri).filter(Boolean));
+    for (const uri of previewTemporaryUris.current) {
+      if (visibleUris.has(uri)) continue;
+      try { new File(uri).delete(); } catch { /* A removed preview no longer owns its cache copy. */ }
+      previewTemporaryUris.current.delete(uri);
+    }
+  }, [attachments, queueEdit]);
   const queueEditRef = useRef(queueEdit);
   queueEditRef.current = queueEdit;
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
@@ -222,6 +246,8 @@ export function SessionWorkspace({
   const supportsSessionTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'session-read') : false;
   const supportsLiveTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'live-items') : false;
   const timelineRecoveryRevision = mobileAiSessionStore.timelineRecoveryRevision(controlPlaneId);
+  const supportsToolActivity = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'tool-activity') : false;
+  const toolActivity = useToolActivityWindow({ controlPlaneId, instanceId, sessionId, turns: session?.turns ?? [], client, enabled: supportsToolActivity, recoveryRevision: timelineRecoveryRevision });
   const timelineLoadInputs = useRef({ session, timelines });
   const timelineRefreshScope = useRef<string | undefined>(undefined);
   const requestedTimelineTurns = useRef(new Set<string>());
@@ -500,7 +526,7 @@ export function SessionWorkspace({
   const queueDragStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: queueDragOffsetY.value }],
   }));
-  if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail instanceName={instanceName} messages={messages} recovering={syncPhase !== 'ready'} session={session} workspaceName={workspaceName} /></View>;
+  if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail instanceName={instanceName} messages={messages} onOpenBuiltinBrowser={onOpenBuiltinBrowser} recovering={syncPhase !== 'ready'} session={session} workspaceName={workspaceName} /></View>;
   const selectedTurn = session.turns?.[selectedTurnIndex];
   const selectedTurnBodyFailure = selectedTurn && turnBodyFailure && turnBodyFailure.sessionId === sessionId && turnBodyFailure.turnId === selectedTurn.id
     ? turnBodyFailure.message
@@ -776,11 +802,13 @@ export function SessionWorkspace({
   const uploadLocalAttachment = async (local: MobileLocalFile, replaceLocalId?: string) => {
     if (!client) return;
     const pending = uploadingMobileAttachment(local, maxFileAttachmentBytes);
+    if (local.kind === 'image' && local.temporary) previewTemporaryUris.current.add(local.uri);
     setAttachments((current) => replaceLocalId
       ? current.map((item) => item.localId === replaceLocalId ? pending : item)
       : [...current.filter((item) => item.localId !== pending.localId), pending]);
     const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local, {
       maxFileAttachmentBytes,
+      retainImagePreview: true,
       onProgress: (progress) => setAttachments((current) => current.map((item) => (
         item.localId === pending.localId && item.phase === 'uploading' ? { ...item, progress } : item
       ))),
@@ -825,6 +853,10 @@ export function SessionWorkspace({
     await uploadLocalAttachment(attachment.retryLocal, attachment.localId);
   };
   const removeAttachment = (attachment: MobilePendingAttachment) => {
+    if (attachment.previewTemporary && attachment.previewUri) {
+      try { new File(attachment.previewUri).delete(); } catch { /* Cache may already be gone. */ }
+      previewTemporaryUris.current.delete(attachment.previewUri);
+    }
     if (attachment.retryLocal?.temporary) {
       try { new File(attachment.retryLocal.uri).delete(); } catch { /* Temporary paste cache may already be gone. */ }
     }
@@ -843,6 +875,18 @@ export function SessionWorkspace({
     latestDraft.current = text;
     if (draftTimer.current) clearTimeout(draftTimer.current);
     if (drafts) draftTimer.current = setTimeout(() => { void drafts.write(controlPlaneId, instanceId, session.id, text); }, 150);
+  };
+  const addTextToConversation = (text: string) => {
+    const next = appendConversationText(latestDraft.current, text);
+    if (next === latestDraft.current) return;
+    setDraft(next);
+    latestDraft.current = next;
+    if (!queueEditRef.current) {
+      if (draftTimer.current) clearTimeout(draftTimer.current);
+      if (drafts) void drafts.write(controlPlaneId, instanceId, session.id, next);
+    }
+    setComposerFocused(true);
+    setComposerFocusRequest((value) => value + 1);
   };
   const hasDraft = Boolean(draft.trim() || attachments.length);
   const composerAction = activeQueueEdit ? 'save' : !hasDraft && canInterrupt ? 'stop' : 'send';
@@ -876,14 +920,20 @@ export function SessionWorkspace({
       <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={[styles.fill, { backgroundColor: colors.background }]} testID="session-workspace">
       <View onTouchStart={Keyboard.dismiss} style={[styles.fill, { backgroundColor: colors.background }]} testID="session-content">
         <SessionDetail
+          client={client}
+          instanceId={instanceId}
           bottomInset={composerOverlayHeight}
           contentLoading={initialTurnLoading}
           keyboardViewportRevision={keyboardViewportRevision}
           instanceName={instanceName}
           messages={messages}
           mode={detailMode}
+          onAddToConversation={addTextToConversation}
           onModeChange={setDetailMode}
           onLoadTimeline={requestTimelineLoad}
+          onLoadToolActivity={toolActivity.load}
+          toolActivityWindows={toolActivity.windows}
+          onOpenBuiltinBrowser={onOpenBuiltinBrowser}
           onRetryTimeline={(turn) => {
             if (selectedTurnBodyFailure) {
               setTurnBodyFailure(undefined);
@@ -1064,7 +1114,7 @@ export function SessionWorkspace({
           } catch { setRuntimeCandidates([]); }
         }}><Text style={[styles.runtimeFile, { color: colors.primary }]}>{candidate.name} · {candidate.path}</Text></Pressable>} /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surface }]}>
-          <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />
+          {attachment.kind === 'image' && attachment.previewUri ? <AttachmentImage name={attachment.name} uri={attachment.previewUri} /> : <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />}
           <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size, locale)}` : attachment.name} style={styles.attachmentCopy}>
             <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>
             {attachment.textPresentation ? <Text numberOfLines={1} style={[styles.attachmentSummary, { color: colors.text }]}>{attachment.textPresentation.summary || t('composer.blankPastedText')}</Text> : null}

@@ -42,6 +42,7 @@ function ActiveAppSessionsBoundary({ children }: { children: ReactNode }) {
     if (!runtime.coordinator || !controller) return;
     return runtime.coordinator.register({
       key: 'app-sessions',
+      snapshotTopics: ['app.sessions'],
       topics: ['app.sessions'],
       start: (signal) => controller.start(signal, { managed: true }),
       stop: () => controller.stop(),

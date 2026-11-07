@@ -137,3 +137,17 @@ test("missing and archived roles fail closed without a legacy fallback", async (
     { code: "CONTROL_PLANE_ROLE_INACTIVE", statusCode: 403 },
   );
 });
+
+test("shared administrator assertions retain all configured management permissions", async () => {
+  const { assertion, ingress } = await fixture();
+  const shared = { ...assertion, accountId: "account_grantee", accessMode: "shared", shareGrantId: "share_admin", shareRevision: 1 };
+  for (const [action, type] of [
+    ["manage-settings", "control-plane-settings"], ["manage-members", "user"],
+    ["update", "role"], ["manage-secrets", "secret"], ["manage-node-auth", "node"],
+  ]) {
+    const actor = await ingress.authorize(shared, action, { type });
+    assert.equal(actor.accessMode, "shared");
+    assert.equal(actor.ownerUserId, undefined);
+    assert.deepEqual(actor.permissionIds, [...CONTROL_PLANE_PERMISSION_IDS]);
+  }
+});

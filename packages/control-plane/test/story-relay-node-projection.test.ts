@@ -27,6 +27,7 @@ test("cloud-relay Story responses use the Control Plane local node identity", as
     connectionPath: { kind: "cloud-relay", nodeHandle: "nrh_05xrelaystory" },
   };
   const service = {
+    diagnosticLogsEnabled: () => false,
     listNodes: () => [node],
     requireNode: (nodeId: string) => {
       if (nodeId !== node.id) throw Object.assign(new Error("Node not found."), { statusCode: 404, code: "NODE_NOT_FOUND" });

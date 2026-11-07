@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { can } from "../src/control-plane/auth/authorization.ts";
-import { cloudEventAllowed, cloudEventPermission, cloudOwnerOnlyRoute, cloudRelayRouteReachable, routeAuthorization } from "../src/control-plane/http/cloud-relay-authorization.ts";
+import { cloudEventAllowed, cloudEventPermission, cloudRelayRouteReachable, routeAuthorization } from "../src/control-plane/http/cloud-relay-authorization.ts";
 
 function sharedActor(roleId, permissionIds, extra = {}) {
   return {
@@ -51,39 +51,33 @@ test("shared custom roles receive exactly their resolved permissions", () => {
   assert.equal(can(customOperator, "update", { type: "role", id: "role_custom_ops" }), false);
 });
 
-test("only the local administrator bound to a Cloud owner receives management authority", () => {
-  const managementPermissions = [
+test("cloud and local actors use identical role permissions for every operation", () => {
+  const permissions = [
     "users:manage", "roles:manage", "identity-providers:manage",
     "chat-bridges:manage", "settings:manage", "secrets:manage",
   ];
-  const sharedAdmin = sharedActor("role_admin", managementPermissions);
-  for (const [action, resource] of [
+  const operations = [
     ["manage-settings", { type: "control-plane-settings" }],
-    ["manage-members", { type: "user", id: "user_a" }],
-    ["manage-secrets", { type: "secret", id: "secret_a" }],
-    ["manage-node-auth", { type: "node", id: "node_a" }],
-  ]) assert.equal(can(sharedAdmin, action, resource), false, `shared Cloud accounts must not ${action}`);
-
-  const unmappedOwner = sharedActor("role_admin", managementPermissions, {
-    accessMode: "owner",
-    accountId: "account_owner",
-    ownerAccountId: "account_owner",
-    shareGrantId: undefined,
-  });
-  assert.equal(can(unmappedOwner, "manage-settings", { type: "control-plane-settings" }), false);
-
-  const boundOwner = sharedActor("role_admin", managementPermissions, {
-    accessMode: "owner",
-    accountId: "account_owner",
-    ownerAccountId: "account_owner",
-    shareGrantId: undefined,
-    ownerUserId: "user_admin_a",
-  });
-  assert.equal(can(boundOwner, "manage-settings", { type: "control-plane-settings" }), true);
-  assert.equal(can(boundOwner, "manage-members", { type: "user", id: "user_a" }), true);
-
-  const sharedOperations = sharedActor("role_operator", ["instances:manage", "instances:interactive"]);
-  assert.equal(can(sharedOperations, "start", { type: "instance", id: "instance_a" }), true);
+    ["manage-members", { type: "user" }],
+    ["update", { type: "role" }],
+    ["update", { type: "identity-provider" }],
+    ["update", { type: "chat-bridge" }],
+    ["manage-secrets", { type: "secret" }],
+    ["manage-node-auth", { type: "node" }],
+  ];
+  for (const accessMode of ["owner", "shared"]) {
+    const admin = sharedActor("role_custom_admin", permissions, { accessMode });
+    for (const [action, resource] of operations) {
+      assert.equal(can(admin, action, resource), true, `${accessMode} must allow ${action} ${resource.type}`);
+      assert.equal(can(admin, action, resource), can({ ...admin, type: "user" }, action, resource));
+      assert.equal(can({ ...admin, permissionIds: [] }, action, resource), false);
+    }
+    // A role name or owner mapping cannot add permissions that were not granted.
+    assert.equal(can({ ...admin, roleIds: ["role_admin"], permissionIds: [], ownerUserId: "user_owner" }, "manage-settings", { type: "control-plane-settings" }), false);
+    const policy = routeAuthorization("POST", "/api/stories/story_a/actions/action_a/run");
+    assert.equal(can(admin, policy.action, policy.resource), true);
+    assert.equal(can({ ...admin, permissionIds: [] }, policy.action, policy.resource), false);
+  }
 });
 
 test("shared event streams follow resolved permissions and unknown families fail closed", () => {
@@ -124,7 +118,7 @@ test("shared event streams follow resolved permissions and unknown families fail
   assert.equal(cloudEventAllowed(
     sharedActor("role_admin", ["settings:manage"]),
     { type: "operation-approval.changed", topic: "operation.approvals" },
-  ), false);
+  ), true);
   const ownerActor = sharedActor("role_admin", ["settings:manage"], { accessMode: "owner", accountId: "account_owner", ownerUserId: "usr_owner" });
   assert.equal(cloudEventAllowed(ownerActor, { type: "operation-approval.changed", topic: "operation.approvals" }), true);
 });
@@ -144,16 +138,18 @@ test("only the personal operation approval snapshot and decision routes are rela
   ]) assert.equal(cloudRelayRouteReachable(method, path), false, `${method} ${path}`);
 });
 
-test("shared users cannot reach owner-only binding routes even with broad permissions", () => {
+test("cloud binding routes require settings permission for owner and shared actors", () => {
   for (const path of [
-    "/api/cloud-account",
-    "/api/cloud-account/sign-out",
-    "/api/cloud-connectivity",
-    "/api/cloud-connectivity/access-settings",
+    "/api/cloud-account", "/api/cloud-account/sign-out",
+    "/api/cloud-connectivity", "/api/cloud-connectivity/access-settings",
     "/api/cloud-connectivity/binding-requests",
-  ]) assert.equal(cloudOwnerOnlyRoute(path), true, `owner-only guard must cover ${path}`);
-  for (const path of ["/api/users", "/api/controlled-instances/instance_a", "/api/nodes"]) {
-    assert.equal(cloudOwnerOnlyRoute(path), false, `${path} is permission-controlled, not owner-only`);
+  ]) {
+    const policy = routeAuthorization("POST", path);
+    for (const accessMode of ["owner", "shared"]) {
+      assert.equal(cloudRelayRouteReachable("POST", path), true);
+      assert.equal(can(sharedActor("role_custom", ["settings:manage"], { accessMode }), policy.action, policy.resource), true);
+      assert.equal(can(sharedActor("role_admin", [], { accessMode }), policy.action, policy.resource), false);
+    }
   }
 });
 

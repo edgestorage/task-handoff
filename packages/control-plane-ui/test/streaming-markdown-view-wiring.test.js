@@ -12,6 +12,8 @@ const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSession
 const animatedText = fs.readFileSync(new URL("../src/components/ai-session/AiSessionAnimatedTextNode.vue", import.meta.url), "utf8");
 const codeBlock = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCodeBlock.vue", import.meta.url), "utf8");
 const markdownNode = fs.readFileSync(new URL("../src/components/ai-session/AiSessionMarkdownNode.vue", import.meta.url), "utf8");
+const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
+const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
 
 test("board, instance session cards, and selected details use the streaming Markdown view", () => {
   for (const source of [card, result]) {
@@ -96,8 +98,9 @@ test("streaming Markdown link context menu only captures anchor context menus", 
   assert.match(menu, /event\.target instanceof Element \? event\.target\.closest\("a\[href\]"\)/);
   assert.match(menu, /<ContextMenuTrigger as-child :disabled="!target">/);
   assert.match(menu, /class="markdown-link-context-menu-item"/);
-  assert.match(menu, /\.markdown-link-context-menu\.markdown-link-context-menu\s*\{[\s\S]*min-width: 190px;[\s\S]*padding: 6px;/);
-  assert.match(menu, /\.markdown-link-context-menu \.markdown-link-context-menu-item\s*\{[\s\S]*gap: 8px;[\s\S]*min-height: 32px;[\s\S]*font-size: 13px;/);
+  assert.match(menu, /\.markdown-link-context-menu\.markdown-link-context-menu\s*\{[\s\S]*--ai-board-column-border[\s\S]*backdrop-filter: blur\(16px\) saturate\(1\.16\);/);
+  assert.doesNotMatch(menu, /\.markdown-link-context-menu\.markdown-link-context-menu\s*\{[^}]*?(?:min-width|background|padding):/);
+  assert.match(menu, /\.markdown-link-context-menu \.markdown-link-context-menu-item\s*\{[\s\S]*gap: 8px;[\s\S]*min-height: 32px;[\s\S]*border-radius: 6px;[\s\S]*padding: 6px 8px;[\s\S]*font-size: 13px;/);
   assert.match(menu, /target\.value = undefined;[\s\S]*if \(!href\) \{\s*return;/);
   assert.match(menu, /const classified = classifyMarkdownLink\(href, props\.repositoryContext\);[\s\S]*if \(classified\.kind === "unsupported"\) \{\s*return;\s*\}[\s\S]*target\.value = classified;/);
   assert.doesNotMatch(captureSource, /event\.(?:stopPropagation|preventDefault)\(\)/);
@@ -105,6 +108,16 @@ test("streaming Markdown link context menu only captures anchor context menus", 
   assert.match(menu, /props\.runtimePathAccess !== "desktop-local" \|\| !canRevealDesktopLocalPath\(\)/);
   assert.match(menu, /resolveRuntimeFilePath\(target\.path, props\.runtimeCwd\)/);
   assert.doesNotMatch(message, /ContextMenuTrigger[\s\S]*@contextmenu="captureContextMenu"/);
+});
+
+test("Story Markdown links open the embedded browser in the resource sidebar", () => {
+  assert.match(message, /inject\(storyBrowserRequestKey, undefined\)/);
+  assert.match(message, /function openBuiltinBrowser\(url: string\) \{\s*if \(openStoryBrowser\) \{\s*openStoryBrowser\(props\.instanceId, url\);[\s\S]*window\.dispatchEvent\(new CustomEvent\("task-handoff:open-markdown-browser"/);
+  assert.match(message, /if \(isWebHref\(href\)\) \{\s*event\.preventDefault\(\);\s*if \(openStoryBrowser\) \{\s*openStoryBrowser\(props\.instanceId, href\);\s*return;\s*\}\s*void openExternalLink\(href\)/);
+  assert.match(storyView, /"open-browser": \[instanceId: string, url: string\]/);
+  assert.match(storyView, /provide\(storyBrowserRequestKey, \(instanceId, url\) => emit\("open-browser", instanceId, url\)\)/);
+  assert.match(workbench, /@open-browser="openStoryEmbeddedBrowser"/);
+  assert.match(workbench, /function openStoryEmbeddedBrowser\(instanceId: string, url: string\)[\s\S]*storyResourceTargetAiSessionId\.value[\s\S]*storyResourceTargetInstanceId\.value !== instanceId[\s\S]*storyResourceSidebar\.openBrowser\(instanceId, url\)/);
 });
 
 test("local session content forwards desktop path access to Markdown links", () => {
@@ -146,8 +159,11 @@ test("streaming Markdown keeps the existing session typography, semantic colors,
   assert.match(message, /\.hljs-keyword/);
   assert.match(message, /:deep\(pre code\)/);
   assert.match(message, /:deep\(\.table-node-wrapper\)/);
+  assert.match(message, /:deep\(\.table-node-wrapper\)\s*\{[\s\S]*padding: 4px;[\s\S]*box-shadow: none;/);
   assert.match(message, /scrollbar-gutter: auto/);
   assert.match(message, /:deep\(table\.table-node\)/);
+  assert.match(message, /:deep\(table\.table-node\)\s*\{[\s\S]*border: 1px solid var\(--markdown-table-border[\s\S]*box-shadow: var\(--shadow-soft/);
+  assert.match(message, /\.table-node th\)\s*\{[\s\S]*box-shadow: inset 0 -1px 0 var\(--markdown-table-border/);
   assert.match(message, /\.table-node tbody tr:nth-child\(even\)/);
   assert.match(message, /--markdown-table-hover-bg/);
 });

@@ -54,3 +54,11 @@ session label to additionally prove that Relay data arrived.
 
 Screenshots, command logs, Maestro logs, and JUnit reports are written to
 `e2e/ios/artifacts/<run-id>/` and are gitignored.
+
+After Relay login, `04-landscape.yaml` checks a landscape cold launch, all four
+workbenches, and portrait/landscape rotation. It can also run against an existing
+Simulator with a saved Control Plane profile:
+
+```sh
+maestro --device <SIMULATOR_UDID> test apps/mobile/e2e/ios/flows/04-landscape.yaml
+```

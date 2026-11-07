@@ -457,6 +457,7 @@
           :nodes="nodes.data.value || []"
           @launch-app="launchStoryResourceApp"
           @instance-context-menu-command="handleInstanceContextMenuCommand"
+          @open-browser="openStoryEmbeddedBrowser"
           @open-session="openStoryAiSessionResource"
           @open-settings="openInstanceSettings"
           @open-repository-workspace="openStoryRepositoryWorkspace"
@@ -2453,6 +2454,11 @@ async function launchStoryResourceApp(instance: InstanceBoardItem, appId: string
 
 function openStoryAiSessionResource(instance: InstanceBoardItemWithAppSessions, session?: AiSessionSummary) {
   if (session?.appSessionId) storyResourceSidebar.focusApp(instance.id, session.appSessionId);
+}
+
+function openStoryEmbeddedBrowser(instanceId: string, url: string) {
+  if (!storyResourceTargetAiSessionId.value || storyResourceTargetInstanceId.value !== instanceId) return;
+  storyResourceSidebar.openBrowser(instanceId, url);
 }
 
 function openStoryRepositoryWorkspace(target: RepositoryWorkspaceTabTarget & { instanceId: string }) {

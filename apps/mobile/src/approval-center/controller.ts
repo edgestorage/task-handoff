@@ -34,9 +34,12 @@ import {
 } from '@task-handoff/protocol/node-agent-capabilities';
 import type { ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import type { MobileAiSessionProfileState } from '../ai-sessions/store';
+import type { MobileStoryListController } from '../stories/list-controller';
 import { isStoryDecisionResumePending } from '../stories/story-decision';
 import type { MobileControlPlaneEvent } from '../control-plane/transport';
 import { MobileControlPlaneTransportError } from '../control-plane/transport';
+import { diagnosticLog } from '../observability/diagnostic-logs';
+import { traceDiagnosticTask } from '../observability/diagnostic-timing';
 import { mobileMetrics } from '../observability/mobile-metrics';
 
 const STORY_REFRESH_DEBOUNCE_MS = 100;
@@ -65,6 +68,7 @@ type DirectoryProjection = {
 };
 
 type ControllerOptions = {
+  stories: MobileStoryListController;
   aiSessions: () => MobileAiSessionProfileState;
   directory: () => DirectoryProjection;
   supportsAiSessions: boolean;
@@ -106,6 +110,9 @@ export class MobileApprovalCenterController {
   private pendingNodeRefreshAll = false;
   private nodeDirectoryOnlineKey = '';
   private snapshotValue: MobileApprovalCenterState;
+  private storyListUnsubscribe?: () => void;
+  private storyRefreshInFlight?: Promise<void>;
+  private observedStoryResult?: ReturnType<MobileStoryListController['snapshot']>['result'];
 
   constructor(
     readonly controlPlaneId: string,
@@ -141,6 +148,13 @@ export class MobileApprovalCenterController {
     const abort = new AbortController();
     this.abortController = abort;
     this.actionStates.clear();
+    this.storyListUnsubscribe?.();
+    this.storyRefreshInFlight = undefined;
+    this.observedStoryResult = undefined;
+    this.storyListUnsubscribe = this.options.supportsStories ? this.options.stories.subscribe(() => {
+      const state = this.options.stories.snapshot();
+      if (state.phase === 'ready' && state.result !== this.observedStoryResult && !this.storyRefreshInFlight) this.scheduleStoryRefresh();
+    }) : undefined;
     const forwardAbort = () => abort.abort(signal.reason);
     if (signal.aborted) forwardAbort();
     else signal.addEventListener('abort', forwardAbort, { once: true });
@@ -154,10 +168,10 @@ export class MobileApprovalCenterController {
       }
       this.syncAiSessions();
       const tasks: Promise<unknown>[] = [];
-      if (this.options.supportsStories) tasks.push(this.refreshStories(epoch, abort.signal));
-      tasks.push(this.refreshOperationApprovals(epoch, abort.signal));
-      tasks.push(this.refreshDeviceTrust(epoch, abort.signal));
-      if (this.options.supportsNodes) tasks.push(this.refreshNodeTrust(epoch, abort.signal));
+      if (this.options.supportsStories) tasks.push(traceDiagnosticTask('approval.source.load', { epoch, source: 'stories' }, () => this.refreshStories(epoch, abort.signal), abort.signal));
+      tasks.push(traceDiagnosticTask('approval.source.load', { epoch, source: 'operations' }, () => this.refreshOperationApprovals(epoch, abort.signal), abort.signal));
+      tasks.push(traceDiagnosticTask('approval.source.load', { epoch, source: 'device-trust' }, () => this.refreshDeviceTrust(epoch, abort.signal), abort.signal));
+      if (this.options.supportsNodes) tasks.push(traceDiagnosticTask('approval.source.load', { epoch, source: 'node-trust' }, () => this.refreshNodeTrust(epoch, abort.signal), abort.signal));
       await Promise.allSettled(tasks);
     } finally {
       signal.removeEventListener('abort', forwardAbort);
@@ -165,6 +179,9 @@ export class MobileApprovalCenterController {
   }
 
   stop() {
+    this.storyListUnsubscribe?.();
+    this.storyListUnsubscribe = undefined;
+    this.storyRefreshInFlight = undefined;
     this.epoch += 1;
     this.abortController?.abort();
     this.abortController = undefined;
@@ -172,6 +189,10 @@ export class MobileApprovalCenterController {
   }
 
   offline() {
+    this.clearRefreshTimers();
+    this.storyListUnsubscribe?.();
+    this.storyListUnsubscribe = undefined;
+    this.storyRefreshInFlight = undefined;
     this.abortController?.abort();
     for (const source of SOURCES) {
       const current = this.sourceHealth.get(source);
@@ -295,6 +316,9 @@ export class MobileApprovalCenterController {
       this.syncAiSessions();
       return;
     }
+    if (this.options.supportsStories && (!source || source === 'story-decision')) {
+      await this.options.stories.refresh().catch(() => undefined);
+    }
     if (source === 'story-decision') await this.refreshStories(epoch, signal);
     else if (source === 'operation-approval') await this.refreshOperationApprovals(epoch, signal);
     else if (source === 'device-trust') await this.refreshDeviceTrust(epoch, signal);
@@ -406,58 +430,86 @@ export class MobileApprovalCenterController {
     }
   }
 
-  private async refreshStories(epoch: number, signal?: AbortSignal) {
+  private refreshStories(epoch: number, signal?: AbortSignal): Promise<void> {
+    if (this.storyRefreshInFlight) return this.storyRefreshInFlight;
+    const request = this.loadStories(epoch, signal).finally(() => {
+      if (this.storyRefreshInFlight !== request) return;
+      this.storyRefreshInFlight = undefined;
+      const latest = this.options.stories.snapshot();
+      if (this.options.supportsStories && this.live(epoch, signal) && latest.phase === 'ready' && latest.result !== this.observedStoryResult) this.scheduleStoryRefresh();
+    });
+    this.storyRefreshInFlight = request;
+    return request;
+  }
+
+  private async loadStories(epoch: number, signal?: AbortSignal) {
     const source: ApprovalCenterSource = 'story-decision';
     if (!this.options.supportsStories) {
       this.setSource(source, [], 'idle', false);
       return;
     }
-    try {
-      const result = await this.client.stories.list(undefined, signal);
-      if (!this.live(epoch, signal)) return;
-      const currentStoryIds = new Set(result.stories.map((story) => story.id));
-      for (const storyId of this.storyEntries.keys()) {
-        if (!currentStoryIds.has(storyId)) this.storyEntries.delete(storyId);
+    return traceDiagnosticTask('approval.stories.refresh', { epoch }, async (refreshId) => {
+      try {
+        const result = await traceDiagnosticTask('approval.stories.snapshot-read', { refreshId, epoch },
+          () => this.options.stories.read(signal), signal);
+        this.observedStoryResult = result;
+        diagnosticLog.info('approval.stories.snapshot', {
+          refreshId, storyCount: result.stories.length, unavailableNodeIds: result.unavailableNodeIds,
+        });
+        if (!this.live(epoch, signal)) return;
+        const currentStoryIds = new Set(result.stories.map((story) => story.id));
+        for (const storyId of this.storyEntries.keys()) {
+          const existing = this.storyEntries.get(storyId)!;
+          if (!currentStoryIds.has(storyId) && !result.unavailableNodeIds.includes(existing.story.ownerNodeId)) this.storyEntries.delete(storyId);
+        }
+        for (const story of result.stories) {
+          if (story.archivedAt) this.storyEntries.delete(story.id);
+        }
+        const ownerIds = [...new Set(result.stories.filter((story) => !story.archivedAt).map((story) => story.ownerNodeId))];
+        const capabilityReads = await Promise.allSettled(ownerIds.map(async (nodeId) => ({
+          nodeId,
+          node: await traceDiagnosticTask('approval.stories.node-read', { refreshId, nodeId },
+            () => this.client.resources.node(nodeId, signal), signal),
+        })));
+        const supportedNodeIds = new Set<string>();
+        const unsupportedNodeIds = new Set<string>();
+        const unreachableNodeIds = new Set(this.options.directory().nodes
+          .filter((node) => node.status === 'offline' || node.status === 'unknown')
+          .map((node) => node.id));
+        // An offline node is an expected directory state, not a failed Story read.
+        // Only an expected-online node that still cannot return its Story list
+        // makes the loaded decision source incomplete.
+        let partial = result.unavailableNodeIds.some((nodeId) => !unreachableNodeIds.has(nodeId));
+        capabilityReads.forEach((read) => {
+          if (read.status === 'rejected') partial = true;
+          else if (supportsDecisionTools(read.value.node.capabilities)) supportedNodeIds.add(read.value.nodeId);
+          else unsupportedNodeIds.add(read.value.nodeId);
+        });
+        const eligible = result.stories.filter((story) => !story.archivedAt && supportedNodeIds.has(story.ownerNodeId));
+        const storiesToDelete = result.stories.filter((story) => story.archivedAt || unsupportedNodeIds.has(story.ownerNodeId));
+        for (const story of storiesToDelete) this.storyEntries.delete(story.id);
+        const decisionReads = await Promise.allSettled(eligible.map(async (story) => ({
+          story,
+          decisions: (await traceDiagnosticTask('approval.stories.decisions', { refreshId, storyId: story.id, nodeId: story.ownerNodeId },
+            () => this.client.stories.listDecisions(story.id, story.ownerNodeId, signal), signal)).decisions,
+        })));
+        if (!this.live(epoch, signal) || this.options.stories.snapshot().result !== result) return;
+        decisionReads.forEach((read) => {
+          if (read.status === 'fulfilled') this.storyEntries.set(read.value.story.id, read.value);
+          else partial = true;
+        });
+        diagnosticLog.info('approval.stories.summary', {
+          refreshId, ownerCount: ownerIds.length, eligibleStoryCount: eligible.length,
+          nodeReadFailures: capabilityReads.filter((read) => read.status === 'rejected').length,
+          decisionReadFailures: decisionReads.filter((read) => read.status === 'rejected').length,
+          phase: partial ? 'stale' : 'ready',
+        });
+        this.updateStoryItems(partial ? 'stale' : 'ready', partial ? 'SOURCE_PARTIAL' : undefined);
+      } catch (cause) {
+        if (!this.live(epoch, signal)) return;
+        this.markUnavailable(source, cause);
       }
-      for (const story of result.stories) {
-        if (story.archivedAt) this.storyEntries.delete(story.id);
-      }
-      const ownerIds = [...new Set(result.stories.filter((story) => !story.archivedAt).map((story) => story.ownerNodeId))];
-      const capabilityReads = await Promise.allSettled(ownerIds.map(async (nodeId) => ({
-        nodeId,
-        node: await this.client.resources.node(nodeId, signal),
-      })));
-      const supportedNodeIds = new Set<string>();
-      const unsupportedNodeIds = new Set<string>();
-      const unreachableNodeIds = new Set(this.options.directory().nodes
-        .filter((node) => node.status === 'offline' || node.status === 'unknown')
-        .map((node) => node.id));
-      // An offline node is an expected directory state, not a failed Story read.
-      // Only an expected-online node that still cannot return its Story list
-      // makes the loaded decision source incomplete.
-      let partial = result.unavailableNodeIds.some((nodeId) => !unreachableNodeIds.has(nodeId));
-      capabilityReads.forEach((read) => {
-        if (read.status === 'rejected') partial = true;
-        else if (supportsDecisionTools(read.value.node.capabilities)) supportedNodeIds.add(read.value.nodeId);
-        else unsupportedNodeIds.add(read.value.nodeId);
-      });
-      const eligible = result.stories.filter((story) => !story.archivedAt && supportedNodeIds.has(story.ownerNodeId));
-      const storiesToDelete = result.stories.filter((story) => story.archivedAt || unsupportedNodeIds.has(story.ownerNodeId));
-      for (const story of storiesToDelete) this.storyEntries.delete(story.id);
-      const decisionReads = await Promise.allSettled(eligible.map(async (story) => ({
-        story,
-        decisions: (await this.client.stories.listDecisions(story.id, story.ownerNodeId, signal)).decisions,
-      })));
-      if (!this.live(epoch, signal)) return;
-      decisionReads.forEach((read) => {
-        if (read.status === 'fulfilled') this.storyEntries.set(read.value.story.id, read.value);
-        else partial = true;
-      });
-      this.updateStoryItems(partial ? 'stale' : 'ready', partial ? 'SOURCE_PARTIAL' : undefined);
-    } catch (cause) {
-      if (!this.live(epoch, signal)) return;
-      this.markUnavailable(source, cause);
-    }
+    }, signal);
   }
 
   private async refreshStory(storyId: string, epoch: number, signal?: AbortSignal) {
@@ -659,6 +711,7 @@ export class MobileApprovalCenterController {
       this.pendingStoryRefreshAll = false;
       const epoch = this.epoch;
       const signal = this.abortController?.signal;
+      if (refreshAll && this.options.stories.snapshot().result === this.observedStoryResult) return;
       void (refreshAll || storyIds.length !== 1 ? this.refreshStories(epoch, signal) : this.refreshStory(storyIds[0]!, epoch, signal));
     }, STORY_REFRESH_DEBOUNCE_MS);
   }

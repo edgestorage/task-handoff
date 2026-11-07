@@ -1,9 +1,14 @@
 import type {
+  BrowserDiagnosticEvent,
   BrowserNativeCapabilities,
   BrowserNativeDiagnostics,
   PrepareBrowserContextInput,
   PreparedBrowserContext,
 } from './TaskHandoffBrowser.types';
+
+export function subscribeBrowserDiagnostics(_listener: (event: BrowserDiagnosticEvent) => void): { remove(): void } | undefined {
+  return undefined;
+}
 
 const unsupported = (): BrowserNativeCapabilities => ({
   supported: false,

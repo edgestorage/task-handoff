@@ -1,6 +1,7 @@
 import { MobileControlPlaneProfileStore } from './profile-store';
 import { ExpoSecureValueStore } from '../platform/secure-storage';
 import { ExpoFileValueStore } from '../platform/file-storage';
+import { mobileBrowserStartPages } from '../browser/start-page-runtime';
 import { MobileAiSessionDraftStore } from '../ai-sessions/actions';
 import { MobileAiSessionCreateRequestStore } from '../ai-sessions/session-lifecycle';
 import { MobileAiSessionPermissionStore } from '../ai-sessions/permission-store';
@@ -140,6 +141,7 @@ export async function deleteMobileControlPlaneProfile(profile: MobileControlPlan
   clearScopeSelectionPreferences(controlPlaneId);
   mobileTriggerStore.clearProfile(controlPlaneId);
   await (await import('../browser/controller')).mobileBrowserController.clearProfile(controlPlaneId);
+  await mobileBrowserStartPages.clearProfile(controlPlaneId);
   return remaining;
 }
 

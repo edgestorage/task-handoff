@@ -127,6 +127,7 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="triggers/[configHash]" options={{ title: t('triggers.title'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="sessions/[instanceId]/[sessionId]/triggers" options={{ title: t('triggers.sessionTitle'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="icon-gallery" options={{ title: 'Ionicons 图标选择' }} />
+                    <Stack.Screen name="markdown-demo" options={{ title: 'Markdown Demo', ...iosTransparentHeaderOptions(dark) }} />
                   </Stack>
                   </ActiveTriggersProvider>
                   </ActiveAppSessionsProvider>
