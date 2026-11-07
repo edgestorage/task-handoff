@@ -10,6 +10,7 @@ import { mobileDirectoryStore } from '../directories/store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 import { mobileTriggerStore } from '../triggers/store';
 import { clearScopeSelectionPreferences } from '../scope-selection/preferences';
+import { clearAppLaunchPreferences } from '../app-sessions/launch-preferences';
 import type { ControlPlaneDirectoryEntry } from '@task-handoff/cloud-contracts/mobile';
 import { staleCloudControlPlaneProfiles, type MobileControlPlaneProfile } from './profile';
 import { createDirectControlPlaneClient } from './client';
@@ -139,6 +140,7 @@ export async function deleteMobileControlPlaneProfile(profile: MobileControlPlan
   mobileAiSessionStore.clearProfile(controlPlaneId);
   mobileDirectoryStore.clearProfile(controlPlaneId);
   clearScopeSelectionPreferences(controlPlaneId);
+  clearAppLaunchPreferences(controlPlaneId);
   mobileTriggerStore.clearProfile(controlPlaneId);
   await (await import('../browser/controller')).mobileBrowserController.clearProfile(controlPlaneId);
   await mobileBrowserStartPages.clearProfile(controlPlaneId);

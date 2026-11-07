@@ -206,11 +206,11 @@ test('AI session detail uses native Markdown for responses while keeping user bu
   expect(sessionDetailSource).toContain("import { MarkdownContent } from '../components/MarkdownContent';");
   expect(sessionDetailSource).toContain("if (item.role === 'user') return <View style={styles.userMessage}>");
   expect(sessionDetailSource).toContain('conversation ? styles.conversationUser : styles.promptBlock');
-  expect(sessionDetailSource).toContain('<SafeMarkdown nativeSelectable={false} onOpenBuiltinBrowser={onOpenBuiltinBrowser} trimEnd>{item.text}</SafeMarkdown>');
+  expect(sessionDetailSource).toContain('<SafeMarkdown nativeSelectable={false} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} trimEnd>{item.text}</SafeMarkdown>');
   expect(sessionDetailSource).toContain("if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><MarkdownContent");
   expect(sessionDetailSource).toContain("if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><MarkdownContent");
-  expect(sessionDetailSource).toContain("<MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser}>{item.text ?? ''}</MarkdownContent>");
-  expect(sessionDetailSource).toContain('onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} streamKey={item.streamKey}');
+  expect(sessionDetailSource).toContain("<MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile}>{item.text ?? ''}</MarkdownContent>");
+  expect(sessionDetailSource).toContain('onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} streamKey={item.streamKey}');
   expect(sessionDetailSource).toContain('streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}');
 });
 
@@ -221,6 +221,7 @@ test('native Markdown wrapper owns link gestures and falls back without the modu
   expect(markdownContentSource).toContain('onLinkPress={({ nativeEvent }) => openLink(nativeEvent.url)}');
   expect(markdownContentSource).toContain('<MarkdownLinkMenu');
   expect(markdownContentSource).toContain('onOpenBuiltinBrowser={props.onOpenBuiltinBrowser}');
+  expect(markdownContentSource).toContain('onOpenFile={openFile}');
   expect(markdownContentSource).toContain('if (!NativeMarkdownView || props.nativeSelectable === false)');
   expect(markdownContentSource).toContain('<SafeMarkdown');
 });
@@ -230,8 +231,9 @@ test('native Markdown preserves local file links for the shared link menu', () =
   expect(swiftSource).toContain('if scheme == "file" { return url.absoluteString }');
   expect(swiftSource).toContain('return target.isEmpty || target.hasPrefix("#") ? nil : target');
   expect(swiftSource).toContain('fileprivate static func linkTarget(from url: URL) -> String?');
-  expect(markdownContentSource).toContain('const url = safeMarkdownLink(raw);');
-  expect(markdownContentSource).toContain('onOpenBuiltinBrowser={props.onOpenBuiltinBrowser}');
+  expect(markdownContentSource).toContain('const target = mobileMarkdownLinkTarget(raw);');
+  expect(markdownContentSource).toContain("if (target?.kind === 'file' && openFile) void openFile(raw);");
+  expect(markdownContentSource).toContain('onOpenFile={openFile}');
 });
 
 test('native links use the same long-press menu as SafeMarkdown', () => {
@@ -244,7 +246,9 @@ test('native links use the same long-press menu as SafeMarkdown', () => {
   expect(demoSource).toContain('<MarkdownLinkMenu');
   expect(safeMarkdownSource).toContain('<MarkdownLinkMenu');
   expect(markdownLinkMenuSource).toContain("t('sessions.linkActions.openBuiltinBrowser')");
-  expect(markdownLinkMenuSource).toContain("t('sessions.linkActions.open')");
+  expect(markdownLinkMenuSource).toContain("t('sessions.linkActions.openFile')");
+  expect(markdownLinkMenuSource).toContain('openFileValue(target.href)');
+  expect(markdownLinkMenuSource).toContain("t('sessions.linkActions.openDefaultBrowser')");
   expect(markdownLinkMenuSource).toContain("t('sessions.linkActions.copyLink')");
 });
 

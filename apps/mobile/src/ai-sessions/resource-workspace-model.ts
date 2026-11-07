@@ -1,11 +1,11 @@
 /** Local resource references only. Runtime state remains in the resource's own store. */
 export type RepositoryResourcePage = 'files' | 'changes' | 'worktrees';
 export type SessionResource =
-  | { kind: 'repository'; page: RepositoryResourcePage }
+  | { kind: 'repository'; page: RepositoryResourcePage; fileRequest?: { basePath?: string; href: string; id: number } }
   | { kind: 'app-session'; sessionId: string }
   | { kind: 'browser'; tabId: string };
 
-export type ResourceWorkspaceState = { resources: readonly SessionResource[]; activeKey?: string; expanded?: boolean; fullscreen?: boolean; fraction?: number };
+export type ResourceWorkspaceState = { resources: readonly SessionResource[]; activeKey?: string; expanded?: boolean; fraction?: number };
 export const EMPTY_RESOURCE_WORKSPACE: ResourceWorkspaceState = { resources: [] };
 
 export function resourceContextKey(controlPlaneId: string, instanceId: string, aiSessionId: string) {
@@ -19,8 +19,29 @@ export function sessionResourceKey(resource: SessionResource) {
 
 export function openSessionResource(state: ResourceWorkspaceState, resource: SessionResource): ResourceWorkspaceState {
   const activeKey = sessionResourceKey(resource);
-  return { ...state, resources: state.resources.some((item) => sessionResourceKey(item) === activeKey)
-    ? state.resources : [...state.resources, resource], activeKey };
+  const index = state.resources.findIndex((item) => sessionResourceKey(item) === activeKey);
+  return {
+    ...state,
+    resources: index < 0
+      ? [...state.resources, resource]
+      : state.resources.map((item, itemIndex) => itemIndex === index ? resource : item),
+    activeKey,
+  };
+}
+
+let repositoryFileRequestSequence = 0;
+
+export function openRepositoryFileResource(state: ResourceWorkspaceState, href: string, basePath?: string): ResourceWorkspaceState {
+  const value = href.trim();
+  if (!value) return state;
+  return {
+    ...openSessionResource(state, {
+      kind: 'repository',
+      page: 'files',
+      fileRequest: { ...(basePath !== undefined ? { basePath } : {}), href: value, id: ++repositoryFileRequestSequence },
+    }),
+    expanded: true,
+  };
 }
 
 export function removeSessionResource(state: ResourceWorkspaceState, key: string): ResourceWorkspaceState {
@@ -45,7 +66,11 @@ export function resourcePanelWidth(width: number, fraction = 0.4) {
 }
 
 export function resourceOverlayWidth(width: number) {
-  return width < 400 ? width : Math.min(560, width - 40);
+  return Math.max(0, width);
+}
+
+export function sessionResourceTopInset(platform: string, headerHeight: number) {
+  return platform === 'ios' ? Math.max(0, headerHeight) : 0;
 }
 
 export class ResourceWorkspaceStore {
@@ -54,7 +79,7 @@ export class ResourceWorkspaceStore {
     if (this.activeContext === key) return;
     this.activeContext = key;
     const state = this.snapshot(key);
-    this.update(key, { ...state, expanded: false, fullscreen: false });
+    this.update(key, { ...state, expanded: false });
   }
   isCurrentContext(key: string) { return this.activeContext === key; }
   private readonly states = new Map<string, ResourceWorkspaceState>();

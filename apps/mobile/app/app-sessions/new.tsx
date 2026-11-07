@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams, type Href } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
 import { NewAppSessionForm } from '../../src/app-sessions/NewAppSessionForm';
@@ -15,6 +15,7 @@ import { useMobileControlPlaneRuntime } from '../../src/control-plane/use-mobile
 import { mobileBrowserController } from '../../src/browser/controller';
 import { mobileSessionCreationInstanceStore, preferredSessionCreationInstanceId } from '../../src/session-creation/instance-selection';
 import { useInstanceScope } from '../../src/instance-scope/use-instance-scope';
+import { appLaunchPreferenceScope, getAppLaunchPreferences, rememberAppLaunchChoice, subscribeAppLaunchPreferences } from '../../src/app-sessions/launch-preferences';
 
 const EMBEDDED_BROWSER_APP_ID = 'embedded-browser';
 
@@ -26,6 +27,7 @@ export default function NewAppSessionRoute() {
   const { controlPlaneId, state } = useActiveDirectories();
   const { scope } = useInstanceScope();
   const [selection, setSelection] = useState<AppLaunchSelection>({});
+  const launchPreferences = useSyncExternalStore(subscribeAppLaunchPreferences, getAppLaunchPreferences, getAppLaunchPreferences);
   const [folderState, setFolderState] = useState<{ key: string; status: 'ready' | 'error'; folders: ControlPlaneNodeLocalFolder[] }>({ key: '', status: 'ready', folders: [] });
   const [folderAttempt, setFolderAttempt] = useState(0);
   const [browserCapability, setBrowserCapability] = useState<{ key: string; supported: boolean }>({ key: '', supported: false });
@@ -52,14 +54,18 @@ export default function NewAppSessionRoute() {
       ...selectedInstance.availableApps,
     ]
     : [];
-  const { app: selectedApp } = resolveAppLaunchSelection(controlPlaneId, selectedInstance, availableApps, selection, []);
+  const scopedSelection = selection.controlPlaneId === controlPlaneId && selection.instanceId === selectedInstanceId && selection.appId
+    ? selection
+    : { controlPlaneId, instanceId: selectedInstanceId, appId: launchPreferences.appByScope[appLaunchPreferenceScope(controlPlaneId, selectedInstanceId)] };
+  const awaitingRememberedBrowser = appsLoading && scopedSelection.appId === EMBEDDED_BROWSER_APP_ID;
+  const { app: selectedApp } = resolveAppLaunchSelection(controlPlaneId, selectedInstance, availableApps, scopedSelection, []);
   const selectedAppId = selectedApp?.id ?? '';
   const folderNodeId = selectedInstance?.runtime.type === 'local' && selectedApp?.supportsCwdSelection ? selectedInstance.nodeId : undefined;
   const folderKey = folderNodeId ? JSON.stringify([controlPlaneId, folderNodeId, folderAttempt]) : '';
   const foldersLoading = Boolean(folderKey) && folderState.key !== folderKey;
   const foldersError = Boolean(folderKey) && folderState.key === folderKey && folderState.status === 'error';
   const folders = folderState.key === folderKey ? folderState.folders : [];
-  const { folderId: selectedFolderId } = resolveAppLaunchSelection(controlPlaneId, selectedInstance, availableApps, selection, folders);
+  const { folderId: selectedFolderId } = resolveAppLaunchSelection(controlPlaneId, selectedInstance, availableApps, scopedSelection, folders);
   const awaitingSelectedFolder = foldersLoading && selection.controlPlaneId === controlPlaneId && selection.instanceId === selectedInstanceId && selection.appId === selectedAppId && Boolean(selection.folderId);
   const issue = appLaunchIssue(selectedInstance);
   const effectiveIssue = issue === 'no-apps' && (browserSupported || appsLoading) ? undefined : issue;
@@ -90,7 +96,7 @@ export default function NewAppSessionRoute() {
   }, [controlPlaneId, folderKey, folderNodeId, runtime.api, runtime.controlPlaneId]);
 
   const create = async () => {
-    if (submitting.current || !selectedInstance || !selectedAppId || !controlPlaneId || guidance || awaitingSelectedFolder) return;
+    if (submitting.current || !selectedInstance || !selectedAppId || !controlPlaneId || guidance || awaitingSelectedFolder || awaitingRememberedBrowser) return;
     submitting.current = true;
     setBusy(true);
     try {
@@ -135,15 +141,18 @@ export default function NewAppSessionRoute() {
       foldersError={foldersError}
       selectedFolderId={selectedFolderId}
       busy={busy}
-      disabled={busy || Boolean(guidance) || !selectedAppId || awaitingSelectedFolder}
+      disabled={busy || Boolean(guidance) || !selectedAppId || awaitingSelectedFolder || awaitingRememberedBrowser}
       error={guidance}
       onInstanceChange={(instanceId) => {
         if (submitting.current || instanceId === selectedInstanceId) return;
-        const instance = state.instances.find((candidate) => candidate.id === instanceId);
         if (scope.kind === 'all') mobileSessionCreationInstanceStore.write(controlPlaneId, 'app', instanceId);
-        setSelection({ controlPlaneId, instanceId, appId: instance?.availableApps[0]?.id });
+        setSelection({ controlPlaneId, instanceId });
       }}
-      onAppChange={(appId) => { if (!submitting.current && appId !== selectedAppId) setSelection({ controlPlaneId, instanceId: selectedInstanceId, appId }); }}
+      onAppChange={(appId) => {
+        if (submitting.current || !availableApps.some((app) => app.id === appId)) return;
+        rememberAppLaunchChoice(controlPlaneId, selectedInstanceId, appId);
+        setSelection(appId === selectedAppId ? { ...scopedSelection, appId } : { controlPlaneId, instanceId: selectedInstanceId, appId });
+      }}
       onFolderChange={(folderId) => { if (!submitting.current) setSelection({ controlPlaneId, instanceId: selectedInstanceId, appId: selectedAppId, folderId }); }}
       onRetryFolders={() => { if (!submitting.current) setFolderAttempt((value) => value + 1); }}
       onCreate={() => { void create(); }}

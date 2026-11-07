@@ -6,6 +6,7 @@ export function MarkdownContent({
   compact,
   nativeSelectable,
   onOpenBuiltinBrowser,
+  onOpenFile,
   streamKey,
   streaming,
   trimEnd,
@@ -14,6 +15,7 @@ export function MarkdownContent({
     compact={compact}
     nativeSelectable={nativeSelectable}
     onOpenBuiltinBrowser={onOpenBuiltinBrowser}
+    onOpenFile={onOpenFile}
     streamKey={streamKey}
     streaming={streaming}
     trimEnd={trimEnd}

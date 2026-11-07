@@ -1,4 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import NewAppSessionRoute from '../app/app-sessions/new';
+import { clearAppLaunchPreferences, rememberAppLaunchChoice } from '../src/app-sessions/launch-preferences';
 
 const mockReplace = jest.fn();
 const mockBack = jest.fn();
@@ -26,10 +28,10 @@ jest.mock('../src/app-sessions/NewAppSessionForm', () => ({ NewAppSessionForm: (
   return <View {...props} testID="launch-form" />;
 } }));
 
-import NewAppSessionRoute from '../app/app-sessions/new';
-
 beforeEach(() => {
   jest.clearAllMocks();
+  clearAppLaunchPreferences('cp');
+  clearAppLaunchPreferences('other-cp');
   mockDirectory = { controlPlaneId: 'cp', state: { instances: [mockInstance], nodes: [] } };
   mockBrowserCapability.mockImplementation(() => new Promise(() => undefined));
   mockFolders.mockResolvedValue([]);
@@ -96,4 +98,45 @@ test('failed workspace reads are explicit and can be retried', async () => {
   await waitFor(() => expect(screen.getByTestId('launch-form').props.foldersError).toBe(false));
   await waitFor(() => expect(screen.getByTestId('launch-form').props.foldersLoading).toBe(false));
   expect(mockFolders).toHaveBeenCalledTimes(2);
+});
+
+test('remembers an explicit App choice after reopening the launcher', async () => {
+  mockDirectory.state.instances = [{ ...mockInstance, availableApps: [mockTerminal, { ...mockTerminal, id: 'editor', name: 'Editor' }] }];
+  const screen = await render(<NewAppSessionRoute />);
+  await fireEvent(screen.getByTestId('launch-form'), 'appChange', 'editor');
+  await screen.unmount();
+  const reopened = await render(<NewAppSessionRoute />);
+  expect(reopened.getByTestId('launch-form').props.selectedAppId).toBe('editor');
+});
+
+test('restores each instance choice independently and ignores unavailable Apps', async () => {
+  const editor = { ...mockTerminal, id: 'editor', name: 'Editor' };
+  mockDirectory.state.instances = [
+    { ...mockInstance, availableApps: [mockTerminal, editor] },
+    { ...mockInstance, id: 'other', availableApps: [mockTerminal, editor] },
+  ];
+  rememberAppLaunchChoice('cp', 'instance', 'editor');
+  rememberAppLaunchChoice('cp', 'other', 'terminal');
+  const screen = await render(<NewAppSessionRoute />);
+  expect(screen.getByTestId('launch-form').props.selectedAppId).toBe('editor');
+  await fireEvent(screen.getByTestId('launch-form'), 'instanceChange', 'other');
+  expect(screen.getByTestId('launch-form').props.selectedAppId).toBe('terminal');
+  await fireEvent(screen.getByTestId('launch-form'), 'instanceChange', 'instance');
+  expect(screen.getByTestId('launch-form').props.selectedAppId).toBe('editor');
+  mockDirectory.state.instances = [mockInstance];
+  await screen.rerender(<NewAppSessionRoute />);
+  expect(screen.getByTestId('launch-form').props.selectedAppId).toBe('terminal');
+});
+
+test('waits for a remembered browser capability before allowing a launch', async () => {
+  rememberAppLaunchChoice('cp', 'instance', 'embedded-browser');
+  let finishCapability!: (value: { supported: boolean }) => void;
+  mockBrowserCapability.mockImplementation(() => new Promise((resolve) => { finishCapability = resolve; }));
+  const screen = await render(<NewAppSessionRoute />);
+  expect(screen.getByTestId('launch-form').props.disabled).toBe(true);
+  await fireEvent(screen.getByTestId('launch-form'), 'create');
+  expect(mockLaunch).not.toHaveBeenCalled();
+  await act(async () => { finishCapability({ supported: true }); });
+  expect(screen.getByTestId('launch-form').props.selectedAppId).toBe('embedded-browser');
+  expect(screen.getByTestId('launch-form').props.disabled).toBe(false);
 });

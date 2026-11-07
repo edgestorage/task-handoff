@@ -1,7 +1,7 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
 import { SessionResourcePanel } from '../src/ai-sessions/SessionResourcePanel';
-import { mobileResourceWorkspaceStore, resourceContextKey } from '../src/ai-sessions/resource-workspace-model';
+import { mobileResourceWorkspaceStore, openSessionResource, resourceContextKey } from '../src/ai-sessions/resource-workspace-model';
 
 const mockLaunch = jest.fn();
 const mockUpsert = jest.fn();
@@ -28,7 +28,7 @@ jest.mock('../src/components/MenuView', () => ({
 
 const instance = { ready: true, connectionStatus: 'online', availableApps: [{ id: 'terminal', name: 'Terminal' }] } as ControlPlaneInstanceResourceEntry;
 function props(sessionId: string) {
-  return { contextKey: resourceContextKey('cp-panel', 'instance-1', sessionId), controlPlaneId: 'cp-panel', expanded: true, fullscreen: false, instance, instanceId: 'instance-1', onClose: jest.fn(), onFullscreenChange: jest.fn(), onFractionChange: jest.fn(), session: { cwd: '/authoritative/worktree' }, sessionId, syncReady: true };
+  return { contextKey: resourceContextKey('cp-panel', 'instance-1', sessionId), controlPlaneId: 'cp-panel', expanded: true, instance, instanceId: 'instance-1', onFractionChange: jest.fn(), session: { cwd: '/authoritative/worktree' }, sessionId, syncReady: true };
 }
 beforeEach(() => { mockLaunch.mockReset(); mockUpsert.mockReset(); mobileResourceWorkspaceStore.clearProfile('cp-panel'); });
 
@@ -58,5 +58,30 @@ test('a launch finishing after a context change updates its authoritative store 
   expect(mockUpsert).toHaveBeenCalledWith('cp-panel', 'instance-1', { id: 'late-launch' });
   expect(mobileResourceWorkspaceStore.snapshot(next.contextKey).resources).toHaveLength(0);
   expect(mobileResourceWorkspaceStore.snapshot(old.contextKey).resources).toHaveLength(0);
+  await screen.unmount();
+});
+
+test('resource header uses tabs without a resource title or back button', async () => {
+  const current = props('session-tabs');
+  mobileResourceWorkspaceStore.update(current.contextKey, openSessionResource(mobileResourceWorkspaceStore.snapshot(current.contextKey), { kind: 'repository', page: 'files' }));
+  const screen = await render(<SessionResourcePanel {...current} />);
+  expect(screen.queryByText(/Resources|资源/)).toBeNull();
+  expect(screen.queryByLabelText(/Back to session|返回会话/)).toBeNull();
+  expect(screen.getByRole('tab', { name: /Files|文件/ })).toBeTruthy();
+  await screen.unmount();
+});
+
+test('resource actions follow the active tab and include closing that tab', async () => {
+  const current = props('session-tab-actions');
+  mobileResourceWorkspaceStore.update(current.contextKey, openSessionResource(mobileResourceWorkspaceStore.snapshot(current.contextKey), { kind: 'repository', page: 'files' }));
+  const screen = await render(<SessionResourcePanel {...current} />);
+  expect(screen.queryByTestId('fullscreen')).toBeNull();
+  expect(screen.queryByTestId('balanced')).toBeNull();
+  expect(screen.queryByTestId('conversation')).toBeNull();
+  expect(screen.queryByTestId('resource')).toBeNull();
+  expect(screen.getByTestId('refresh')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('close-tab'));
+  expect(mobileResourceWorkspaceStore.snapshot(current.contextKey).resources).toHaveLength(0);
+  expect(screen.queryByTestId('close-tab')).toBeNull();
   await screen.unmount();
 });

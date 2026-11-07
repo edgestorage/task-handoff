@@ -10,7 +10,7 @@ import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@ta
 import { AiSessionDetailSchema, AiSessionTurnIndexSchema } from '@task-handoff/protocol/ai-sessions';
 import { ControlPlaneInstanceDirectoryCapabilitiesSchema } from '@task-handoff/protocol/control-plane-directory';
 
-import { conversationDetailItems, conversationListOptions, detailItems, isSessionScrollNearBottom, processedDurationLabel, SessionDetail } from '../src/ai-sessions/SessionDetail';
+import { conversationDetailItems, conversationListOptions, detailItems, isSessionScrollNearBottom, latestAiSessionMessage, processedDurationLabel, SessionDetail } from '../src/ai-sessions/SessionDetail';
 import { appendConversationText, COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, OFFLINE_NOTICE_DELAY_MS, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { advanceStreamingMarkdownBlocks, CHARACTER_FADE_MS, hasUnclosedMarkdownFence, initialStreamingText, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText, streamingMarkdownStableCutoff } from '../src/components/SafeMarkdown';
@@ -216,6 +216,25 @@ test('detail preserves turn and streaming message identity order', () => {
   const items = detailItems(session, [{ instanceId: 'instance-1', sessionId: 'session-1', turnId: 'turn-1', itemId: 'item-1', receivedText: 'Streaming result', status: 'streaming', updatedAt: '2026-08-05T00:01:00.000Z' }]);
   expect(items.map((item) => [item.role, item.text])).toEqual([['user', 'Please **test** this'], ['assistant', 'Streaming result']]);
   expect(items[1]).toEqual(expect.objectContaining({ streamKey: 'turn-1:item-1', streaming: true }));
+});
+
+test('resource activity selects the latest streamed or historical AI message', () => {
+  const multiTurn = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    lastMessage: 'Session fallback',
+    status: 'running',
+    turns: [
+      { id: 'turn-old', status: 'completed', revision: 1, lastMessage: 'Older answer', startedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:01:00.000Z' },
+      { id: 'turn-live', status: 'running', revision: 1, startedAt: '2026-08-05T00:02:00.000Z', updatedAt: '2026-08-05T00:03:00.000Z' },
+    ],
+  });
+  expect(latestAiSessionMessage(multiTurn, [])).toBe('Older answer');
+  expect(latestAiSessionMessage(multiTurn, [{
+    instanceId: 'instance-1', sessionId: 'session-1', turnId: 'turn-live', itemId: 'item-live',
+    receivedText: 'Live answer', status: 'streaming', updatedAt: '2026-08-05T00:03:00.000Z',
+  }])).toBe('Live answer');
+  expect(latestAiSessionMessage(ControlPlaneAiSessionSummarySchema.parse({ ...session, turns: undefined, lastMessage: 'Last answer' }), [])).toBe('Last answer');
 });
 
 test('failed detail displays the authoritative session error', () => {
@@ -1577,10 +1596,43 @@ test('safe markdown normalizes protocol text and rejects executable schemes', ()
 
 test('mobile markdown targets distinguish external links from local paths', () => {
   expect(mobileMarkdownLinkTarget('https://example.com/docs')).toEqual({ kind: 'web', url: 'https://example.com/docs' });
-  expect(mobileMarkdownLinkTarget('knowledge/note.md#L12')).toEqual({ kind: 'file', path: 'knowledge/note.md' });
-  expect(mobileMarkdownLinkTarget('file:///Users/me/note%20one.md')).toEqual({ kind: 'file', path: '/Users/me/note one.md' });
+  expect(mobileMarkdownLinkTarget('knowledge/note.md#L12')).toEqual({ kind: 'file', href: 'knowledge/note.md#L12', path: 'knowledge/note.md' });
+  expect(mobileMarkdownLinkTarget('file:///Users/me/note%20one.md')).toEqual({ kind: 'file', href: 'file:///Users/me/note%20one.md', path: '/Users/me/note one.md' });
   expect(mobileMarkdownLinkTarget('javascript:alert(1)')).toBeUndefined();
   expect(mobileMarkdownLinkTarget('#section')).toBeUndefined();
+});
+
+test('markdown local file links open the file manager when available', async () => {
+  const openFile = jest.fn();
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SafeMarkdown onOpenFile={openFile}>{'[note](knowledge/note.md#L12)'}</SafeMarkdown>
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  await fireEvent.press(screen.getByRole('link', { name: 'note' }));
+  expect(openFile).toHaveBeenCalledWith('knowledge/note.md#L12');
+  await screen.unmount();
+});
+
+test('markdown local file link menus open the file manager and keep copy path', async () => {
+  const openFile = jest.fn();
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SafeMarkdown onOpenFile={openFile}>{'[note](knowledge/note.md#L12)'}</SafeMarkdown>
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  fireEvent(screen.getByRole('link', { name: 'note' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
+  await waitFor(() => screen.getByText('Open in file manager'));
+  expect(screen.getByText('Copy path')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Open in file manager'));
+  expect(openFile).toHaveBeenCalledWith('knowledge/note.md#L12');
+  await screen.unmount();
 });
 
 test('markdown web links expose open and copy actions on long press', async () => {
@@ -1594,7 +1646,7 @@ test('markdown web links expose open and copy actions on long press', async () =
   );
 
   fireEvent(screen.getByRole('link', { name: 'docs' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
-  await waitFor(() => screen.getByText('Open link'));
+  await waitFor(() => screen.getByText('Open in default browser'));
   await fireEvent.press(screen.getByText('Copy link'));
   await waitFor(() => expect(write).toHaveBeenCalledWith('https://example.com/docs'));
   await screen.unmount();
@@ -1628,7 +1680,7 @@ test('markdown web links omit the embedded browser action without an opener', as
   );
 
   fireEvent(screen.getByRole('link', { name: 'docs' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
-  await waitFor(() => screen.getByText('Open link'));
+  await waitFor(() => screen.getByText('Open in default browser'));
   expect(screen.queryByText('Open in embedded browser')).toBeNull();
   await screen.unmount();
 });
@@ -1644,7 +1696,7 @@ test('markdown mail links do not offer the embedded web browser action', async (
   );
 
   fireEvent(screen.getByRole('link', { name: 'mail' }), 'longPress', { nativeEvent: { pageX: 120, pageY: 240 } });
-  await waitFor(() => screen.getByText('Open link'));
+  await waitFor(() => screen.getByText('Open in default browser'));
   expect(screen.queryByText('Open in embedded browser')).toBeNull();
   await screen.unmount();
 });
@@ -1681,7 +1733,7 @@ test('markdown link menus still open when iOS omits long-press coordinates', asy
   );
 
   await fireEvent(screen.getByRole('link', { name: 'docs' }), 'longPress', { nativeEvent: { target: 2 } });
-  await waitFor(() => screen.getByText('Open link'));
+  await waitFor(() => screen.getByText('Open in default browser'));
   await screen.unmount();
 });
 
@@ -1702,6 +1754,26 @@ test('markdown local file links expose copy path on long press', async () => {
   await waitFor(() => expect(write).toHaveBeenCalledWith('knowledge/note.md'));
   await screen.unmount();
   write.mockRestore();
+});
+
+test('session markdown forwards local file links into the file manager', async () => {
+  const openFile = jest.fn();
+  const linkedSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    subAgents: [],
+    turns: [{ ...session.turns![0], lastMessage: 'Done.', status: 'completed', userPrompt: '[note](knowledge/note.md#L12)' }],
+  });
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+      <MobileToastProvider>
+        <SessionDetail messages={[]} onOpenFile={openFile} session={linkedSession} />
+      </MobileToastProvider>
+    </SafeAreaProvider>,
+  );
+
+  await fireEvent.press(screen.getByRole('link', { name: 'note' }));
+  expect(openFile).toHaveBeenCalledWith('knowledge/note.md#L12');
+  await screen.unmount();
 });
 
 test('streaming fence detection follows CommonMark marker and closing-length rules', () => {

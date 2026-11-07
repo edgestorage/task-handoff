@@ -80,7 +80,13 @@ export function cloudEventAllowed(actor: Pick<ControlPlaneCloudAccountActor, "pe
 
 export function routeAuthorization(method: string, url: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
   const path = url.split("?")[0] || "/";
+  const proxy = instanceProxyRoute(path);
+  if (proxy) return instanceProxyAuthorization(method, proxy.instanceId, proxy.apiPath);
   if (!path.startsWith("/api/")) return undefined;
+  return apiRouteAuthorization(method, path);
+}
+
+function apiRouteAuthorization(method: string, path: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
   if (ROUTES_WITHOUT_RBAC.has(path)) return undefined;
   if (path.startsWith("/api/operation-approvals")) return undefined;
   const action = actionForHttpMethod(method);
@@ -156,6 +162,8 @@ export function routeAuthorization(method: string, url: string): { action: Contr
     return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
   }
   if (path.startsWith("/api/controlled-instances")) {
+    const repository = /^\/api\/controlled-instances\/([^/]+)\/repository(?:\/(?:context|directories|files|changes|diff|worktrees|worktrees\/remove|worktrees\/move-to-main|worktrees\/move-to-main\/preflight|branches))?$/.exec(path);
+    if (repository) return repositoryAuthorization(method, decodePathSegment(repository[1]));
     if (/^\/api\/controlled-instances\/[^/]+\/(?:shell|browser-access)$/.test(path)) return { action: "interactive-access", resource: { type: "instance" } };
     if (/\/apps\/sessions\/[^/]+\/access$/.test(path)) return { action: "interactive-access", resource: { type: "app-session" } };
     // 自定义应用目录可能携带启动环境变量；读取与写入都要求实例 update 权限，不能按普通 read 放开。
@@ -201,6 +209,33 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   return method === "GET" || method === "HEAD"
     ? { action: "read", resource: { type: "public-directory" } }
     : { action, resource: { type: "control-plane-settings" } };
+}
+
+function instanceProxyRoute(path: string) {
+  const match = /^\/instances\/([^/]+)\/(api\/.*)$/.exec(path);
+  if (!match) return undefined;
+  return { instanceId: decodePathSegment(match[1]), apiPath: `/${match[2]}` };
+}
+
+function instanceProxyAuthorization(method: string, instanceId: string, apiPath: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
+  // The instance proxy is an authenticated transport boundary, not a blanket
+  // permission grant. Route the inner API path through the same resource model
+  // so a relayed role can use exactly the operations granted to a local user.
+  if (/^\/api\/(?:ai-sessions|apps\/sessions)\/[^/]+\/repository(?:\/(?:context|directories|files|changes|diff|worktrees|worktrees\/remove|worktrees\/move-to-main|worktrees\/move-to-main\/preflight|branches))?$/.test(apiPath)) {
+    return repositoryAuthorization(method, instanceId);
+  }
+  if ((method === "GET" || method === "HEAD") && /^\/api\/apps\/sessions\/[^/]+\/tty$/.test(apiPath)) {
+    return { action: "interactive-access", resource: { type: "app-session", instanceId } };
+  }
+  return undefined;
+}
+
+function repositoryAuthorization(method: string, instanceId: string) {
+  return { action: method === "GET" || method === "HEAD" ? "read" as const : "update" as const, resource: { type: "repository" as const, instanceId } };
+}
+
+function decodePathSegment(value: string) {
+  try { return decodeURIComponent(value); } catch { return value; }
 }
 
 function actionForHttpMethod(method: string): ControlPlaneAction {

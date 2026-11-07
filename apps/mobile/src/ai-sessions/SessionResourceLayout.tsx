@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Animated, BackHandler, Keyboard, Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { AccessibilityInfo, Animated, BackHandler, Keyboard, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AdaptiveContentWidthProvider, useAdaptiveContentLayout } from '../components/adaptive-layout';
+import { markdownPlainText } from '../components/SafeMarkdown';
 import { ResourceBackContext, type ResourceBackHandlers } from '../components/resource-back';
 import { useDetailSpace } from '../components/detail-space';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { RESOURCE_INLINE_MIN_WIDTH, resourceLayoutMode, resourceOverlayWidth, resourcePanelWidth } from './resource-workspace-model';
+import { ToolActivityText } from './ToolActivityText';
 
-export function SessionResourceLayout({ children, expanded, fullscreen, fraction, onClose, onFractionChange, panel, topInset = 0 }: {
+export function SessionResourceLayout({ activity, children, expanded, fraction, onClose, onFractionChange, panel, topInset = 0 }: {
+  activity?: { text?: string; lastMessage?: string; running: boolean };
   children: ReactNode;
   topInset?: number;
   expanded: boolean;
-  fullscreen: boolean;
   fraction: number;
   onClose(): void;
   onFractionChange(value: number | ((current: number) => number)): void;
@@ -29,9 +31,12 @@ export function SessionResourceLayout({ children, expanded, fullscreen, fraction
   const [progress] = useState(() => new Animated.Value(0));
   const horizontalInsets = useAdaptiveContentLayout(Number.MAX_SAFE_INTEGER).contentInsets;
   useDetailSpace(expanded ? RESOURCE_INLINE_MIN_WIDTH + 16 : undefined);
-  const inline = mode === 'inline' && !fullscreen;
+  const inline = mode === 'inline';
   const modal = expanded && !inline;
-  const size = fullscreen ? width : inline ? resourcePanelWidth(width, fraction) : resourceOverlayWidth(width);
+  const size = inline ? resourcePanelWidth(width, fraction) : resourceOverlayWidth(width);
+  const lastMessage = activity?.lastMessage?.trim() ? markdownPlainText(activity.lastMessage).trim() : '';
+  const activityText = activity?.text?.trim() || '';
+  const showActivityDock = modal && Boolean(lastMessage || activityText);
   useEffect(() => {
     let live = true;
     void AccessibilityInfo.isReduceMotionEnabled().then((value) => { if (live) setReduceMotion(value); });
@@ -82,22 +87,48 @@ export function SessionResourceLayout({ children, expanded, fullscreen, fraction
     >
       <AdaptiveContentWidthProvider availableWidth={inline && expanded ? Math.max(0, width - size - 1) : width || undefined} horizontalInsets={{ left: horizontalInsets.left, right: inline && expanded ? 0 : horizontalInsets.right }}>{children}</AdaptiveContentWidthProvider>
     </Animated.View>
-    {modal ? <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress }]}>
-      <Pressable accessibilityRole="button" accessibilityLabel={t('sessionResources.collapse')} onPress={onClose} style={[StyleSheet.absoluteFill, styles.scrim]} />
-    </Animated.View> : null}
     <Animated.View
       accessibilityElementsHidden={!expanded}
       accessibilityViewIsModal={modal}
       importantForAccessibility={expanded ? 'auto' : 'no-hide-descendants'}
       pointerEvents={expanded ? 'auto' : 'none'}
       style={[styles.panel, {
-        backgroundColor: colors.background, borderLeftColor: colors.border, width: size,
-        paddingBottom: insets.bottom, paddingRight: horizontalInsets.right, paddingLeft: modal && size >= width ? horizontalInsets.left : 0, top: topInset,
+        backgroundColor: colors.background, borderLeftColor: colors.border, borderLeftWidth: modal ? 0 : StyleSheet.hairlineWidth, width: size,
+        paddingBottom: insets.bottom, paddingRight: horizontalInsets.right, paddingLeft: modal && size >= width ? horizontalInsets.left : 0, paddingTop: topInset, top: 0,
         transform: [{ translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [size + 1, 0] }) }],
       }]}
       testID="session-resource-panel"
     >
-      <AdaptiveContentWidthProvider availableWidth={Math.max(0, size - horizontalInsets.right - (modal && size >= width ? horizontalInsets.left : 0))}><ResourceBackContext.Provider value={backHandlers}>{panel}</ResourceBackContext.Provider></AdaptiveContentWidthProvider>
+      {topInset > 0 ? <View pointerEvents="none" style={[styles.topBackdrop, { backgroundColor: colors.surface, height: topInset }]} testID="session-resource-top-backdrop" /> : null}
+      <View style={styles.panelContent}>
+        <View style={styles.panelMain}>
+          <AdaptiveContentWidthProvider availableWidth={Math.max(0, size - horizontalInsets.right - (modal && size >= width ? horizontalInsets.left : 0))}><ResourceBackContext.Provider value={backHandlers}>{panel}</ResourceBackContext.Provider></AdaptiveContentWidthProvider>
+        </View>
+        {showActivityDock ? <Pressable
+          accessibilityHint={t('sessionResources.backToSession')}
+          accessibilityLabel={[
+            lastMessage ? `${t('sessionResources.lastAiMessage')}: ${lastMessage}` : '',
+            activityText ? `${t('sessionResources.activity')}: ${activityText}` : '',
+          ].filter(Boolean).join('\n')}
+          accessibilityLiveRegion="polite"
+          accessibilityRole="button"
+          onPress={onClose}
+          style={({ pressed }) => [styles.activityDock, pressed && styles.activityDockPressed]}
+          testID="session-resource-activity"
+        >
+          <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.workbenchCardBorder, shadowColor: colors.text }]}>
+            {lastMessage ? <Text
+              ellipsizeMode="tail"
+              numberOfLines={2}
+              style={[styles.activityMessage, { color: colors.textMuted }]}
+              testID="session-resource-last-message"
+            >{lastMessage}</Text> : null}
+            {activityText ? <View style={styles.activityRow} testID="session-resource-tool-activity">
+              <ToolActivityText containerStyle={styles.activityText} numberOfLines={1} running={Boolean(activity?.running)} textStyle={styles.activityTextStyle}>{activityText}</ToolActivityText>
+            </View> : null}
+          </View>
+        </Pressable> : null}
+      </View>
     </Animated.View>
     {inline && expanded ? <GestureDetector gesture={resize}><View
       accessible accessibilityRole="adjustable" accessibilityLabel={t('sessionResources.resize')}
@@ -111,8 +142,14 @@ export function SessionResourceLayout({ children, expanded, fullscreen, fraction
 
 const styles = StyleSheet.create({
   root: { flex: 1, overflow: 'hidden' }, main: { height: '100%' }, fill: { flex: 1 },
-  panel: { position: 'absolute', right: 0, top: 0, bottom: 0, borderLeftWidth: StyleSheet.hairlineWidth },
-  scrim: { backgroundColor: 'rgba(0,0,0,0.35)' },
+  panel: { position: 'absolute', right: 0, top: 0, bottom: 0, borderLeftWidth: StyleSheet.hairlineWidth }, topBackdrop: { position: 'absolute', left: 0, right: 0, top: 0 },
+  panelContent: { flex: 1, minHeight: 0 }, panelMain: { flex: 1, minHeight: 0 },
+  activityDock: { paddingHorizontal: 10, paddingTop: 8, paddingBottom: 8 },
+  activityDockPressed: { opacity: 0.65 },
+  activityCard: { borderRadius: 16, borderWidth: 1, elevation: 3, gap: 5, paddingHorizontal: 14, paddingVertical: 10, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
+  activityMessage: { fontSize: 13, fontWeight: '400', lineHeight: 18 },
+  activityRow: { alignItems: 'center', flexDirection: 'row', minHeight: 16 },
+  activityText: { flex: 1, minWidth: 0 }, activityTextStyle: { fontSize: 12, fontWeight: '400', lineHeight: 16 },
   divider: { position: 'absolute', top: 48, bottom: 0, width: 20, alignItems: 'center', justifyContent: 'center' },
   grip: { width: 3, height: 32, borderRadius: 2 },
 });

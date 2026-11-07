@@ -377,6 +377,15 @@ function isPublicUiPath(url: string) {
   return !path.startsWith("/api/") && path !== "/api" && !path.startsWith("/instances/") && path !== "/instances";
 }
 
+function authorizationRouteUrl(params: unknown, matchedRoute: string | undefined, fallback: string) {
+  if (matchedRoute !== "/instances/:id" && matchedRoute !== "/instances/:id/*") return fallback;
+  const record = params && typeof params === "object" && !Array.isArray(params) ? params as Record<string, unknown> : {};
+  const instanceId = typeof record.id === "string" ? record.id : "";
+  if (!instanceId) return fallback;
+  const suffix = matchedRoute === "/instances/:id/*" && typeof record["*"] === "string" ? record["*"] : "";
+  return `/instances/${encodeURIComponent(instanceId)}${suffix ? `/${suffix}` : ""}`;
+}
+
 type RequestSessionCredential = {
   token: string | undefined;
   source: "cookie" | "bearer";
@@ -635,7 +644,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       const method = String(input?.method || "GET").toUpperCase();
       const requestPath = String(input?.path || "");
       const authorization = routeAuthorization(method, requestPath);
-      if (!requestPath.startsWith("/api/") || !cloudRelayRouteReachable(method, requestPath)) {
+      if (!cloudRelayRouteReachable(method, requestPath)) {
         throw Object.assign(new Error("Cloud access route is not available."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       }
       if (authorization) assertCan(actor, authorization.action, authorization.resource);
@@ -1055,7 +1064,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     // so an encoded segment such as /%61pi cannot be mistaken for a public UI
     // path after Fastify has routed it to /api.
     const matchedRoute = request.routeOptions.url;
-    const securityUrl = matchedRoute && matchedRoute !== "*" ? matchedRoute : request.url;
+    const securityUrl = authorizationRouteUrl(request.params, matchedRoute, matchedRoute && matchedRoute !== "*" ? matchedRoute : request.url);
     const authBoundary = request.routeOptions.config.controlPlaneAuthBoundary;
     const internalActorToken = request.headers[CLOUD_INTERNAL_ACTOR_HEADER];
     let cloudActor = typeof internalActorToken === "string" ? cloudRelayActors.get(internalActorToken) : undefined;

@@ -21,6 +21,7 @@ export * from "./triggers.ts";
 export * from "./stories.ts";
 export * from "./agents.ts";
 export * from "./repository.ts";
+export * from "./repository-path.ts";
 export * from "./catalog.ts";
 export * from "./node-admin.ts";
 export * from "./git-credentials.ts";

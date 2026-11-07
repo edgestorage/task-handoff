@@ -16,7 +16,6 @@ jest.mock('expo-router', () => {
     },
   };
 });
-
 const setPlatform = (os: 'android' | 'ios') => Object.defineProperty(Platform, 'OS', { configurable: true, value: os, writable: true });
 
 const setPlatformVersion = (version: number) => Object.defineProperty(Platform, 'Version', { configurable: true, value: version, writable: true });

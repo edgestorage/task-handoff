@@ -5,7 +5,7 @@ import { requireNativeView, requireOptionalNativeModule } from 'expo';
 import type { TaskHandoffMarkdownViewProps, TaskHandoffMarkdownTheme } from '../../modules/task-handoff-markdown/src/TaskHandoffMarkdownView';
 import { useI18n } from '../i18n';
 import { openSystemLink } from '../platform/links';
-import { safeMarkdownLink } from './markdown-link-target';
+import { mobileMarkdownLinkTarget } from './markdown-link-target';
 import { MarkdownLinkMenu } from './MarkdownLinkMenu';
 import type { MarkdownContentProps } from './MarkdownContent.types';
 import type { FloatingMenuAnchor } from './menu/FloatingMenu';
@@ -20,6 +20,7 @@ const NativeMarkdownView = nativeMarkdownAvailable
 export function MarkdownContent(props: MarkdownContentProps) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const openFile = props.onOpenFile;
   const [markdownWidth, setMarkdownWidth] = useState(0);
   const [linkMenu, setLinkMenu] = useState<{ anchor: FloatingMenuAnchor; url: string }>();
 
@@ -50,15 +51,17 @@ export function MarkdownContent(props: MarkdownContentProps) {
   }), [colors]);
 
   const openLink = useCallback((raw: string) => {
-    const url = safeMarkdownLink(raw);
-    if (url) void openSystemLink(url);
-  }, []);
+    const target = mobileMarkdownLinkTarget(raw);
+    if (target?.kind === 'file' && openFile) void openFile(raw);
+    else if (target?.kind === 'web') void openSystemLink(target.url);
+  }, [openFile]);
 
   if (!NativeMarkdownView || props.nativeSelectable === false) {
     return <SafeMarkdown
       compact={props.compact}
       nativeSelectable={props.nativeSelectable}
       onOpenBuiltinBrowser={props.onOpenBuiltinBrowser}
+      onOpenFile={openFile}
       streamKey={props.streamKey}
       streaming={props.streaming}
       trimEnd={props.trimEnd}
@@ -99,6 +102,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
       anchor={linkMenu.anchor}
       onDismiss={() => setLinkMenu(undefined)}
       onOpenBuiltinBrowser={props.onOpenBuiltinBrowser}
+      onOpenFile={openFile}
       url={linkMenu.url}
     /> : null}
   </View>;

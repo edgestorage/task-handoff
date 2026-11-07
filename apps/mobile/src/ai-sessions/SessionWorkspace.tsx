@@ -84,6 +84,7 @@ export function SessionWorkspace({
   refresh,
   onVisible,
   onOpenBuiltinBrowser,
+  onOpenFile,
   onOpenSession,
   detailMode: controlledDetailMode,
   onDetailModeChange,
@@ -110,6 +111,7 @@ export function SessionWorkspace({
   refresh?(): Promise<void>;
   onVisible?(): void;
   onOpenBuiltinBrowser?(url: string): void | Promise<void>;
+  onOpenFile?(href: string): void | Promise<void>;
   onOpenSession?(sessionId: string): void;
   detailMode?: SessionDetailMode;
   onDetailModeChange?(mode: SessionDetailMode): void;
@@ -526,7 +528,7 @@ export function SessionWorkspace({
   const queueDragStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: queueDragOffsetY.value }],
   }));
-  if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail instanceName={instanceName} messages={messages} onOpenBuiltinBrowser={onOpenBuiltinBrowser} recovering={syncPhase !== 'ready'} session={session} workspaceName={workspaceName} /></View>;
+  if (!session) return <View style={[styles.fill, adaptive.contentStyle]}><SessionDetail instanceName={instanceName} messages={messages} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} recovering={syncPhase !== 'ready'} session={session} workspaceName={workspaceName} /></View>;
   const selectedTurn = session.turns?.[selectedTurnIndex];
   const selectedTurnBodyFailure = selectedTurn && turnBodyFailure && turnBodyFailure.sessionId === sessionId && turnBodyFailure.turnId === selectedTurn.id
     ? turnBodyFailure.message
@@ -934,6 +936,7 @@ export function SessionWorkspace({
           onLoadToolActivity={toolActivity.load}
           toolActivityWindows={toolActivity.windows}
           onOpenBuiltinBrowser={onOpenBuiltinBrowser}
+          onOpenFile={onOpenFile}
           onRetryTimeline={(turn) => {
             if (selectedTurnBodyFailure) {
               setTurnBodyFailure(undefined);
@@ -1114,7 +1117,7 @@ export function SessionWorkspace({
           } catch { setRuntimeCandidates([]); }
         }}><Text style={[styles.runtimeFile, { color: colors.primary }]}>{candidate.name} · {candidate.path}</Text></Pressable>} /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surface }]}>
-          {attachment.kind === 'image' && attachment.previewUri ? <AttachmentImage name={attachment.name} uri={attachment.previewUri} /> : <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />}
+          {attachment.kind === 'image' && attachment.previewUri ? <AttachmentImage compact name={attachment.name} uri={attachment.previewUri} /> : <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />}
           <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size, locale)}` : attachment.name} style={styles.attachmentCopy}>
             <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>
             {attachment.textPresentation ? <Text numberOfLines={1} style={[styles.attachmentSummary, { color: colors.text }]}>{attachment.textPresentation.summary || t('composer.blankPastedText')}</Text> : null}

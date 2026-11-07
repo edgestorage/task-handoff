@@ -12,7 +12,7 @@ import { openSystemLink } from '../platform/links';
 import { splitGraphemes } from './graphemes';
 import { type FloatingMenuAnchor } from './menu/FloatingMenu';
 import { MarkdownLinkMenu } from './MarkdownLinkMenu';
-import { mobileMarkdownLinkTarget, safeMarkdownLink } from './markdown-link-target';
+import { mobileMarkdownLinkTarget } from './markdown-link-target';
 import { useMobileTheme, type MobileThemeColors } from './theme';
 import { mobileWebMetric, mobileWebType } from './mobile-web-typography';
 import { useStreamingMarkdown } from './useStreamingMarkdown';
@@ -31,6 +31,7 @@ const codeHighlighter = createLowlight(common);
 const TABLE_FIRST_COLUMN_WIDTH = 148;
 const TABLE_COLUMN_WIDTH = 112;
 const TABLE_FADE_WIDTH = 18;
+export const SAFE_MARKDOWN_BODY_LINE_HEIGHT = 24;
 
 function markdownTableColumnCount(node: ASTNode) {
   let count = 0;
@@ -231,6 +232,7 @@ export function SafeMarkdown({
   compact = false,
   nativeSelectable: allowNativeSelectable = true,
   onOpenBuiltinBrowser,
+  onOpenFile,
   streamKey,
   streaming = false,
   trimEnd = false,
@@ -239,6 +241,7 @@ export function SafeMarkdown({
   compact?: boolean;
   nativeSelectable?: boolean;
   onOpenBuiltinBrowser?(url: string): void | Promise<void>;
+  onOpenFile?(href: string): void | Promise<void>;
   streamKey?: string;
   streaming?: boolean;
   trimEnd?: boolean;
@@ -298,12 +301,13 @@ export function SafeMarkdown({
     {
       defaultImageHandler: null,
       onLinkPress: (raw) => {
-        const url = safeMarkdownLink(raw);
-        if (url) void openSystemLink(url);
+        const target = mobileMarkdownLinkTarget(raw);
+        if (target?.kind === 'file' && onOpenFile) void onOpenFile(raw);
+        else if (target?.kind === 'web') void openSystemLink(target.url);
         return false;
       },
     },
-  ), [rules, styles]);
+  ), [onOpenFile, rules, styles]);
   return (
     <View style={styles.root}>
       {sources.map((block, index) => (
@@ -320,6 +324,7 @@ export function SafeMarkdown({
         anchor={linkMenu.anchor}
         onDismiss={() => setLinkMenu(undefined)}
         onOpenBuiltinBrowser={onOpenBuiltinBrowser}
+        onOpenFile={onOpenFile}
         url={linkMenu.url}
       /> : null}
     </View>
@@ -822,7 +827,7 @@ function renderHeading(
 function markdownStyles(colors: MobileThemeColors, compact: boolean) {
   const codeFont = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
   const bodySize = compact ? 13 : 16;
-  const bodyLineHeight = compact ? 20 : 24;
+  const bodyLineHeight = compact ? 20 : SAFE_MARKDOWN_BODY_LINE_HEIGHT;
   const heading1Size = compact ? 17 : mobileWebMetric(14 * 1.65);
   const heading2Size = compact ? 16 : mobileWebMetric(14 * 1.4);
   const heading3Size = compact ? 15 : mobileWebMetric(14 * 1.2);

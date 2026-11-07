@@ -2,7 +2,7 @@ const EXTERNAL_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 
 export type MobileMarkdownLinkTarget =
   | { kind: 'web'; url: string }
-  | { kind: 'file'; path: string };
+  | { kind: 'file'; href: string; path: string };
 
 export function safeMarkdownLink(raw: string) {
   try {
@@ -43,5 +43,5 @@ export function mobileMarkdownLinkTarget(raw: string): MobileMarkdownLinkTarget 
   const url = safeMarkdownLink(raw);
   if (url) return { kind: 'web', url };
   const path = markdownFileLinkPath(raw);
-  return path ? { kind: 'file', path } : undefined;
+  return path ? { kind: 'file', href: raw.trim(), path } : undefined;
 }

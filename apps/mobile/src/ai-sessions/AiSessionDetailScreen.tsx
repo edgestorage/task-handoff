@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { Stack, useNavigation, useRouter } from 'expo-router';
+import { Stack, useNavigation, useRouter, type NativeStackHeaderItem, type NativeStackHeaderItemMenuAction } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { AccessibilityInfo, Alert, findNodeHandle, Platform, Pressable, StyleSheet, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
@@ -8,9 +8,10 @@ import { MenuView, type MenuAction } from '../components/MenuView';
 import { clearRepositoryViewProfile } from '../repository/view-memory';
 import { SessionResourceLayout } from './SessionResourceLayout';
 import { SessionResourcePanel } from './SessionResourcePanel';
-import { mobileResourceWorkspaceStore, resourceContextKey } from './resource-workspace-model';
+import { mobileResourceWorkspaceStore, openRepositoryFileResource, resourceContextKey, sessionResourceTopInset } from './resource-workspace-model';
 import { SessionWorkspace } from './SessionWorkspace';
-import type { SessionDetailMode } from './SessionDetail';
+import { latestAiSessionMessage, sessionActivityText, type SessionDetailMode } from './SessionDetail';
+import { getAiSessionViewPreferences, subscribeAiSessionViewPreferences, updateAiSessionViewPreferences } from './session-view-preferences';
 import { workspaceLabel } from './InboxModel';
 import { mobileAiSessionBusyKey } from './actions';
 import { useActiveAiSessionView, useActiveAiSessionsRuntime } from './use-active-sessions';
@@ -59,7 +60,6 @@ export function AiSessionDetailScreen({
   );
   useLayoutEffect(() => mobileResourceWorkspaceStore.enterContext(contextKey), [contextKey]);
   const resourceExpanded = Boolean(resourceState.expanded && mobileResourceWorkspaceStore.isCurrentContext(contextKey));
-  const fullscreen = Boolean(resourceState.fullscreen);
   const fraction = resourceState.fraction ?? 0.4;
   const resourceButton = useRef<View>(null);
   const headerHeight = useHeaderHeight();
@@ -71,15 +71,20 @@ export function AiSessionDetailScreen({
     }
     previousProfile.current = controlPlaneId;
   }, [controlPlaneId]);
-  const setFullscreen = useCallback((value: boolean) => {
-    mobileResourceWorkspaceStore.update(contextKey, { ...mobileResourceWorkspaceStore.snapshot(contextKey), fullscreen: value });
-  }, [contextKey]);
   const closeResources = useCallback(() => {
-    mobileResourceWorkspaceStore.update(contextKey, { ...mobileResourceWorkspaceStore.snapshot(contextKey), expanded: false, fullscreen: false });
+    mobileResourceWorkspaceStore.update(contextKey, { ...mobileResourceWorkspaceStore.snapshot(contextKey), expanded: false });
     requestAnimationFrame(() => {
       const node = findNodeHandle(resourceButton.current);
       if (node) AccessibilityInfo.setAccessibilityFocus(node);
     });
+  }, [contextKey]);
+  const toggleResources = useCallback(() => {
+    if (resourceExpanded) closeResources();
+    else mobileResourceWorkspaceStore.update(contextKey, { ...mobileResourceWorkspaceStore.snapshot(contextKey), expanded: true });
+  }, [closeResources, contextKey, resourceExpanded]);
+  const openFileInResources = useCallback((href: string) => {
+    const current = mobileResourceWorkspaceStore.snapshot(contextKey);
+    mobileResourceWorkspaceStore.update(contextKey, openRepositoryFileResource(current, href));
   }, [contextKey]);
   const changeFraction = useCallback((value: number | ((current: number) => number)) => {
     const current = mobileResourceWorkspaceStore.snapshot(contextKey);
@@ -98,7 +103,13 @@ export function AiSessionDetailScreen({
   const instance = directories.controlPlaneId === controlPlaneId
     ? directories.state.instances.find((candidate) => candidate.id === instanceId)
     : undefined;
-  const [detailMode, setDetailMode] = useState<SessionDetailMode>('turn');
+  const sessionViewPreferences = useSyncExternalStore(
+    subscribeAiSessionViewPreferences,
+    getAiSessionViewPreferences,
+    getAiSessionViewPreferences,
+  );
+  const detailMode = sessionViewPreferences.detailMode;
+  const setDetailMode = useCallback((next: SessionDetailMode) => updateAiSessionViewPreferences({ detailMode: next }), []);
   const [closing, setClosing] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameError, setRenameError] = useState('');
@@ -201,38 +212,71 @@ export function AiSessionDetailScreen({
       setRenameError(result.disposition === 'duplicate-blocked' ? t('sessions.renameBusy') : result.error);
     }).finally(() => setRenaming(false));
   };
+  const handleMenuEvent = (event: string) => {
+    if (event === 'view-turn') setDetailMode('turn');
+    else if (event === 'view-conversation') setDetailMode('conversation');
+    else if (event === 'rename') openRename();
+    else if (event === 'live-activity') {
+      if (trackedHere) void taskStatus.stopTracking();
+      else if (controlPlaneId) void taskStatus.startTracking({ controlPlaneId, instanceId, sessionId });
+    }
+    else if (event === 'triggers') router.push({ pathname: '/sessions/[instanceId]/[sessionId]/triggers' as never, params: { instanceId, sessionId } });
+    else if (event === 'close') closeSession();
+  };
+  const menuActions: MenuAction[] = [
+    { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.compact') },
+    { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.conversation') },
+    ...(canRename ? [{ id: 'rename', image: 'pencil', title: renaming ? t('sessions.renaming') : t('sessions.rename'), attributes: { disabled: renaming || !actions || sessionView.syncPhase !== 'ready' } } as MenuAction] : []),
+    ...(liveActivityAction ? [liveActivityAction] : []),
+    ...(triggers.available ? [{ id: 'triggers', image: 'bolt', title: t('triggers.sessionTitle') } as MenuAction] : []),
+    { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' } },
+  ];
   const menu = <MenuView
-    actions={[
-      { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.compact') },
-      { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.conversation') },
-      ...(canRename ? [{ id: 'rename', image: 'pencil', title: renaming ? t('sessions.renaming') : t('sessions.rename'), attributes: { disabled: renaming || !actions || sessionView.syncPhase !== 'ready' } } as MenuAction] : []),
-      ...(liveActivityAction ? [liveActivityAction] : []),
-      ...(triggers.available ? [{ id: 'triggers', image: 'bolt', title: t('triggers.sessionTitle') } as MenuAction] : []),
-      { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' } },
-    ]}
-    onPressAction={({ nativeEvent }) => {
-      if (nativeEvent.event === 'view-turn') setDetailMode('turn');
-      else if (nativeEvent.event === 'view-conversation') setDetailMode('conversation');
-      else if (nativeEvent.event === 'rename') openRename();
-      else if (nativeEvent.event === 'live-activity') {
-        if (trackedHere) void taskStatus.stopTracking();
-        else if (controlPlaneId) void taskStatus.startTracking({ controlPlaneId, instanceId, sessionId });
-      }
-      else if (nativeEvent.event === 'triggers') router.push({ pathname: '/sessions/[instanceId]/[sessionId]/triggers' as never, params: { instanceId, sessionId } });
-      else if (nativeEvent.event === 'close') closeSession();
-    }}
+    actions={menuActions}
+    onPressAction={({ nativeEvent }) => handleMenuEvent(nativeEvent.event)}
     title={t('sessions.sessionView')}
   >
     <Pressable accessibilityLabel={t('sessions.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.menuButtonPressed]}>
       <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
     </Pressable>
   </MenuView>;
+  const nativeMenuActions = [
+    { type: 'action', label: t('sessions.compact'), onPress: () => handleMenuEvent('view-turn'), state: detailMode === 'turn' ? 'on' : 'off' },
+    { type: 'action', label: t('sessions.conversation'), onPress: () => handleMenuEvent('view-conversation'), state: detailMode === 'conversation' ? 'on' : 'off' },
+    ...(canRename ? [{ type: 'action' as const, label: renaming ? t('sessions.renaming') : t('sessions.rename'), onPress: openRename, disabled: renaming || !actions || sessionView.syncPhase !== 'ready' }] : []),
+    ...(liveActivityAction ? [{ type: 'action' as const, label: liveActivityAction.title, onPress: () => handleMenuEvent('live-activity'), disabled: Boolean(liveActivityAction.attributes?.disabled), state: trackedHere ? 'on' as const : 'off' as const }] : []),
+    ...(triggers.available ? [{ type: 'action' as const, label: t('triggers.sessionTitle'), onPress: () => handleMenuEvent('triggers') }] : []),
+    { type: 'action' as const, label: closing ? t('sessions.closing') : t('sessions.closeSession'), onPress: () => handleMenuEvent('close'), destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' },
+  ] satisfies NativeStackHeaderItemMenuAction[];
+  const nativeHeaderRightItems = () => [
+    {
+      accessibilityLabel: t(resourceExpanded ? 'sessionResources.collapse' : 'sessionResources.expand'),
+      icon: { name: 'rectangle.stack', type: 'sfSymbol' as const },
+      identifier: 'session-resources',
+      label: t('sessionResources.title'),
+      onPress: toggleResources,
+      selected: resourceExpanded,
+      sharesBackground: false,
+      tintColor: colors.primary,
+      type: 'button' as const,
+    },
+    {
+      accessibilityLabel: t('sessions.moreActions'),
+      icon: { name: 'ellipsis', type: 'sfSymbol' as const },
+      identifier: 'session-actions',
+      label: t('sessions.moreActions'),
+      sharesBackground: false,
+      tintColor: colors.primary,
+      type: 'menu' as const,
+      menu: { title: t('sessions.sessionView'), items: nativeMenuActions },
+    },
+  ] satisfies NativeStackHeaderItem[];
+  const nativeHeaderRightItemsRef = useRef(nativeHeaderRightItems);
+  useLayoutEffect(() => { nativeHeaderRightItemsRef.current = nativeHeaderRightItems; });
+  const embeddedHeaderRightItems = useCallback(() => nativeHeaderRightItemsRef.current(), []);
   const headerActions = <View style={styles.headerActions}>
-    <Pressable ref={resourceButton} accessibilityRole="button" accessibilityLabel={t(resourceExpanded ? 'sessionResources.collapse' : 'sessionResources.expand')}
-      accessibilityState={{ expanded: resourceExpanded }} onPress={() => {
-        if (resourceExpanded) closeResources();
-        else mobileResourceWorkspaceStore.update(contextKey, { ...mobileResourceWorkspaceStore.snapshot(contextKey), expanded: true });
-      }} style={({ pressed }) => [styles.resourceButton, resourceExpanded && { backgroundColor: colors.primarySoft }, pressed && styles.menuButtonPressed]} testID="session-resource-toggle">
+    <Pressable ref={resourceButton} accessibilityRole="button" accessibilityLabel={t(resourceExpanded ? 'sessionResources.collapse' : 'sessionResources.expand')} hitSlop={6}
+      accessibilityState={{ expanded: resourceExpanded }} onPress={toggleResources} style={({ pressed }) => [styles.resourceButton, resourceExpanded && { backgroundColor: colors.primarySoft }, pressed && styles.menuButtonPressed]} testID="session-resource-toggle">
       <Icon color={colors.primary} name="albums-outline" size={22} />
     </Pressable>{menu}
   </View>;
@@ -255,8 +299,10 @@ export function AiSessionDetailScreen({
   ].join('|');
   useLayoutEffect(() => {
     if (!embeddedHeader) return;
-    navigation.setOptions({ headerRight: embeddedHeaderRight, title });
-  }, [embeddedHeader, embeddedHeaderRight, headerMenuKey, navigation, title]);
+    navigation.setOptions(Platform.OS === 'ios'
+      ? { title, unstable_headerRightItems: embeddedHeaderRightItems }
+      : { headerRight: embeddedHeaderRight, title });
+  }, [embeddedHeader, embeddedHeaderRight, embeddedHeaderRightItems, headerMenuKey, navigation, title]);
   const workspace = <SessionWorkspace
     actions={actions}
     controlPlaneId={controlPlaneId || '__booting__'}
@@ -275,6 +321,7 @@ export function AiSessionDetailScreen({
     nodeId={instance?.nodeId}
     onVisible={markVisible}
     onOpenBuiltinBrowser={openBuiltinBrowser}
+    onOpenFile={openFileInResources}
     onOpenSession={(nextSessionId) => {
       if (onOpenSession) onOpenSession(instanceId, nextSessionId);
       else router.push({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId, sessionId: nextSessionId } });
@@ -287,13 +334,20 @@ export function AiSessionDetailScreen({
     timelines={sessionView.timelines}
     workspaceName={workspaceName}
   />;
+  const resourceActivity = session ? {
+    lastMessage: latestAiSessionMessage(session, messages),
+    running: session.status === 'running',
+    text: sessionActivityText(session, t),
+  } : undefined;
   return <>
-    {embeddedHeader ? null : <Stack.Screen options={pane ? { headerRight: () => headerActions } : { title, headerRight: () => headerActions }} />}
+    {embeddedHeader ? null : <Stack.Screen options={Platform.OS === 'ios'
+      ? { ...(pane ? {} : { title }), unstable_headerRightItems: nativeHeaderRightItems }
+      : pane ? { headerRight: () => headerActions } : { title, headerRight: () => headerActions }} />}
     {embeddedHeader ? null : <PaneHeaderRestore pane={pane} />}
-    <SessionResourceLayout topInset={embeddedHeader && Platform.OS === 'ios' ? headerHeight : 0} expanded={resourceExpanded} fullscreen={fullscreen} fraction={fraction} onClose={closeResources} onFractionChange={changeFraction}
-      panel={<SessionResourcePanel key={contextKey} contextKey={contextKey} controlPlaneId={controlPlaneId || ''} expanded={resourceExpanded} fullscreen={fullscreen}
+    <SessionResourceLayout activity={resourceActivity?.text || resourceActivity?.lastMessage ? resourceActivity : undefined} topInset={sessionResourceTopInset(Platform.OS, headerHeight)} expanded={resourceExpanded} fraction={fraction} onClose={closeResources} onFractionChange={changeFraction}
+      panel={<SessionResourcePanel key={contextKey} contextKey={contextKey} controlPlaneId={controlPlaneId || ''} expanded={resourceExpanded}
         instance={instance} instanceId={instanceId} sessionId={sessionId} session={session} syncReady={sessionView.syncPhase === 'ready'}
-        onClose={closeResources} onFullscreenChange={setFullscreen} onFractionChange={changeFraction} />}
+        onFractionChange={changeFraction} />}
     >{workspace}</SessionResourceLayout>
     <SessionRenameModal
       busy={renaming}
@@ -308,7 +362,7 @@ export function AiSessionDetailScreen({
 
 const styles = StyleSheet.create({
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  resourceButton: { alignItems: 'center', justifyContent: 'center', width: 44, height: 44, borderRadius: 10 },
+  resourceButton: { alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 17 },
   menuButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
   menuButtonPressed: { opacity: 0.65 },
 });

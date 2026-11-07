@@ -12,11 +12,13 @@ export function MarkdownLinkMenu({
   anchor,
   onDismiss,
   onOpenBuiltinBrowser,
+  onOpenFile,
   url,
 }: {
   anchor: FloatingMenuAnchor;
   onDismiss(): void;
   onOpenBuiltinBrowser?(url: string): void | Promise<void>;
+  onOpenFile?(href: string): void | Promise<void>;
   url: string;
 }) {
   const { t } = useI18n();
@@ -42,6 +44,12 @@ export function MarkdownLinkMenu({
       toast.show({ title: t('browser.createFailed'), tone: 'error' });
     });
   }, [onOpenBuiltinBrowser, t, toast]);
+  const openFileValue = useCallback((value: string) => {
+    if (!onOpenFile) return;
+    void Promise.resolve(onOpenFile(value)).catch(() => {
+      toast.show({ title: t('sessions.linkActions.openFileFailed'), tone: 'error' });
+    });
+  }, [onOpenFile, t, toast]);
 
   const page = useMemo<FloatingMenuPage | undefined>(() => {
     if (!target) return undefined;
@@ -54,17 +62,23 @@ export function MarkdownLinkMenu({
           icon: 'globe-outline' as const,
           onPress: () => openBuiltinBrowserValue(embeddedUrl),
         }] : []),
-        { key: 'open', label: t('sessions.linkActions.open'), icon: 'open-outline', onPress: () => openLinkValue(target.url) },
+        { key: 'open', label: t('sessions.linkActions.openDefaultBrowser'), icon: 'open-outline', onPress: () => openLinkValue(target.url) },
         { key: 'copy', label: t('sessions.linkActions.copyLink'), icon: 'copy-outline', onPress: () => { void copyLinkValue(target.url); } },
       ]
       : [
+        ...(onOpenFile ? [{
+          key: 'open-file',
+          label: t('sessions.linkActions.openFile'),
+          icon: 'folder-open-outline' as const,
+          onPress: () => openFileValue(target.href),
+        }] : []),
         { key: 'copy', label: t('sessions.linkActions.copyPath'), icon: 'copy-outline', onPress: () => { void copyLinkValue(target.path); } },
       ];
     return {
       title: t('sessions.linkActions.title'),
       blocks: items.map((item) => ({ type: 'item', key: item.key, item })),
     };
-  }, [copyLinkValue, onOpenBuiltinBrowser, openBuiltinBrowserValue, openLinkValue, t, target]);
+  }, [copyLinkValue, onOpenBuiltinBrowser, openBuiltinBrowserValue, openFileValue, openLinkValue, onOpenFile, t, target]);
 
   return page ? <FloatingMenu anchor={anchor} onDismiss={onDismiss} page={page} /> : null;
 }

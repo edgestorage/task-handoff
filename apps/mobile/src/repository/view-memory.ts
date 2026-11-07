@@ -1,10 +1,8 @@
-import type { RepositoryChangeScope } from '@task-handoff/protocol/repository';
-
 /** View references and scroll offsets only; HTTP/WS remain authoritative for content. */
 export type RepositoryViewNavigation = {
   directories: string[];
   filePath?: string;
-  change?: { path: string; scope: RepositoryChangeScope };
+  fileLine?: number;
 };
 
 type ViewMemory = { navigation: RepositoryViewNavigation; offsets: Map<string, number> };

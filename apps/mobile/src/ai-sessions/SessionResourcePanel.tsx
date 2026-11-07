@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
 
 import { AppSessionDetailScreen } from '../app-sessions/AppSessionDetailScreen';
@@ -8,6 +8,7 @@ import { useActiveAppSessions } from '../app-sessions/use-active-app-sessions';
 import { mobileAppSessionStore } from '../app-sessions/store';
 import { BrowserTabScreen } from '../browser/BrowserTabScreen';
 import { mobileBrowserController } from '../browser/controller';
+import { openEmbeddedWebBrowserLink } from '../browser/link-opener';
 import { mobileBrowserTabStore } from '../browser/store';
 import { EmptyState } from '../components/EmptyState';
 import { Icon, type IconName } from '../components/Icon';
@@ -17,17 +18,14 @@ import { mobileBrowserCapability } from '../control-plane/browser-context';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useI18n } from '../i18n';
 import { RepositoryResourceView } from '../repository/RepositoryResourceView';
-import { mobileResourceWorkspaceStore, openSessionResource, removeSessionResource, sessionResourceKey, type SessionResource } from './resource-workspace-model';
+import { mobileResourceWorkspaceStore, openRepositoryFileResource, openSessionResource, removeSessionResource, sessionResourceKey, type SessionResource } from './resource-workspace-model';
 
-export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, fullscreen, instance, instanceId, onClose, onFullscreenChange, onFractionChange, session, sessionId, syncReady }: {
+export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, instance, instanceId, onFractionChange, session, sessionId, syncReady }: {
   contextKey: string;
   controlPlaneId: string;
   expanded: boolean;
-  fullscreen: boolean;
   instance?: ControlPlaneInstanceResourceEntry;
   instanceId: string;
-  onClose(): void;
-  onFullscreenChange(value: boolean): void;
   onFractionChange(value: number): void;
   session?: { cwd?: string; cwdFolderId?: string };
   sessionId: string;
@@ -45,12 +43,14 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ful
   const [browserSupport, setBrowserSupport] = useState<{ key: string; supported: boolean }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [actionTokens, setActionTokens] = useState<Record<string, number>>({});
   const currentContext = useRef(contextKey);
   useLayoutEffect(() => {
     currentContext.current = contextKey;
     return () => { currentContext.current = ''; };
   }, [contextKey]);
   const ready = Boolean(syncReady && runtime.api && instance?.ready && instance.connectionStatus === 'online');
+  const instanceCapabilities = instance?.capabilities;
   const apps = appSessions.controlPlaneId === controlPlaneId ? appSessions.state.snapshot?.instances.find((item) => item.instanceId === instanceId)?.appSessions.sessions || [] : [];
   const tabs = browsers.tabs.filter((tab) => tab.controlPlaneId === controlPlaneId && tab.instanceId === instanceId);
   const canBrowse = browserSupport?.key === contextKey && browserSupport.supported;
@@ -68,7 +68,44 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ful
   const remove = useCallback((key: string) => {
     mobileResourceWorkspaceStore.update(contextKey, removeSessionResource(mobileResourceWorkspaceStore.snapshot(contextKey), key));
   }, [contextKey]);
+  const openRepositoryFile = useCallback((href: string, basePath?: string) => {
+    mobileResourceWorkspaceStore.update(contextKey, openRepositoryFileResource(mobileResourceWorkspaceStore.snapshot(contextKey), href, basePath));
+  }, [contextKey]);
+  const openFiles = useCallback(() => {
+    open({ kind: 'repository', page: 'files' });
+  }, [open]);
+  const openBuiltinBrowser = useCallback(async (url: string) => {
+    try {
+      const target = await openEmbeddedWebBrowserLink({
+        api: runtime.api,
+        capabilities: instanceCapabilities,
+        instanceId,
+        profile: runtime.profile,
+        url,
+      });
+      if (target.kind === 'tab') open({ kind: 'browser', tabId: target.tabId });
+    } catch {
+      setError(t('sessionResources.launchFailed'));
+    }
+  }, [instanceCapabilities, instanceId, open, runtime.api, runtime.profile, t]);
   const active = state.resources.find((item) => sessionResourceKey(item) === state.activeKey);
+  const activeKey = active ? sessionResourceKey(active) : undefined;
+  const activeMenuActions: MenuAction[] = active ? [
+    ...(active.kind === 'repository'
+      ? [{ id: 'refresh', title: t('sessionResources.refresh'), image: 'arrow.clockwise' as const }]
+      : active.kind === 'browser'
+        ? [{ id: 'reload', title: t('browser.reload'), image: 'arrow.clockwise' as const, attributes: { disabled: !ready } }]
+        : []),
+    { id: 'close-tab', title: t('sessionResources.closeTab'), image: 'xmark.circle' as const, attributes: { destructive: true } },
+  ] : [];
+  const runActiveMenuAction = (id: string) => {
+    if (!activeKey) return;
+    if (id === 'refresh' || id === 'reload') {
+      setActionTokens((current) => ({ ...current, [activeKey]: (current[activeKey] ?? 0) + 1 }));
+    } else if (id === 'close-tab') {
+      remove(activeKey);
+    }
+  };
   const selectedBrowser = active?.kind === 'browser' ? active : state.resources.find((item) => item.kind === 'browser');
   const [retainedBrowser, setRetainedBrowser] = useState<Extract<SessionResource, { kind: 'browser' }>>();
   const browser = selectedBrowser || retainedBrowser;
@@ -98,8 +135,8 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ful
         const result = await mobileBrowserController.create({ api: runtime.api, profile: runtime.profile, instanceId });
         if (currentContext.current === startedContext) open({ kind: 'browser', tabId: result.id });
       }
-    } catch (cause) {
-      if (currentContext.current === startedContext) setError(cause instanceof Error ? cause.message : t('sessionResources.loadFailed'));
+    } catch {
+      if (currentContext.current === startedContext) setError(t('sessionResources.launchFailed'));
     } finally {
       if (currentContext.current === startedContext) setBusy(false);
     }
@@ -139,20 +176,10 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ful
     else if (right > scrollOffset.current + viewportWidth.current) tabScroll.current?.scrollTo({ x: right - viewportWidth.current, animated: true });
   }, [state.activeKey]);
   useLayoutEffect(revealTab, [expanded, revealTab]);
-  const closeButton = useRef<View>(null);
-  useEffect(() => {
-    if (!expanded) return;
-    const frame = requestAnimationFrame(() => {
-      const node = findNodeHandle(closeButton.current);
-      if (node) AccessibilityInfo.setAccessibilityFocus(node);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [expanded]);
   const actionButton = (label: string, name: IconName, onPress?: () => void) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => [styles.button, pressed && styles.pressed]}><Icon color={colors.primary} name={name} /></Pressable>;
   return <View style={styles.root}>
-    <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
-      <Pressable ref={closeButton} accessibilityRole="button" accessibilityLabel={t('sessionResources.collapse')} onPress={onClose} style={styles.button}><Icon color={colors.primary} name="chevron-forward" /></Pressable>
-      <ScrollView horizontal ref={tabScroll} showsHorizontalScrollIndicator={false} style={styles.tabs}
+    <View style={[styles.header, { backgroundColor: colors.surface }]} testID="session-resource-header">
+      {state.resources.length ? <ScrollView horizontal ref={tabScroll} showsHorizontalScrollIndicator={false} style={styles.tabs}
         onLayout={(event) => { viewportWidth.current = event.nativeEvent.layout.width; revealTab(); }}
         onScroll={(event) => { scrollOffset.current = event.nativeEvent.contentOffset.x; }} scrollEventThrottle={16}
         onContentSizeChange={revealTab}>
@@ -162,28 +189,21 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ful
             const selected = key === state.activeKey;
             return <Pressable key={key} accessibilityRole="tab" accessibilityState={{ selected }} accessibilityLabel={title(resource)} onPress={() => open(resource)}
               onLayout={(event) => { tabPositions.current.set(key, event.nativeEvent.layout); revealTab(); }}
-              style={[styles.tab, { borderBottomColor: selected ? colors.primary : 'transparent', backgroundColor: selected ? colors.primarySoft : 'transparent' }]}>
-              <Icon name={icon(resource)} size={16} color={selected ? colors.primary : colors.textMuted} /><Text numberOfLines={1} style={[styles.tabText, { color: selected ? colors.text : colors.textMuted }]}>{title(resource)}</Text>
+              style={({ pressed }) => [styles.tab, pressed && styles.pressed]}>
+              <View style={[styles.tabPill, { backgroundColor: selected ? colors.surfaceHover : 'transparent' }]}>
+                <Icon name={icon(resource)} size={16} color={selected ? colors.primary : colors.textMuted} />
+                <Text numberOfLines={1} style={[styles.tabText, { color: selected ? colors.text : colors.textMuted }]}>{title(resource)}</Text>
+              </View>
             </Pressable>;
           })}
         </View>
-      </ScrollView>
+      </ScrollView> : <View style={styles.tabs} />}
       <MenuView actions={menuActions} onPressAction={({ nativeEvent }) => handleMenu(nativeEvent.event)} title={t('sessionResources.add')}>
         {actionButton(t('sessionResources.add'), 'add')}
       </MenuView>
-      <MenuView actions={[
-        { id: 'fullscreen', title: t(fullscreen ? 'sessionResources.exitFullscreen' : 'sessionResources.fullscreen'), image: 'arrow.up.left.and.arrow.down.right' },
-        { id: 'balanced', title: t('sessionResources.balanced') },
-        { id: 'conversation', title: t('sessionResources.conversationPriority') },
-        { id: 'resource', title: t('sessionResources.resourcePriority') },
-        ...(active ? [{ id: 'remove-view', title: t('sessionResources.removeView') }] : []),
-      ]} onPressAction={({ nativeEvent }) => {
-        if (nativeEvent.event === 'fullscreen') onFullscreenChange(!fullscreen);
-        else if (nativeEvent.event === 'remove-view' && active) remove(sessionResourceKey(active));
-        else onFractionChange(nativeEvent.event === 'balanced' ? 0.5 : nativeEvent.event === 'conversation' ? 0.35 : 0.6);
-      }} title={t('sessionResources.options')}>
+      {active ? <MenuView actions={activeMenuActions} onPressAction={({ nativeEvent }) => runActiveMenuAction(nativeEvent.event)} title={t('sessionResources.options')}>
         {actionButton(t('sessionResources.options'), 'ellipsis-horizontal')}
-      </MenuView>
+      </MenuView> : null}
     </View>
     {busy ? <ActivityIndicator style={styles.busy} /> : null}
     {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error, backgroundColor: colors.errorSoft }]}>{error}</Text> : null}
@@ -200,13 +220,16 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ful
         return <View key={key} accessibilityElementsHidden={!visible} importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'} pointerEvents={visible ? 'auto' : 'none'} style={[styles.layer, !visible && styles.hidden]}>
           {resource.kind === 'repository' ? <RepositoryResourceView
             key={`${contextKey}:${session?.cwd || ''}:${session?.cwdFolderId || ''}:${resource.page}`}
-            active={visible} client={runtime.api} cwdFolderId={session?.cwdFolderId} page={resource.page} ready={ready} target={target} workspaceIdentity={JSON.stringify([contextKey, session?.cwd || '', session?.cwdFolderId || ''])}
+            active={visible} client={runtime.api} cwdFolderId={session?.cwdFolderId} fileRequest={resource.fileRequest}
+            onOpenBuiltinBrowser={openBuiltinBrowser} onOpenFile={openRepositoryFile} onOpenFiles={openFiles}
+            page={resource.page} ready={ready} refreshToken={actionTokens[key] ?? 0} target={target} workspaceIdentity={JSON.stringify([contextKey, session?.cwd || '', session?.cwdFolderId || ''])}
           /> : apps.some((app) => app.id === resource.sessionId) ? <AppSessionDetailScreen resource active={visible && ready} instanceId={instanceId} sessionId={resource.sessionId} onClosed={() => remove(key)} />
             : <EmptyState icon="alert-circle-outline" message={t('sessionResources.unavailable')} />}
         </View>;
       })}
       {browser?.kind === 'browser' ? <View accessibilityElementsHidden={!expanded || active?.kind !== 'browser'} importantForAccessibility={expanded && active?.kind === 'browser' ? 'auto' : 'no-hide-descendants'} pointerEvents={expanded && active?.kind === 'browser' ? 'auto' : 'none'} style={[styles.layer, (!expanded || active?.kind !== 'browser') && styles.hidden]}>
         {tabs.some((tab) => tab.id === browser.tabId) && canBrowse ? <BrowserTabScreen resource active={ready} pane instanceId={instanceId} browserTabId={browser.tabId}
+          reloadToken={actionTokens[sessionResourceKey(browser)] ?? 0}
           onSelectTab={(tab) => {
             const current = mobileResourceWorkspaceStore.snapshot(contextKey);
             const next = openSessionResource(current, { kind: 'browser', tabId: tab.id });
@@ -218,9 +241,11 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ful
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, minWidth: 0 }, header: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', minHeight: 48 },
-  button: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, tabs: { flex: 1 }, tabRow: { flexDirection: 'row' },
-  tab: { alignItems: 'center', borderBottomWidth: 2, flexDirection: 'row', gap: 6, minHeight: 48, maxWidth: 180, paddingHorizontal: 12 }, tabText: { flexShrink: 1, fontSize: 14, fontWeight: '500' },
+  root: { flex: 1, minWidth: 0 }, header: { alignItems: 'center', flexDirection: 'row', gap: 4, minHeight: 48, paddingHorizontal: 8 },
+  button: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, tabs: { flex: 1, minWidth: 0 }, tabRow: { alignItems: 'center', flexDirection: 'row', gap: 4 },
+  tab: { justifyContent: 'center', minHeight: 44, minWidth: 44, maxWidth: 180, paddingVertical: 5 },
+  tabPill: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', gap: 7, minHeight: 34, paddingHorizontal: 12, paddingVertical: 6 },
+  tabText: { flexShrink: 1, fontSize: 14, fontWeight: '500', lineHeight: 20 },
   content: { flex: 1, minHeight: 0 }, layer: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0 }, hidden: { opacity: 0 },
   emptyContent: { flexGrow: 1, justifyContent: 'center', padding: 20, gap: 12 }, hint: { fontSize: 13, lineHeight: 19, textAlign: 'center' },
   quickAction: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 14 }, quickLabel: { fontSize: 15 },

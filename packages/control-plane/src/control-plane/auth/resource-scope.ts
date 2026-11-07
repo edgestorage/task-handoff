@@ -83,7 +83,7 @@ export async function resolveRequestResourceScopes(
     return Promise.all([...new Set(instanceIds)].map((instanceId) => instanceScope(service, instanceId, actor)));
   }
 
-  const instanceId = routePath.startsWith("/api/controlled-instances/")
+  const instanceId = routePath.startsWith("/api/controlled-instances/") || routePath.startsWith("/instances/")
     ? stringField(params.id)
     : stringField(body.instanceId);
   if (instanceId && ["instance", "app-session", "ai-session", "trigger-deployment", "repository", "attachment", "template"].includes(resource.type)) {

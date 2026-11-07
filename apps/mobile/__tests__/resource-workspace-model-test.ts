@@ -1,4 +1,4 @@
-import { EMPTY_RESOURCE_WORKSPACE, openSessionResource, removeSessionResource, resourceContextKey, resourceLayoutMode, resourceOverlayWidth, resourcePanelWidth, ResourceWorkspaceStore } from '../src/ai-sessions/resource-workspace-model';
+import { EMPTY_RESOURCE_WORKSPACE, openRepositoryFileResource, openSessionResource, removeSessionResource, resourceContextKey, resourceLayoutMode, resourceOverlayWidth, resourcePanelWidth, ResourceWorkspaceStore, sessionResourceTopInset } from '../src/ai-sessions/resource-workspace-model';
 
 test('resource selection deduplicates a view and removes only its local reference', () => {
   const files = openSessionResource(EMPTY_RESOURCE_WORKSPACE, { kind: 'repository', page: 'files' });
@@ -9,6 +9,17 @@ test('resource selection deduplicates a view and removes only its local referenc
   const removed = removeSessionResource(selectedAgain, 'repository:files');
   expect(removed.activeKey).toBe('app-session:app_opaque');
   expect(removeSessionResource(removed, removed.activeKey!).resources).toEqual([]);
+});
+
+test('file links reuse the files resource and replace its pending path request', () => {
+  const first = openRepositoryFileResource(EMPTY_RESOURCE_WORKSPACE, 'src/first.ts#L4');
+  const second = openRepositoryFileResource(first, 'src/second.ts', 'src');
+  expect(second).toMatchObject({ activeKey: 'repository:files', expanded: true });
+  expect(second.resources).toHaveLength(1);
+  expect(second.resources[0]).toMatchObject({ kind: 'repository', page: 'files', fileRequest: { basePath: 'src', href: 'src/second.ts' } });
+  const firstRequest = first.resources[0].kind === 'repository' ? first.resources[0].fileRequest : undefined;
+  const secondRequest = second.resources[0].kind === 'repository' ? second.resources[0].fileRequest : undefined;
+  expect(secondRequest!.id).toBeGreaterThan(firstRequest!.id);
 });
 
 test('contexts remain distinct across profiles, instances and sessions with opaque IDs', () => {
@@ -41,8 +52,10 @@ test('layout respects actual container width, minimum columns and hysteresis', (
       expect(width - panel - 1).toBeGreaterThanOrEqual(480);
     }
   }
-  expect(resourceOverlayWidth(320)).toBe(320);
-  expect(resourceOverlayWidth(500)).toBeLessThan(500);
+  for (const width of [320, 390, 500, 850]) expect(resourceOverlayWidth(width)).toBe(width);
+  expect(sessionResourceTopInset('ios', 96)).toBe(96);
+  expect(sessionResourceTopInset('ios', -1)).toBe(0);
+  expect(sessionResourceTopInset('android', 96)).toBe(0);
 });
 
 test('window-driven remounts preserve expansion but entering another session resets its display intent', () => {

@@ -35,6 +35,7 @@ export function BrowserTabScreen({
   onClosed,
   onSelectTab,
   pane = false,
+  reloadToken = 0,
 }: {
   browserTabId: string;
   resource?: boolean;
@@ -44,6 +45,7 @@ export function BrowserTabScreen({
   onClosed?(): void;
   onSelectTab?(tab: MobileBrowserTab): void;
   pane?: boolean;
+  reloadToken?: number;
 }) {
   const router = useRouter();
   const runtime = useMobileControlPlaneRuntime();
@@ -79,6 +81,9 @@ export function BrowserTabScreen({
   const error = activeViewState?.error || routeError;
   const tabControlPlaneId = tab?.controlPlaneId;
   const tabInstanceId = tab?.instanceId;
+  const reloadTabId = tab?.id;
+  const reloadTabUrl = tab?.currentUrl;
+  const lastReloadToken = useRef(reloadToken);
 
   const activateTab = useCallback((candidate: MobileBrowserTab) => {
     if (callbacks.current.onSelectTab) callbacks.current.onSelectTab(candidate);
@@ -139,6 +144,16 @@ export function BrowserTabScreen({
   useEffect(() => {
     diagnosticLog.info('browser.view.context', { controlPlaneId: tabControlPlaneId, instanceId: tabInstanceId, tabId: tab?.id, contextId, preparing: !contextId });
   }, [contextId, tab?.id, tabControlPlaneId, tabInstanceId]);
+
+  useEffect(() => {
+    if (lastReloadToken.current === reloadToken) return;
+    lastReloadToken.current = reloadToken;
+    if (!active || !reloadTabId || reloadTabUrl === 'about:blank') return;
+    const view = viewRefs.current[reloadTabId];
+    if (!view) return;
+    setRouteError('');
+    void view.reload().catch((cause) => setRouteError(cause instanceof Error ? cause.message : t('browser.createFailed')));
+  }, [active, reloadTabId, reloadTabUrl, reloadToken, t]);
 
   if (!tab || !runtime.controlPlaneId) return null;
 
