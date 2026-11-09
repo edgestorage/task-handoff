@@ -66,6 +66,13 @@ impl ManagedAppDetectionRule {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallRecipe {
+    /// Private installed layout; never eligible for installation or updates.
+    ArchiveOwnership {
+        platforms: Vec<FinalComputerPlatform>,
+        arches: Option<Vec<FinalComputerArch>>,
+        privilege: Option<AppInstallPrivilege>,
+        install_root: String,
+    },
     Bundled {
         platforms: Vec<FinalComputerPlatform>,
         arches: Option<Vec<FinalComputerArch>>,
@@ -118,6 +125,7 @@ impl InstallRecipe {
             Self::NodePackage { .. } => "node-package",
             Self::NativePackage { .. } => "native-package",
             Self::Archive { .. } => "archive",
+            Self::ArchiveOwnership { .. } => "archive-ownership",
         }
     }
 
@@ -127,6 +135,7 @@ impl InstallRecipe {
             | Self::SystemPackage { platforms, .. }
             | Self::NodePackage { platforms, .. }
             | Self::NativePackage { platforms, .. }
+            | Self::ArchiveOwnership { platforms, .. }
             | Self::Archive { platforms, .. } => platforms,
         }
     }
@@ -137,6 +146,7 @@ impl InstallRecipe {
             | Self::SystemPackage { arches, .. }
             | Self::NodePackage { arches, .. }
             | Self::NativePackage { arches, .. }
+            | Self::ArchiveOwnership { arches, .. }
             | Self::Archive { arches, .. } => arches.as_deref(),
         }
     }
@@ -147,6 +157,7 @@ impl InstallRecipe {
             | Self::SystemPackage { privilege, .. }
             | Self::NodePackage { privilege, .. }
             | Self::NativePackage { privilege, .. }
+            | Self::ArchiveOwnership { privilege, .. }
             | Self::Archive { privilege, .. } => privilege.unwrap_or(AppInstallPrivilege::User),
         }
     }
@@ -156,7 +167,10 @@ impl InstallRecipe {
             Self::SystemPackage { installer, .. } | Self::NodePackage { installer, .. } => {
                 Some(*installer)
             }
-            Self::Bundled { .. } | Self::NativePackage { .. } | Self::Archive { .. } => None,
+            Self::Bundled { .. }
+            | Self::NativePackage { .. }
+            | Self::ArchiveOwnership { .. }
+            | Self::Archive { .. } => None,
         }
     }
 
@@ -164,7 +178,7 @@ impl InstallRecipe {
         match self {
             Self::SystemPackage { packages, .. } | Self::NodePackage { packages, .. } => packages,
             Self::NativePackage { package, .. } => std::slice::from_ref(package),
-            Self::Bundled { .. } | Self::Archive { .. } => &[],
+            Self::Bundled { .. } | Self::ArchiveOwnership { .. } | Self::Archive { .. } => &[],
         }
     }
 
@@ -346,6 +360,7 @@ fn launcher(
 
 pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
     let mut definitions = vec![
+        crate::remote_desktop::definition(),
         ManagedAppDefinition {
             launcher: launcher(
                 "terminal-tty",
@@ -930,6 +945,14 @@ pub fn managed_app_launcher_path(
                 .unwrap_or(true)
         })
         .find_map(|recipe| match recipe {
+            InstallRecipe::ArchiveOwnership { install_root, .. }
+            | InstallRecipe::Archive { install_root, .. } => {
+                let command = definition.launcher.command.as_deref()?;
+                if !valid_native_launch_path(command) || !valid_native_launch_path(install_root) {
+                    return None;
+                }
+                Some(root.join(install_root).join(command))
+            }
             InstallRecipe::NativePackage { launch_path, .. }
                 if valid_native_launch_path(launch_path) =>
             {
@@ -1035,6 +1058,7 @@ pub fn select_install_recipe_with_target(
     let platform_matches = definition
         .recipes
         .iter()
+        .filter(|recipe| !matches!(recipe, InstallRecipe::ArchiveOwnership { .. }))
         .filter(|recipe| recipe.platforms().contains(&capabilities.platform))
         .collect::<Vec<_>>();
     let arch_matches = platform_matches
@@ -1191,10 +1215,9 @@ pub fn managed_app_projection(
     let can_install =
         state == ManagedAppState::NotInstalled && selected.recipe.is_some() && !bundled;
     let can_uninstall = matches!(state, ManagedAppState::Installed | ManagedAppState::Broken)
-        && selected.recipe.is_some()
         && !bundled
         && source == ManagedAppManagementSource::Recipe;
-    let can_update = can_uninstall;
+    let can_update = can_uninstall && selected.recipe.is_some();
     let install_reason = if can_install {
         None
     } else if bundled {
@@ -1774,6 +1797,14 @@ pub async fn detect_managed_app_ownership_with_context(
         .recipes
         .iter()
         .filter(|recipe| {
+            if matches!(recipe, InstallRecipe::ArchiveOwnership { .. }) {
+                return recipe.platforms().contains(&capabilities.platform)
+                    && recipe
+                        .arches()
+                        .is_none_or(|arches| arches.contains(&capabilities.arch))
+                    && privilege_rank(capabilities.privilege)
+                        >= privilege_rank(recipe.privilege());
+            }
             select_install_recipe(
                 &ManagedAppDefinition {
                     recipes: vec![(*recipe).clone()],
@@ -1825,7 +1856,8 @@ pub async fn detect_managed_app_ownership_with_context(
                     context,
                 )
             }),
-            InstallRecipe::Archive { install_root, .. } => context.is_some_and(|context| {
+            InstallRecipe::ArchiveOwnership { install_root, .. }
+            | InstallRecipe::Archive { install_root, .. } => context.is_some_and(|context| {
                 archive_manifest_owns_executable(
                     &definition.launcher.id,
                     install_root,

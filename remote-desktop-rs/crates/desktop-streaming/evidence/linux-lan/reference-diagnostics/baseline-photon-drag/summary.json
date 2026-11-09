@@ -1,0 +1,41 @@
+{
+  "mode": "drag",
+  "elapsedSeconds": 300.17,
+  "inputSamples": 100,
+  "p95Ms": 169.30000001192093,
+  "maxMs": 217.59999999403954,
+  "geometry": [
+    [
+      1920,
+      1080
+    ]
+  ],
+  "decodedFps": 29.809774461138687,
+  "deltas": [
+    {
+      "framesDecoded": 2984,
+      "framesDropped": 0,
+      "freezeCount": 1,
+      "pliCount": 0,
+      "nackCount": 45
+    },
+    {
+      "framesDecoded": 2984,
+      "framesDropped": 0,
+      "freezeCount": 2,
+      "pliCount": 0,
+      "nackCount": 59
+    },
+    {
+      "framesDecoded": 2980,
+      "framesDropped": 0,
+      "freezeCount": 6,
+      "pliCount": 0,
+      "nackCount": 49
+    }
+  ],
+  "cpuPercent": 37.265170150708165,
+  "peakRssMiB": 193.9609375,
+  "resourceSeconds": 301.0377023539986,
+  "status": "measured, review against proposal; no automatic capability enable"
+}

@@ -7,6 +7,7 @@ import { codexProvider } from "./codex";
 import { opencodeProvider } from "./opencode";
 import { terminalGuiProvider } from "./terminal-gui";
 import { terminalTtyProvider } from "./terminal-tty";
+import { remoteDesktopProvider } from "./remote-desktop";
 import { thctlProvider } from "./thctl";
 import type { ManagedAppProvider, ManagedAppRegistryOptions } from "./types";
 import { vscodeWebProvider } from "./vscode-web";
@@ -69,6 +70,7 @@ export const builtinManagedAppRegistry = createManagedAppRegistry([
   vscodeWebProvider,
   ccSwitchProvider,
   thctlProvider,
+  remoteDesktopProvider,
 ]);
 
 export function builtinManagedAppDefinitions(options: ManagedAppRegistryOptions = {}) {

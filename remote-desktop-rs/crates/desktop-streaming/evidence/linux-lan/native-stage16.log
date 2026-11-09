@@ -1,0 +1,13 @@
+   Compiling desktop-streaming v0.0.46 (/home/huadream/.local/share/task-handoff-g1-tests/remote-desktop-g1/src/crates/desktop-streaming)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.44s
+     Running tests/linux_surface.rs (target/debug/deps/linux_surface-539b45b34116d936)
+
+running 4 tests
+XFixes server hide leaves image/serial unchanged: true
+test xfixes_cursor_hotspot_motion_and_transparent_hide_update_captured_pixels ... ok
+test damage_acknowledgement_must_precede_image_read_to_preserve_concurrent_redraw ... ok
+xterm: cannot load font "-misc-fixed-medium-r-semicondensed--13-120-75-75-c-60-iso10646-1"
+test surface_crash_reclaims_slot_and_component_sigkill_reaps_owned_tree ... ok
+test private_surface_real_capture_cursor_guard_release_and_lifetime_cleanup ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.90s

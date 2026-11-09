@@ -31,6 +31,14 @@ function managedTarget(root: string, definition: ManagedAppDefinition, platform:
     installers: ["apt", "dnf", "brew", "npm"],
     privilege: "root",
   }, target).recipe;
+  const archive = selected?.type === "archive" ? selected : definition.distribution.recipes.find(recipe=>recipe.type === "archive-ownership" && recipe.platforms.includes(platform as ManagedAppRecipePlatform) && (!recipe.arches?.length || recipe.arches.includes(arch as ManagedAppRecipeArch)));
+  if (archive && (archive.type === "archive" || archive.type === "archive-ownership")) {
+    const command = definition.launcher.command;
+    if (!command || path.isAbsolute(command) || command.split(/[\\/]/).some((part) => part === ".." || !part)) return undefined;
+    const base = path.resolve(root);
+    const target = path.resolve(base, archive.installRoot, command);
+    return target.startsWith(`${base}${path.sep}`) ? target : undefined;
+  }
   if (selected?.type === "native-package") return managedNativeAppLauncher(root, definition.launcher.id, selected.launchPath);
   if (selected?.type === "node-package" && selected.managed) return path.join(managedNodePackageBin(root, definition.launcher.id), definition.launcher.id);
   return undefined;
@@ -52,7 +60,7 @@ export class ManagedApps {
   readonly bin: string;
 
   constructor(readonly root: string, definitions: ManagedAppDefinition[]) {
-    this.definitions = definitions.filter((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "native-package" || (recipe.type === "node-package" && recipe.managed)));
+    this.definitions = definitions.filter((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "archive" || recipe.type === "archive-ownership" || recipe.type === "native-package" || (recipe.type === "node-package" && recipe.managed)));
     this.bin = path.join(root, "bin");
   }
 

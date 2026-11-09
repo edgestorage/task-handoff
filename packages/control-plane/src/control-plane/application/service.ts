@@ -1,3 +1,4 @@
+import type { DesktopManagedOperation } from "@task-handoff/runtime-shared/remote-desktop-managed";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   CLOUD_ACCOUNT_NODE_HANDLE_LABEL,
@@ -2430,6 +2431,23 @@ export class ControlPlaneService {
 
   interruptAiSession(instanceId: string, sessionId: string) {
     return this.aiSessionActionService.interrupt(instanceId, sessionId);
+  }
+
+  async desktopRequest(instanceId: string, operation: DesktopManagedOperation, body: unknown) {
+    return this.controlledInstanceGateway.desktopRequest(await this.requireControlledInstance(instanceId, true) as ControlledInstance, operation, body);
+  }
+
+  async desktopAttach(instanceId: string, socket: NodeAgentWebSocket) {
+    this.controlledInstanceGateway.desktopAttach(await this.requireControlledInstance(instanceId, true) as ControlledInstance, socket);
+  }
+
+  async desktopFallback(instanceId: string, role: "media" | "control", socket: NodeAgentWebSocket, headers: Record<string, string>) {
+    this.controlledInstanceGateway.desktopFallback(
+      await this.requireControlledInstance(instanceId, true) as ControlledInstance,
+      role,
+      socket,
+      headers,
+    );
   }
 
   async proxyInstanceHttp(instanceId: string, path: string, init: ProxyHttpInit = {}) {

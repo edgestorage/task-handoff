@@ -212,7 +212,9 @@
         :app-launch-button-title="appLaunchButtonTitle"
         :app-launch-menu-open="appLaunchMenuOpen"
         :can-export-config="canExportConfig"
+        :can-interact-remote-desktop="canInteractRemoteDesktop === true"
         :can-launch-app="canLaunchApp"
+        :can-manage-remote-desktop="canManageRemoteDesktop === true"
         :copied-text="copiedText"
         :choose-project-folder="chooseProjectFolder"
         :instance="instance"
@@ -319,6 +321,8 @@ const props = defineProps<{
   appLaunchMenuOpen: boolean;
   canExportConfig?: (instance: InstanceBoardItem) => boolean;
   canLaunchApp: boolean;
+  canInteractRemoteDesktop?: boolean;
+  canManageRemoteDesktop?: boolean;
   copiedText: string;
   chooseProjectFolder?: NativeNodeFolderPicker;
   error?: string;

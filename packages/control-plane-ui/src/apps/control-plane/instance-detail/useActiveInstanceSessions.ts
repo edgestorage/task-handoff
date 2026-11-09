@@ -8,6 +8,7 @@ import {
   buildSessionTabs,
   EMBEDDED_BROWSER_APP_ID,
   launchableAppsForInstance,
+  REMOTE_DESKTOP_APP_ID,
   sessionFrameUrl,
   sessionTerminalSocketUrl,
   uniqueLaunchableApps,
@@ -22,12 +23,56 @@ import { supportsDirectoryBrowserTunnel } from "@task-handoff/protocol/control-p
 import { canUseDesktopBrowserContext } from "../../../lib/desktopBridge";
 import { createBrowserUuid } from "../../../lib/random-id";
 import { ApiError } from "../../../api/client";
+import { remoteDesktopAvailable } from "../remoteDesktopCapability";
 
 export type SessionPaneId = "left" | "right";
+
+const REMOTE_DESKTOP_TABS_STORAGE_KEY = "task-handoff.control-plane.remote-desktop-tabs";
+
+function loadRemoteDesktopSessionTabs(t: Translate): Record<string, SessionTab[]> {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(window.localStorage?.getItem(REMOTE_DESKTOP_TABS_STORAGE_KEY) || "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const tabs: Record<string, SessionTab[]> = {};
+    for (const [instanceId, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!instanceId || !Array.isArray(value)) continue;
+      const key = `${REMOTE_DESKTOP_APP_ID}:${instanceId}`;
+      const item = value.find((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).key === key) as Record<string, unknown> | undefined;
+      if (!item) continue;
+      tabs[instanceId] = [{
+        key,
+        kind: "remote-desktop",
+        label: REMOTE_DESKTOP_APP_ID,
+        title: typeof item.title === "string" && item.title.trim() ? item.title.trim().slice(0, 120) : t("instances.remoteDesktop.title"),
+        status: "running",
+      }];
+    }
+    return tabs;
+  } catch {
+    return {};
+  }
+}
+
+function persistRemoteDesktopSessionTabs(tabs: Record<string, SessionTab[]>) {
+  if (typeof window === "undefined") return;
+  try {
+    const value = Object.fromEntries(Object.entries(tabs).flatMap(([instanceId, instanceTabs]) => {
+      const remoteTabs = instanceTabs
+        .filter((tab) => tab.kind === "remote-desktop")
+        .map((tab) => ({ key: tab.key, ...(tab.title ? { title: tab.title } : {}) }));
+      return remoteTabs.length ? [[instanceId, remoteTabs]] : [];
+    }));
+    window.localStorage?.setItem(REMOTE_DESKTOP_TABS_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
+}
 
 type UseActiveInstanceSessionsInput = {
   activeInstance: ComputedRef<InstanceWithAiSessions | undefined>;
   boardSessionKeys: Record<string, string>;
+  canInteractRemoteDesktop: Ref<boolean>;
   closeFloatingLayers: (except?: "instance" | "session" | "app") => void;
   errorText: (error: unknown) => string;
   focusAppSession?: (instance: InstanceBoardItem, sessionId: string) => void | Promise<void>;
@@ -42,6 +87,7 @@ export function useActiveInstanceSessions({
   activeInstance,
   appLaunchMenuOpen,
   boardSessionKeys,
+  canInteractRemoteDesktop,
   closeFloatingLayers,
   errorText,
   focusAppSession,
@@ -63,14 +109,26 @@ export function useActiveInstanceSessions({
   const selectedAiSessionSnapshots = reactive<Record<string, AiSessionSummary | undefined>>({});
   const repositorySessionTabs = reactive<Record<string, SessionTab[]>>({});
   const browserSessionTabs = reactive<Record<string, SessionTab[]>>({});
+  const remoteDesktopSessionTabs = reactive<Record<string, SessionTab[]>>(loadRemoteDesktopSessionTabs(t));
   const pendingAiSessionAppSelections = new Map<string, AiSessionSummary>();
+
+  const remoteDesktopEnabled = computed(() => Boolean(
+    activeInstance.value
+    && canInteractRemoteDesktop.value
+    && remoteDesktopAvailable(activeInstance.value),
+  ));
 
   const sessionTabs = computed(() => {
     const instanceId = activeInstance.value?.id;
     const instanceTabs = buildSessionTabs(activeInstance.value, t);
     return instanceTabs.some((session) => session.kind === "status")
       ? instanceTabs
-      : [...instanceTabs, ...(instanceId ? repositorySessionTabs[instanceId] || [] : []), ...(instanceId ? browserSessionTabs[instanceId] || [] : [])];
+      : [
+          ...instanceTabs,
+          ...(instanceId ? repositorySessionTabs[instanceId] || [] : []),
+          ...(instanceId ? browserSessionTabs[instanceId] || [] : []),
+          ...(instanceId && remoteDesktopEnabled.value ? remoteDesktopSessionTabs[instanceId] || [] : []),
+        ];
   });
   const browserSurfaceState = computed<Record<string, {
     leftSessionKey: string;
@@ -80,7 +138,8 @@ export function useActiveInstanceSessions({
       leftSessionKey: string;
       rightSessionKey: string;
     }> = {};
-    for (const instanceId of Object.keys(browserSessionTabs)) {
+    const instanceIds = new Set([...Object.keys(browserSessionTabs), ...Object.keys(remoteDesktopSessionTabs)]);
+    for (const instanceId of instanceIds) {
       state[instanceId] = {
         leftSessionKey: selectedSessionKeys[instanceId] || "",
         rightSessionKey: rightSelectedSessionKeys[instanceId] || "",
@@ -168,14 +227,22 @@ export function useActiveInstanceSessions({
     if (!activeInstance.value) {
       return [];
     }
+    const remoteDesktopApps = remoteDesktopEnabled.value
+      ? [{
+          id: REMOTE_DESKTOP_APP_ID,
+          label: t("instances.remoteDesktop.title"),
+          description: t("instances.remoteDesktop.chooseTargetHint"),
+          kind: "gui" as const,
+        }]
+      : [];
     const browser = canUseDesktopBrowserContext()
       && (supportsBrowserTunnel(activeInstance.value.capabilities) || supportsDirectoryBrowserTunnel(activeInstance.value.capabilities))
       ? [{ id: EMBEDDED_BROWSER_APP_ID, label: t("sessions.tabs.embeddedBrowser") }]
       : [];
     const catalogApps = launchableAppsForInstance(activeInstance.value, t);
-    if (catalogApps.length) return [...catalogApps, ...browser];
+    if (catalogApps.length) return uniqueLaunchableApps([...remoteDesktopApps, ...catalogApps, ...browser]);
     const ids = activeInstance.value.image?.optionalApps?.length ? activeInstance.value.image.optionalApps : ["terminal-tty"];
-    return uniqueLaunchableApps([...ids.map((id) => ({ id, label: appDisplayName(id, t) })), ...browser]);
+    return uniqueLaunchableApps([...remoteDesktopApps, ...ids.map((id) => ({ id, label: appDisplayName(id, t) })), ...browser]);
   });
 
   watch(
@@ -393,6 +460,11 @@ export function useActiveInstanceSessions({
   }
 
   async function launchSelectedApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>) {
+    if (appId === REMOTE_DESKTOP_APP_ID) {
+      openRemoteDesktopTab(instance.id);
+      appLaunchMenuOpen.value = false;
+      return;
+    }
     if (appId === EMBEDDED_BROWSER_APP_ID) {
       openBrowserTab(instance.id);
       appLaunchMenuOpen.value = false;
@@ -438,6 +510,14 @@ export function useActiveInstanceSessions({
 
   async function stopSelectedAppSession(instance: InstanceBoardItem, session: SessionTab) {
     if (session.kind === "ai" || session.kind === "status") {
+      return;
+    }
+    if (session.kind === "remote-desktop") {
+      remoteDesktopSessionTabs[instance.id] = (remoteDesktopSessionTabs[instance.id] || []).filter((tab) => tab.key !== session.key);
+      if (selectedSessionKeys[instance.id] === session.key) delete selectedSessionKeys[instance.id];
+      if (rightSelectedSessionKeys[instance.id] === session.key) delete rightSelectedSessionKeys[instance.id];
+      delete rightPaneSessionKeys[instance.id]?.[session.key];
+      normalizeSessionLayout();
       return;
     }
     if (session.kind === "embedded-browser") {
@@ -589,6 +669,31 @@ export function useActiveInstanceSessions({
     rememberSessionKey(instanceId, key);
   }
 
+  function openRemoteDesktopTab(instanceId: string) {
+    if (!remoteDesktopEnabled.value || activeInstance.value?.id !== instanceId) return;
+    const key = `${REMOTE_DESKTOP_APP_ID}:${instanceId}`;
+    const tabs = remoteDesktopSessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
+    if (!tabs.some((tab) => tab.key === key)) {
+      tabs.push({
+        key,
+        kind: "remote-desktop",
+        label: REMOTE_DESKTOP_APP_ID,
+        title: t("instances.remoteDesktop.title"),
+        status: "running",
+      });
+    }
+    const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";
+    if (pane === "right") {
+      ensurePaneAssignments(instanceId)[key] = true;
+      rightSelectedSessionKeys[instanceId] = key;
+    } else {
+      selectedSessionKeys[instanceId] = key;
+    }
+    focusedSessionPanes[instanceId] = pane;
+    rememberSessionKey(instanceId, key);
+    appLaunchMenuOpen.value = false;
+  }
+
   function handleMarkdownBrowserRequest(event: Event) {
     const detail = (event as CustomEvent<{ instanceId?: string; url?: string }>).detail;
     if (!detail?.url || !detail.instanceId || detail.instanceId !== activeInstance.value?.id) return;
@@ -627,7 +732,17 @@ export function useActiveInstanceSessions({
       delete selectedSessionKeys[instanceId];
       delete focusedSessionPanes[instanceId];
     }
+    for (const instanceId of Object.keys(remoteDesktopSessionTabs)) {
+      if (validInstanceIds.has(instanceId)) continue;
+      delete remoteDesktopSessionTabs[instanceId];
+      delete rightPaneSessionKeys[instanceId];
+      delete rightSelectedSessionKeys[instanceId];
+      delete selectedSessionKeys[instanceId];
+      delete focusedSessionPanes[instanceId];
+    }
   }
+
+  watch(remoteDesktopSessionTabs, (tabs) => persistRemoteDesktopSessionTabs(tabs), { deep: true });
 
   return {
     activeAttachUrl,
@@ -643,6 +758,7 @@ export function useActiveInstanceSessions({
     canLaunchApp,
     browserSessionTabs,
     browserSurfaceState,
+    remoteDesktopSessionTabs,
     launchableApps,
     launchingApp,
     launchSelectedApp,

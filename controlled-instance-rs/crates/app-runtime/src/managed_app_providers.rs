@@ -78,6 +78,14 @@ const NO_CAPABILITIES: ManagedAppProviderCapabilities = ManagedAppProviderCapabi
 
 const PROVIDERS: &[ManagedAppProvider] = &[
     ManagedAppProvider {
+        id: "remote-desktop",
+        capabilities: NO_CAPABILITIES,
+        tty_runtime: ManagedAppTtyRuntime::Default,
+        gui_runtime: ManagedAppGuiRuntime::Default,
+        web_runtime: ManagedAppWebRuntime::Default,
+        ai_session_resume_args: None,
+    },
+    ManagedAppProvider {
         id: "terminal-tty",
         capabilities: ManagedAppProviderCapabilities {
             supports_cwd_selection: true,

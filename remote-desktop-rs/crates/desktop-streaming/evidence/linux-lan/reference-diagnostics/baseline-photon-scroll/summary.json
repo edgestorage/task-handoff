@@ -1,0 +1,41 @@
+{
+  "mode": "scroll",
+  "elapsedSeconds": 300.189,
+  "inputSamples": 100,
+  "p95Ms": 154.90000000596046,
+  "maxMs": 186.2000000178814,
+  "geometry": [
+    [
+      1920,
+      1080
+    ]
+  ],
+  "decodedFps": 29.807887697417293,
+  "deltas": [
+    {
+      "framesDecoded": 2984,
+      "framesDropped": 0,
+      "freezeCount": 1,
+      "pliCount": 0,
+      "nackCount": 25
+    },
+    {
+      "framesDecoded": 2982,
+      "framesDropped": 0,
+      "freezeCount": 0,
+      "pliCount": 0,
+      "nackCount": 26
+    },
+    {
+      "framesDecoded": 2982,
+      "framesDropped": 0,
+      "freezeCount": 0,
+      "pliCount": 0,
+      "nackCount": 26
+    }
+  ],
+  "cpuPercent": 48.412283956331564,
+  "peakRssMiB": 259.76171875,
+  "resourceSeconds": 300.7976511320012,
+  "status": "measured, review against proposal; no automatic capability enable"
+}

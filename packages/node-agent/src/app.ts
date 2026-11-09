@@ -1,3 +1,4 @@
+import { registerManagedDesktopRoutes } from "./instances/remote-desktop-routes.ts";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -2179,6 +2180,16 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     releaseEnvironmentImage: (imageId) => environmentTemplates.releaseUnusedImage(imageId),
     diagnostic: logDiagnostic,
   }, instanceOperations);
+
+  registerManagedDesktopRoutes(app, {
+    fetchImpl,
+    instanceBase: (id) => resolveInstanceWeb(state.requireInstance(id)),
+    instanceCredential: (id) => {
+      const token = state.requireInstance(id).registrationToken;
+      if (!token) throw Object.assign(new Error("Instance registration token is unavailable."), { code: "INSTANCE_REGISTRATION_TOKEN_MISSING" });
+      return token;
+    },
+  });
 
   registerInstanceProxyRoutes(app, {
     fetchImpl,

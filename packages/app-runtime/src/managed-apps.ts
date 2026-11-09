@@ -156,7 +156,7 @@ export function selectInstallRecipe(
   recipe?: InstallRecipe;
   reason?: ManagedAppActionReason;
 } {
-  const platformMatches = definition.distribution.recipes.filter((recipe) => recipe.platforms.includes(capabilities.platform as ManagedAppRecipePlatform));
+  const platformMatches = definition.distribution.recipes.filter((recipe) => recipe.type !== "archive-ownership" && recipe.platforms.includes(capabilities.platform as ManagedAppRecipePlatform));
   const archMatches = platformMatches.filter((recipe) => !recipe.arches?.length || recipe.arches.includes(capabilities.arch as ManagedAppRecipeArch));
   if (!archMatches.length) {
     return { reason: { code: "UNSUPPORTED_PLATFORM", message: `No built-in recipe supports ${capabilities.platform}/${capabilities.arch}.` } };
@@ -193,7 +193,7 @@ type ManagedAppOwnershipOptions = {
   runCommand?: (executable: string, args: string[]) => Promise<OwnershipCommandResult>;
   realpath?: (value: string) => Promise<string>;
   readFile?: (value: string) => Promise<string>;
-  archiveManifestOwned?: (definition: ManagedAppDefinition, recipe: Extract<InstallRecipe, { type: "archive" }>, detection: ManagedAppDetectionResult) => Promise<boolean>;
+  archiveManifestOwned?: (definition: ManagedAppDefinition, recipe: Extract<InstallRecipe, { type: "archive" | "archive-ownership" }>, detection: ManagedAppDetectionResult) => Promise<boolean>;
   nativeManifestOwned?: (definition: ManagedAppDefinition, recipe: Extract<InstallRecipe, { type: "native-package" }>, detection: ManagedAppDetectionResult) => Promise<boolean>;
   target?: ManagedAppRecipeTarget;
 };
@@ -320,7 +320,9 @@ export async function detectManagedAppOwnership(
   options: ManagedAppOwnershipOptions = {},
 ): Promise<ManagedAppOwnershipResult> {
   if (detection.state === "not-installed") return { source: "none" };
-  const viableRecipes = definition.distribution.recipes.filter((recipe) => selectInstallRecipe({ ...definition, distribution: { recipes: [recipe] } }, capabilities, options.target).recipe);
+  const viableRecipes = definition.distribution.recipes.filter((recipe) => recipe.type === "archive-ownership"
+    ? recipe.platforms.includes(capabilities.platform as ManagedAppRecipePlatform) && (!recipe.arches?.length || recipe.arches.includes(capabilities.arch as ManagedAppRecipeArch)) && privilegeAllows(capabilities.privilege,recipe.privilege)
+    : selectInstallRecipe({ ...definition, distribution: { recipes: [recipe] } }, capabilities, options.target).recipe);
   const bundled = viableRecipes.find((recipe) => recipe.type === "bundled");
   if (bundled) return { source: "bundled", recipe: bundled };
   const resolved = {
@@ -365,8 +367,8 @@ export function managedAppProjection(
   const state = detection.state === "not-installed" && !selected.recipe ? "unsupported" : detection.state;
   const bundled = selected.recipe?.type === "bundled";
   const canInstall = state === "not-installed" && Boolean(selected.recipe) && !bundled;
-  const canUninstall = (state === "installed" || state === "broken") && Boolean(selected.recipe) && !bundled && source === "recipe";
-  const canUpdate = canUninstall;
+  const canUninstall = (state === "installed" || state === "broken") && !bundled && source === "recipe";
+  const canUpdate = canUninstall && Boolean(selected.recipe);
   const installReason = canInstall ? undefined
     : bundled ? { code: "BUNDLED" as const, message: "This app is supplied with the controlled computer." }
       : state === "installed" || state === "broken" ? { code: "ALREADY_INSTALLED" as const, message: "This app is already present." }

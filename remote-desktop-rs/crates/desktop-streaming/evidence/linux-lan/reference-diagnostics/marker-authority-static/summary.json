@@ -1,0 +1,41 @@
+{
+  "mode": "static",
+  "elapsedSeconds": 300.174,
+  "inputSamples": 100,
+  "p95Ms": 168.30000001192093,
+  "maxMs": 169.7000000178814,
+  "geometry": [
+    [
+      1920,
+      1080
+    ]
+  ],
+  "decodedFps": 30.005929893994818,
+  "deltas": [
+    {
+      "framesDecoded": 3002,
+      "framesDropped": 0,
+      "freezeCount": 0,
+      "pliCount": 0,
+      "nackCount": 6
+    },
+    {
+      "framesDecoded": 3003,
+      "framesDropped": 0,
+      "freezeCount": 0,
+      "pliCount": 0,
+      "nackCount": 6
+    },
+    {
+      "framesDecoded": 3002,
+      "framesDropped": 0,
+      "freezeCount": 0,
+      "pliCount": 0,
+      "nackCount": 7
+    }
+  ],
+  "cpuPercent": 37.381084263526425,
+  "peakRssMiB": 244.04296875,
+  "resourceSeconds": 301.08664640799907,
+  "status": "measured, review against proposal; no automatic capability enable"
+}

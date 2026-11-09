@@ -1,0 +1,129 @@
+//! Opaque, short-lived window selection. Native handles never cross IPC/wire.
+use crate::session::{secret, Owner};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+pub const WINDOW_TTL: Duration = Duration::from_secs(60);
+pub const MAX_WINDOWS: usize = 256;
+pub const MAX_CAPTURE_DIMENSION: u32 = 8192;
+pub const MAX_CATALOG_BYTES: usize = 512 * 1024;
+
+pub use remote_desktop_protocol::model::WindowEntry;
+/// Platform-only input to publication; H may hold a retained SCWindow/WGC item.
+pub struct NativeWindow<H> {
+    pub unavailable_reason: Option<String>,
+    pub handle: H,
+    pub title: String,
+    pub application_name: String,
+    pub width: u32,
+    pub height: u32,
+}
+struct Reference<H> {
+    handle: H,
+    owner: Owner,
+    expires: Instant,
+}
+pub struct Catalog<H> {
+    references: HashMap<String, Reference<H>>,
+}
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CatalogError {
+    #[error("REMOTE_DESKTOP_WINDOW_CATALOG_TOO_LARGE")]
+    TooLarge,
+    #[error("REMOTE_DESKTOP_WINDOW_REFERENCE_INVALID")]
+    InvalidReference,
+}
+impl<H> Default for Catalog<H> {
+    fn default() -> Self {
+        Self {
+            references: HashMap::new(),
+        }
+    }
+}
+impl<H> Catalog<H> {
+    /// Invalidate before starting asynchronous enumeration, including a failed
+    /// native request. No periodic enumeration or expired-handle polling.
+    pub fn invalidate(&mut self) {
+        self.references.clear();
+    }
+    /// Refresh invalidates the preceding generation, including on enumeration
+    /// failure. One catalog per component bounds retained native handles to 256.
+    pub fn publish(
+        &mut self,
+        owner: Owner,
+        windows: Vec<NativeWindow<H>>,
+        now: Instant,
+    ) -> Result<Vec<WindowEntry>, CatalogError> {
+        self.references.clear();
+        if windows.len() > MAX_WINDOWS
+            || windows
+                .iter()
+                .any(|w| w.title.len() > 512 || w.application_name.len() > 256)
+        {
+            return Err(CatalogError::TooLarge);
+        }
+        let mut references = HashMap::new();
+        let mut entries = Vec::new();
+        for w in windows {
+            // Filtering platform shell/cloaked/protected windows belongs in the
+            // backend. Zero geometry is never a valid selectable target.
+            if w.width == 0 || w.height == 0 {
+                continue;
+            }
+            let capturable = w.unavailable_reason.is_none()
+                && w.width <= MAX_CAPTURE_DIMENSION
+                && w.height <= MAX_CAPTURE_DIMENSION;
+            let window_ref = secret();
+            entries.push(WindowEntry {
+                window_ref: window_ref.clone(),
+                title: w.title,
+                application_name: w.application_name,
+                width: w.width,
+                height: w.height,
+                capturable,
+                reason: w.unavailable_reason.or_else(|| {
+                    (!capturable).then(|| "REMOTE_DESKTOP_WINDOW_DIMENSIONS_UNSUPPORTED".into())
+                }),
+            });
+            if !capturable {
+                continue;
+            }
+            references.insert(
+                window_ref,
+                Reference {
+                    handle: w.handle,
+                    owner: owner.clone(),
+                    expires: now + WINDOW_TTL,
+                },
+            );
+        }
+        if serde_json::to_vec(&entries)
+            .map_err(|_| CatalogError::TooLarge)?
+            .len()
+            > MAX_CATALOG_BYTES
+        {
+            return Err(CatalogError::TooLarge);
+        }
+        self.references = references;
+        Ok(entries)
+    }
+    /// Validate owner before removing: a rejected caller cannot consume another
+    /// actor's reference. The caller must revalidate native identity before use.
+    pub fn consume(
+        &mut self,
+        window_ref: &str,
+        owner: &Owner,
+        now: Instant,
+    ) -> Result<H, CatalogError> {
+        self.references.retain(|_, r| r.expires > now);
+        let r = self
+            .references
+            .get(window_ref)
+            .ok_or(CatalogError::InvalidReference)?;
+        if &r.owner != owner {
+            return Err(CatalogError::InvalidReference);
+        }
+        Ok(self.references.remove(window_ref).unwrap().handle)
+    }
+}

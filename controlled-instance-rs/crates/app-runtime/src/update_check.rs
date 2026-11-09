@@ -291,7 +291,7 @@ impl AppUpdateChecker {
                 ManagedAppUpdateStatus::Unsupported,
             )
             .reason("Bundled apps ship with the controlled computer and have no update source."),
-            InstallRecipe::Archive { .. } => {
+            InstallRecipe::ArchiveOwnership { .. } | InstallRecipe::Archive { .. } => {
                 AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unsupported)
                     .reason("Archive updates are delivered with the built-in app definition.")
             }

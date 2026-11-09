@@ -10,13 +10,13 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ARCHS=${TASK_HANDOFF_RUST_CONTROLLED_INSTANCE_ARCHS:-x64,arm64}
 OUTPUT_DIR=${TASK_HANDOFF_RUST_CONTROLLED_INSTANCE_BINARIES_DIR:-"$ROOT/release/rust-controlled-instance-binaries"}
-IMAGE=${TASK_HANDOFF_RUST_CONTROLLED_INSTANCE_DOCKER_IMAGE:-rust:1.89-bookworm}
+IMAGE=${TASK_HANDOFF_RUST_CONTROLLED_INSTANCE_DOCKER_IMAGE:-rust:1.95-bookworm}
 X64_IMAGE=${TASK_HANDOFF_RUST_CONTROLLED_INSTANCE_DOCKER_IMAGE_X64:-$IMAGE}
 ARM64_IMAGE=${TASK_HANDOFF_RUST_CONTROLLED_INSTANCE_DOCKER_IMAGE_ARM64:-$IMAGE}
 # Offline hosts may already have the older Debian 11 Rust image for one
 # architecture. Its glibc baseline is still compatible with the Debian 12
 # controlled-instance runtime, so use it when the primary pull is unavailable.
-FALLBACK_IMAGE=${TASK_HANDOFF_RUST_CONTROLLED_INSTANCE_FALLBACK_DOCKER_IMAGE:-rust:1.89-bullseye}
+FALLBACK_IMAGE=${TASK_HANDOFF_RUST_CONTROLLED_INSTANCE_FALLBACK_DOCKER_IMAGE:-rust:1.95-bullseye}
 CARGO_REGISTRY_DIR=${CARGO_REGISTRY_DIR:-${CARGO_HOME:-$HOME/.cargo}/registry}
 OFFLINE=${TASK_HANDOFF_RUST_BUILD_OFFLINE:-1}
 
@@ -84,7 +84,7 @@ for arch in "${REQUESTED_ARCHS[@]}"; do
     "$image" \
     bash -c '
       set -euo pipefail
-      export PATH="/usr/local/rustup/toolchains/1.89.0-${RUST_TOOLCHAIN}/bin:${PATH}"
+      export PATH="/usr/local/rustup/toolchains/1.95.0-${RUST_TOOLCHAIN}/bin:${PATH}"
       cargo build --locked --release -p controlled-instance-cli
       install -m 0755 "$CARGO_TARGET_DIR/release/controlled-instance-rs" \
         "/out/controlled-instance-linux-'"$arch"'"

@@ -100,10 +100,10 @@ jobs:
             -w /workspace/controlled-instance-rs \
             -e CARGO_TARGET_DIR="target/linux-${{ matrix.arch }}" \
             -e RUST_TOOLCHAIN="$RUST_TOOLCHAIN" \
-            rust:1.89-bookworm \
+            rust:1.95-bookworm \
             bash -c '
               set -euo pipefail
-              export PATH="/usr/local/rustup/toolchains/1.89.0-${RUST_TOOLCHAIN}/bin:${PATH}"
+              export PATH="/usr/local/rustup/toolchains/1.95.0-${RUST_TOOLCHAIN}/bin:${PATH}"
               cargo build --locked --release -p controlled-instance-cli
               install -d -m 0755 /workspace/release/rust-controlled-instance-binaries
               install -m 0755 "$CARGO_TARGET_DIR/release/controlled-instance-rs" \

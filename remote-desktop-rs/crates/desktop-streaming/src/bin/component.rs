@@ -1,0 +1,175 @@
+use controlled_instance_core::local_ipc::{self, LocalIpcEndpoint};
+use desktop_streaming::{
+    contract::{Hello, IPC_VERSION},
+    framing,
+};
+use std::io::Read;
+use std::{path::PathBuf, time::Duration};
+use subtle::ConstantTimeEq;
+
+fn main() -> anyhow::Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--version")) {
+        anyhow::ensure!(
+            std::env::args_os().count() == 2,
+            "unexpected version argument"
+        );
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--request-input-permission"))
+    {
+        anyhow::ensure!(
+            std::env::args_os().count() == 2,
+            "unexpected permission argument"
+        );
+        // Explicit operator action, with no native key or pointer events. Normal
+        // guard initialization keeps the maintained library's prompt disabled.
+        let allowed = enigo::Enigo::new(&enigo::Settings {
+            open_prompt_to_get_permissions: true,
+            ..Default::default()
+        })
+        .is_ok();
+        println!("{}", serde_json::json!({"inputAllowed":allowed}));
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--check-native-permissions"))
+    {
+        anyhow::ensure!(
+            std::env::args_os().count() == 2,
+            "unexpected permission argument"
+        );
+        let screen_capture = core_graphics::access::ScreenCaptureAccess.preflight();
+        let input = enigo::Enigo::new(&enigo::Settings {
+            open_prompt_to_get_permissions: false,
+            ..Default::default()
+        })
+        .is_ok();
+        println!(
+            "{}",
+            serde_json::json!({"screenCaptureAllowed":screen_capture,"inputAllowed":input})
+        );
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--request-screen-permission"))
+    {
+        anyhow::ensure!(
+            std::env::args_os().count() == 2,
+            "unexpected permission argument"
+        );
+        // Explicit diagnostic action only: normal capability checks and attach
+        // never trigger a TCC prompt or alter the user's permission settings.
+        let allowed = core_graphics::access::ScreenCaptureAccess.request();
+        println!("{}", serde_json::json!({"screenCaptureAllowed":allowed}));
+        return Ok(());
+    }
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--clipboard-worker")) {
+        anyhow::ensure!(
+            std::env::args_os().count() == 2,
+            "unexpected clipboard argument"
+        );
+        return desktop_streaming::clipboard::run();
+    }
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--surface-owner")) {
+        anyhow::ensure!(
+            std::env::args_os().count() == 2,
+            "unexpected surface argument"
+        );
+        return desktop_streaming::surface::run();
+    }
+
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--input-guard")) {
+        anyhow::ensure!(
+            std::env::args_os().count() == 2,
+            "unexpected guard argument"
+        );
+        return desktop_streaming::input_guard::run();
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(component())
+}
+async fn component() -> anyhow::Result<()> {
+    let mut args = std::env::args_os().skip(1);
+    let mut first = args.next();
+    if first.as_deref() == Some(std::ffi::OsStr::new("--input-guard")) {
+        anyhow::ensure!(args.next().is_none(), "unexpected guard argument");
+        return desktop_streaming::input_guard::run();
+    }
+    let mode = match first.as_deref().and_then(|s| s.to_str()) {
+        Some("--synthetic") => desktop_streaming::capture::Mode::Synthetic,
+        Some("--native") => desktop_streaming::capture::Mode::Local,
+        Some("--virtual") => desktop_streaming::capture::Mode::Virtual,
+        _ => desktop_streaming::capture::Mode::Control,
+    };
+    if mode != desktop_streaming::capture::Mode::Control {
+        first = args.next();
+    }
+    anyhow::ensure!(
+        first.as_deref() == Some(std::ffi::OsStr::new("--ipc")),
+        "expected --ipc"
+    );
+    let path = PathBuf::from(
+        args.next()
+            .ok_or_else(|| anyhow::anyhow!("missing IPC endpoint"))?,
+    );
+    let show_cursor = match args.next() {
+        Some(argument) if argument == std::ffi::OsStr::new("--system-cursor") => false,
+        Some(_) => anyhow::bail!("unexpected argument"),
+        None => true,
+    };
+    anyhow::ensure!(args.next().is_none(), "unexpected argument");
+    // Tokio stdin uses a blocking runtime worker that can keep runtime shutdown
+    // waiting forever. A detached OS thread owns the inherited pipe instead;
+    // normal component exit never waits for a still-live host to close stdin.
+    let (bootstrap_tx, bootstrap_rx) = tokio::sync::oneshot::channel();
+    let (death_tx, death_rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let mut input = std::io::stdin();
+        let bootstrap = (|| -> anyhow::Result<Hello> {
+            let mut header = [0; 4];
+            input.read_exact(&mut header)?;
+            let length = u32::from_be_bytes(header) as usize;
+            anyhow::ensure!(
+                length > 0 && length <= desktop_streaming::contract::MAX_IPC_FRAME,
+                "invalid bootstrap frame"
+            );
+            let mut bytes = vec![0; length];
+            input.read_exact(&mut bytes)?;
+            serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid bootstrap JSON"))
+        })();
+        if bootstrap_tx.send(bootstrap).is_err() {
+            return;
+        }
+        let mut byte = [0];
+        let _ = input.read(&mut byte);
+        let _ = death_tx.send(());
+    });
+    let bootstrap = tokio::time::timeout(Duration::from_secs(5), bootstrap_rx).await???;
+    anyhow::ensure!(
+        bootstrap.protocol_version == IPC_VERSION && bootstrap.nonce.len() == 64,
+        "invalid bootstrap"
+    );
+    let endpoint = LocalIpcEndpoint::explicit(path)?;
+    let mut stream = local_ipc::connect(&endpoint).await?;
+    framing::write(&mut stream, &bootstrap).await?;
+    let host: Hello = tokio::time::timeout(Duration::from_secs(5), framing::read(&mut stream))
+        .await??
+        .ok_or_else(|| anyhow::anyhow!("host disconnected"))?;
+    anyhow::ensure!(
+        host.protocol_version == IPC_VERSION
+            && bool::from(host.nonce.as_bytes().ct_eq(bootstrap.nonce.as_bytes())),
+        "host authentication failed"
+    );
+    tokio::select! {
+        result = desktop_streaming::service::serve_mode_with_cursor(stream,mode,show_cursor) => result,
+        _ = death_rx => Ok(()),
+    }
+}

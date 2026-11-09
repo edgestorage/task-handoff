@@ -1,0 +1,3889 @@
+{
+  "result": {
+    "ok": true,
+    "metrics": {
+      "encoder": "videotoolbox",
+      "estimatedBitrate": 3161306,
+      "frameBudgetDrops": 0,
+      "framesSent": 152,
+      "keyframesSent": 8,
+      "maxQueuedBytes": 8793,
+      "pacedBitrate": 3161306,
+      "queueResets": 0,
+      "queuedBytes": 0
+    },
+    "initial": {
+      "diagnostic": {
+        "snapshot": {
+          "captureGeometry": {
+            "height": 392,
+            "width": 640
+          },
+          "captureTarget": {
+            "kind": "window",
+            "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": null,
+          "mediaPaused": false,
+          "phase": "active",
+          "reason": null,
+          "sessionExpiresAt": 1794128577045,
+          "sessionRevision": 4,
+          "viewerSessionId": "rdv_6gvhbge2nc2ze"
+        },
+        "error": null,
+        "decodedFrames": 2,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": null,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 1,
+        "textCommits": 0,
+        "metrics": null,
+        "metricsReplies": 0,
+        "windows": {
+          "count": 5,
+          "capturable": 5
+        }
+      },
+      "stats": [
+        {
+          "framesDecoded": 2,
+          "keyFramesDecoded": 1,
+          "bytesReceived": 4089,
+          "codecId": "CIT01_108_level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+          "jitter": 0,
+          "jitterBufferDelay": 0.016822999999999998,
+          "jitterBufferEmittedCount": 2,
+          "framesDropped": 0,
+          "pliCount": 0,
+          "nackCount": 0,
+          "freezeCount": 0,
+          "totalFreezesDuration": 0,
+          "jitterBufferTargetDelay": 0.022071999999999998,
+          "jitterBufferMinimumDelay": 0.022071999999999998
+        }
+      ],
+      "size": [
+        640,
+        392
+      ]
+    },
+    "nativeClick": true,
+    "clickPoints": [
+      {
+        "expectedX": 500,
+        "actualX": 500
+      },
+      {
+        "expectedX": 100,
+        "actualX": 100
+      },
+      {
+        "expectedX": 500,
+        "actualX": 500
+      }
+    ],
+    "nativePhysicalKey": true,
+    "nativeWheel": true,
+    "unicodeMatches": true,
+    "characters": 37,
+    "pause": {
+      "before": 135,
+      "after": 135,
+      "epoch": null,
+      "keyframes": 5
+    },
+    "resume": {
+      "keyframes": 6,
+      "epoch": null,
+      "stats": [
+        {
+          "framesDecoded": 141,
+          "keyFramesDecoded": 6,
+          "bytesReceived": 49790,
+          "codecId": "CIT01_108_level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+          "jitter": 0.001,
+          "jitterBufferDelay": 1.124349,
+          "jitterBufferEmittedCount": 141,
+          "framesDropped": 0,
+          "pliCount": 0,
+          "nackCount": 0,
+          "freezeCount": 1,
+          "totalFreezesDuration": 1.876,
+          "jitterBufferTargetDelay": 1.986141,
+          "jitterBufferMinimumDelay": 1.986141
+        }
+      ]
+    },
+    "windowLifecycle": {
+      "geometry": [
+        {
+          "action": "move",
+          "released": true,
+          "staleRevisionRejected": true,
+          "snapshot": {
+            "snapshot": {
+              "captureGeometry": {
+                "height": 392,
+                "width": 640
+              },
+              "captureTarget": {
+                "kind": "window",
+                "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+              },
+              "idleExpiresAt": null,
+              "inputEpoch": null,
+              "mediaPaused": false,
+              "phase": "active",
+              "reason": null,
+              "sessionExpiresAt": 1794128577045,
+              "sessionRevision": 13,
+              "viewerSessionId": "rdv_6gvhbge2nc2ze"
+            }
+          }
+        },
+        {
+          "action": "resize",
+          "released": true,
+          "staleRevisionRejected": true,
+          "snapshot": {
+            "snapshot": {
+              "captureGeometry": {
+                "height": 432,
+                "width": 720
+              },
+              "captureTarget": {
+                "kind": "window",
+                "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+              },
+              "idleExpiresAt": null,
+              "inputEpoch": null,
+              "mediaPaused": false,
+              "phase": "active",
+              "reason": null,
+              "sessionExpiresAt": 1794128577045,
+              "sessionRevision": 18,
+              "viewerSessionId": "rdv_6gvhbge2nc2ze"
+            }
+          }
+        }
+      ],
+      "focusLoss": true,
+      "occlusion": true,
+      "terminal": "minimize",
+      "reason": "REMOTE_DESKTOP_WINDOW_UNAVAILABLE"
+    }
+  },
+  "trace": [
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": -1,
+      "lastMouseY": -1,
+      "marked": false,
+      "mouseDowns": 0,
+      "mouseUps": 0,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": -1,
+      "lastMouseY": -1,
+      "marked": false,
+      "mouseDowns": 0,
+      "mouseUps": 0,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "snapshot",
+      "lastMouseX": -1,
+      "lastMouseY": -1,
+      "marked": false,
+      "mouseDowns": 0,
+      "mouseUps": 0,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": -1,
+      "lastMouseY": -1,
+      "marked": false,
+      "mouseDowns": 0,
+      "mouseUps": 0,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 500,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 1,
+      "mouseUps": 0,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 500,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 1,
+      "mouseUps": 1,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "snapshot",
+      "lastMouseX": 500,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 1,
+      "mouseUps": 1,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": 500,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 1,
+      "mouseUps": 1,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": false,
+      "mouseDowns": 2,
+      "mouseUps": 1,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": false,
+      "mouseDowns": 2,
+      "mouseUps": 2,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "snapshot",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": false,
+      "mouseDowns": 2,
+      "mouseUps": 2,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": false,
+      "mouseDowns": 2,
+      "mouseUps": 2,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 500,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 2,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 500,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": 500,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "snapshot",
+      "lastMouseX": 500,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 0
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "snapshot",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 1,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 1,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 1,
+      "keyUps": 0,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 1,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 1,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 1,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 1,
+      "keyUps": 1,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 1,
+      "keyUps": 1,
+      "kind": "cleared",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 2,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 1,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 2,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 1,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 3,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 2,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 3,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 2,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 4,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 3,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 4,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 3,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 5,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 4,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 5,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 4,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 6,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 5,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 6,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 5,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 7,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 6,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 7,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 6,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 8,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 7,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 8,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 7,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 9,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 8,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 9,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 8,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 10,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 9,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 10,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 9,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 11,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 10,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 11,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 10,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 12,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 11,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 12,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 11,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 13,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 12,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 13,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 12,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 14,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 13,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 14,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 13,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 15,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 14,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 15,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 14,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 16,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 15,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 16,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 15,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 17,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 16,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 17,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 16,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 18,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 17,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 18,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 17,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 19,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 18,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 19,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 18,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 20,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 19,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 20,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 19,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 21,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 20,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 21,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 20,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 22,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 21,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 22,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 21,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 23,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 22,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 23,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 22,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 24,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 23,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 24,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 23,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 25,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 24,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 25,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 24,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 26,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 25,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 26,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 25,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 27,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 26,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 27,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 26,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 28,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 27,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 28,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 27,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 29,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 28,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 29,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 28,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 30,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 29,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 30,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 29,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 31,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 30,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 31,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 30,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 32,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 31,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 32,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 31,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 33,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 32,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 33,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 32,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 34,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 33,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 34,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 33,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 35,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 34,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 35,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 34,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 36,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 35,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 36,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 35,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 37,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 36,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 37,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 36,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 38,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 37,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": true,
+      "keyDowns": 38,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 37,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": true,
+      "keyDowns": 38,
+      "keyUps": 1,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 37,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": true,
+      "keyDowns": 38,
+      "keyUps": 1,
+      "kind": "snapshot",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 37,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": true,
+      "keyDowns": 39,
+      "keyUps": 1,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 38,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 39,
+      "keyUps": 1,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 38,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 39,
+      "keyUps": 1,
+      "kind": "moved",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 38,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 39,
+      "keyUps": 2,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 38,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 39,
+      "keyUps": 2,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 38,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 39,
+      "keyUps": 2,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 38,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 39,
+      "keyUps": 2,
+      "kind": "snapshot",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 38,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 2,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 2,
+      "kind": "text",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 2,
+      "kind": "resized",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "stolen",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "uncovered",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "occluded",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "uncovered",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "ready",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    },
+    {
+      "active": true,
+      "characters": 39,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 40,
+      "keyUps": 3,
+      "kind": "minimized",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 3,
+      "mouseUps": 3,
+      "pid": 2432,
+      "rect": {
+        "height": 432,
+        "width": 720,
+        "x": 260,
+        "y": 508
+      },
+      "wheels": 1
+    }
+  ],
+  "browserTrace": [
+    {
+      "diagnostic": {
+        "snapshot": {
+          "captureGeometry": {
+            "height": 392,
+            "width": 640
+          },
+          "captureTarget": {
+            "kind": "window",
+            "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": null,
+          "mediaPaused": false,
+          "phase": "active",
+          "reason": null,
+          "sessionExpiresAt": 1794128577045,
+          "sessionRevision": 4,
+          "viewerSessionId": "rdv_6gvhbge2nc2ze"
+        },
+        "error": null,
+        "decodedFrames": 2,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": null,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 1,
+        "textCommits": 0,
+        "metrics": null,
+        "metricsReplies": 0,
+        "windows": {
+          "count": 5,
+          "capturable": 5
+        }
+      },
+      "stats": [
+        {
+          "framesDecoded": 2,
+          "keyFramesDecoded": 1,
+          "bytesReceived": 4089,
+          "codecId": "CIT01_108_level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+          "jitter": 0,
+          "jitterBufferDelay": 0.016822999999999998,
+          "jitterBufferEmittedCount": 2,
+          "framesDropped": 0,
+          "pliCount": 0,
+          "nackCount": 0,
+          "freezeCount": 0,
+          "totalFreezesDuration": 0,
+          "jitterBufferTargetDelay": 0.022071999999999998,
+          "jitterBufferMinimumDelay": 0.022071999999999998
+        }
+      ],
+      "size": [
+        640,
+        392
+      ]
+    },
+    {
+      "epoch": 1
+    },
+    {
+      "sent": true,
+      "diagnostic": {
+        "snapshot": {
+          "captureGeometry": {
+            "height": 392,
+            "width": 640
+          },
+          "captureTarget": {
+            "kind": "window",
+            "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": 1,
+          "mediaPaused": false,
+          "phase": "active",
+          "reason": null,
+          "sessionExpiresAt": 1794128577045,
+          "sessionRevision": 5,
+          "viewerSessionId": "rdv_6gvhbge2nc2ze"
+        },
+        "error": null,
+        "decodedFrames": 31,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": 1,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 1,
+        "textCommits": 0,
+        "metrics": null,
+        "metricsReplies": 0,
+        "windows": {
+          "count": 5,
+          "capturable": 5
+        }
+      }
+    },
+    {
+      "sent": true,
+      "diagnostic": {
+        "snapshot": {
+          "captureGeometry": {
+            "height": 392,
+            "width": 640
+          },
+          "captureTarget": {
+            "kind": "window",
+            "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": 1,
+          "mediaPaused": false,
+          "phase": "active",
+          "reason": null,
+          "sessionExpiresAt": 1794128577045,
+          "sessionRevision": 5,
+          "viewerSessionId": "rdv_6gvhbge2nc2ze"
+        },
+        "error": null,
+        "decodedFrames": 49,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": 1,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 1,
+        "textCommits": 0,
+        "metrics": null,
+        "metricsReplies": 0,
+        "windows": {
+          "count": 5,
+          "capturable": 5
+        }
+      }
+    },
+    {
+      "sent": true,
+      "diagnostic": {
+        "snapshot": {
+          "captureGeometry": {
+            "height": 392,
+            "width": 640
+          },
+          "captureTarget": {
+            "kind": "window",
+            "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": 1,
+          "mediaPaused": false,
+          "phase": "active",
+          "reason": null,
+          "sessionExpiresAt": 1794128577045,
+          "sessionRevision": 5,
+          "viewerSessionId": "rdv_6gvhbge2nc2ze"
+        },
+        "error": null,
+        "decodedFrames": 65,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": 1,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 1,
+        "textCommits": 0,
+        "metrics": null,
+        "metricsReplies": 0,
+        "windows": {
+          "count": 5,
+          "capturable": 5
+        }
+      }
+    },
+    {
+      "sent": true
+    },
+    {
+      "sent": true,
+      "diagnostic": {
+        "snapshot": {
+          "captureGeometry": {
+            "height": 392,
+            "width": 640
+          },
+          "captureTarget": {
+            "kind": "window",
+            "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": 1,
+          "mediaPaused": false,
+          "phase": "active",
+          "reason": null,
+          "sessionExpiresAt": 1794128577045,
+          "sessionRevision": 5,
+          "viewerSessionId": "rdv_6gvhbge2nc2ze"
+        },
+        "error": null,
+        "decodedFrames": 96,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": 1,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 1,
+        "textCommits": 0,
+        "metrics": null,
+        "metricsReplies": 0,
+        "windows": {
+          "count": 5,
+          "capturable": 5
+        }
+      }
+    },
+    {
+      "committed": true
+    },
+    {
+      "before": 135,
+      "after": 135,
+      "epoch": null,
+      "keyframes": 5
+    },
+    {
+      "keyframes": 6,
+      "epoch": null,
+      "stats": [
+        {
+          "framesDecoded": 141,
+          "keyFramesDecoded": 6,
+          "bytesReceived": 49790,
+          "codecId": "CIT01_108_level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+          "jitter": 0.001,
+          "jitterBufferDelay": 1.124349,
+          "jitterBufferEmittedCount": 141,
+          "framesDropped": 0,
+          "pliCount": 0,
+          "nackCount": 0,
+          "freezeCount": 1,
+          "totalFreezesDuration": 1.876,
+          "jitterBufferTargetDelay": 1.986141,
+          "jitterBufferMinimumDelay": 1.986141
+        }
+      ]
+    },
+    {
+      "encoder": "videotoolbox",
+      "estimatedBitrate": 3161306,
+      "frameBudgetDrops": 0,
+      "framesSent": 152,
+      "keyframesSent": 8,
+      "maxQueuedBytes": 8793,
+      "pacedBitrate": 3161306,
+      "queueResets": 0,
+      "queuedBytes": 0
+    },
+    {
+      "epoch": 2,
+      "revision": 10
+    },
+    {
+      "sent": true
+    },
+    {
+      "snapshot": {
+        "captureGeometry": {
+          "height": 392,
+          "width": 640
+        },
+        "captureTarget": {
+          "kind": "window",
+          "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+        },
+        "idleExpiresAt": null,
+        "inputEpoch": null,
+        "mediaPaused": false,
+        "phase": "active",
+        "reason": null,
+        "sessionExpiresAt": 1794128577045,
+        "sessionRevision": 13,
+        "viewerSessionId": "rdv_6gvhbge2nc2ze"
+      }
+    },
+    {
+      "staleRejected": true
+    },
+    {
+      "epoch": 3,
+      "revision": 14
+    },
+    {
+      "suspended": true
+    },
+    {
+      "epoch": 4,
+      "revision": 16
+    },
+    {
+      "sent": true
+    },
+    {
+      "snapshot": {
+        "captureGeometry": {
+          "height": 432,
+          "width": 720
+        },
+        "captureTarget": {
+          "kind": "window",
+          "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+        },
+        "idleExpiresAt": null,
+        "inputEpoch": null,
+        "mediaPaused": false,
+        "phase": "active",
+        "reason": null,
+        "sessionExpiresAt": 1794128577045,
+        "sessionRevision": 18,
+        "viewerSessionId": "rdv_6gvhbge2nc2ze"
+      }
+    },
+    {
+      "staleRejected": true
+    },
+    {
+      "epoch": 5,
+      "revision": 19
+    },
+    {
+      "suspended": true
+    },
+    {
+      "epoch": 6,
+      "revision": 21
+    },
+    {
+      "focusSuspended": true
+    },
+    {
+      "epoch": 7,
+      "revision": 23
+    },
+    {
+      "occlusionSuspended": true,
+      "mediaContinues": true
+    },
+    {
+      "epoch": 8,
+      "revision": 25
+    },
+    {
+      "reason": "REMOTE_DESKTOP_WINDOW_UNAVAILABLE"
+    },
+    {
+      "final": {
+        "snapshot": {
+          "captureGeometry": {
+            "height": 432,
+            "width": 720
+          },
+          "captureTarget": {
+            "kind": "window",
+            "windowRef": "c79387170f3d31d50ba4ec726cc890e4bad12a514a4281919c7d1f1d576e36ae"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": null,
+          "mediaPaused": true,
+          "phase": "failed",
+          "reason": "REMOTE_DESKTOP_WINDOW_UNAVAILABLE",
+          "sessionExpiresAt": 1794128577045,
+          "sessionRevision": 27,
+          "viewerSessionId": "rdv_6gvhbge2nc2ze"
+        },
+        "error": null,
+        "decodedFrames": 359,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": null,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 1,
+        "textCommits": 1,
+        "metrics": {
+          "encoder": "videotoolbox",
+          "estimatedBitrate": 3161306,
+          "frameBudgetDrops": 0,
+          "framesSent": 152,
+          "keyframesSent": 8,
+          "maxQueuedBytes": 8793,
+          "pacedBitrate": 3161306,
+          "queueResets": 0,
+          "queuedBytes": 0
+        },
+        "metricsReplies": 1,
+        "windows": {
+          "count": 5,
+          "capturable": 5
+        }
+      },
+      "stats": [
+        {
+          "framesDecoded": 376,
+          "keyFramesDecoded": 18,
+          "bytesReceived": 163665,
+          "codecId": "CIT01_108_level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+          "jitter": 0.001,
+          "jitterBufferDelay": 3.571002,
+          "jitterBufferEmittedCount": 376,
+          "framesDropped": 0,
+          "pliCount": 0,
+          "nackCount": 0,
+          "freezeCount": 1,
+          "totalFreezesDuration": 1.876,
+          "jitterBufferTargetDelay": 5.839678999999999,
+          "jitterBufferMinimumDelay": 5.839678999999999
+        }
+      ]
+    },
+    {
+      "stopping": true
+    }
+  ]
+}

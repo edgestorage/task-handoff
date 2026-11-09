@@ -125,6 +125,22 @@ type Publisher = Arc<dyn Fn(AppManagementEvent) + Send + Sync>;
 type Warning = Arc<dyn Fn(&str) + Send + Sync>;
 type RuntimeHook = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Provider-owned package hooks run under the existing serialized App queue.
+/// They must complete before publishing a terminal job or admitting new work.
+#[async_trait::async_trait]
+pub trait AppPackageLifecycle: Send + Sync {
+    async fn before_change(
+        &self,
+        operation: AppManagementOperation,
+    ) -> Result<(), AppRecipeExecutionError>;
+    async fn changed(
+        &self,
+        operation: AppManagementOperation,
+        succeeded: bool,
+    ) -> Result<(), AppRecipeExecutionError>;
+}
+type PackageLifecycles = Arc<dyn Fn(&str) -> Option<Arc<dyn AppPackageLifecycle>> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct AppManagementManager {
     inner: Arc<Mutex<ManagerState>>,
@@ -139,9 +155,18 @@ pub struct AppManagementManager {
     update_checker: Arc<AppUpdateChecker>,
     install_environment: Option<AppInstallEnvironmentManager>,
     queue: Arc<tokio::sync::Mutex<()>>,
+    package_lifecycles: PackageLifecycles,
 }
 
 impl AppManagementManager {
+    pub fn with_package_lifecycles(
+        mut self,
+        hooks: impl Fn(&str) -> Option<Arc<dyn AppPackageLifecycle>> + Send + Sync + 'static,
+    ) -> Self {
+        self.package_lifecycles = Arc::new(hooks);
+        self
+    }
+
     pub fn new(
         state_dir: impl Into<PathBuf>,
         install_base_dir: impl Into<PathBuf>,
@@ -212,6 +237,9 @@ impl AppManagementManager {
     ) -> Self {
         let state_dir = state_dir.into();
         let install_base_dir = install_base_dir.into();
+        if !crate::archive_transaction::recover_all(&state_dir, &install_base_dir).is_empty() {
+            warn("Some archive transactions require recovery; affected apps remain unavailable.");
+        }
         let jobs = load_jobs(&state_dir, &warn);
         let capabilities = install_environment
             .as_ref()
@@ -237,6 +265,7 @@ impl AppManagementManager {
             publish,
             warn,
             runtime_hook,
+            package_lifecycles: Arc::new(|_| None),
             executor: install_environment
                 .as_ref()
                 .map(|environment| {
@@ -267,6 +296,7 @@ impl AppManagementManager {
             &definitions,
             &mut state,
             &self.install_base_dir,
+            &self.state_dir,
             self.install_environment.as_ref(),
         )
     }
@@ -331,6 +361,7 @@ impl AppManagementManager {
             &definitions,
             &mut state,
             &self.install_base_dir,
+            &self.state_dir,
             self.install_environment.as_ref(),
         )
     }
@@ -438,6 +469,25 @@ impl AppManagementManager {
         operation: AppManagementOperation,
         input: AppManagementOperationRequest,
     ) -> Result<AppManagementJob, AppManagementRequestError> {
+        // An active job owns its journal until it reaches a terminal state. Only
+        // an idle manager may declare the journal unrecoverable.
+        let idle = !self
+            .lock()
+            .jobs
+            .values()
+            .any(|job| ACTIVE_STATES.contains(&job.state));
+        if idle {
+            if let Ok(_queue) = self.queue.try_lock() {
+                crate::archive_transaction::recover_all(&self.state_dir, &self.install_base_dir);
+            }
+            if crate::archive_transaction::pending(&self.state_dir, app_id) {
+                return Err(AppManagementRequestError::new(
+                    "app_recovery_failed",
+                    "The prior archive transaction could not be recovered.",
+                    409,
+                ));
+            }
+        }
         let request_id = input
             .request_id
             .as_deref()
@@ -623,6 +673,7 @@ impl AppManagementManager {
             &definitions,
             &mut state,
             &self.install_base_dir,
+            &self.state_dir,
             self.install_environment.as_ref(),
         );
         let event = AppManagementEvent {
@@ -729,7 +780,15 @@ impl AppManagementManager {
                 session.app_id == definition.launcher.id
                     && matches!(session.status.as_str(), "created" | "running" | "stopping")
             });
-        let result = if busy {
+        let lifecycle = (self.package_lifecycles)(&definition.launcher.id);
+        let preparation = if let Some(hook) = &lifecycle {
+            hook.before_change(operation).await
+        } else {
+            Ok(())
+        };
+        let result = if let Err(error) = preparation {
+            Err(error)
+        } else if busy {
             Err(AppRecipeExecutionError::new(
                 "app_sessions_running",
                 "The app has running sessions and cannot be changed.",
@@ -746,9 +805,11 @@ impl AppManagementManager {
         if result.is_ok() {
             (self.runtime_hook)(&definition.launcher.id);
         }
-        stop_flush.notify_waiters();
+        // Keep a permit when a fast archive operation finishes before the
+        // output task first polls; notify_waiters would lose that wakeup.
+        stop_flush.notify_one();
         let _ = flush_task.await;
-        let terminal = match result {
+        let mut terminal = match result {
             Ok(_) => {
                 let target = detect_managed_app_recipe_target(context.capabilities.platform);
                 let detection = detect_managed_app_with_managed_root_for_target(
@@ -800,6 +861,11 @@ impl AppManagementManager {
             }
             Err(error) => Err(error),
         };
+        if let Some(hook) = &lifecycle {
+            if let Err(error) = hook.changed(operation, terminal.is_ok()).await {
+                terminal = Err(error);
+            }
+        }
         let finished_at = now();
         if let Some(job) = self.update_job(&job_id, |job| {
             job.finished_at = Some(finished_at.clone());
@@ -875,6 +941,7 @@ impl AppManagementManager {
                 &definitions,
                 state,
                 &self.install_base_dir,
+                &self.state_dir,
                 self.install_environment.as_ref(),
             )
         });
@@ -930,6 +997,7 @@ fn snapshot_locked(
     definitions: &[ManagedAppDefinition],
     state: &mut ManagerState,
     install_base_dir: &Path,
+    state_dir: &Path,
     install_environment: Option<&AppInstallEnvironmentManager>,
 ) -> AppManagementSnapshot {
     let mut jobs = state.jobs.values().cloned().collect::<Vec<_>>();
@@ -954,6 +1022,16 @@ fn snapshot_locked(
                 state.capabilities.arch,
                 target,
             );
+            let detection =
+                if crate::archive_transaction::pending(state_dir, &definition.launcher.id) {
+                    ManagedAppDetectionResult {
+                        state: controlled_instance_protocol::ManagedAppState::Broken,
+                        executable_paths: vec![],
+                        version: None,
+                    }
+                } else {
+                    detection
+                };
             let fingerprint = ownership_fingerprint(&detection, &state.capabilities);
             let selected = select_install_recipe(definition, &state.capabilities);
             let cached = state.ownership.get(&definition.launcher.id);
@@ -1250,6 +1328,125 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn archive_uninstall_queue_runs_drain_and_clear_before_terminal_and_preserves_user_files()
+    {
+        use std::os::unix::fs::PermissionsExt;
+        struct Lifecycle {
+            root: PathBuf,
+            phases: Arc<Mutex<Vec<&'static str>>>,
+        }
+        #[async_trait::async_trait]
+        impl AppPackageLifecycle for Lifecycle {
+            async fn before_change(
+                &self,
+                _: AppManagementOperation,
+            ) -> Result<(), AppRecipeExecutionError> {
+                assert!(self.root.join("bin/tool").exists());
+                self.phases.lock().unwrap().push("drained");
+                Ok(())
+            }
+            async fn changed(
+                &self,
+                _: AppManagementOperation,
+                succeeded: bool,
+            ) -> Result<(), AppRecipeExecutionError> {
+                if succeeded {
+                    assert!(!self.root.join("bin/tool").exists());
+                }
+                self.phases.lock().unwrap().push("cleared");
+                Ok(())
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let base = dir.path().join("apps");
+        let root = base.join("tool");
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(state.join("manifests")).unwrap();
+        std::fs::write(root.join("bin/tool"), "#!/bin/sh\necho 1\n").unwrap();
+        std::fs::set_permissions(
+            root.join("bin/tool"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        std::fs::write(root.join("user"), "preserved").unwrap();
+        std::fs::write(
+            state.join("manifests/tool.json"),
+            serde_json::json!({
+                "schemaVersion":1,"appId":"tool","installRoot":root,"files":["bin/tool"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut app = definition("tool");
+        app.launcher.command = Some("bin/tool".into());
+        app.detection = vec![crate::ManagedAppDetectionRule::LauncherExecutable {
+            version_args: vec!["--version".into()],
+        }];
+        let capabilities = detect_final_computer_capabilities_sync();
+        app.recipes = vec![InstallRecipe::ArchiveOwnership {
+            platforms: vec![capabilities.platform],
+            arches: Some(vec![capabilities.arch]),
+            privilege: Some(controlled_instance_protocol::AppInstallPrivilege::User),
+            install_root: "tool".into(),
+        }];
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let published = phases.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let hook: Arc<dyn AppPackageLifecycle> = Arc::new(Lifecycle {
+            root: root.clone(),
+            phases: phases.clone(),
+        });
+        let manager = AppManagementManager::with_parts(
+            state.clone(),
+            base,
+            Arc::new(move || vec![app.clone()]),
+            Arc::new(Vec::new),
+            Arc::new(move |event| {
+                if let Some(job) = event.job {
+                    if !matches!(
+                        job.state,
+                        AppManagementJobState::Queued | AppManagementJobState::Running
+                    ) {
+                        assert_eq!(*published.lock().unwrap(), vec!["drained", "cleared"]);
+                        let _ = tx.send(job);
+                    }
+                }
+            }),
+            Arc::new(|_| {}),
+            Arc::new(|_| {}),
+            None,
+        )
+        .with_package_lifecycles(move |_| Some(hook.clone()));
+        let snapshot = manager.refresh_snapshot(false).await;
+        assert!(snapshot.apps[0].can_uninstall);
+        assert_eq!(snapshot.apps[0].can_update, Some(false));
+        manager
+            .request(
+                "tool",
+                AppManagementOperation::Uninstall,
+                AppManagementOperationRequest { request_id: None },
+            )
+            .await
+            .unwrap();
+        let job = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            job.state,
+            AppManagementJobState::Succeeded,
+            "{:?}",
+            job.error
+        );
+        assert!(!state.join("manifests/tool.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("user")).unwrap(),
+            "preserved"
+        );
+    }
     #[test]
     fn logs_are_bounded_and_escape_sequences_are_removed() {
         let mut job = AppManagementJob {

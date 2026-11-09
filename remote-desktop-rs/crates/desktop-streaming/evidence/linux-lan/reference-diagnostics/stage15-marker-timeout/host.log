@@ -1,0 +1,10 @@
+Reference process tree:4CPUs/4GiB
+Owned reference PID=255553
+Owned fullHD fixture DISPLAY=:88 AUTH=/tmp/th-g1-fullhd-hgpvk1yd/Xauthority
+Synthetic G1 harness: http://127.0.0.1:39281
+desktop encoder: hardware unavailable; stream uses OpenH264
+Traceback (most recent call last):
+  File "/home/huadream/.local/share/task-handoff-g1-tests/remote-desktop-g1/fullhd-surface.py", line 30, in <module>
+    while time.monotonic()<end and all(c.poll() is None for c in children):time.sleep(.2)
+                                                                           ~~~~~~~~~~^^^^
+KeyboardInterrupt

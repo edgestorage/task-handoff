@@ -176,6 +176,12 @@ pub struct FeatureCapabilities {
     pub ai_session_conversation_attachments: AiSessionConversationAttachmentCapabilities,
     pub ai_session_providers: Vec<AiSessionProviderCapability>,
     pub instance_shell: InstanceShellCapabilities,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::deserialize_remote_desktop"
+    )]
+    pub remote_desktop: Option<crate::RemoteDesktopCapabilities>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

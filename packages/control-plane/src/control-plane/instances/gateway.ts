@@ -1,3 +1,4 @@
+import { DesktopManagedSchemas, type DesktopManagedOperation } from "@task-handoff/runtime-shared/remote-desktop-managed";
 import { controlledInstanceAcceptsTraffic, type ControlledInstance, type ControlledInstanceHeartbeat, type Node } from "@task-handoff/protocol/control-plane";
 import { plainHeaders } from "../common/helpers.ts";
 import type { NodeAgentTransport, NodeAgentWebSocket } from "../nodes/client.ts";
@@ -123,6 +124,44 @@ export class ControlledInstanceGateway {
     const node = this.requireNode(instance.nodeId);
     const proxyPath = path.startsWith("/") ? path.slice(1) : path;
     this.nodeAgentTransport(node).proxyWebSocket(node, socket, `/instances/${encodeURIComponent(instance.id)}/proxy/ws/${proxyPath}`, protocols, headers);
+  }
+
+  async desktopRequest(instance: ControlledInstance, operation: DesktopManagedOperation, body: unknown) {
+    const input = DesktopManagedSchemas[operation].parse(body);
+    assertInstanceAcceptsTraffic(instance);
+    const node = this.requireNode(instance.nodeId);
+    const response = await this.nodeAgentTransport(node).request(node, `/instances/${encodeURIComponent(instance.id)}/remote-desktop/${operation}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input),
+    });
+    const payload = await response.json() as { data?: unknown; error?: { code?: string } };
+    if (!response.ok) throw Object.assign(new Error("Remote desktop operation failed."), {
+      statusCode: response.status, code: payload.error?.code || "REMOTE_DESKTOP_UPSTREAM_UNAVAILABLE",
+    });
+    return payload.data;
+  }
+
+  desktopAttach(instance: ControlledInstance, socket: NodeAgentWebSocket) {
+    assertInstanceAcceptsTraffic(instance);
+    const node = this.requireNode(instance.nodeId);
+    this.nodeAgentTransport(node).proxyWebSocket(node, socket, `/instances/${encodeURIComponent(instance.id)}/remote-desktop/attach`);
+  }
+  desktopFallback(
+    instance: ControlledInstance,
+    role: "media" | "control",
+    socket: NodeAgentWebSocket,
+    headers: Record<string, string>,
+  ) {
+    assertInstanceAcceptsTraffic(instance);
+    const node = this.requireNode(instance.nodeId);
+    this.nodeAgentTransport(node).proxyWebSocket(
+      node,
+      socket,
+      `/instances/${encodeURIComponent(instance.id)}/remote-desktop/fallback/${role}`,
+      role === "media"
+        ? "taskhandoff.remote-desktop.fallback.media.v1"
+        : "taskhandoff.remote-desktop.fallback.control.v1",
+      headers,
+    );
   }
 
   async reportHeartbeat(instance: ControlledInstance, input: ControlledInstanceHeartbeat) {

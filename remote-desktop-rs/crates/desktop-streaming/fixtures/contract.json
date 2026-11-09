@@ -1,0 +1,103 @@
+{
+  "ipcVersion": "2026-11-07",
+  "channelVersion": "2026-11-05",
+  "maxIpcFrame": 1048576,
+  "framing": {
+    "json": {
+      "requestId": "fixture"
+    },
+    "hex": "000000177b22726571756573744964223a2266697874757265227d"
+  },
+  "channels": [
+    {
+      "label": "control",
+      "ordered": true,
+      "maxRetransmits": null,
+      "wireLimit": 16384,
+      "id": 0,
+      "negotiated": true
+    },
+    {
+      "label": "input",
+      "ordered": true,
+      "maxRetransmits": null,
+      "wireLimit": 16384,
+      "id": 1,
+      "negotiated": true
+    },
+    {
+      "label": "pointer",
+      "ordered": false,
+      "maxRetransmits": 0,
+      "wireLimit": 16384,
+      "id": 2,
+      "negotiated": true
+    },
+    {
+      "label": "clipboard",
+      "ordered": true,
+      "maxRetransmits": null,
+      "wireLimit": 65536,
+      "id": 3,
+      "negotiated": true
+    }
+  ],
+  "messages": [
+    {
+      "channel": "control",
+      "message": {
+        "v": "2026-11-05",
+        "seq": 0,
+        "type": "input.suspend"
+      }
+    },
+    {
+      "channel": "control",
+      "message": {
+        "v": "2026-11-05",
+        "seq": 0,
+        "type": "stream.resolution",
+        "payload": {
+          "maxWidth": 1280,
+          "maxHeight": 720
+        }
+      }
+    },
+    {
+      "channel": "input",
+      "message": {
+        "v": "2026-11-05",
+        "seq": 0,
+        "type": "text.commit",
+        "payload": {
+          "inputEpoch": 1,
+          "text": "中文・日本語・é・😀"
+        }
+      }
+    },
+    {
+      "channel": "pointer",
+      "message": {
+        "v": "2026-11-05",
+        "seq": 0,
+        "type": "pointer",
+        "payload": {
+          "inputEpoch": 1,
+          "x": 0.25,
+          "y": 0.75
+        }
+      }
+    },
+    {
+      "channel": "clipboard",
+      "message": {
+        "v": "2026-11-05",
+        "seq": 0,
+        "type": "clipboard.write",
+        "payload": {
+          "text": "explicit opt-in only"
+        }
+      }
+    }
+  ]
+}

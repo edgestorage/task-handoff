@@ -13,6 +13,8 @@ scripts/docker-up-workspace-local.sh
 packages/web-ui/dist/
 packages/control-plane-ui/dist/
 packages/controlled-instance-ui/dist/
+/remote-desktop-rs/target/
+/remote-desktop-rs/target-linux-arm64/
 # Built-in project content and manifests are pulled from published skill
 # releases by scripts/sync-builtin-projects.mjs; only project.json is tracked.
 /builtin-projects/*/content/

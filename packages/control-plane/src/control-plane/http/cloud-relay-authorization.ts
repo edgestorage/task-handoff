@@ -164,6 +164,10 @@ function apiRouteAuthorization(method: string, path: string): { action: ControlP
   if (path.startsWith("/api/controlled-instances")) {
     const repository = /^\/api\/controlled-instances\/([^/]+)\/repository(?:\/(?:context|directories|files|changes|diff|worktrees|worktrees\/remove|worktrees\/move-to-main|worktrees\/move-to-main\/preflight|branches))?$/.exec(path);
     if (repository) return repositoryAuthorization(method, decodePathSegment(repository[1]));
+    if (/^\/api\/controlled-instances\/[^/]+\/remote-desktop(?:-sessions)?(?:\/|$)/.test(path)) {
+      const management = /\/force-stop$|\/remote-desktop\/settings$/.test(path);
+      return { action: management ? "update" : "interactive-access", resource: { type: "instance" } };
+    }
     if (/^\/api\/controlled-instances\/[^/]+\/(?:shell|browser-access)$/.test(path)) return { action: "interactive-access", resource: { type: "instance" } };
     if (/\/apps\/sessions\/[^/]+\/access$/.test(path)) return { action: "interactive-access", resource: { type: "app-session" } };
     // 自定义应用目录可能携带启动环境变量；读取与写入都要求实例 update 权限，不能按普通 read 放开。

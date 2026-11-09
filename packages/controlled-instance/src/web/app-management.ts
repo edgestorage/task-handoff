@@ -34,6 +34,8 @@ import { AppRecipeExecutionError, createAppRecipeExecutor, type AppRecipeExecuti
 import { createAppUpdateChecker, type AppUpdateCheckContext, type AppUpdateCheckResult } from "./app-update-check";
 import type { AppInstallEnvironmentManager, AppInstallExecutionPolicy } from "./app-install-environment";
 
+import { recoverArchiveTransactions } from "./archive-transaction";
+
 const ACTIVE_STATES = new Set<AppManagementJob["state"]>(["queued", "running"]);
 const JOB_LOG_LIMIT = 32_768;
 const JOB_FIELDS = new Set(["id", "requestId", "appId", "operation", "state", "phase", "progress", "command", "logTail", "logTruncated", "error", "requestedAt", "startedAt", "finishedAt", "updatedAt"]);
@@ -151,7 +153,13 @@ export class AppManagementJobStore {
   }
 }
 
+export type AppPackageLifecycle = {
+  beforeChange?(operation: AppManagementOperation): void | Promise<void>;
+  changed?(operation: AppManagementOperation, succeeded: boolean): void | Promise<void>;
+};
+
 export type AppManagementManagerOptions = {
+  packageLifecycle?: (appId: string) => AppPackageLifecycle | undefined;
   stateDir: string;
   installBaseDir: string;
   installEnvironment?: AppInstallEnvironmentManager;
@@ -171,6 +179,7 @@ export type AppManagementManagerOptions = {
 };
 
 export class AppManagementManager {
+  private readonly packageLifecycle?: AppManagementManagerOptions["packageLifecycle"];
   private readonly store: AppManagementJobStore;
   private readonly definitions: () => ManagedAppDefinition[];
   private readonly capabilities: () => FinalComputerCapabilities;
@@ -188,6 +197,7 @@ export class AppManagementManager {
   private readonly now: NonNullable<AppManagementManagerOptions["now"]>;
   private readonly onTerminal: NonNullable<AppManagementManagerOptions["onTerminal"]>;
   private readonly warn: NonNullable<AppManagementManagerOptions["warn"]>;
+  private readonly stateDir: string;
   private readonly installBaseDir: string;
   private readonly installEnvironment?: AppInstallEnvironmentManager;
   private readonly ownershipByApp = new Map<string, { fingerprint: string; source: ManagedAppManagementSource; recipe?: InstallRecipe }>();
@@ -198,7 +208,10 @@ export class AppManagementManager {
   private queue = Promise.resolve();
 
   constructor(options: AppManagementManagerOptions) {
+    const recoveryFailures = recoverArchiveTransactions(options.stateDir, options.installBaseDir);
+    if (recoveryFailures.length) options.warn?.("Some archive transactions require recovery; affected apps remain unavailable.");
     this.store = new AppManagementJobStore(path.join(options.stateDir, "jobs.json"), options.warn);
+    this.stateDir = options.stateDir;
     this.installBaseDir = options.installBaseDir;
     this.installEnvironment = options.installEnvironment;
     this.definitions = options.definitions || (() => builtinManagedAppDefinitions());
@@ -209,7 +222,9 @@ export class AppManagementManager {
     this.refreshCapabilities = options.capabilities
       ? async () => withInstallEnvironment(options.capabilities!())
       : async () => withInstallEnvironment(await detectFinalComputerCapabilitiesAsync());
-    this.detection = options.detection || ((definition) => detectManagedApp(definitionWithManagedLauncher(definition, options.installBaseDir, this.capabilities())));
+    const detect = options.detection || ((definition: ManagedAppDefinition) => detectManagedApp(definitionWithManagedLauncher(definition, options.installBaseDir, this.capabilities())));
+    this.detection = (definition) => fs.existsSync(path.join(options.stateDir,"manifests",`${definition.launcher.id}.json.transaction`))
+      ? {state:"broken",executablePaths:[]} : detect(definition);
     const defaultOwnership = (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => {
       const target = recipeTarget(capabilities);
       const selected = selectInstallRecipe(definition, capabilities, target).recipe;
@@ -259,6 +274,7 @@ export class AppManagementManager {
       stateDir: options.stateDir,
       ...(options.installEnvironment ? { installEnvironment: options.installEnvironment } : {}),
     });
+    this.packageLifecycle = options.packageLifecycle;
     this.stopAppRuntime = options.stopAppRuntime || (() => undefined);
     this.sessions = options.sessions || (() => []);
     this.publishEvent = options.publish || (() => undefined);
@@ -365,6 +381,8 @@ export class AppManagementManager {
   }
 
   request(appId: string, operation: AppManagementOperation, requestId?: string) {
+    if (!this.store.list().some((job) => ACTIVE_STATES.has(job.state))) recoverArchiveTransactions(this.stateDir, this.installBaseDir);
+    if (fs.existsSync(path.join(this.stateDir,"manifests",`${appId}.json.transaction`))) throw new AppManagementRequestError("app_recovery_failed","The prior archive transaction could not be recovered.",409);
     const definition = this.definitions().find((entry) => entry.launcher.id === appId);
     if (!definition) throw new AppManagementRequestError("unknown_app", "The requested built-in app does not exist.", 404);
     if (requestId) {
@@ -497,7 +515,9 @@ export class AppManagementManager {
     const startedAt = this.now();
     job = this.store.save({ ...job, state: "running", phase: "starting", startedAt, updatedAt: startedAt });
     this.emit(job, true);
+    const lifecycle = this.packageLifecycle?.(job.appId);
     try {
+      await lifecycle?.beforeChange?.(job.operation);
       if (job.operation !== "install") {
         const active = this.sessions().filter((session) => session.appId === job.appId && ["created", "running", "stopping"].includes(session.status));
         if (active.length) throw new AppRecipeExecutionError("app_sessions_running", "The app has running sessions and cannot be changed.", true);
@@ -533,10 +553,12 @@ export class AppManagementManager {
       const satisfied = job.operation === "uninstall" ? detection.state === "not-installed" : detection.state === "installed";
       if (!satisfied) throw new AppRecipeExecutionError("postcondition_failed", `App ${job.operation} completed but detection did not confirm the required state.`, true);
       await this.refreshOwnership(definition, detection, await this.ensureCapabilities(true));
+      await lifecycle?.changed?.(job.operation, true);
       const finishedAt = this.now();
       job = this.store.save({ ...this.getJob(jobId), state: "succeeded", phase: "verify", progress: undefined, finishedAt, updatedAt: finishedAt });
     } catch (error) {
       flushOutput();
+      try { await lifecycle?.changed?.(job.operation, false); } catch { this.warn("App failure cleanup did not complete."); }
       const finishedAt = this.now();
       const code = error instanceof AppRecipeExecutionError ? error.code : "app_operation_failed";
       const retryable = error instanceof AppRecipeExecutionError ? error.retryable : true;

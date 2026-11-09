@@ -1,3 +1,5 @@
+import { registerRemoteDesktopRoutes } from "./remote-desktop-routes.ts";
+import type { DesktopAccess, DesktopPrincipal } from "../remote-desktop/access.ts";
 import { BrowserRelayService } from "../instances/browser-relay-service.ts";
 import { CONTROL_PLANE_CAPABILITY_HEADER, requestsExtendedControlPlaneCapabilities } from "@task-handoff/protocol/control-plane-access";
 import path from "node:path";
@@ -548,6 +550,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const operationApprovals = new OperationApprovals(events, configuredApprovalPolicy);
   app.addHook("onClose", async () => operationApprovals.close());
   const authorizationConnections = new AuthorizationConnectionRegistry();
+  let desktopAccess: DesktopAccess | undefined;
   const browserAccess = new BrowserAccessService();
 
   const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
@@ -601,8 +604,12 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     createControlPlaneDeviceTrustStore(database),
     (roleId, repository) => auth.users.roleAuthorization(roleId, repository),
     {
-      closePinSessions: (pin, reason) => trustedDeviceSessions.closePin(pin.id, pin.authorizationRevision, reason),
-      closeAllSessions: (reason) => trustedDeviceSessions.closeAll(reason),
+      closePinSessions: async (pin, reason) => {
+        await Promise.all([trustedDeviceSessions.closePin(pin.id, pin.authorizationRevision, reason), desktopAccess?.invalidate(p => p.actor.type === "cloud-account" && p.actor.deviceTrustPinId === pin.id)]);
+      },
+      closeAllSessions: async (reason) => {
+        await Promise.all([trustedDeviceSessions.closeAll(reason), desktopAccess?.invalidate(p => p.actor.type === "cloud-account")]);
+      },
       onChanged: ({ bindingId, revision }) => {
         events.publish("device-trust.changed", { bindingId, revision }, { topic: "device-trust" });
       },
@@ -1863,6 +1870,34 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   registerInstanceProxyRoutes({ app, service, auth, authorizationConnections });
   registerInstanceShellRoutes({ app, service, authorizationConnections, events });
+  desktopAccess = registerRemoteDesktopRoutes({
+    app, service, authorizationConnections, events,
+    async principal(request) {
+      const actor = controlPlaneRequestActor(request);
+      if (!actor || (actor.type !== "user" && actor.type !== "cloud-account")) throw Object.assign(new Error("Desktop authentication is required."), { statusCode: 401 });
+      if (actor.type === "cloud-account") return { actor, deviceSessionId: actor.deviceSessionId };
+      const credential = requestSessionCredential(request);
+      const resolved = credential.token ? await auth.sessions.resolve(credential.token, credential.clientTypes) : undefined;
+      if (resolved) return { actor, deviceSessionId: resolved.session.id, expiresAt: Date.parse(resolved.session.expiresAt) };
+      if (!auth.enabled() && !credential.presented) return { actor, deviceSessionId: `local-operator:${actor.identityId}` };
+      throw Object.assign(new Error("Desktop authentication is required."), { statusCode: 401 });
+    },
+    async renewAuthorization(principal: DesktopPrincipal) {
+      const actor = principal.actor;
+      if (actor.type === "user") {
+        const current = await auth.users.authorization(actor.userId).catch(() => undefined);
+        if (current?.authorizationRevision !== actor.authorizationRevision) return false;
+        if (principal.deviceSessionId.startsWith("local-operator:")) return !auth.enabled();
+        const session = await auth.users.store.sessions.get(principal.deviceSessionId);
+        return !!session && session.userId === actor.userId && session.authorizationRevision === actor.authorizationRevision && Date.parse(session.expiresAt) > Date.now();
+      }
+      // Cloud binding/share/device invalidations synchronously close their
+      // registered connections; no credential is stored for periodic refresh.
+      return actor.type === "cloud-account";
+    },
+  });
+  const releaseDesktopLogout = auth.sessions.onSessionRevoked(id => { void desktopAccess?.invalidate(p => p.actor.type === "user" && p.deviceSessionId === id); });
+  app.addHook("onClose", async () => { releaseDesktopLogout(); });
   registerBrowserRelayRoutes({ app, service, auth, authorizationConnections, events, browserAccess, browserRelay });
 
   app.get("*", { config: PUBLIC_CONTROL_PLANE_UI_ROUTE }, async (_request, reply) =>

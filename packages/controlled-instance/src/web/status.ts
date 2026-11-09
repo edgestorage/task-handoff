@@ -1,3 +1,4 @@
+import type { RemoteDesktopCapabilities } from "@task-handoff/protocol/remote-desktop";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -200,6 +201,7 @@ export function controlledInstanceCapabilities(
   aiSessionProviders: AiSessionProviderCapability[] = [],
   gitCredentialBrokerInstalled = false,
   installEnvironment?: AppInstallEnvironmentManager,
+  remoteDesktop?: RemoteDesktopCapabilities,
 ): ControlledInstanceCapabilities {
   const inventory = appRuntime.appInventory();
   const available = inventory.items.filter((item) => item.availability === "available");
@@ -207,6 +209,7 @@ export function controlledInstanceCapabilities(
   const availableProviders = aiSessionProviders.filter((provider) => availableAppIds.has(provider.agent));
   return ControlledInstanceCapabilitiesSchema.parse({
     features: {
+      remoteDesktop,
       appRuntime: true,
       tty: available.some((item) => item.kind === "tty"),
       gui: available.some((item) => item.kind === "gui"),
@@ -287,6 +290,7 @@ export async function controlledInstanceSnapshot(
   aiSessionProviders: AiSessionProviderCapability[] = [],
   gitCredentialBrokerInstalled = false,
   installEnvironment?: AppInstallEnvironmentManager,
+  remoteDesktop?: RemoteDesktopCapabilities,
 ) {
   const appSessions = appRuntime.listSessions();
   return {
@@ -296,7 +300,7 @@ export async function controlledInstanceSnapshot(
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
     build: buildInfo(),
     controlMode: (controlledMode() ? "controlled" : "standalone") as "standalone" | "controlled",
-    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline, aiSessionProviders, gitCredentialBrokerInstalled, installEnvironment),
+    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline, aiSessionProviders, gitCredentialBrokerInstalled, installEnvironment, remoteDesktop),
     appInventory: appRuntime.appInventory(),
     apps: {
       runningCount: appRuntime.runningSessionCount(),

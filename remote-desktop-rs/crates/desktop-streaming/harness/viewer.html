@@ -1,0 +1,85 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>G1 synthetic desktop harness</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font:14px system-ui;margin:24px;background:#15191e;color:#e4e9ee}button,input,textarea{font:inherit;margin:4px;padding:8px}video{width:min(960px,100%);display:block;background:#000;cursor:none}pre{white-space:pre-wrap}label{display:inline-block}textarea{display:block;width:460px}h1{font-size:20px;font-weight:500}</style>
+<h1>G1 synthetic desktop harness</h1><p>Synthetic pixels and input only. No host screen, keyboard or system clipboard access.</p>
+<button id="connect">Connect</button><button id="resume">Resume input</button><button id="suspend">Release input</button><button id="hidden">Pause stream</button><button id="visible">Resume stream</button><button id="keyframe">Request IDR</button><button id="renegotiate">Renegotiate</button><button id="restart">Restart ICE</button><button id="metrics">Read component metrics</button><button id="stop">Stop</button>
+<video autoplay playsinline muted tabindex="0" id="video"></video>
+<p>Bars show animation, accepted input, committed Unicode characters and pressed keys. The cursor is encoded in video.</p>
+<label>IME commit <input id="commit" placeholder="中文 / 日本語 / emoji"></label>
+<label><input type="checkbox" id="clipboard">Enable text clipboard</label><textarea id="clipboardText" maxlength="32768"></textarea><button id="write">Write text</button><button id="read">Read text</button>
+<pre id="status">Disconnected</pre><script type="module">
+const $=id=>document.getElementById(id),video=$('video');
+const diagnostic={snapshot:null,error:null,decodedFrames:0,channels:[],inputEpoch:null,clipboardText:null,clipboardEnabled:false,clipboardWrites:0,transport:null,negotiations:0,textCommits:0,metrics:null,metricsReplies:0};
+window.diagnostic=diagnostic;
+let pc,ws,channels={},sequences={},epoch=null,signalTimer,inputTimer,pointerPending,pointerRaf,composing=false,offerQueue=Promise.resolve(),pendingAnswer,textPending=false,connectionGeneration=0;
+function status(){ $('status').textContent=JSON.stringify(diagnostic,null,2); }
+function send(channel,type,payload){if(channel==='clipboard'&&!diagnostic.clipboardEnabled)return false;const dc=channels[channel];if(dc?.readyState!=='open')return false;const limit=channel==='clipboard'?65536:16384;const text=JSON.stringify({v:'2026-11-05',seq:sequences[channel]??0,type,...(payload===undefined?{}:{payload})});if(new TextEncoder().encode(text).length>limit||dc.bufferedAmount>65536){if(channel==='input')suspend();return false;}sequences[channel]=(sequences[channel]??0)+1;dc.send(text);return true;}
+function suspend(){textPending=false;epoch=null;diagnostic.inputEpoch=null;clearInterval(inputTimer);pointerPending=null;send('control','input.suspend');status();}
+function visibility(hidden){suspend();send('control','visibility',{hidden});}
+async function cleanup(sendStop=true){
+ const generation=++connectionGeneration;
+ const closing=ws,closingPeer=pc;
+ // Detach ownership before awaiting. A previous cleanup must never close a
+ // replacement socket/peer or clear its video after receiving a late reply.
+ ws=null;pc=null;channels={};video.srcObject=null;
+ clearInterval(signalTimer);clearInterval(inputTimer);
+ epoch=null;textPending=false;pointerPending=null;diagnostic.inputEpoch=null;
+ pendingAnswer?.reject(new Error('Connection closed'));pendingAnswer=null;
+ offerQueue=Promise.resolve();
+ if(sendStop&&closing?.readyState===1){
+  const closed=new Promise(resolve=>closing.addEventListener('close',resolve,{once:true}));
+  closing.send(JSON.stringify({type:'stop'}));
+  await Promise.race([closed,new Promise(resolve=>setTimeout(resolve,1500))]);
+ }
+ closing?.close();closingPeer?.close();status();return generation;
+}
+function consume(snapshot){const old=diagnostic.snapshot;if(old?.viewerSessionId===snapshot.viewerSessionId&&old.sessionRevision>=snapshot.sessionRevision)return;diagnostic.snapshot=snapshot;if(snapshot.inputEpoch===null){textPending=false;epoch=null;clearInterval(inputTimer);diagnostic.inputEpoch=null;}status();}
+function sampleFrame(){video.requestVideoFrameCallback(()=>{diagnostic.decodedFrames++;sampleFrame();});}sampleFrame();
+function negotiate(iceRestart=false){
+ const peer=pc,socket=ws,generation=connectionGeneration;
+ const current=()=>generation===connectionGeneration&&pc===peer&&ws===socket;
+ offerQueue=offerQueue.catch(()=>{}).then(async()=>{
+  if(!current())return;
+  const offer=await peer.createOffer({iceRestart});if(!current())return;
+  await peer.setLocalDescription(offer);if(!current())return;
+  if(peer.iceGatheringState!=='complete')await new Promise(resolve=>{const listener=()=>{if(peer.iceGatheringState==='complete'||!current()){peer.removeEventListener('icegatheringstatechange',listener);resolve();}};peer.addEventListener('icegatheringstatechange',listener);});
+  if(!current())return;
+  const answered=new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pendingAnswer=null;reject(new Error('answer timeout'));},6000);pendingAnswer={resolve:()=>{clearTimeout(timer);resolve();},reject:error=>{clearTimeout(timer);reject(error);}};});
+  socket.send(JSON.stringify({type:'offer',sdp:peer.localDescription.sdp}));
+  await answered;if(!current())return;diagnostic.negotiations++;status();
+ }).catch(error=>{if(current())throw error;});return offerQueue;
+}
+$('metrics').onclick=()=>{if(ws?.readyState===1)ws.send(JSON.stringify({type:'metrics'}));};
+$('renegotiate').onclick=()=>negotiate().catch(()=>{diagnostic.error='HARNESS_NEGOTIATION_FAILED';status();});
+$('restart').onclick=()=>negotiate(true).catch(()=>{diagnostic.error='HARNESS_NEGOTIATION_FAILED';status();});
+$('connect').onclick=async()=>{
+ const generation=await cleanup();if(generation!==connectionGeneration)return;
+ const current=()=>generation===connectionGeneration;
+ diagnostic.error=null;diagnostic.snapshot=null;diagnostic.windows=null;diagnostic.decodedFrames=0;channels={};sequences={};diagnostic.channels=[];diagnostic.clipboardEnabled=false;diagnostic.clipboardText=null;diagnostic.clipboardWrites=0;
+ pc=new RTCPeerConnection();pc.addTransceiver('video',{direction:'recvonly'});
+ for(const label of ['control','input','pointer','clipboard']){
+  const dc=pc.createDataChannel(label,{negotiated:true,id:['control','input','pointer','clipboard'].indexOf(label),...(label==='pointer'?{ordered:false,maxRetransmits:0}:{})});channels[label]=dc;
+  dc.onopen=()=>{if(!current())return;diagnostic.channels.push(label);status();};dc.onmessage=event=>{if(!current())return;const message=JSON.parse(event.data);if(message.type==='input.resumed'){epoch=message.payload.inputEpoch;diagnostic.inputEpoch=epoch;clearInterval(inputTimer);inputTimer=setInterval(()=>send('control','input.alive',{inputEpoch:epoch}),500);}if(message.type==='text.committed'){textPending=false;diagnostic.textCommits++;}if(message.type==='clipboard.enabled'){diagnostic.clipboardEnabled=message.payload.enabled;$('clipboard').checked=message.payload.enabled;}if(message.type==='clipboard.written')diagnostic.clipboardWrites++;if(message.type==='clipboard.text'){diagnostic.clipboardText=message.payload.text;$('clipboardText').value=message.payload.text;}if(message.type==='error')diagnostic.error=message.payload.code;status();};
+ }
+ const peer=pc;
+ pc.ontrack=event=>{if(!current())return;if('jitterBufferTarget' in event.receiver)event.receiver.jitterBufferTarget=0;video.srcObject=new MediaStream([event.track]);video.play().catch(()=>{});};pc.onconnectionstatechange=()=>{if(!current())return;diagnostic.transport=peer.connectionState;status();};
+ ws=new WebSocket(location.origin.replace('http:','ws:')+'/signal'+(new URLSearchParams(location.search).get('target')==='window'?'?target=window':''));
+ const socket=ws;
+ ws.onmessage=async event=>{if(!current()){const message=JSON.parse(event.data);if(message.type==='snapshot'&&['stopped','failed'].includes(message.snapshot?.phase)&&diagnostic.snapshot?.viewerSessionId===message.snapshot.viewerSessionId)consume(message.snapshot);return;}try{const message=JSON.parse(event.data);if(message.type==='windows'){diagnostic.windows=message.windows;status();}else if(message.type==='ready'){
+  consume(message.snapshot);signalTimer=setInterval(()=>{if(current()&&socket.readyState===1)socket.send(JSON.stringify({type:'alive'}));},2000);
+  await negotiate();
+ }else if(message.type==='answer'){await peer.setRemoteDescription({type:'answer',sdp:message.sdp});if(!current())return;pendingAnswer?.resolve();pendingAnswer=null;}else if(message.type==='metrics'){diagnostic.metrics=message.metrics;diagnostic.metricsReplies++;status();}else if(message.type==='snapshot')consume(message.snapshot);else if(message.type==='error'){diagnostic.error=message.code;status();}}catch{if(current()){diagnostic.error='HARNESS_NEGOTIATION_FAILED';status();}}};
+ ws.onclose=()=>{if(!current())return;clearInterval(signalTimer);clearInterval(inputTimer);epoch=null;diagnostic.inputEpoch=null;status();};
+};
+$('resume').onclick=()=>{video.focus();send('control','input.resume',{sessionRevision:diagnostic.snapshot?.sessionRevision});};$('suspend').onclick=suspend;$('hidden').onclick=()=>visibility(true);$('visible').onclick=()=>visibility(false);$('keyframe').onclick=()=>send('control','stream.keyframe');$('stop').onclick=()=>cleanup();
+function point(event){const r=video.getBoundingClientRect();return{x:Math.max(0,Math.min(1,(event.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(event.clientY-r.top)/r.height))};}
+video.onpointermove=event=>{if(epoch===null)return;pointerPending={inputEpoch:epoch,...point(event)};if(!pointerRaf)pointerRaf=requestAnimationFrame(()=>{pointerRaf=null;if(pointerPending){send('pointer','pointer',pointerPending);pointerPending=null;}});};
+for(const down of [true,false])video.addEventListener(down?'pointerdown':'pointerup',event=>{event.preventDefault();if(epoch!==null)send('input','button',{inputEpoch:epoch,...point(event),button:event.button,down});});
+video.onwheel=event=>{event.preventDefault();if(epoch!==null)send('input','wheel',{inputEpoch:epoch,...point(event),deltaX:event.deltaX,deltaY:event.deltaY});};video.oncontextmenu=event=>event.preventDefault();
+for(const down of [true,false])video.addEventListener(down?'keydown':'keyup',event=>{if(event.repeat||event.isComposing||composing||textPending||epoch===null)return;event.preventDefault();send('input','key',{inputEpoch:epoch,code:event.code,down,repeat:false,modifiers:(event.shiftKey?1:0)|(event.ctrlKey?2:0)|(event.altKey?4:0)|(event.metaKey?8:0)});});
+function commit(text){if(textPending||epoch===null||!text)return;textPending=send('input','text.commit',{inputEpoch:epoch,text});}
+$('commit').oncompositionstart=()=>{composing=true;};$('commit').oncompositionend=event=>{composing=false;commit(event.data);$('commit').value='';};$('commit').onkeydown=event=>{if(event.key==='Enter'&&!composing&&epoch!==null){commit(event.currentTarget.value);event.currentTarget.value='';}};
+$('clipboard').onchange=()=>{diagnostic.clipboardEnabled=false;send('control','clipboard.enable',{enabled:$('clipboard').checked&&pc?.sctp?.maxMessageSize>=65536});};$('write').onclick=()=>send('clipboard','clipboard.write',{text:$('clipboardText').value});$('read').onclick=()=>send('clipboard','clipboard.read');
+window.addEventListener('blur',suspend);document.addEventListener('visibilitychange',()=>visibility(document.hidden));window.addEventListener('pagehide',()=>cleanup());
+window.harness={send,visibility,suspend,selectWindow:windowRef=>ws.send(JSON.stringify({type:"selectWindow",window_ref:windowRef})),stats:async()=>{const reports=await pc.getStats();return[...reports.values()].filter(r=>r.type==='inbound-rtp'&&r.kind==='video').map(r=>({framesDecoded:r.framesDecoded,keyFramesDecoded:r.keyFramesDecoded,bytesReceived:r.bytesReceived,codecId:r.codecId,jitter:r.jitter,jitterBufferDelay:r.jitterBufferDelay,jitterBufferEmittedCount:r.jitterBufferEmittedCount,framesDropped:r.framesDropped,pliCount:r.pliCount,nackCount:r.nackCount,freezeCount:r.freezeCount,totalFreezesDuration:r.totalFreezesDuration,jitterBufferTargetDelay:r.jitterBufferTargetDelay,jitterBufferMinimumDelay:r.jitterBufferMinimumDelay}));}};
+</script></html>

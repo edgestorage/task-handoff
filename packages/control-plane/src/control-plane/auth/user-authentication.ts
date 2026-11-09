@@ -98,6 +98,10 @@ function sha256(value: string) {
 }
 
 export class ControlPlaneUserAuthentication {
+  private readonly revokedListeners = new Set<(sessionId: string) => void>();
+  onSessionRevoked(listener: (sessionId: string) => void) { this.revokedListeners.add(listener); return () => this.revokedListeners.delete(listener); }
+  private sessionRevoked(sessionId: string) { for (const listener of this.revokedListeners) listener(sessionId); }
+
   private readonly passwordUpdates = new Set<string>();
   private readonly limiter: LoginRateLimiter;
   private readonly sessionActivity = new Map<string, { expiresAt: string; lastSeenAt: string }>();
@@ -361,6 +365,7 @@ export class ControlPlaneUserAuthentication {
     }
     const revoked = await this.users.store.sessions.delete(sessionId);
     if (revoked) {
+      this.sessionRevoked(sessionId);
       this.sessionActivity.delete(sessionId);
       this.recentAuthentication.delete(sessionId);
     }
@@ -371,6 +376,7 @@ export class ControlPlaneUserAuthentication {
     const sessionId = token?.split(".")[0];
     if (sessionId) {
       await this.users.store.sessions.delete(sessionId);
+      this.sessionRevoked(sessionId);
       this.sessionActivity.delete(sessionId);
       this.recentAuthentication.delete(sessionId);
     }

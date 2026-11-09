@@ -550,7 +550,9 @@
         :app-launch-button-label="appLaunchButtonLabel"
         :app-launch-button-title="appLaunchButtonTitle"
         :can-export-config="canExportConfig"
+        :can-interact-remote-desktop="canInteractRemoteDesktop"
         :can-launch-app="canLaunchApp"
+        :can-manage-remote-desktop="canManageRemoteDesktop"
         :copied-text="copiedText"
         :choose-project-folder="activeProjectFolderChooser"
         :error="standaloneDetailError || (board.error.value ? errorText(board.error.value) : '')"
@@ -613,6 +615,14 @@
         :browser-session-tabs="combinedBrowserSessionTabs"
         :browser-surface-state="combinedBrowserSurfaceState"
         @update-browser-tab="updateCombinedBrowserTab"
+      />
+      <RemoteDesktopSurfaceLayer
+        :active-instance-id="activeInstanceId"
+        :can-interact="canInteractRemoteDesktop"
+        :can-manage="canManageRemoteDesktop"
+        :instance-capabilities="remoteDesktopSurfaceCapabilities"
+        :session-tabs="remoteDesktopSessionTabs"
+        :surface-state="browserSurfaceState"
       />
     </main>
 
@@ -732,6 +742,7 @@ import { allNodesVisible, nodeIsVisible, nodeIsSelected, normalizeNodeVisibility
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
+import RemoteDesktopSurfaceLayer from "./instance-detail/RemoteDesktopSurfaceLayer.vue";
 import InstanceList from "./instance-list/InstanceList.vue";
 import ConfigSyncDialog from "./instance-list/ConfigSyncDialog.vue";
 import InstanceDeleteDialog from "./instance-list/InstanceDeleteDialog.vue";
@@ -861,6 +872,8 @@ const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.d
 const canManageUsers = computed(() => currentAccess.data.value?.permissionIds.includes("users:manage") === true);
 const canManageSettings = computed(() => currentAccess.data.value?.permissionIds.includes("settings:manage") === true);
 const canManageSecrets = computed(() => authSession.data.value?.enabled !== true || currentAccess.data.value?.permissionIds.includes("secrets:manage") === true);
+const canManageRemoteDesktop = computed(() => currentAccess.data.value?.permissionIds.includes("instances:manage") === true);
+const canInteractRemoteDesktop = computed(() => currentAccess.data.value?.permissionIds.includes("instances:interactive") === true);
 const settingsSections = computed(() => buildSettingsSections(t, {
   manageSecrets: canManageSecrets.value,
   manageSettings: canManageSettings.value,
@@ -1757,11 +1770,13 @@ const {
   stopSelectedAppSession,
   openBrowserTab,
   pruneBrowserInstances,
+  remoteDesktopSessionTabs,
   updateBrowserTab,
 } = useActiveInstanceSessions({
   activeInstance: activeInstanceWithAiSessions,
   appLaunchMenuOpen,
   boardSessionKeys,
+  canInteractRemoteDesktop,
   closeFloatingLayers,
   errorText,
   focusAppSession,
@@ -1769,6 +1784,14 @@ const {
   refresh,
   sessionMenuOpen,
   t,
+});
+const remoteDesktopSurfaceCapabilities = computed<Record<string, Record<string, unknown> | undefined>>(() => {
+  const capabilities: Record<string, Record<string, unknown> | undefined> = {};
+  for (const instanceId of Object.keys(remoteDesktopSessionTabs)) {
+    const instance = sortedInstances.value.find((item) => item.id === instanceId);
+    capabilities[instanceId] = instance?.capabilities as Record<string, unknown> | undefined;
+  }
+  return capabilities;
 });
 const storyBrowserSessionTabs = computed<Record<string, SessionTab[]>>(() => {
   const tabs: Record<string, SessionTab[]> = {};

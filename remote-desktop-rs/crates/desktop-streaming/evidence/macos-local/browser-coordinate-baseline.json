@@ -1,0 +1,314 @@
+{
+  "result": {
+    "ok": false
+  },
+  "trace": [
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": -1,
+      "lastMouseY": -1,
+      "marked": false,
+      "mouseDowns": 0,
+      "mouseUps": 0,
+      "pid": 74568,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      }
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": -1,
+      "lastMouseY": -1,
+      "marked": false,
+      "mouseDowns": 0,
+      "mouseUps": 0,
+      "pid": 74568,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      }
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "snapshot",
+      "lastMouseX": -1,
+      "lastMouseY": -1,
+      "marked": false,
+      "mouseDowns": 0,
+      "mouseUps": 0,
+      "pid": 74568,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      }
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "ready",
+      "lastMouseX": -1,
+      "lastMouseY": -1,
+      "marked": false,
+      "mouseDowns": 0,
+      "mouseUps": 0,
+      "pid": 74568,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      }
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 1,
+      "mouseUps": 0,
+      "pid": 74568,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      }
+    },
+    {
+      "active": true,
+      "characters": 0,
+      "display": {
+        "height": 1080,
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      },
+      "expectedTextMatches": false,
+      "keyDowns": 0,
+      "keyUps": 0,
+      "kind": "input",
+      "lastMouseX": 100,
+      "lastMouseY": 192,
+      "marked": true,
+      "mouseDowns": 1,
+      "mouseUps": 1,
+      "pid": 74568,
+      "rect": {
+        "height": 392,
+        "width": 640,
+        "x": 180,
+        "y": 528
+      }
+    }
+  ],
+  "browserTrace": [
+    {
+      "diagnostic": {
+        "snapshot": {
+          "captureTarget": {
+            "kind": "display"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": null,
+          "mediaPaused": false,
+          "phase": "active",
+          "reason": null,
+          "sessionExpiresAt": 1794126046002,
+          "sessionRevision": 3,
+          "viewerSessionId": "rdv_6gvh1vf69vsg6"
+        },
+        "error": null,
+        "decodedFrames": 1,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": null,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 5,
+        "textCommits": 1,
+        "metrics": null,
+        "metricsReplies": 0
+      },
+      "stats": [
+        {
+          "framesDecoded": 1,
+          "keyFramesDecoded": 1,
+          "bytesReceived": 21607,
+          "codecId": "CIT01_108_level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+          "jitter": 0,
+          "jitterBufferDelay": 0.08510899999999999,
+          "jitterBufferEmittedCount": 1,
+          "framesDropped": 0,
+          "pliCount": 0,
+          "nackCount": 0,
+          "freezeCount": 0,
+          "totalFreezesDuration": 0,
+          "jitterBufferTargetDelay": 0.011328999999999999,
+          "jitterBufferMinimumDelay": 0.011328999999999999
+        }
+      ],
+      "size": [
+        928,
+        522
+      ]
+    },
+    {
+      "epoch": 1
+    },
+    {
+      "sent": true,
+      "diagnostic": {
+        "snapshot": {
+          "captureTarget": {
+            "kind": "display"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": 1,
+          "mediaPaused": false,
+          "phase": "active",
+          "reason": null,
+          "sessionExpiresAt": 1794126046002,
+          "sessionRevision": 4,
+          "viewerSessionId": "rdv_6gvh1vf69vsg6"
+        },
+        "error": null,
+        "decodedFrames": 7,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": 1,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 5,
+        "textCommits": 1,
+        "metrics": null,
+        "metricsReplies": 0
+      }
+    },
+    {
+      "final": {
+        "snapshot": {
+          "captureTarget": {
+            "kind": "display"
+          },
+          "idleExpiresAt": null,
+          "inputEpoch": 1,
+          "mediaPaused": false,
+          "phase": "active",
+          "reason": null,
+          "sessionExpiresAt": 1794126046002,
+          "sessionRevision": 4,
+          "viewerSessionId": "rdv_6gvh1vf69vsg6"
+        },
+        "error": null,
+        "decodedFrames": 7,
+        "channels": [
+          "control",
+          "input",
+          "pointer",
+          "clipboard"
+        ],
+        "inputEpoch": 1,
+        "clipboardText": null,
+        "clipboardEnabled": false,
+        "clipboardWrites": 0,
+        "transport": "connected",
+        "negotiations": 5,
+        "textCommits": 1,
+        "metrics": null,
+        "metricsReplies": 0
+      },
+      "stats": [
+        {
+          "framesDecoded": 7,
+          "keyFramesDecoded": 2,
+          "bytesReceived": 52011,
+          "codecId": "CIT01_108_level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+          "jitter": 0.007,
+          "jitterBufferDelay": 0.203982,
+          "jitterBufferEmittedCount": 7,
+          "framesDropped": 0,
+          "pliCount": 0,
+          "nackCount": 0,
+          "freezeCount": 0,
+          "totalFreezesDuration": 0,
+          "jitterBufferTargetDelay": 0.061373,
+          "jitterBufferMinimumDelay": 0.061373
+        }
+      ]
+    },
+    {
+      "stopping": true
+    }
+  ]
+}

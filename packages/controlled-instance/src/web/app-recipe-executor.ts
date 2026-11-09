@@ -12,6 +12,8 @@ import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
 import type { AppInstallEnvironmentManager, AppInstallExecutionPolicy } from "./app-install-environment";
 
+import { commitArchiveTransaction } from "./archive-transaction";
+
 const MAX_LOG_CHARS = 8_192;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 100_000;
@@ -415,6 +417,8 @@ function manifestPath(stateDir: string, appId: string) {
 }
 
 function walkOwnedFiles(root: string, current = root): string[] {
+  const directory=fs.lstatSync(current);
+  if(directory.isSymbolicLink() || !directory.isDirectory())throw new AppRecipeExecutionError("unsafe_archive","Archive root must be a real directory.");
   const values: string[] = [];
   for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
     const absolute = path.join(current, entry.name);
@@ -633,21 +637,23 @@ async function stageArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExec
 
 async function installArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: Required<Pick<AppRecipeExecutorOptions, "commandRunner" | "fetcher">> & AppRecipeExecutorOptions) {
   const installRoot = controlledPath(options.installBaseDir, recipe.installRoot);
-  if (fs.existsSync(installRoot)) throw new AppRecipeExecutionError("install_target_exists", "The managed install target already exists.");
+  if (fs.existsSync(manifestPath(options.stateDir,context.appId))) throw new AppRecipeExecutionError("install_target_exists", "The managed install target already exists.");
   const staged = await stageArchive(recipe, context, options);
   const ownershipManifest = manifestPath(options.stateDir, context.appId);
   try {
-    atomicWriteJsonSync(ownershipManifest, { schemaVersion: 1, appId: context.appId, installRoot, files: staged.files });
-    fs.renameSync(staged.extracted, installRoot);
-  } catch (error) {
-    fs.rmSync(ownershipManifest, { force: true });
-    throw error;
+    let candidate=staged.extracted;
+    if(fs.existsSync(installRoot)) {
+      const current=walkOwnedFiles(installRoot);
+      if(staged.files.some(file=>current.includes(file)))throw new AppRecipeExecutionError("archive_unowned_conflict","An artifact would replace an unowned file.");
+      candidate=path.join(staged.staging,"candidate");fs.cpSync(installRoot,candidate,{recursive:true});fs.cpSync(staged.extracted,candidate,{recursive:true});
+    }
+    commitArchiveTransaction({ root:installRoot, staging:staged.staging, candidate, manifestFile:ownershipManifest, manifest:{ schemaVersion:1, appId:context.appId, installRoot, files:staged.files } },options.installBaseDir);
   } finally {
-    fs.rmSync(staged.staging, { recursive: true, force: true });
+    if (!fs.existsSync(`${ownershipManifest}.transaction`)) fs.rmSync(staged.staging, { recursive: true, force: true });
   }
 }
 
-function readArchiveManifest(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: AppRecipeExecutorOptions) {
+function readArchiveManifest(recipe: Pick<ArchiveInstallRecipe,"installRoot">, context: AppRecipeExecutionContext, options: AppRecipeExecutorOptions) {
   const installRoot = controlledPath(options.installBaseDir, recipe.installRoot);
   const filePath = manifestPath(options.stateDir, context.appId);
   if (!fs.existsSync(filePath)) throw new AppRecipeExecutionError("ownership_manifest_missing", "The archive ownership manifest is missing.");
@@ -674,20 +680,32 @@ async function updateArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExe
   if (!fs.existsSync(manifest.installRoot)) throw new AppRecipeExecutionError("ownership_manifest_invalid", "The managed install target does not exist.");
   const staged = await stageArchive(recipe, context, options);
   try {
-    removeOwnedArchiveFiles(manifest.installRoot, manifest.files);
-    fs.cpSync(staged.extracted, manifest.installRoot, { recursive: true, force: true });
-    atomicWriteJsonSync(manifest.filePath, { schemaVersion: 1, appId: context.appId, installRoot: manifest.installRoot, files: staged.files });
+    // Preserve unowned files in the complete candidate; never mutate the live
+    // tree before all copies and validation have succeeded.
+    const candidate = path.join(staged.staging,"candidate");
+    const current = walkOwnedFiles(manifest.installRoot);
+    const owned = new Set(manifest.files);
+    for (const file of staged.files) if (current.includes(file) && !owned.has(file)) throw new AppRecipeExecutionError("archive_unowned_conflict","An artifact would replace an unowned file.");
+    fs.cpSync(manifest.installRoot,candidate,{recursive:true});
+    removeOwnedArchiveFiles(candidate,manifest.files);
+    fs.cpSync(staged.extracted,candidate,{recursive:true,force:true});
+    commitArchiveTransaction({ root:manifest.installRoot, staging:staged.staging, candidate, manifestFile:manifest.filePath, manifest:{ schemaVersion:1, appId:context.appId, installRoot:manifest.installRoot, files:staged.files } },options.installBaseDir);
   } finally {
-    fs.rmSync(staged.staging, { recursive: true, force: true });
+    if (!fs.existsSync(`${manifest.filePath}.transaction`)) fs.rmSync(staged.staging, { recursive: true, force: true });
   }
 }
 
-function uninstallArchive(recipe: ArchiveInstallRecipe, context: AppRecipeExecutionContext, options: AppRecipeExecutorOptions) {
+function uninstallArchive(recipe: Pick<ArchiveInstallRecipe,"installRoot">, context: AppRecipeExecutionContext, options: AppRecipeExecutorOptions) {
   const manifest = readArchiveManifest(recipe, context, options);
   const { installRoot: expectedRoot, filePath, files } = manifest;
-  removeOwnedArchiveFiles(expectedRoot, files);
-  try { fs.rmdirSync(expectedRoot); } catch (error) { if (!["ENOENT", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code || "")) throw error; }
-  fs.unlinkSync(filePath);
+  walkOwnedFiles(expectedRoot); // Reject links before copying or changing anything.
+  const staging=fs.mkdtempSync(path.join(path.dirname(expectedRoot),".install-uninstall-"));
+  try {
+    const candidate=path.join(staging,"candidate");fs.cpSync(expectedRoot,candidate,{recursive:true});
+    removeOwnedArchiveFiles(candidate,files);
+    commitArchiveTransaction({root:expectedRoot,staging,candidate,manifestFile:filePath,manifest:null},options.installBaseDir);
+  } finally {if(!fs.existsSync(`${filePath}.transaction`))fs.rmSync(staging,{recursive:true,force:true});}
+  try {fs.rmdirSync(expectedRoot);}catch(error){if(!["ENOENT","ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code||""))throw error;}
 }
 
 function managedNodePackageRoot(installBaseDir: string, appId: string) {
@@ -1007,6 +1025,10 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
       context.onCommand?.({ executable: command.executable, args: [...command.args] });
       return resolved.commandRunner(command, { onOutput: context.onOutput });
     };
+    if (recipe.type === "archive-ownership") {
+      if(operation!=="uninstall")throw new AppRecipeExecutionError("invalid_builtin_recipe","Ownership layouts only support removal.");
+      context.onPhase?.("uninstall-archive");uninstallArchive(recipe,context,resolved);return {log:""};
+    }
     if (recipe.type === "bundled") throw new AppRecipeExecutionError("bundled_app", "Bundled apps do not support managed installation, update, or removal.");
     if (recipe.type === "system-package") {
       context.onPhase?.(operation === "install" ? "install-package" : operation === "update" ? "update-package" : "uninstall-package");

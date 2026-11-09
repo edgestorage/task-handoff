@@ -1,3 +1,4 @@
+import { RemoteDesktopCapabilitiesSchema, normalizeRemoteDesktopCapabilities, unsupportedRemoteDesktopCapabilities, type RemoteDesktopCapabilities } from "./remote-desktop.ts";
 import { z } from "zod";
 import { DateTimeStringSchema, NonEmptyTrimmedTextSchema, TrimmedTextSchema } from "./internal/text-schemas.ts";
 import {
@@ -178,6 +179,7 @@ function defaultControlledInstanceFeatures() {
     aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
     aiSessionProviders: emptyAiSessionProviderCapabilities(),
     instanceShell: unsupportedInstanceShellCapabilities(),
+    remoteDesktop: unsupportedRemoteDesktopCapabilities(),
   };
 }
 
@@ -361,6 +363,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   // Compatibility for v0.0.46: absence or an invalid value disables only the
   // instance-shell feature domain and must not invalidate the capability document.
   instanceShell: InstanceShellCapabilitiesSchema.optional(),
+  // Compatibility for v0.0.50: malformed additive data disables only desktop.
+  remoteDesktop: z.preprocess((value) => value === undefined ? undefined : normalizeRemoteDesktopCapabilities(value), RemoteDesktopCapabilitiesSchema.optional()),
   // Additive capability: absence disables only instance-owned install source settings.
   appInstallEnvironment: ControlledInstanceAppInstallEnvironmentCapabilitiesSchema.optional(),
 }).passthrough();
@@ -418,6 +422,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     managedModelEnvironment: ControlledInstanceManagedModelEnvironmentCapabilities;
     appInstallEnvironment: ControlledInstanceAppInstallEnvironmentCapabilities;
     instanceShell: InstanceShellCapabilities;
+    remoteDesktop: RemoteDesktopCapabilities;
   };
 };
 
@@ -468,6 +473,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
   if (modelRelay.success) normalizedFeatures.modelRelay = modelRelay.data;
   const managedModelEnvironment = ControlledInstanceManagedModelEnvironmentCapabilitiesSchema.safeParse(features.managedModelEnvironment);
   if (managedModelEnvironment.success) normalizedFeatures.managedModelEnvironment = managedModelEnvironment.data;
+  normalizedFeatures.remoteDesktop = normalizeRemoteDesktopCapabilities(features.remoteDesktop);
   const instanceShell = InstanceShellCapabilitiesSchema.safeParse(features.instanceShell);
   if (instanceShell.success) normalizedFeatures.instanceShell = instanceShell.data;
   const appInstallEnvironment = ControlledInstanceAppInstallEnvironmentCapabilitiesSchema.safeParse(features.appInstallEnvironment);
@@ -4268,3 +4274,8 @@ export const CreateNodeJoinInviteInputSchema = z.object({
   nodeName: NonEmptyTrimmedTextSchema.max(160).optional(),
   expiresInMs: z.number().int().positive().max(60 * 60 * 1000).optional(),
 }).strict();
+
+/** Read only the boundary-normalized feature document; protocol dates remain diagnostic. */
+export function controlledInstanceRemoteDesktopCapabilities(capabilities: unknown): RemoteDesktopCapabilities {
+  return normalizeControlledInstanceCapabilities(capabilities).features.remoteDesktop;
+}

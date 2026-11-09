@@ -1,0 +1,1 @@
+{"height":1080,"samples":[{"bitrate":2000000,"encodeMicros":10219,"idrBytes":105051,"keyframe":true,"pacerBudgetBytes":26500},{"bitrate":4000000,"encodeMicros":9400,"idrBytes":111889,"keyframe":true,"pacerBudgetBytes":51500},{"bitrate":8000000,"encodeMicros":9202,"idrBytes":122196,"keyframe":true,"pacerBudgetBytes":101500}],"width":1920}

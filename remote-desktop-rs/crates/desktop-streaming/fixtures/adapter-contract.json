@@ -1,0 +1,88 @@
+[
+  {
+    "id": "create",
+    "command": {
+      "type": "reserve",
+      "owner": {
+        "actorId": "adapter-actor",
+        "deviceSessionId": "adapter-device"
+      },
+      "captureTarget": {
+        "kind": "display"
+      }
+    },
+    "expectType": "reserved"
+  },
+  {
+    "id": "create",
+    "command": {
+      "type": "reserve",
+      "owner": {
+        "actorId": "adapter-actor",
+        "deviceSessionId": "adapter-device"
+      },
+      "captureTarget": {
+        "kind": "display"
+      }
+    },
+    "expectType": "reserved"
+  },
+  {
+    "id": "forbidden",
+    "command": {
+      "type": "snapshot",
+      "owner": {
+        "actorId": "other",
+        "deviceSessionId": "other"
+      },
+      "viewerSessionId": "$session"
+    },
+    "expectType": "error",
+    "expectCode": "REMOTE_DESKTOP_FORBIDDEN"
+  },
+  {
+    "id": "attach",
+    "command": {
+      "type": "attach",
+      "owner": {
+        "actorId": "adapter-actor",
+        "deviceSessionId": "adapter-device"
+      },
+      "viewerSessionId": "$session",
+      "captureTarget": {
+        "kind": "display"
+      },
+      "attachToken": "$token"
+    },
+    "expectType": "snapshot"
+  },
+  {
+    "id": "replay",
+    "command": {
+      "type": "attach",
+      "owner": {
+        "actorId": "adapter-actor",
+        "deviceSessionId": "adapter-device"
+      },
+      "viewerSessionId": "$session",
+      "captureTarget": {
+        "kind": "display"
+      },
+      "attachToken": "$token"
+    },
+    "expectType": "error",
+    "expectCode": "REMOTE_DESKTOP_ATTACH_INVALID"
+  },
+  {
+    "id": "stop",
+    "command": {
+      "type": "stop",
+      "owner": {
+        "actorId": "adapter-actor",
+        "deviceSessionId": "adapter-device"
+      },
+      "viewerSessionId": "$session"
+    },
+    "expectType": "stopped"
+  }
+]

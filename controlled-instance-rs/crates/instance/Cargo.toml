@@ -5,6 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+desktop-component-host = { path = "../desktop-component-host" }
+remote-desktop-protocol = { path = "../../../remote-desktop-rs/crates/protocol" }
 anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true

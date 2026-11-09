@@ -165,6 +165,10 @@
     "./relay-browser-channel": {
       "types": "./src/relay-browser-channel.ts",
       "default": "./src/relay-browser-channel.ts"
+    },
+    "./remote-desktop": {
+      "types": "./src/remote-desktop.ts",
+      "default": "./src/remote-desktop.ts"
     }
   },
   "scripts": {

@@ -1,0 +1,12 @@
+[
+ {"id":"first","command":{"type":"reserve","owner":{"actorId":"actor","deviceSessionId":"old-device"},"captureTarget":{"kind":"display"}},"expectType":"reserved","save":"first"},
+ {"id":"foreign","command":{"type":"takeover","owner":{"actorId":"foreign","deviceSessionId":"new-device"},"viewerSessionId":"$firstSession","captureTarget":{"kind":"display"}},"expectType":"error","expectCode":"REMOTE_DESKTOP_FORBIDDEN"},
+ {"id":"replace","command":{"type":"takeover","owner":{"actorId":"actor","deviceSessionId":"new-device"},"viewerSessionId":"$firstSession","captureTarget":{"kind":"display"}},"expectType":"reserved","save":"second"},
+ {"id":"replace","command":{"type":"takeover","owner":{"actorId":"actor","deviceSessionId":"new-device"},"viewerSessionId":"$firstSession","captureTarget":{"kind":"display"}},"expectType":"reserved","save":"second"},
+ {"id":"old-callback","command":{"type":"signalClosed","owner":{"actorId":"actor","deviceSessionId":"old-device"},"viewerSessionId":"$firstSession"},"expectType":"error","expectCode":"REMOTE_DESKTOP_NOT_FOUND"},
+ {"id":"wrong-device","command":{"type":"snapshot","owner":{"actorId":"actor","deviceSessionId":"old-device"},"viewerSessionId":"$secondSession"},"expectType":"error","expectCode":"REMOTE_DESKTOP_FORBIDDEN"},
+ {"id":"new-attach","command":{"type":"attach","owner":{"actorId":"actor","deviceSessionId":"new-device"},"viewerSessionId":"$secondSession","captureTarget":{"kind":"display"},"attachToken":"$secondToken"},"expectType":"snapshot"},
+ {"id":"admin-stop","command":{"type":"forceStop","viewerSessionId":"$secondSession"},"expectType":"stopped"},
+ {"id":"admin-stop","command":{"type":"forceStop","viewerSessionId":"$secondSession"},"expectType":"stopped"},
+ {"id":"new-snapshot","command":{"type":"snapshot","owner":{"actorId":"actor","deviceSessionId":"new-device"},"viewerSessionId":"$secondSession"},"expectType":"snapshot","expectPhase":"stopped"}
+]

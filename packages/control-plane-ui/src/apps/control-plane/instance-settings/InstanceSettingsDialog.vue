@@ -265,6 +265,7 @@
                         </div>
                         <small>{{ installableAppCount ? t("instances.settings.readyToInstall", { count: installableAppCount }) : t("instances.settings.noInstalls") }}</small>
                       </div>
+                      <div v-if="remoteDesktopSettingsError" class="instance-settings-state instance-settings-state-error" role="alert">{{ remoteDesktopSettingsError }}</div>
                       <div v-if="!filteredManagedApps.length" class="instance-settings-state">{{ t("instances.settings.noFilterMatches") }}</div>
                       <div v-else class="instance-app-list instance-directory-list">
                         <article v-for="app in filteredManagedApps" :key="app.id" class="instance-app-row instance-managed-app-row">
@@ -284,6 +285,7 @@
                             </div>
                             <div class="instance-app-controls">
                               <Badge :variant="managedAppBadgeVariant(app.state)">{{ managedAppStateLabel(app.state) }}</Badge>
+                              <Button v-if="app.id === 'remote-desktop' && app.state === 'installed' && remoteDesktopSettings" size="sm" variant="outline" :disabled="remoteDesktopSettingsLoading" @click="toggleRemoteDesktop">{{ remoteDesktopSettings.enabled ? t('instances.settings.remoteDesktopDisable') : t('instances.settings.remoteDesktopEnable') }}</Button>
                               <Button v-if="activeJob(app)" size="sm" variant="outline" @click="openAppTask(activeJob(app)!.id)">
                                 <LoaderCircle v-if="activeJob(app)!.state === 'running'" class="animate-spin motion-reduce:animate-none" :size="13" aria-hidden="true" />
                                 <Clock3 v-else :size="13" aria-hidden="true" />
@@ -396,6 +398,7 @@ import { authorizeInstanceGitCredential, revokeInstanceGitCredential, useGitCred
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { instanceModelEntityId, instanceModelIdMatches } from "./instanceSettingsState";
 import { instanceStatusBadgeLabel } from "../useInstanceStatus";
+import { getRemoteDesktopSettings, updateRemoteDesktopSettings, type RemoteDesktopSettings } from "../../../api/remoteDesktop";
 
 const { t } = useI18n();
 const { locale } = useControlPlaneLocale();
@@ -457,6 +460,9 @@ const operationSubmitting = ref("");
 const checkingApps = reactive(new Set<string>());
 const appConfirmation = ref<{ app: ManagedAppProjection; operation: AppManagementOperation }>();
 const appOperationError = ref("");
+const remoteDesktopSettings = ref<RemoteDesktopSettings>();
+const remoteDesktopSettingsLoading = ref(false);
+const remoteDesktopSettingsError = ref("");
 const focusEnvironmentAfterConfirmation = ref(false);
 const appFilter = ref<AppFilter>("all");
 const appView = ref("catalog");
@@ -474,6 +480,25 @@ function openAppTask(jobId: string) {
   selectedAppTaskId.value = jobId;
   appView.value = "tasks";
   void nextTick(() => appTasksTab.value?.$el?.focus());
+}
+async function refreshRemoteDesktopSettings() {
+  if (!props.instance || remoteDesktopApp.value?.state !== "installed") return;
+  remoteDesktopSettingsLoading.value = true;
+  remoteDesktopSettingsError.value = "";
+  try { remoteDesktopSettings.value = await getRemoteDesktopSettings(props.instance.id); }
+  catch (reason) {
+    remoteDesktopSettings.value = undefined;
+    remoteDesktopSettingsError.value = translateApiError(reason, t, t("instances.settings.remoteDesktopSettingsFailed"));
+  }
+  finally { remoteDesktopSettingsLoading.value = false; }
+}
+async function toggleRemoteDesktop() {
+  if (!props.instance || !remoteDesktopSettings.value || remoteDesktopSettingsLoading.value) return;
+  remoteDesktopSettingsLoading.value = true;
+  remoteDesktopSettingsError.value = "";
+  try { remoteDesktopSettings.value = await updateRemoteDesktopSettings(props.instance.id, !remoteDesktopSettings.value.enabled); }
+  catch (reason) { remoteDesktopSettingsError.value = translateApiError(reason, t, t("instances.settings.remoteDesktopSettingsFailed")); }
+  finally { remoteDesktopSettingsLoading.value = false; }
 }
 function retryAppTask(job: AppManagementJob) {
   if (!props.appManagement || operationSubmitting.value) return;
@@ -718,6 +743,8 @@ const filteredManagedApps = computed(() => {
   if (appFilter.value === "installed") return apps.filter((app) => app.state === "installed");
   return apps;
 });
+const remoteDesktopApp = computed(() => props.appManagement?.apps.find((app) => app.id === "remote-desktop"));
+const remoteDesktopInstalled = computed(() => remoteDesktopApp.value?.state === "installed");
 
 watch(
   [() => props.open, () => props.instance?.id, () => props.initialSection],
@@ -755,7 +782,22 @@ watch(() => props.instance, (instance) => {
 watch(
   [() => props.open, () => props.instance?.id, () => section.value],
   ([open, instanceId, activeSection]) => {
-    if (open && instanceId && (activeSection === "apps" || activeSection === "browser" || activeSection === "codex")) void props.refreshAppManagement(instanceId);
+    if (open && instanceId && (activeSection === "apps" || activeSection === "browser" || activeSection === "codex")) {
+      void props.refreshAppManagement(instanceId);
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  [() => props.open, () => props.instance?.id, () => section.value, remoteDesktopInstalled],
+  ([open, instanceId, activeSection, installed]) => {
+    if (open && instanceId && activeSection === "apps" && installed) {
+      void refreshRemoteDesktopSettings();
+    } else if (!installed) {
+      remoteDesktopSettings.value = undefined;
+      remoteDesktopSettingsError.value = "";
+    }
   },
   { immediate: true },
 );

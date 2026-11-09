@@ -262,3 +262,28 @@ test("instance shell replays a start frame received while the proxy resolves its
   assert.equal(String(upstream.sent[0]), "early-start");
   client.terminate();
 });
+
+test("all generic proxy modes reject desktop private endpoints before credentials or payloads reach upstream",async t=>{
+  const app=Fastify({logger:false});await app.register(websocket);
+  t.after(async()=>{for(const socket of app.websocketServer.clients)socket.terminate();await app.close();});
+  let forwarded=0;const diagnostics=[];const metrics=createInstanceProxyMetrics();
+  registerInstanceProxyRoutes(app,{
+    fetchImpl:async()=>{forwarded++;throw Error('must not forward');},metrics,
+    instanceBase:()=> 'http://instance.invalid',syncModelEnvironment:async()=>{forwarded++;},
+    webSocketUpstreamHeaders:()=>{forwarded++;return {};},webSocketFactory:()=>{forwarded++;throw Error('must not forward');},
+    diagnostic:data=>diagnostics.push(data),
+  });
+  const paths=['/api/internal/remote-desktop/settings','/api/internal/remote-desktop/attach?token=private',
+    '/api/%69nternal/remote-desktop/reserve','/api/internal%2fremote-desktop/stop','/api/internal/%2572emote-desktop/stop'];
+  for(const route of ['', '/stream','/raw'])for(const path of paths){
+    const response=await app.inject({method:'POST',url:`/api/node-agent/instances/inst_proxy/proxy${route}`,payload:{path,method:'POST',headers:{authorization:'Bearer forged','x-task-handoff-auth':'node-agent'},body:'private'}});
+    assert.equal(response.statusCode,403,`${route}: ${path}`);
+  }
+  await app.ready();
+  for(const path of paths){
+    const socket=await app.injectWS(`/api/node-agent/instances/inst_proxy/proxy/ws${path}`,{headers:{authorization:'Bearer forged'}});
+    const [code]=await require('node:events').once(socket,'close');assert.equal(code,1008);
+  }
+  assert.equal(forwarded,0);assert.equal(metrics.active,0);
+  assert.deepEqual(diagnostics,[]);
+});

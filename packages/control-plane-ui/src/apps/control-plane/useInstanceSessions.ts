@@ -31,12 +31,13 @@ export type SessionTab = {
   label: string;
   title?: string;
   status: string;
-  kind: "terminal" | "browser" | "embedded-browser" | "logs" | "app" | "ai" | "status" | "repository";
+  kind: "terminal" | "browser" | "embedded-browser" | "logs" | "app" | "ai" | "status" | "repository" | "remote-desktop";
   source?: Record<string, unknown>;
   aiSessions?: AiSessionSummary[];
 };
 
 export const EMBEDDED_BROWSER_APP_ID = "embedded-browser";
+export const REMOTE_DESKTOP_APP_ID = "remote-desktop";
 
 export type RepositoryWorkspaceTabTarget = {
   aiAgent?: "codex" | "claude" | "opencode";
@@ -58,6 +59,7 @@ export type SessionWorkspaceGroup = {
 export type LaunchableApp = {
   id: string;
   label: string;
+  description?: string;
   kind?: "tty" | "gui" | "web";
   automation?: "cdp";
   agent?: boolean;
@@ -226,6 +228,7 @@ export function appDisplayName(id: string, t: Translate) {
     browser: t("sessions.tabs.browser"),
     "vscode-web": "VS Code",
     [EMBEDDED_BROWSER_APP_ID]: t("sessions.tabs.embeddedBrowser"),
+    [REMOTE_DESKTOP_APP_ID]: t("instances.remoteDesktop.title"),
   };
   return names[id] || id.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -284,6 +287,9 @@ export function sessionMeta(session: SessionTab, t: Translate) {
   if (session.kind === "ai") {
     return aiSessionListHeadline(session.aiSessions || [], t);
   }
+  if (session.kind === "remote-desktop") {
+    return t("instances.remoteDesktop.title");
+  }
   const kind = sessionKindDisplayName(typeof session.source?.kind === "string" ? session.source.kind : session.kind, t);
   const id = typeof session.source?.id === "string" ? session.source.id : session.key;
   return [kind, id].filter(Boolean).join(" · ");
@@ -330,6 +336,9 @@ function sessionWorkspaceKey(session: SessionTab, instance: InstanceBoardItem) {
   if (session.kind === "status") {
     return "__status__";
   }
+  if (session.kind === "remote-desktop") {
+    return "__remote_desktop__";
+  }
   const source = session.source || {};
   const tty = objectValue(source.tty);
   const ai = objectValue(source.ai);
@@ -350,6 +359,7 @@ function sessionWorkspaceKey(session: SessionTab, instance: InstanceBoardItem) {
 function sessionWorkspaceLabel(key: string, t: Translate) {
   if (key === "__ai_sessions__") return t("sessions.title");
   if (key === "__status__") return t("sessions.tabs.status");
+  if (key === "__remote_desktop__") return t("instances.remoteDesktop.title");
   if (key === "__unknown_workspace__") return t("sessions.tabs.unknownWorkspace");
   return key;
 }
@@ -372,6 +382,7 @@ export function sessionKindDisplayName(kind: string, t: Translate) {
     app: t("sessions.tabs.app"),
     logs: t("sessions.tabs.logs"),
     ai: "AI",
+    "remote-desktop": t("instances.remoteDesktop.title"),
   };
   return labels[kind] || appDisplayName(kind, t);
 }

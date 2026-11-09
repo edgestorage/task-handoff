@@ -46,3 +46,6 @@ pub use stories::*;
 pub use story_instance::*;
 pub use triggers::*;
 pub use versions::*;
+
+mod remote_desktop;
+pub use remote_desktop::*;

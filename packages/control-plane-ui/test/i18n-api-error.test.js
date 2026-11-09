@@ -25,6 +25,21 @@ test("a cloud binding recovery error tells the user where to unblock sign-in", (
   );
 });
 
+test("remote desktop failures use actionable localized messages", () => {
+  const cases = [
+    ["REMOTE_DESKTOP_TURN_UNAVAILABLE", "Remote desktop relay configuration is unavailable. Check the TURN service and its clock health, then try again.", "远程桌面中继配置不可用。请检查 TURN 服务和时钟健康状态后重试。"],
+    ["REMOTE_DESKTOP_SIGNAL_ORIGIN", "The remote desktop signaling connection was rejected. Use the configured HTTPS address, or ask an administrator to enable private-network HTTP access.", "远程桌面信令连接被拒绝，请使用配置的 HTTPS 地址，或由管理员启用局域网 HTTP 访问。"],
+    ["REMOTE_DESKTOP_NOT_INSTALLED", "The remote desktop component is not installed on this instance.", "此实例尚未安装远程桌面组件。"],
+    ["REMOTE_DESKTOP_VERSION_MISMATCH", "The remote desktop component version does not match the instance. Update or restart the instance, then try again.", "远程桌面组件版本与实例不一致，请更新或重启实例后重试。"],
+  ];
+
+  for (const [code, englishMessage, chineseMessage] of cases) {
+    const error = { code, message: `raw server diagnostic for ${code}` };
+    assert.equal(translateApiError(error, english), englishMessage);
+    assert.equal(translateApiError(error, chinese), chineseMessage);
+  }
+});
+
 test("stable instance, node, and model errors have localized messages", () => {
   const cases = [
     ["LOCAL_FOLDER_REQUIRES_INSTANCE_NODE", "Select a local folder owned by the instance node.", "请选择实例所属节点上的本地文件夹。"],

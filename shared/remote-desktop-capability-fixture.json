@@ -1,0 +1,48 @@
+{
+  "available": false,
+  "status": "unavailable",
+  "reason": "REMOTE_DESKTOP_UNSUPPORTED",
+  "protocolVersion": "2026-11-05",
+  "runtimeKind": "unknown",
+  "platform": "unknown",
+  "desktopSource": "none",
+  "captureTargets": [],
+  "windowCapture": {
+    "available": false,
+    "reason": "REMOTE_DESKTOP_UNSUPPORTED"
+  },
+  "capture": {
+    "backends": [],
+    "cursor": false
+  },
+  "encoders": [],
+  "input": {
+    "backends": [],
+    "textCommit": false,
+    "keyboardLayout": false
+  },
+  "transport": [],
+  "video": {
+    "codecs": [],
+    "maxWidth": 0,
+    "maxHeight": 0,
+    "maxFrameRate": 0
+  },
+  "features": {
+    "clipboard": false,
+    "keyboard": false,
+    "mouse": false
+  },
+  "viewerLimit": 0,
+  "fallback": {
+    "available": false,
+    "reason": "REMOTE_DESKTOP_UNSUPPORTED",
+    "protocolVersion": "2026-11-09",
+    "mediaSubprotocol": "taskhandoff.remote-desktop.fallback.media.v1",
+    "controlSubprotocol": "taskhandoff.remote-desktop.fallback.control.v1",
+    "maxWidth": 0,
+    "maxHeight": 0,
+    "maxFrameRate": 0,
+    "maxBitrate": 0
+  }
+}

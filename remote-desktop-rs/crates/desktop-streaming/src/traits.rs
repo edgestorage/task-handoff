@@ -1,0 +1,99 @@
+//! Platform backends own OS handles. Capture and input share one geometry.
+use crate::session::CaptureTarget;
+use async_trait::async_trait;
+use std::time::Duration;
+
+pub type Result<T> = anyhow::Result<T>;
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Geometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+}
+impl Geometry {
+    /// OS actuator rectangle, independent of captured pixel dimensions. Validate
+    /// floats before conversion so saturating casts cannot mask invalid targets.
+    pub fn from_actuator_rect(x: f64, y: f64, width: f64, height: f64) -> Result<Self> {
+        anyhow::ensure!(
+            [x, y, width, height].iter().all(|v| v.is_finite()),
+            crate::error::BackendError::InvalidGeometry
+        );
+        let (x, y, width, height) = (x.round(), y.round(), width.round(), height.round());
+        anyhow::ensure!(
+            width >= 1.0
+                && height >= 1.0
+                && width <= u32::MAX as f64
+                && height <= u32::MAX as f64
+                && x >= i32::MIN as f64
+                && y >= i32::MIN as f64
+                && x + width - 1.0 <= i32::MAX as f64
+                && y + height - 1.0 <= i32::MAX as f64,
+            crate::error::BackendError::InvalidGeometry
+        );
+        Ok(Self {
+            x: x as i32,
+            y: y as i32,
+            width: width as u32,
+            height: height as u32,
+            scale: 1.0,
+        })
+    }
+}
+pub struct RawFrame {
+    pub bgra: Vec<u8>,
+    pub stride: usize,
+    pub geometry: Geometry,
+    pub captured_at: std::time::Instant,
+}
+pub struct EncodedFrame {
+    pub annex_b: Vec<u8>,
+    pub keyframe: bool,
+    pub duration: Duration,
+}
+pub struct Cursor {
+    pub argb: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub hotspot: (u32, u32),
+    pub position: (i32, i32),
+    pub visible: bool,
+}
+#[async_trait]
+pub trait DesktopSurface: Send {
+    async fn start(&mut self) -> Result<()>;
+    async fn shutdown(&mut self) -> Result<()>;
+}
+#[async_trait]
+pub trait CaptureCatalog: Send {
+    type Entry: Send;
+    async fn enumerate(&mut self) -> Result<Vec<Self::Entry>>;
+}
+#[async_trait]
+pub trait CaptureSource: Send {
+    async fn open(&mut self, target: &CaptureTarget) -> Result<Geometry>;
+    async fn frame(&mut self) -> Result<RawFrame>;
+    async fn pause(&mut self) -> Result<()>;
+}
+pub trait VideoEncoder: Send {
+    fn encode(&mut self, frame: &RawFrame, idr: bool) -> Result<EncodedFrame>;
+    fn set_bitrate(&mut self, bits_per_second: u32) -> Result<()>;
+}
+pub trait CursorSource: Send {
+    fn cursor(&mut self) -> Result<Cursor>;
+}
+pub trait InputSink: Send {
+    fn apply(&mut self, event: &crate::channel::Input) -> Result<()>;
+    fn release_all(&mut self) -> Result<()>;
+}
+pub trait ClipboardBridge: Send {
+    fn read_text(&mut self) -> Result<String>;
+    fn write_text(&mut self, text: &str) -> Result<()>;
+}
+#[async_trait]
+pub trait PeerSession: Send {
+    async fn offer(&mut self, sdp: &str) -> Result<String>;
+    async fn send_frame(&mut self, frame: EncodedFrame) -> Result<()>;
+    async fn close(&mut self) -> Result<()>;
+}

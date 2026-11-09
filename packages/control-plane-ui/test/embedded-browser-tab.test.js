@@ -82,8 +82,8 @@ test("browser address suggestions use local history and accessible keyboard navi
 test("ordinary web builds keep the browser launcher behind desktop bridge and capability", () => {
   const sessions = source("instance-detail/useActiveInstanceSessions.ts");
   assert.match(sessions, /supportsBrowserTunnel\(activeInstance\.value\.capabilities\) \|\| supportsDirectoryBrowserTunnel\(activeInstance\.value\.capabilities\)/);
-  assert.match(sessions, /if \(catalogApps\.length\) return \[\.\.\.catalogApps, \.\.\.browser\]/);
-  assert.match(sessions, /uniqueLaunchableApps\(\[\.\.\.ids\.map\([\s\S]*?\), \.\.\.browser\]\)/);
+  assert.match(sessions, /uniqueLaunchableApps\(\[\.\.\.remoteDesktopApps, \.\.\.catalogApps, \.\.\.browser\]\)/);
+  assert.match(sessions, /uniqueLaunchableApps\(\[\.\.\.remoteDesktopApps, \.\.\.ids\.map\([\s\S]*?\), \.\.\.browser\]\)/);
 });
 
 test("browser popup requests create a sibling browser tab with its initial URL", () => {

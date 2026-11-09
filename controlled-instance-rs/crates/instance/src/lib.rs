@@ -18,6 +18,7 @@ pub mod git_provisioning;
 mod instance_shell;
 pub mod node_agent_client;
 mod private_model;
+mod remote_desktop;
 pub mod server;
 mod session_titles;
 pub mod state;

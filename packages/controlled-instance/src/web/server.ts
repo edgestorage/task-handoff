@@ -1,3 +1,7 @@
+import { INSTANCE_CAPABILITIES_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/remote-desktop";
+import { DesktopService } from "../remote-desktop/service";
+import { registerDesktopRoutes } from "../remote-desktop/routes";
+import { DESKTOP_COMPONENT_APP_ID, readManagedDesktopPackage } from "@task-handoff/app-runtime";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -294,6 +298,7 @@ type CreateWebAppOptions = {
   aiSessionDiscovery?: AiSessionDiscoveryCoordinator;
   codexAppServer?: CodexAppServerSessionBridge;
   appManagement?: AppManagementManager;
+  desktopService?: DesktopService;
 };
 
 export class AiSessionRefreshScheduler {
@@ -748,7 +753,28 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     warn: (message) => app.log?.warn?.({ message }, "app install environment warning"),
   });
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
+  const desktopService = options.desktopService || new DesktopService({
+    dataDir:storagePaths.dataDir, version:packageVersion(),
+    mode:process.env.TASK_HANDOFF_RUNTIME_KIND === "docker" ? "virtual" : "local",
+    installedPackage:()=>readManagedDesktopPackage(managedAppRoot,appManagementStateDir),
+    canStart:()=>!appRuntime.isDraining() && !appManagement.hasActiveOperation(DESKTOP_COMPONENT_APP_ID),
+    requestUpdate:()=>{appManagement.request(DESKTOP_COMPONENT_APP_ID,"update");},
+  });
+  let lastDesktopCapability="";
+  const desktopChanged=()=>{
+    const next=JSON.stringify(desktopService.status());
+    if(next!==lastDesktopCapability){lastDesktopCapability=next;events.publish(INSTANCE_CAPABILITIES_CHANGED_EVENT_TYPE,{});}
+  };
+  desktopService.on("changed",desktopChanged);
+  app.addHook("onReady",async()=>{await desktopService.reconcile();});
+  app.addHook("onClose",async()=>{desktopService.off("changed",desktopChanged);});
+  const packageLifecycles = new Map([[DESKTOP_COMPONENT_APP_ID,{
+    beforeChange:()=>desktopService.beforePackageChange(),
+    changed:(operation:string,succeeded:boolean)=>desktopService.packageChanged(operation,succeeded),
+  }]]);
+  app.addHook("onClose",()=>desktopService.close());
   const appManagement = options.appManagement || new AppManagementManager({
+    packageLifecycle:(appId)=>packageLifecycles.get(appId),
     stateDir: appManagementStateDir,
     installBaseDir: managedAppRoot,
     installEnvironment,
@@ -757,9 +783,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       ...aiSessions.list().filter((session) => session.activeTurnId).map((session) => ({ id: session.id, appId: session.agent, status: "running" })),
     ],
     stopAppRuntime: (appId) => appRuntime.stopSharedResource(appId),
-    publish: (event) => events.publish("app.management", event),
+    publish: (event) => {
+      events.publish("app.management", event);
+      if(event.job?.appId===DESKTOP_COMPONENT_APP_ID)queueMicrotask(desktopChanged);
+    },
     warn: (message) => app.log?.warn?.({ message }, "app management persistence warning"),
-    onTerminal: async () => {
+    onTerminal: async (job) => {
+      if(job.appId===DESKTOP_COMPONENT_APP_ID)await desktopService.refresh();
       if (nodeAgentClient.enabled()) await nodeAgentClient.heartbeat();
     },
   });
@@ -804,6 +834,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     aiSessionProviderCapabilities(),
     gitCredentialBrokerInstalled,
     installEnvironment,
+    desktopService.status(),
   ));
   const agentRunMembers = new AgentRunMemberBindingStore(storagePaths.runtimeDir);
   const storyAgentTools = new StoryAgentToolService(
@@ -825,6 +856,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   appRuntime.replaceSharedResourcePrivateEnvironment?.("opencode", storyAgentToolBridge?.openCodeRuntimeEnvironment() || {});
 
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
+  registerDesktopRoutes(app,desktopService,()=>process.env.TASK_HANDOFF_CONTROL_MODE === "controlled" ? process.env.TASK_HANDOFF_REGISTRATION_TOKEN?.trim() : undefined);
   registerAuth(app, auth);
   const instanceShellRuntime = new InstanceShellRuntime({
     environment: () => appRuntime.processEnvironment(),
@@ -1935,6 +1967,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.post("/api/internal/node-agent/drain", nodeAgentProcessRoute, async () => {
     await instanceShellRuntime.shutdown(1001, "Controlled instance is draining.");
     appRuntime.beginDrain();
+    await desktopService.close();
     triggerExecutor.beginDrain();
     triggerManager.stop();
     await appRuntime.stopAll();
@@ -2032,6 +2065,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       aiSessionProviderCapabilities(),
       gitCredentialBrokerInstalled,
       installEnvironment,
+      desktopService.status(),
     );
     return {
       data: {
@@ -2044,7 +2078,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/instance/capabilities", async () => ({
-    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities(), gitCredentialBrokerInstalled, installEnvironment),
+    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities(), gitCredentialBrokerInstalled, installEnvironment, desktopService.status()),
   }));
 
   app.get("/api/workspace/status", async () => ({

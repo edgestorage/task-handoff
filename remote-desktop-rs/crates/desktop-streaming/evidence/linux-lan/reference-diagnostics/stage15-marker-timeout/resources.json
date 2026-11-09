@@ -1,0 +1,5 @@
+{
+  "status": "unavailable",
+  "reason": "resource sampler produced no JSON before failing benchmark teardown terminated it",
+  "rawFile": "resources.json.empty"
+}

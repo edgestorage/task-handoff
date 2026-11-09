@@ -176,6 +176,8 @@ pub struct AppRecipeExecutor {
     state_dir: PathBuf,
     env: BTreeMap<String, String>,
     install_environment: Option<AppInstallEnvironmentManager>,
+    #[cfg(test)]
+    archive_fixture: Option<Vec<u8>>,
 }
 
 impl AppRecipeExecutor {
@@ -185,6 +187,8 @@ impl AppRecipeExecutor {
             state_dir: state_dir.into(),
             env: std::env::vars().collect(),
             install_environment: None,
+            #[cfg(test)]
+            archive_fixture: None,
         }
     }
 
@@ -283,6 +287,18 @@ impl AppRecipeExecutor {
                     source_policy.as_ref(),
                 )
                 .await
+            }
+            InstallRecipe::ArchiveOwnership { install_root, .. } => {
+                if operation != AppManagementOperation::Uninstall {
+                    return Err(AppRecipeExecutionError::new(
+                        "invalid_builtin_recipe",
+                        "Ownership layouts only support removal.",
+                        false,
+                    ));
+                }
+                let root = controlled_path(&self.install_base_dir, install_root)?;
+                uninstall_archive(&self.state_dir, context, &root, &self.install_base_dir)?;
+                Ok(String::new())
             }
             InstallRecipe::Archive {
                 url,
@@ -755,7 +771,7 @@ impl AppRecipeExecutor {
         }
         let root = controlled_path(&self.install_base_dir, install_root)?;
         if operation == AppManagementOperation::Uninstall {
-            uninstall_archive(&self.state_dir, context, &root)?;
+            uninstall_archive(&self.state_dir, context, &root, &self.install_base_dir)?;
             return Ok(String::new());
         }
         let manifest_path = manifest_path(&self.state_dir, &context.app_id);
@@ -770,7 +786,7 @@ impl AppRecipeExecutor {
             }
             Some(manifest)
         } else {
-            if root.exists() {
+            if manifest_path.exists() {
                 return Err(AppRecipeExecutionError::new(
                     "install_target_exists",
                     "The managed install target already exists.",
@@ -782,28 +798,55 @@ impl AppRecipeExecutor {
         let staged = self
             .stage_archive(url, sha256, format, &root, context)
             .await?;
-        if let Some(manifest) = update_manifest {
-            remove_owned_files(&manifest.install_root, &manifest.files)?;
-            copy_tree(&staged.extracted, &manifest.install_root)?;
-            write_manifest(
+        let result = (|| {
+            let candidate = if let Some(manifest) = &update_manifest {
+                let current = walk_owned_files(&root)?;
+                if staged
+                    .files
+                    .iter()
+                    .any(|file| current.contains(file) && !manifest.files.contains(file))
+                {
+                    return Err(AppRecipeExecutionError::new(
+                        "archive_unowned_conflict",
+                        "An artifact would replace an unowned file.",
+                        false,
+                    ));
+                }
+                let candidate = staged.staging.join("candidate");
+                copy_tree(&root, &candidate)?;
+                remove_owned_files(&candidate, &manifest.files)?;
+                copy_tree(&staged.extracted, &candidate)?;
+                candidate
+            } else if root.exists() {
+                let current = walk_owned_files(&root)?;
+                if staged.files.iter().any(|file| current.contains(file)) {
+                    return Err(AppRecipeExecutionError::new(
+                        "archive_unowned_conflict",
+                        "An artifact would replace an unowned file.",
+                        false,
+                    ));
+                }
+                let candidate = staged.staging.join("candidate");
+                copy_tree(&root, &candidate)?;
+                copy_tree(&staged.extracted, &candidate)?;
+                candidate
+            } else {
+                staged.extracted.clone()
+            };
+            let payload = json!({"schemaVersion":1,"appId":context.app_id,"installRoot":root,"files":staged.files});
+            crate::archive_transaction::commit(
+                &root,
+                &staged.staging,
+                &candidate,
                 &manifest_path,
-                &context.app_id,
-                &manifest.install_root,
-                &staged.files,
-            )?;
+                &payload,
+                &self.install_base_dir,
+            )
+        })();
+        if !crate::archive_transaction::journal_path(&manifest_path).exists() {
             let _ = fs::remove_dir_all(&staged.staging);
-            return Ok(String::new());
         }
-        if let Some(parent) = root.parent() {
-            fs::create_dir_all(parent).map_err(storage_error)?;
-        }
-        write_manifest(&manifest_path, &context.app_id, &root, &staged.files)?;
-        if let Err(error) = fs::rename(&staged.extracted, &root) {
-            let _ = fs::remove_file(&manifest_path);
-            let _ = fs::remove_dir_all(&staged.staging);
-            return Err(storage_error(error));
-        }
-        let _ = fs::remove_dir_all(&staged.staging);
+        result?;
         Ok(String::new())
     }
 
@@ -858,6 +901,17 @@ impl AppRecipeExecutor {
         expected_sha256: &str,
         context: &AppRecipeExecutionContext,
     ) -> Result<(), AppRecipeExecutionError> {
+        #[cfg(test)]
+        if let Some(bytes) = &self.archive_fixture {
+            return Self::persist_archive_stream(
+                destination,
+                expected_sha256,
+                context,
+                Some(bytes.len() as u64),
+                futures_util::stream::iter([Ok(bytes.as_slice())]),
+            )
+            .await;
+        }
         let response = artifact_http_client()?
             .get(url)
             .send()
@@ -877,7 +931,25 @@ impl AppRecipeExecutor {
                 true,
             ));
         }
-        let declared = response.content_length();
+        Self::persist_archive_stream(
+            destination,
+            expected_sha256,
+            context,
+            response.content_length(),
+            response
+                .bytes_stream()
+                .map(|chunk| chunk.map_err(artifact_stream_error)),
+        )
+        .await
+    }
+
+    async fn persist_archive_stream<B: AsRef<[u8]>>(
+        destination: &Path,
+        expected_sha256: &str,
+        context: &AppRecipeExecutionContext,
+        declared: Option<u64>,
+        stream: impl futures_util::Stream<Item = Result<B, AppRecipeExecutionError>>,
+    ) -> Result<(), AppRecipeExecutionError> {
         if declared.is_some_and(|length| length > MAX_ARCHIVE_BYTES) {
             return Err(AppRecipeExecutionError::new(
                 "artifact_too_large",
@@ -894,11 +966,12 @@ impl AppRecipeExecutor {
             let _ = tokio::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o600))
                 .await;
         }
-        let mut stream = response.bytes_stream();
+        let mut stream = Box::pin(stream);
         let mut hash = Sha256::new();
         let mut received = 0_u64;
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(artifact_stream_error)?;
+            let chunk = chunk?;
+            let chunk = chunk.as_ref();
             received = received.saturating_add(chunk.len() as u64);
             if received > MAX_ARCHIVE_BYTES {
                 return Err(AppRecipeExecutionError::new(
@@ -907,8 +980,8 @@ impl AppRecipeExecutor {
                     false,
                 ));
             }
-            hash.update(&chunk);
-            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+            hash.update(chunk);
+            tokio::io::AsyncWriteExt::write_all(&mut file, chunk)
                 .await
                 .map_err(storage_error)?;
             phase_with_progress(
@@ -2230,7 +2303,15 @@ fn controlled_path(
             false,
         ));
     }
-    let base = fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
+    // Keep the configured lexical root, as the Node installer does. Resolving
+    // macOS /var aliases here would disagree with ownership and journal paths.
+    let base = if base_dir.is_absolute() {
+        base_dir.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(storage_error)?
+            .join(base_dir)
+    };
     let resolved = base.join(relative);
     if resolved == base {
         return Err(AppRecipeExecutionError::new(
@@ -2244,27 +2325,6 @@ fn controlled_path(
 
 fn manifest_path(state_dir: &Path, app_id: &str) -> PathBuf {
     state_dir.join("manifests").join(format!("{app_id}.json"))
-}
-
-fn write_manifest(
-    path: &Path,
-    app_id: &str,
-    install_root: &Path,
-    files: &[String],
-) -> Result<(), AppRecipeExecutionError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(storage_error)?;
-    }
-    let payload = json!({
-        "schemaVersion": 1,
-        "appId": app_id,
-        "installRoot": install_root,
-        "files": files,
-    });
-    let bytes = serde_json::to_vec(&payload).map_err(|error| {
-        AppRecipeExecutionError::new("app_operation_failed", error.to_string(), true)
-    })?;
-    controlled_instance_core::atomic::write_atomic(path, &bytes, Some(0o600)).map_err(storage_error)
 }
 
 fn read_manifest(
@@ -2357,6 +2417,14 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), AppRecipeExecution
 }
 
 fn walk_owned_files(root: &Path) -> Result<Vec<String>, AppRecipeExecutionError> {
+    let metadata = fs::symlink_metadata(root).map_err(storage_error)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppRecipeExecutionError::new(
+            "unsafe_archive",
+            "Archive root must be a real directory.",
+            false,
+        ));
+    }
     fn visit(
         root: &Path,
         current: &Path,
@@ -2566,12 +2634,31 @@ fn uninstall_archive(
     state_dir: &Path,
     context: &AppRecipeExecutionContext,
     root: &Path,
+    base: &Path,
 ) -> Result<(), AppRecipeExecutionError> {
     let manifest_file = manifest_path(state_dir, &context.app_id);
     let manifest = read_manifest(&manifest_file, root)?;
-    remove_owned_files(&manifest.install_root, &manifest.files)?;
-    let _ = fs::remove_dir(&manifest.install_root);
-    fs::remove_file(manifest_file).map_err(storage_error)
+    walk_owned_files(root)?;
+    let staging = create_archive_staging(root, &context.app_id)?;
+    let result = (|| {
+        let candidate = staging.join("candidate");
+        copy_tree(root, &candidate)?;
+        remove_owned_files(&candidate, &manifest.files)?;
+        crate::archive_transaction::commit(
+            root,
+            &staging,
+            &candidate,
+            &manifest_file,
+            &Value::Null,
+            base,
+        )
+    })();
+    if !crate::archive_transaction::journal_path(&manifest_file).exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result?;
+    let _ = fs::remove_dir(root);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2609,6 +2696,89 @@ mod tests {
             .expect("gzip");
     }
 
+    #[tokio::test]
+    async fn archive_install_update_failure_uninstall_reinstall_share_complete_ownership_transactions(
+    ) {
+        fn artifact(content: &str) -> Vec<u8> {
+            let gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            let mut tar = tar::Builder::new(gzip);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o700);
+            header.set_cksum();
+            tar.append_data(&mut header, "bin/tool", content.as_bytes())
+                .unwrap();
+            tar.into_inner().unwrap().finish().unwrap()
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("apps");
+        let state = dir.path().join("state");
+        let root = base.join("tool");
+        let mut executor = AppRecipeExecutor::new(&base, &state);
+        let capabilities = crate::detect_final_computer_capabilities_sync();
+        let context = AppRecipeExecutionContext {
+            app_id: "tool".into(),
+            capabilities: capabilities.clone(),
+            on_phase: None,
+            on_command: None,
+            on_output: None,
+        };
+        let recipe = |bytes: &[u8]| InstallRecipe::Archive {
+            platforms: vec![capabilities.platform],
+            arches: Some(vec![capabilities.arch]),
+            privilege: None,
+            url: "https://fixtures.invalid/tool.tar.gz".into(),
+            sha256: hex::encode(Sha256::digest(bytes)),
+            format: "tar.gz".into(),
+            install_root: "tool".into(),
+        };
+        let first = artifact("first");
+        executor.archive_fixture = Some(first.clone());
+        executor
+            .execute(AppManagementOperation::Install, &recipe(&first), &context)
+            .await
+            .unwrap();
+        fs::write(root.join("user"), "preserve").unwrap();
+        let next = artifact("next");
+        executor.archive_fixture = Some(next.clone());
+        assert_eq!(
+            executor
+                .execute(AppManagementOperation::Update, &recipe(&first), &context)
+                .await
+                .unwrap_err()
+                .code,
+            "checksum_mismatch"
+        );
+        assert_eq!(fs::read_to_string(root.join("bin/tool")).unwrap(), "first");
+        executor
+            .execute(AppManagementOperation::Update, &recipe(&next), &context)
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(root.join("bin/tool")).unwrap(), "next");
+        let ownership = InstallRecipe::ArchiveOwnership {
+            platforms: vec![capabilities.platform],
+            arches: None,
+            privilege: None,
+            install_root: "tool".into(),
+        };
+        executor
+            .execute(AppManagementOperation::Uninstall, &ownership, &context)
+            .await
+            .unwrap();
+        assert!(!root.join("bin/tool").exists());
+        assert!(!manifest_path(&state, "tool").exists());
+        assert!(executor
+            .execute(AppManagementOperation::Install, &ownership, &context)
+            .await
+            .is_err());
+        executor
+            .execute(AppManagementOperation::Install, &recipe(&next), &context)
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(root.join("user")).unwrap(), "preserve");
+        assert!(manifest_path(&state, "tool").exists());
+        assert!(!crate::archive_transaction::pending(&state, "tool"));
+    }
     #[test]
     fn native_package_metadata_validates_sri_urls_and_launcher_paths() {
         let integrity = NativePackageIntegrity::parse(

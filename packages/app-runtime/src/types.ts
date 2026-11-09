@@ -99,7 +99,10 @@ export type ArchiveInstallRecipe = ManagedAppRecipeConstraint & {
   installRoot: string;
 };
 
-export type InstallRecipe = BundledInstallRecipe | SystemPackageInstallRecipe | NodePackageInstallRecipe | NativePackageInstallRecipe | ArchiveInstallRecipe;
+/** Private ownership layout; never eligible for download/install/update. */
+export type ArchiveOwnershipRecipe = ManagedAppRecipeConstraint & { type: "archive-ownership"; installRoot: string };
+
+export type InstallRecipe = ArchiveOwnershipRecipe | BundledInstallRecipe | SystemPackageInstallRecipe | NodePackageInstallRecipe | NativePackageInstallRecipe | ArchiveInstallRecipe;
 
 export type ManagedAppDefinition = {
   launcher: AppCatalogItem;

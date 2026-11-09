@@ -31,3 +31,5 @@ export * from "./workspace-git.ts";
 export * from "./stories.ts";
 export * from "./triggers.ts";
 export * from "./websocket-bridge.ts";
+
+export * from "./remote-desktop.ts";

@@ -172,6 +172,7 @@ pub struct AppState {
     pub events: EventBus,
     pub app_runtime: Arc<AppRuntime>,
     pub app_management: Arc<AppManagementManager>,
+    pub desktop_service: desktop_component_host::service::DesktopService,
     pub install_environment: AppInstallEnvironmentManager,
     app_session_authority: Arc<Mutex<AppSessionAuthority>>,
     pub ai_sessions: Arc<AiSessionRuntime>,
@@ -518,6 +519,74 @@ impl AppState {
         let app_management_sessions = app_runtime.clone();
         let app_management_runtime = app_runtime.clone();
         let app_management_ai_sessions = ai_sessions.clone();
+        let desktop_admission =
+            Arc::new(std::sync::OnceLock::<std::sync::Weak<AppManagementManager>>::new());
+        let desktop_service = {
+            let update_admission = desktop_admission.clone();
+            let root = managed_app_root.clone();
+            let state = app_management_state_dir.clone();
+            let admission = desktop_admission.clone();
+            let runtime = app_runtime.clone();
+            desktop_component_host::service::DesktopService::new(
+                &config.storage_paths.data_dir,
+                config.package_version.clone(),
+                if config.runtime_kind == crate::config::RuntimeKind::Docker {
+                    desktop_component_host::host::CaptureMode::Virtual
+                } else {
+                    desktop_component_host::host::CaptureMode::Local
+                },
+                move || {
+                    controlled_instance_app_runtime::remote_desktop::installed_package(
+                        &root, &state,
+                    )
+                    .map(|package| {
+                        package.map(|p| desktop_component_host::service::DesktopPackage {
+                            binary: p.binary,
+                            version: p.version,
+                        })
+                    })
+                    .map_err(Into::into)
+                },
+                move || {
+                    !runtime.is_draining()
+                        && admission
+                            .get()
+                            .and_then(std::sync::Weak::upgrade)
+                            .is_some_and(|manager| {
+                                !manager.has_active_operation(
+                                    controlled_instance_app_runtime::remote_desktop::APP_ID,
+                                )
+                            })
+                },
+            )
+            .with_update_request(move || {
+                let admission = update_admission.clone();
+                Box::pin(async move {
+                    if let Some(manager) = admission.get().and_then(std::sync::Weak::upgrade) {
+                        let _ = manager
+                            .request(
+                                controlled_instance_app_runtime::remote_desktop::APP_ID,
+                                controlled_instance_protocol::AppManagementOperation::Update,
+                                controlled_instance_protocol::AppManagementOperationRequest {
+                                    request_id: None,
+                                },
+                            )
+                            .await;
+                    }
+                })
+            })
+        };
+        let desktop_terminal = desktop_service.clone();
+        let desktop_lifecycle = Arc::new(crate::remote_desktop::DesktopLifecycle(
+            desktop_service.clone(),
+        ));
+        let desktop_hooks: BTreeMap<
+            &str,
+            Arc<dyn controlled_instance_app_runtime::AppPackageLifecycle>,
+        > = BTreeMap::from([(
+            controlled_instance_app_runtime::remote_desktop::APP_ID,
+            desktop_lifecycle as Arc<dyn controlled_instance_app_runtime::AppPackageLifecycle>,
+        )]);
         let app_management = Arc::new(
             AppManagementManager::new_with_runtime_hook_and_install_environment(
                 app_management_state_dir,
@@ -546,8 +615,27 @@ impl AppState {
                     sessions
                 },
                 move |event| {
+                    if event.job.as_ref().is_some_and(|job| {
+                        job.app_id == controlled_instance_app_runtime::remote_desktop::APP_ID
+                    }) {
+                        desktop_terminal.package_operation_changed();
+                    }
+                    let desktop_done = event.job.as_ref().is_some_and(|job| {
+                        job.app_id == controlled_instance_app_runtime::remote_desktop::APP_ID
+                            && !matches!(
+                                job.state,
+                                controlled_instance_protocol::AppManagementJobState::Queued
+                                    | controlled_instance_protocol::AppManagementJobState::Running
+                            )
+                    });
                     if let Ok(payload) = serde_json::to_value(event) {
                         let _ = app_management_events.publish("app.management", payload);
+                    }
+                    if desktop_done {
+                        let desktop = desktop_terminal.clone();
+                        tokio::spawn(async move {
+                            desktop.refresh().await;
+                        });
                     }
                 },
                 move |app_id| {
@@ -555,8 +643,13 @@ impl AppState {
                     app_management_runtime.invalidate_catalog();
                 },
                 install_environment.clone(),
-            ),
+            )
+            .with_package_lifecycles(move |app_id| {
+                // Provider registration, not a branch inside the generic executor.
+                desktop_hooks.get(app_id).cloned()
+            }),
         );
+        let _ = desktop_admission.set(Arc::downgrade(&app_management));
         let management_admission = Arc::downgrade(&app_management);
         app_runtime.set_app_launch_admission(move |app_id| {
             management_admission
@@ -620,6 +713,7 @@ impl AppState {
             events,
             app_runtime,
             app_management,
+            desktop_service,
             install_environment,
             app_session_authority,
             ai_sessions,
@@ -723,8 +817,9 @@ impl AppState {
         let trigger_store = self.trigger_store.clone();
         let git_credential_broker_installed = self.git_credential_broker_installed.clone();
         let install_environment = self.install_environment.clone();
+        let desktop = self.desktop_service.clone();
         self.node_agent_client.start(move || {
-            build_status_snapshot(
+            let mut snapshot = build_status_snapshot(
                 &config,
                 &app_runtime,
                 &ai_sessions,
@@ -732,7 +827,9 @@ impl AppState {
                 trigger_store.snapshot().ok(),
                 git_credential_broker_installed.load(Ordering::SeqCst),
                 Some(&install_environment),
-            )
+            );
+            snapshot.capabilities.features.remote_desktop = Some(desktop.status());
+            snapshot
         });
     }
 
@@ -762,12 +859,34 @@ impl AppState {
     }
 
     pub fn capabilities(&self) -> ControlledInstanceCapabilities {
-        controlled_instance_capabilities(
+        let mut capabilities = controlled_instance_capabilities(
             &self.app_runtime,
             &self.ai_session_controller,
             self.git_credential_broker_installed.load(Ordering::SeqCst),
             Some(&self.install_environment),
-        )
+        );
+        capabilities.features.remote_desktop = Some(self.desktop_service.status());
+        capabilities
+    }
+    pub fn start_desktop_services(&self) {
+        let service = self.desktop_service.clone();
+        let events = self.events.clone();
+        let mut changes = service.subscribe();
+        let mut shutdown = self.shutdown_receiver();
+        tokio::spawn(async move {
+            service.reconcile().await;
+            let mut previous = String::new();
+            loop {
+                tokio::select! {
+                    _=shutdown.changed()=>break,
+                    change=changes.recv()=>{
+                        match change {Ok(desktop_component_host::service::DesktopEvent::Session(_))=>continue,Err(tokio::sync::broadcast::error::RecvError::Closed)=>break,_=>{}}
+                        let current=serde_json::to_string(&service.status()).unwrap_or_default();
+                        if current!=previous {previous=current;let _=events.publish(controlled_instance_protocol::INSTANCE_CAPABILITIES_CHANGED_EVENT_TYPE,serde_json::json!({}));}
+                    }
+                }
+            }
+        });
     }
 
     pub fn set_git_credential_broker_installed(&self, installed: bool) {
@@ -1607,7 +1726,7 @@ impl AppState {
     }
 
     pub fn status_snapshot(&self) -> InstanceStatusSnapshot {
-        build_status_snapshot(
+        let mut snapshot = build_status_snapshot(
             &self.config,
             &self.app_runtime,
             &self.ai_sessions,
@@ -1615,7 +1734,9 @@ impl AppState {
             self.trigger_store.snapshot().ok(),
             self.git_credential_broker_installed.load(Ordering::SeqCst),
             Some(&self.install_environment),
-        )
+        );
+        snapshot.capabilities.features.remote_desktop = Some(self.desktop_service.status());
+        snapshot
     }
 
     pub fn target(&self) -> serde_json::Value {

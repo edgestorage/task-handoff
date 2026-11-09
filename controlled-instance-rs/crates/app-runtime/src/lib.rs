@@ -1,3 +1,4 @@
+mod archive_transaction;
 mod catalog;
 pub mod codex_app_server;
 pub mod command_invocation;
@@ -12,6 +13,7 @@ mod native_package;
 mod profiles;
 mod pty;
 mod recipe;
+pub mod remote_desktop;
 mod runtime;
 mod terminal_screen;
 mod update_check;
@@ -37,7 +39,9 @@ pub use managed::{
     ManagedAppDetectionRule, ManagedAppOwnership, ManagedAppOwnershipContext,
 };
 pub use managed_node_apps::ManagedNodeApps;
-pub use management::{AppManagementManager, AppManagementRequestError, AppManagementSession};
+pub use management::{
+    AppManagementManager, AppManagementRequestError, AppManagementSession, AppPackageLifecycle,
+};
 pub use native_package::{
     detect_managed_app_recipe_target, managed_native_app_launcher,
     managed_native_app_manifest_path, managed_native_app_root, read_native_app_manifest,

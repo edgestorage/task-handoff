@@ -34,7 +34,7 @@
         <AppLaunchIcon :app="app" />
         <span>
           <strong>{{ app.label }}</strong>
-          <small>{{ app.id }}</small>
+          <small>{{ app.description || app.id }}</small>
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent :class="submenuClass || 'app-launch-menu'">
@@ -61,7 +61,7 @@
       <AppLaunchIcon :app="app" />
       <span>
         <strong>{{ app.label }}</strong>
-        <small>{{ app.id }}</small>
+        <small>{{ app.description || app.id }}</small>
       </span>
     </DropdownMenuItem>
   </template>

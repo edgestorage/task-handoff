@@ -8,13 +8,14 @@ members = [
   "crates/instance",
   "crates/cli",
   "crates/test-support",
+  "crates/desktop-component-host",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.0.46"
 edition = "2021"
-rust-version = "1.89"
+rust-version = "1.95"
 
 [workspace.dependencies]
 anyhow = "1.0"

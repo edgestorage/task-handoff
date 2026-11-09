@@ -87,6 +87,7 @@
                           <FolderGit2 v-if="session.kind === 'repository'" :size="14" class="session-tab-icon" />
                           <LoaderCircle v-else-if="session.kind === 'embedded-browser' && session.status === 'loading'" :size="14" class="session-tab-icon session-tab-icon-loading" />
                           <Globe2 v-else-if="session.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
+                          <Monitor v-else-if="session.kind === 'remote-desktop'" :size="14" class="session-tab-icon" />
                           <AppWindow v-else :size="14" class="session-tab-icon" />
                         </template>
                         <input
@@ -123,7 +124,7 @@
                       @update:window-always-on-top="setWindowAlwaysOnTop"
                     >
                       <ContextMenuItem
-                        v-if="session.kind !== 'repository' && session.kind !== 'embedded-browser'"
+                        v-if="session.kind !== 'repository' && session.kind !== 'embedded-browser' && session.kind !== 'remote-desktop'"
                         class="instance-action-item"
                         :disabled="!sessionTabCanRename(session)"
                         :title="sessionTabCanRename(session) ? undefined : t('sessions.tabs.renameUnavailable')"
@@ -314,6 +315,7 @@
         <FolderGit2 v-if="sessionTabPointerDrag.session.kind === 'repository'" :size="14" class="session-tab-icon" />
         <LoaderCircle v-else-if="sessionTabPointerDrag.session.kind === 'embedded-browser' && sessionTabPointerDrag.session.status === 'loading'" :size="14" class="session-tab-icon session-tab-icon-loading" />
         <Globe2 v-else-if="sessionTabPointerDrag.session.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
+        <Monitor v-else-if="sessionTabPointerDrag.session.kind === 'remote-desktop'" :size="14" class="session-tab-icon" />
         <AppWindow v-else :size="14" class="session-tab-icon" />
         <strong>{{ sessionDisplayName(sessionTabPointerDrag.session, t) }}</strong>
       </div>
@@ -336,7 +338,9 @@
           :active-action-label="activeActionLabel"
           :app-launch-button-title="appLaunchButtonTitle"
           :can-launch-app="canLaunchApp"
+          :can-interact-remote-desktop="canInteractRemoteDesktop"
           :can-export-config="canExportConfig"
+          :can-manage-remote-desktop="canManageRemoteDesktop"
           :choose-project-folder="chooseProjectFolder"
           :instance="instance"
           :is-closing-all-sessions="isClosingAllSessions"
@@ -418,7 +422,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMediaQuery, useNow, useStorage } from "@vueuse/core";
-import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Globe2, LoaderCircle, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
+import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Globe2, LoaderCircle, Maximize2, Minimize2, Monitor, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
@@ -476,7 +480,9 @@ const props = defineProps<{
   appLaunchButtonTitle: string;
   appLaunchMenuOpen: boolean;
   canExportConfig?: (instance: InstanceBoardItem) => boolean;
+  canInteractRemoteDesktop?: boolean;
   canLaunchApp: boolean;
+  canManageRemoteDesktop?: boolean;
   chooseProjectFolder?: NativeNodeFolderPicker;
   copiedText: string;
   instance: InstanceWithAiSessions;
@@ -585,7 +591,7 @@ watch(
 );
 const { locale } = useControlPlaneLocale();
 const activeRepositorySessionId = computed(() => {
-  if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status" || props.activeSession.kind === "repository" || props.activeSession.kind === "embedded-browser") return "";
+  if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status" || props.activeSession.kind === "repository" || props.activeSession.kind === "embedded-browser" || props.activeSession.kind === "remote-desktop") return "";
   return typeof props.activeSession.source?.id === "string" ? props.activeSession.source.id : props.activeSession.key;
 });
 const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime(), locale.value, t));
@@ -604,6 +610,7 @@ let sessionTabDetailCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let sessionTabDetailClosedAt = 0;
 
 function sessionTabWorkspaceLabel(session: SessionTab) {
+  if (session.kind === "remote-desktop") return t("instances.remoteDesktop.title");
   if (session.kind === "embedded-browser") {
     const url = typeof session.source?.currentUrl === "string"
       ? session.source.currentUrl

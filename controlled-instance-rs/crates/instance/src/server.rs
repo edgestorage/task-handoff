@@ -235,6 +235,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/status", get(auth_status))
         .route("/api/status", get(status))
         .route("/api/instance/status", get(instance_status))
+        .merge(crate::remote_desktop::routes(state.clone()))
         .route("/api/instance/capabilities", get(capabilities))
         .route("/api/workspace/status", get(workspace_status))
         .route("/api/diagnostics", get(diagnostics))
@@ -4145,6 +4146,7 @@ pub async fn run_web(options: ServerOptions) -> anyhow::Result<()> {
         }
     };
     state.set_git_credential_broker_installed(git_credential_broker_installed);
+    state.start_desktop_services();
     state.start_ai_session_services();
     state.start_app_session_services();
     if let Err(error) = state.trigger_manager.start() {
@@ -4169,6 +4171,7 @@ pub async fn run_web(options: ServerOptions) -> anyhow::Result<()> {
         .await;
     server_state.stop_node_agent().await;
     server_state.stop_ai_session_services().await;
+    let _ = server_state.desktop_service.close().await;
     server_state.app_runtime.stop_all().await;
     server_state.trigger_manager.stop();
     git_credential_broker.close().await?;
@@ -13888,6 +13891,7 @@ async fn drain(State(state): State<AppState>) -> Json<ApiEnvelope<Value>> {
         .shutdown(1001, "Controlled instance is draining.")
         .await;
     state.set_draining(true);
+    let _ = state.desktop_service.close().await;
     state.app_runtime.stop_all().await;
     state.publish_app_session_snapshot("app-session-updated");
     state.close_lost_app_session_ai_sessions().await;
@@ -14723,6 +14727,9 @@ async fn auth_middleware(State(state): State<AppState>, request: Request, next: 
     if path == "/api/health" || path == "/api/auth/status" {
         return next.run(request).await;
     }
+    if path.starts_with("/api/internal/remote-desktop/") {
+        return next.run(request).await; // Dedicated route middleware owns credentials.
+    }
     if path == "/api/internal/instance-shell" {
         let expected = state.config.registration_token.as_deref();
         let authorized = state.config.control_mode == ControlMode::Controlled
@@ -14937,6 +14944,111 @@ mod tests {
     use http_body_util::BodyExt;
     use std::sync::Arc;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn desktop_private_routes_enforce_their_credential_even_when_web_auth_is_disabled() {
+        for mode in [ControlMode::Controlled, ControlMode::Standalone] {
+            let (mut state, _root) = test_state_with_control_mode(mode);
+            let mut auth = WebAuthState::disabled(None);
+            auth.token = Some("standalone-desktop-token".into());
+            state.auth = Arc::new(auth);
+            let credential = if mode == ControlMode::Controlled {
+                "test-registration-token"
+            } else {
+                "standalone-desktop-token"
+            };
+            let app = router(state.clone());
+            let mut desktop_changes = state.events.subscribe();
+            state.start_desktop_services();
+            let changed = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    let event = desktop_changes.recv().await.unwrap();
+                    if event.r#type
+                        == controlled_instance_protocol::INSTANCE_CAPABILITIES_CHANGED_EVENT_TYPE
+                    {
+                        break event;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(changed.payload, json!({}));
+            let capability = body_json(
+                app.clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri("/api/instance/capabilities")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(
+                capability["data"]["features"]["remoteDesktop"]["reason"],
+                "REMOTE_DESKTOP_NOT_INSTALLED"
+            );
+            let status = body_json(
+                app.clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri("/api/instance/status")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(
+                status["data"]["capabilities"]["features"]["remoteDesktop"],
+                capability["data"]["features"]["remoteDesktop"]
+            );
+            for token in [None, Some("wrong")] {
+                let mut builder = Request::builder().uri(format!(
+                    "/api/internal/remote-desktop/settings?token={credential}"
+                ));
+                if let Some(token) = token {
+                    builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+                }
+                let response = app
+                    .clone()
+                    .oneshot(builder.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+                assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/internal/remote-desktop/settings")
+                        .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if mode == ControlMode::Standalone {
+                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+                state.request_shutdown();
+                state.desktop_service.close().await.unwrap();
+                continue;
+            }
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(body_json(response).await["data"]["enabled"], false);
+            let response=app.clone().oneshot(Request::builder().method("POST").uri("/api/internal/remote-desktop/windows").header(header::AUTHORIZATION,format!("Bearer {credential}")).header(header::CONTENT_TYPE,"application/json").body(Body::from(r#"{"requestId":"r","owner":{"actorId":"actor","deviceSessionId":"device"}}"#)).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(
+                body_json(response).await["error"]["code"],
+                "REMOTE_DESKTOP_NOT_INSTALLED"
+            );
+            state.request_shutdown();
+            state.desktop_service.close().await.unwrap();
+        }
+    }
 
     static OPEN_APP_TEST_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 

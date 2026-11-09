@@ -1,3 +1,4 @@
+import { instanceEndpointAccess } from "@task-handoff/core/core/instance-endpoint-access";
 import { Readable, Transform } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
@@ -105,6 +106,7 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     const parsed = ProxyRequestSchema.parse(request.body);
     const instanceBase = await options.instanceBase(id);
     const proxyPath = normalizedPath(parsed.path);
+    if (instanceEndpointAccess(proxyPath) !== "generic") return reply.code(403).send({ error:{code:"INSTANCE_ENDPOINT_PRIVATE",message:"This endpoint requires its dedicated managed transport."} });
     if (parsed.method === "POST" && proxyPath === "/api/apps/sessions") await options.syncModelEnvironment(id);
     diagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, instanceBase }, "node instance proxy requested");
     const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
@@ -153,6 +155,7 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
       const parsed = ProxyRequestSchema.parse(request.body);
       const instanceBase = await options.instanceBase(id);
       const proxyPath = normalizedPath(parsed.path);
+      if (instanceEndpointAccess(proxyPath) !== "generic") { finalize("aborted"); return reply.code(403).send({ error:{code:"INSTANCE_ENDPOINT_PRIVATE",message:"This endpoint requires its dedicated managed transport."} }); }
       diagnostic({ instanceId: id, action: "proxy.stream", method: parsed.method, path: proxyPath, instanceBase }, "node instance streaming proxy requested");
       const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
         method: parsed.method,
@@ -202,6 +205,7 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     const parsed = ProxyRequestSchema.parse(request.body);
     const instanceBase = await options.instanceBase(id);
     const proxyPath = normalizedPath(parsed.path);
+    if (instanceEndpointAccess(proxyPath) !== "generic") return reply.code(403).send({ error:{code:"INSTANCE_ENDPOINT_PRIVATE",message:"This endpoint requires its dedicated managed transport."} });
     diagnostic({ instanceId: id, action: "proxy.raw", method: parsed.method, path: proxyPath, instanceBase }, "node instance raw proxy requested");
     const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
       method: parsed.method,
@@ -231,6 +235,7 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     const suffix = (request.params as { id: string; "*": string })["*"] || "";
     const queryIndex = request.url.indexOf("?");
     const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
+    if (instanceEndpointAccess(`/${suffix}${query}`) !== "generic") { socket.close(1008,"This endpoint requires its dedicated managed transport."); return; }
     // Fastify completes the downstream upgrade before this async handler resumes.
     // Capture frames synchronously so an immediate Instance Shell `start` is not
     // emitted while instance/credential resolution is still pending below.

@@ -1,0 +1,1 @@
+{"ok":true,"text":"中文・日本語・é・😀 mixed ASCII punctuation !?","commitsBefore":0,"commitsAfter":1,"expectedTerminalUtf8":"中文・日本語・é・😀 mixed ASCII punctuation !?\r"}

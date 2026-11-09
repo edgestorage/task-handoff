@@ -687,3 +687,42 @@ test("update checks reject apps that app management does not own", async () => {
     return true;
   });
 });
+
+test("provider package hooks drain before mutation and finish before queue admission reopens", async () => {
+  const dirs = stateDirs("desktop-package-hooks-");
+  let state = "not-installed";
+  const order = [];
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  let entered; const started = new Promise((resolve) => { entered = resolve; });
+  const manager = new AppManagementManager({
+    ...dirs, definitions:()=>[app()], capabilities:()=>capabilities,
+    detection:()=>({ state, executablePaths:state === "installed" ? ["/bin/tool"] : [] }),
+    packageLifecycle:()=>({
+      beforeChange:async () => { order.push("drain"); entered(); await gate; },
+      changed:async (_op,success) => { assert.equal(success,true); assert.equal(manager.hasActiveOperation("tool"),true); order.push("changed"); },
+    }),
+    execute:async () => { order.push("mutate"); state="installed"; },
+    publish:(event)=>{ if (event.job?.state === "succeeded") order.push("terminal"); },
+  });
+  const job = manager.request("tool","install");
+  await started;
+  assert.equal(manager.hasActiveOperation("tool"),true);
+  assert.deepEqual(order,["drain"]);
+  assert.throws(()=>manager.request("tool","uninstall"), (error)=>error.code==="app_operation_conflict");
+  release(); await manager.waitForIdle();
+  assert.equal(manager.getJob(job.id).state,"succeeded");
+  assert.deepEqual(order,["drain","mutate","changed","terminal"]);
+});
+
+test("failed provider drain never mutates package files or bypasses failure cleanup", async () => {
+  const dirs = stateDirs("desktop-package-drain-failure-");
+  let executed=false, cleaned=false;
+  const manager = new AppManagementManager({
+    ...dirs, definitions:()=>[app()], capabilities:()=>capabilities,
+    detection:()=>({state:"not-installed",executablePaths:[]}),
+    packageLifecycle:()=>({ beforeChange:()=>{throw new Error("drain failed");}, changed:(_op,success)=>{assert.equal(success,false);cleaned=true;} }),
+    execute:async()=>{executed=true;},
+  });
+  const job=manager.request("tool","install"); await manager.waitForIdle();
+  assert.equal(manager.getJob(job.id).state,"failed"); assert.equal(executed,false); assert.equal(cleaned,true);
+});

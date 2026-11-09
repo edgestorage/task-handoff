@@ -109,6 +109,13 @@
     <RepositoryChangesReviewTab v-else-if="session?.kind === 'repository' && session.source?.page === 'changes-review'" :instance-id="instance.id" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
     <RepositoryWorktreesTab v-else-if="session?.kind === 'repository' && session.source?.page === 'worktrees'" :instance-id="instance.id" :move-to-main-supported="supportsRepositoryWorktreeMoveToMain(instance.capabilities)" :session="session" />
     <RepositoryWorkspaceTab v-else-if="session?.kind === 'repository'" :instance-id="instance.id" :path-search-supported="supportsRepositoryPathSearch(instance.capabilities)" :file-content-supported="supportsRepositoryFileContent(instance.capabilities)" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
+    <div
+      v-else-if="session?.kind === 'remote-desktop' && canInteractRemoteDesktop"
+      class="remote-desktop-surface-target"
+      data-remote-desktop-surface
+      :data-instance-id="instance.id"
+      :data-pane="pane"
+    />
     <div v-else-if="activeFrameUrl" class="session-preview-live">
       <AppSessionViewer class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || t('sessions.tabs.appSession')" />
     </div>
@@ -162,8 +169,10 @@ const { locale, t } = useI18n();
 const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   appLaunchButtonTitle: string;
+  canInteractRemoteDesktop?: boolean;
   canLaunchApp: boolean;
   canExportConfig?: (instance: InstanceBoardItem) => boolean;
+  canManageRemoteDesktop?: boolean;
   chooseProjectFolder?: NativeNodeFolderPicker;
   instance: InstanceWithAiSessions;
   isClosingAllSessions?: (instance: InstanceBoardItem) => boolean;
@@ -260,6 +269,8 @@ function imagePreparationStepState(index: number) {
   .session-status-image-retry { margin-inline-start: 48px; }
 }
 .session-preview-live { position: relative; min-height: 0; overflow: hidden; background: var(--terminal-bg); }
+
+.remote-desktop-surface-target { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .session-preview-frame, .session-terminal { display: block; width: 100%; height: 100%; min-height: 0; border: 0; background: var(--terminal-bg); }
 .session-terminal { position: relative; box-sizing: border-box; overflow: hidden; }
 .session-terminal :deep(.xterm) { box-sizing: border-box; width: 100%; height: 100%; padding: 8px; }

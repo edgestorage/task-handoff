@@ -1,0 +1,17 @@
+[package]
+name = "desktop-component-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+controlled-instance-core = { path = "../core" }
+controlled-instance-protocol = { path = "../protocol" }
+remote-desktop-protocol = { path = "../../../remote-desktop-rs/crates/protocol" }
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

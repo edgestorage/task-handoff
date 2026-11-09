@@ -348,6 +348,9 @@ test("archive install verifies checksum before extraction and uninstall preserve
   assert.equal(fs.existsSync(path.join(installBaseDir, "tool", "bin", "tool")), false);
   assert.equal(fs.readFileSync(path.join(installBaseDir, "tool", "user-config.json"), "utf8"), "{}\n");
   assert.equal(fs.existsSync(path.join(stateDir, "manifests", "tool.json")), false);
+  await execute("install",recipe,{appId:"tool",capabilities});
+  assert.equal(fs.readFileSync(path.join(installBaseDir,"tool","bin","tool"),"utf8"),"tool\n");
+  assert.equal(fs.readFileSync(path.join(installBaseDir,"tool","user-config.json"),"utf8"),"{}\n");
 });
 
 test("archive update re-verifies the checksum and atomically replaces the managed install", async () => {
