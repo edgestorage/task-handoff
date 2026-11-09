@@ -103,6 +103,9 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="cloud-account" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
                     <Stack.Screen name="cloud-account-totp" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
                     <Stack.Screen name="cloud-account-security" options={{ title: t('cloudAccount.settings'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="cloud-account-security-actions" options={{ title: t('cloudAccount.securityActionsTitle'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="cloud-account-two-step" options={{ title: t('cloudAccount.totpTitle'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="cloud-account-delete" options={{ title: t('cloudAccount.deleteAccountTitle'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="cloud-control-planes" options={{ title: t('nav.controlPlanes'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="nodes/[nodeId]" options={{ title: t('nav.node') }} />
                     <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance'), ...iosTransparentHeaderOptions(dark) }} />

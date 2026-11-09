@@ -1,32 +1,42 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { normalizeOneTimeCode } from './one-time-code';
 import { useMobileTheme } from './theme';
 
-export function normalizeOneTimeCode(value: string, length = 6) {
-  return value.replace(/\D/g, '').slice(0, length);
-}
+export { normalizeOneTimeCode } from './one-time-code';
 
 export function OneTimeCodeInput({
   accessibilityLabel,
   autoFocus = false,
   disabled = false,
+  focusKey = 0,
   length = 6,
   onChangeText,
+  onComplete,
   value,
 }: {
   accessibilityLabel: string;
   autoFocus?: boolean;
   disabled?: boolean;
+  focusKey?: number;
   length?: number;
   onChangeText: (value: string) => void;
+  onComplete?: (value: string) => void;
   value: string;
 }) {
   const { colors } = useMobileTheme();
   const input = useRef<TextInput>(null);
+  const previousFocusKey = useRef(focusKey);
   const [focused, setFocused] = useState(false);
   const normalized = normalizeOneTimeCode(value, length);
   const activeIndex = Math.min(normalized.length, length - 1);
+
+  useEffect(() => {
+    if (focusKey === previousFocusKey.current) return;
+    previousFocusKey.current = focusKey;
+    if (!disabled) input.current?.focus();
+  }, [disabled, focusKey]);
 
   return (
     <Pressable
@@ -45,7 +55,11 @@ export function OneTimeCodeInput({
         inputMode="numeric"
         keyboardType="number-pad"
         onBlur={() => setFocused(false)}
-        onChangeText={(next) => onChangeText(normalizeOneTimeCode(next, length))}
+        onChangeText={(next) => {
+          const normalizedNext = normalizeOneTimeCode(next, length);
+          onChangeText(normalizedNext);
+          if (normalizedNext.length === length && normalized.length < length) onComplete?.(normalizedNext);
+        }}
         onFocus={() => setFocused(true)}
         ref={input}
         style={styles.hiddenInput}

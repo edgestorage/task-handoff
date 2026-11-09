@@ -7,7 +7,7 @@ import type { NativeActionButtonProps } from './NativeActionButton.ios';
 export function NativeActionButton({ compact, destructive, disabled, icon, label, onPress }: NativeActionButtonProps) {
   const { colors } = useMobileTheme();
   return (
-    <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.button, compact && styles.compact, { backgroundColor: destructive ? colors.errorSoft : colors.primaryButton }, disabled && styles.disabled, pressed && styles.pressed]}>
+    <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.button, compact && styles.compact, { backgroundColor: destructive ? colors.errorSoft : colors.primaryButton }, disabled && styles.disabled, pressed && styles.pressed]}>
       {icon ? <Icon color={destructive ? colors.error : '#ffffff'} name={icon} size={16} /> : null}
       <Text style={[styles.text, destructive && { color: colors.error }]}>{label}</Text>
     </Pressable>

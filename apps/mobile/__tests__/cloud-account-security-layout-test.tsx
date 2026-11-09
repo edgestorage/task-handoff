@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Platform } from 'react-native';
 import { DeviceSessionSchema } from '@task-handoff/cloud-contracts/mobile';
 
@@ -10,20 +10,28 @@ import { translate } from '../src/i18n';
 import type { MessageKey } from '../src/i18n/messages';
 
 const mockNativeController: { current?: CloudAccountSecurityController } = {};
-const mockNativeNavigation: { current?: () => void } = {};
+const mockNativeNavigation: { current?: { controlPlanes(): void; securityActions(): void } } = {};
 
-jest.mock('expo-router', () => ({
-  Redirect: () => null,
-  router: { back: jest.fn(), push: jest.fn() },
-  Stack: { Screen: () => null },
-}));
+jest.mock('expo-router', () => {
+  const React = jest.requireActual<typeof import('react')>('react');
+  return {
+    Redirect: () => null,
+    router: { back: jest.fn(), dismissAll: jest.fn(), push: jest.fn(), replace: jest.fn() },
+    Stack: { Screen: () => null },
+    useFocusEffect: (effect: () => void | (() => void)) => React.useEffect(effect, [effect]),
+  };
+});
 jest.mock('../src/control-plane/NativeCloudAccountSecurityScreen', () => {
   const React = jest.requireActual<typeof import('react')>('react');
   const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
   return {
-    NativeCloudAccountSecurityScreen: ({ controller, onOpenControlPlanes }: { controller: CloudAccountSecurityController; onOpenControlPlanes(): void }) => {
+    NativeCloudAccountSecurityScreen: ({ controller, onOpenControlPlanes, onOpenSecurityActions }: {
+      controller: CloudAccountSecurityController;
+      onOpenControlPlanes(): void;
+      onOpenSecurityActions(): void;
+    }) => {
       mockNativeController.current = controller;
-      mockNativeNavigation.current = onOpenControlPlanes;
+      mockNativeNavigation.current = { controlPlanes: onOpenControlPlanes, securityActions: onOpenSecurityActions };
       return React.createElement(Text, { testID: 'native-account-security' }, controller.message ?? controller.profile?.email ?? 'loading');
     },
   };
@@ -42,7 +50,10 @@ const MOBILE_DEVICE = { id: 'device_a', kind: 'mobile', deviceName: 'TaskHandoff
 const setPlatform = (os: 'android' | 'ios') => Object.defineProperty(Platform, 'OS', { configurable: true, value: os, writable: true });
 const originalPlatform = Platform.OS;
 
-afterEach(() => setPlatform(originalPlatform as 'android' | 'ios'));
+afterEach(() => {
+  jest.clearAllMocks();
+  setPlatform(originalPlatform as 'android' | 'ios');
+});
 
 function mockSession(totpEnabled: boolean, devices: () => Promise<unknown[]> = async () => [MOBILE_DEVICE]) {
   restore.mockResolvedValue({
@@ -54,42 +65,36 @@ function mockSession(totpEnabled: boolean, devices: () => Promise<unknown[]> = a
   } as unknown as Awaited<ReturnType<typeof restoreActiveCloudAccountSession>>);
 }
 
-test('account settings render as grouped settings sections', async () => {
+test('account settings keep security actions behind one entry', async () => {
   setPlatform('android');
   mockSession(false);
   const screen = await render(<CloudAccountSecurityScreen />);
 
-  await screen.findByText('TaskHandoff Mobile');
+  await screen.findByText(t('cloudAccount.manageSecurityActions'));
   expect(screen.getAllByText('user@example.com')).toHaveLength(2);
   expect(screen.getByText(t('cloudAccount.accountInformation'))).toBeTruthy();
   expect(screen.getByText(t('cloudAccount.emailVerified'))).toBeTruthy();
   expect(screen.getByText(t('cloudAccount.manageControlPlanes'))).toBeTruthy();
-  expect(screen.getByText(`${t('cloudAccount.deviceKind.mobile')} · ${t('cloudAccount.thisDevice')}`)).toBeTruthy();
-  expect(screen.getByText(t('cloudAccount.enableAuthenticator'))).toBeTruthy();
+  expect(screen.getByText(t('cloudAccount.securityActionsTitle'))).toBeTruthy();
+  expect(screen.getByText(t('cloudAccount.manageSecurityActions'))).toBeTruthy();
+  expect(screen.getByText(t('cloudAccount.twoStepDisabled'))).toBeTruthy();
   expect(screen.getByText(t('cloudAccount.signOutAction'))).toBeTruthy();
+  expect(screen.queryByText(t('cloudAccount.devices'))).toBeNull();
+  expect(screen.queryByText('TaskHandoff Mobile')).toBeNull();
+  expect(screen.queryByText(t('cloudAccount.deleteAccountAction'))).toBeNull();
   // Passwords and sign-in methods are managed in the cloud console, not on this screen.
   expect(screen.queryByText('Sign-in methods')).toBeNull();
   expect(screen.queryByText('Change password')).toBeNull();
 });
 
-test('replacing the authenticator asks for recent authentication', async () => {
+test('the security entry opens the combined actions page', async () => {
   setPlatform('android');
-  mockSession(true);
+  mockSession(false);
   const screen = await render(<CloudAccountSecurityScreen />);
 
-  await screen.findByText(t('cloudAccount.replaceAuthenticator'));
-  expect(screen.getByPlaceholderText(t('cloudAccount.stepUpPasswordPlaceholder'))).toBeTruthy();
-  expect(screen.getByPlaceholderText(t('cloudAccount.stepUpCodePlaceholder'))).toBeTruthy();
-});
-
-test('a Control Plane device session renders with its own kind label', async () => {
-  setPlatform('android');
-  mockSession(false, async () => [MOBILE_DEVICE, { id: 'control_plane_session_a', kind: 'control-plane', deviceName: 'Control Plane control_plane_a', platform: 'control-plane', createdAt: at, expiresAt: '2026-09-10T00:00:00.000Z' }]);
-  const screen = await render(<CloudAccountSecurityScreen />);
-
-  await screen.findByText('Control Plane control_plane_a');
-  expect(screen.getByText(t('cloudAccount.deviceKind.controlPlane'))).toBeTruthy();
-  expect(screen.getByText(t('cloudAccount.manageControlPlanes'))).toBeTruthy();
+  await screen.findByText(t('cloudAccount.manageSecurityActions'));
+  await fireEvent.press(screen.getByLabelText(t('cloudAccount.manageSecurityActions')));
+  expect(jest.requireMock('expo-router').router.push).toHaveBeenCalledWith('/cloud-account-security-actions');
 });
 
 test('an unreadable device projection still renders the account profile', async () => {
@@ -116,6 +121,8 @@ test('iOS renders the native account settings screen with the same account state
   expect(mockNativeController.current?.stepUp).toBe('');
   expect(mockNativeController.current?.loaded).toBe(true);
 
-  mockNativeNavigation.current?.();
+  mockNativeNavigation.current?.controlPlanes();
   expect(jest.requireMock('expo-router').router.push).toHaveBeenCalledWith('/cloud-control-planes');
+  mockNativeNavigation.current?.securityActions();
+  expect(jest.requireMock('expo-router').router.push).toHaveBeenCalledWith('/cloud-account-security-actions');
 });

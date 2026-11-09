@@ -475,6 +475,24 @@ test("mobile login providers ignore additive fields but still validate known fie
   await assert.rejects(() => client.publicProviders());
 });
 
+test("mobile account deletion uses the account endpoint with the step-up proof", async () => {
+  let seen: { url: string; init?: RequestInit } | undefined;
+  const stepUp = { accountId: "account_a", deviceSessionId: "device_a", methods: ["password"], authenticatedAt: at, expiresAt: at };
+  const client = new publicContracts.OfficialMobileAccountClient({
+    origin: "https://cloud.example.test",
+    accessToken: async () => "token",
+    request: async (url, init) => {
+      seen = { url, init };
+      return { ok: true, status: 200, json: async () => ({ data: { scheduled: true } }) };
+    },
+  });
+
+  assert.deepEqual(await client.deleteAccount({ stepUp }), { scheduled: true });
+  assert.equal(seen?.url, "https://cloud.example.test/api/v1/account");
+  assert.equal(seen?.init?.method, "DELETE");
+  assert.deepEqual(JSON.parse(String(seen?.init?.body)), { stepUp });
+});
+
 test("cloud access settings ignore additive fields at both levels and preserve authority checks", () => {
   const role = { roleId: "role_admin", name: "Admin", system: true, status: "active" };
   const view = { bindingId: "binding_a", ownerRoleId: role.roleId, availableRoleIds: [role.roleId], settingsRevision: 1, updatedAt: at, catalogRevision: 1, roles: [role] };

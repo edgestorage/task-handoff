@@ -77,6 +77,7 @@ export class OfficialMobileAccountClient extends OfficialAccountClient {
   disableTotp(input: OfficialApiInput): Promise<unknown> { return this.dataCall("/api/v1/account/totp", "DELETE", z.unknown(), input); }
   changePassword(input: OfficialApiInput): Promise<unknown> { return this.dataCall("/api/v1/account/password", "PATCH", z.unknown(), input); }
   changeEmail(input: OfficialApiInput): Promise<unknown> { return this.dataCall("/api/v1/account/email", "PATCH", z.unknown(), input); }
+  deleteAccount(input: OfficialApiInput = {}): Promise<unknown> { return this.dataCall("/api/v1/account", "DELETE", z.unknown(), input); }
   linkProvider(providerId: OfficialProviderId, input: OfficialApiInput): Promise<unknown> { return this.dataCall(`/api/v1/providers/${encodeURIComponent(providerId)}/link`, "POST", z.unknown(), input); }
   unlinkProvider(providerId: OfficialProviderId, input: OfficialApiInput): Promise<unknown> { return this.dataCall(`/api/v1/providers/${encodeURIComponent(providerId)}/unlink`, "POST", z.unknown(), input); }
   issueAccessTicket(input: OfficialApiInput): Promise<AccessTicket> { return this.dataCall("/api/v1/access-tickets", "POST", AccessTicketSchema.strip(), input); }

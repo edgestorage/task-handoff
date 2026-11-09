@@ -1,16 +1,22 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Alert } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 
 import type { AccountPublicProfile, DeviceSession, OfficialMobileAccountClient, TotpEnrollmentResponse } from '@task-handoff/cloud-contracts/mobile';
 
+import { normalizeOneTimeCode } from '../components/one-time-code';
+import { normalizeSecondFactorCode } from '../components/recovery-code';
 import { useI18n } from '../i18n';
+import { errorHaptic, successHaptic } from '../platform/haptics';
 import { cloudMobileErrorMessage } from './cloud-error';
 import { hasActiveCloudAccount, logoutActiveCloudAccount, restoreActiveCloudAccountSession } from './runtime';
 
 export type CloudAccountSecurityController = {
   busy: boolean;
   currentDeviceId?: string;
+  deleteCode: string;
+  deleteComplete: boolean;
+  deletePassword: string;
   devices: DeviceSession[];
   enrollment?: TotpEnrollmentResponse;
   loaded: boolean;
@@ -20,10 +26,16 @@ export type CloudAccountSecurityController = {
   stepCode: string;
   stepUp: string;
   totpCode: string;
+  totpFocusKey: number;
   beginTotp(): void;
-  confirmTotp(): void;
+  cancelTotpEnrollment(): void;
+  confirmTotp(code?: string): void;
+  confirmDeleteAccount(): void;
+  dismissRecoveryCodes(): void;
   disableTotp(): void;
   revokeDevice(deviceSessionId: string): void;
+  setDeleteCode(value: string): void;
+  setDeletePassword(value: string): void;
   setStepCode(value: string): void;
   setStepUp(value: string): void;
   setTotpCode(value: string): void;
@@ -40,15 +52,20 @@ export function useCloudAccountSecurity(): CloudAccountSecurityController {
   const [profile, setProfile] = useState<AccountPublicProfile>();
   const [devices, setDevices] = useState<DeviceSession[]>([]);
   const [currentDeviceId, setCurrentDeviceId] = useState<string>();
+  const [deleteCode, setDeleteCode] = useState('');
+  const [deleteComplete, setDeleteComplete] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
   const [stepUp, setStepUp] = useState('');
   const [stepCode, setStepCode] = useState('');
   const [enrollment, setEnrollment] = useState<TotpEnrollmentResponse>();
   const [totpCode, setTotpCode] = useState('');
+  const [totpFocusKey, setTotpFocusKey] = useState(0);
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
 
   const load = useCallback(async () => {
+    setMessage(undefined);
     try {
       const session = await restoreActiveCloudAccountSession();
       setCurrentDeviceId(session.reference().id);
@@ -65,16 +82,23 @@ export function useCloudAccountSecurity(): CloudAccountSecurityController {
     }
   }, [zh]);
 
-  useEffect(() => {
-    const timer = setTimeout(() => void load(), 0);
-    return () => clearTimeout(timer);
-  }, [load]);
+  useFocusEffect(useCallback(() => {
+    void load();
+  }, [load]));
+
+  const createStepUpToken = useCallback((client: OfficialMobileAccountClient, password: string, code: string) => {
+    return client.stepUp({ password, ...(code.includes('-') ? { recoveryCode: code } : code ? { totpCode: code } : {}) });
+  }, []);
 
   const stepUpToken = useCallback((client: OfficialMobileAccountClient) => {
-    return client.stepUp({ password: stepUp, ...(stepCode.includes('-') ? { recoveryCode: stepCode } : stepCode ? { totpCode: stepCode } : {}) });
-  }, [stepCode, stepUp]);
+    return createStepUpToken(client, stepUp, stepCode);
+  }, [createStepUpToken, stepCode, stepUp]);
 
-  const action = useCallback(async (operation: (client: OfficialMobileAccountClient) => Promise<unknown>, done?: (result: unknown) => void) => {
+  const action = useCallback(async (
+    operation: (client: OfficialMobileAccountClient) => Promise<unknown>,
+    done?: (result: unknown) => void,
+    failed?: () => void,
+  ) => {
     setBusy(true);
     setMessage(undefined);
     try {
@@ -83,6 +107,7 @@ export function useCloudAccountSecurity(): CloudAccountSecurityController {
       done?.(result);
       await load();
     } catch (error) {
+      failed?.();
       setMessage(cloudMobileErrorMessage(error, zh));
     } finally {
       setBusy(false);
@@ -110,23 +135,88 @@ export function useCloudAccountSecurity(): CloudAccountSecurityController {
     ]);
   }, [logout, t]);
 
+  const deleteAccount = useCallback(async () => {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const session = await restoreActiveCloudAccountSession();
+      const stepUp = await createStepUpToken(session.client, deletePassword, deleteCode);
+      await session.client.deleteAccount({ stepUp });
+      // The server revokes this device session with the account. Clear the local
+      // account artifacts even if the now-invalid logout request fails.
+      await logoutActiveCloudAccount().catch(() => undefined);
+      setDeleteCode('');
+      setDeletePassword('');
+      setMessage(undefined);
+      setDeleteComplete(true);
+      successHaptic();
+    } catch (error) {
+      errorHaptic();
+      const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code ?? '') : '';
+      if (code === 'TOTP_INVALID') setMessage(t('cloudAccount.totpInvalid'));
+      else if (code === 'RECOVERY_CODE_INVALID_OR_CONSUMED') setMessage(t('cloudAccount.recoveryInvalid'));
+      else setMessage(cloudMobileErrorMessage(error, zh));
+    } finally {
+      setBusy(false);
+    }
+  }, [createStepUpToken, deleteCode, deletePassword, t, zh]);
+
+  const confirmDeleteAccount = useCallback(() => {
+    if (busy || !deletePassword || (profile?.totpEnabled && !deleteCode)) return;
+    void deleteAccount();
+  }, [busy, deleteAccount, deleteCode, deletePassword, profile?.totpEnabled]);
+
   const beginTotp = useCallback(() => {
     void action(
       async (client) => client.beginTotp(profile?.totpEnabled ? { replace: true, stepUp: await stepUpToken(client) } : {}),
-      (result) => setEnrollment(result as TotpEnrollmentResponse),
+      (result) => {
+        setEnrollment(result as TotpEnrollmentResponse);
+        setTotpCode('');
+        setStepUp('');
+        setStepCode('');
+        successHaptic();
+      },
+      errorHaptic,
     );
   }, [action, profile?.totpEnabled, stepUpToken]);
 
-  const confirmTotp = useCallback(() => {
-    if (!enrollment) return;
+  const confirmTotp = useCallback((code = totpCode) => {
+    const normalizedCode = normalizeOneTimeCode(code);
+    if (!enrollment || normalizedCode.length !== 6) return;
     void action(
-      (client) => client.confirmTotp({ enrollmentToken: enrollment.enrollmentToken, code: totpCode }),
-      (result) => { setRecoveryCodes((result as { recoveryCodes?: string[] })?.recoveryCodes ?? []); setEnrollment(undefined); },
+      (client) => client.confirmTotp({ enrollmentToken: enrollment.enrollmentToken, code: normalizedCode }),
+      (result) => {
+        setRecoveryCodes((result as { recoveryCodes?: string[] })?.recoveryCodes ?? []);
+        setEnrollment(undefined);
+        setTotpCode('');
+        successHaptic();
+      },
+      () => {
+        setTotpCode('');
+        setTotpFocusKey((value) => value + 1);
+        errorHaptic();
+      },
     );
   }, [action, enrollment, totpCode]);
 
+  const cancelTotpEnrollment = useCallback(() => {
+    setEnrollment(undefined);
+    setTotpCode('');
+    setMessage(undefined);
+  }, []);
+
+  const dismissRecoveryCodes = useCallback(() => setRecoveryCodes([]), []);
+
   const disableTotp = useCallback(() => {
-    void action(async (client) => client.disableTotp({ stepUp: await stepUpToken(client) }));
+    void action(
+      async (client) => client.disableTotp({ stepUp: await stepUpToken(client) }),
+      () => {
+        setStepUp('');
+        setStepCode('');
+        successHaptic();
+      },
+      errorHaptic,
+    );
   }, [action, stepUpToken]);
 
   const revokeDevice = useCallback((deviceSessionId: string) => {
@@ -136,6 +226,9 @@ export function useCloudAccountSecurity(): CloudAccountSecurityController {
   return {
     busy,
     currentDeviceId,
+    deleteCode,
+    deleteComplete,
+    deletePassword,
     devices,
     enrollment,
     loaded: Boolean(profile || message),
@@ -145,13 +238,19 @@ export function useCloudAccountSecurity(): CloudAccountSecurityController {
     stepCode,
     stepUp,
     totpCode,
+    totpFocusKey,
     beginTotp,
+    cancelTotpEnrollment,
     confirmTotp,
+    confirmDeleteAccount,
+    dismissRecoveryCodes,
     disableTotp,
     revokeDevice,
-    setStepCode,
+    setDeleteCode: (value: string) => setDeleteCode(normalizeSecondFactorCode(value)),
+    setDeletePassword,
+    setStepCode: (value: string) => setStepCode(normalizeSecondFactorCode(value)),
     setStepUp,
-    setTotpCode,
+    setTotpCode: (value: string) => setTotpCode(normalizeOneTimeCode(value)),
     signOut,
   };
 }
