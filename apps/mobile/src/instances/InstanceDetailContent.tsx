@@ -49,6 +49,15 @@ export function InstanceDetailContent(props: InstanceDetailContentProps) {
       })}
     </View> : null}
 
+    {props.remoteDesktopAvailable ? <Pressable accessibilityRole="button" onPress={props.onOpenRemoteDesktop} style={({ pressed }) => [styles.remoteDesktopLink, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && styles.pressed]}>
+      <View style={[styles.remoteDesktopIcon, { backgroundColor: colors.primarySoft }]}><Icon color={colors.primary} name="desktop-outline" size={21} /></View>
+      <View style={styles.remoteDesktopCopy}>
+        <Text style={[styles.remoteDesktopTitle, { color: colors.text }]}>{t('remoteDesktop.open')}</Text>
+        <Text style={[styles.remoteDesktopDescription, { color: colors.textMuted }]}>{t('remoteDesktop.openDescription')}</Text>
+      </View>
+      <Icon color={colors.textMuted} name="chevron-forward" size={14} />
+    </Pressable> : null}
+
     <InstanceOverview
       activeSessionCount={props.activeSessionCount}
       heartbeat={props.heartbeat}
@@ -86,6 +95,11 @@ const styles = StyleSheet.create({
   lifecycleSeparator: { alignSelf: 'center', height: 20, width: StyleSheet.hairlineWidth },
   lifecycleButtonDisabled: { opacity: 0.42 },
   lifecycleButtonText: { flexShrink: 1, fontSize: 13, fontWeight: '500', textAlign: 'center' },
+  remoteDesktopLink: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, minHeight: 58, paddingHorizontal: 12, paddingVertical: 9 },
+  remoteDesktopIcon: { alignItems: 'center', borderRadius: 9, height: 36, justifyContent: 'center', width: 36 },
+  remoteDesktopCopy: { flex: 1, gap: 1, minWidth: 0 },
+  remoteDesktopTitle: { fontSize: 15, fontWeight: '500', lineHeight: 20 },
+  remoteDesktopDescription: { fontSize: 12, lineHeight: 17 },
   notice: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 9, padding: 12 },
   noticeText: { flex: 1, fontSize: 13, lineHeight: 18 },
   pressed: { opacity: 0.65 },

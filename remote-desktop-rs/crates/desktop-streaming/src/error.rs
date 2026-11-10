@@ -6,6 +6,8 @@
 pub enum BackendError {
     #[error("REMOTE_DESKTOP_WINDOW_FOCUS_REQUIRED")]
     WindowFocusRequired,
+    #[error("REMOTE_DESKTOP_POINTER_TARGET_MISMATCH")]
+    PointerTargetMismatch,
     #[error("REMOTE_DESKTOP_WINDOW_IDENTITY_AMBIGUOUS")]
     WindowIdentityAmbiguous,
     #[error("REMOTE_DESKTOP_PROCESS_OWNERSHIP_UNAVAILABLE")]

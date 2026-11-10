@@ -14,6 +14,8 @@ pub struct NativeInput {
     display_geometry: Option<crate::platform::display_geometry::DisplayGeometry>,
     #[cfg(target_os = "macos")]
     window: Option<crate::platform::macos_window::Lease>,
+    #[cfg(target_os = "linux")]
+    window: Option<crate::platform::linux::WindowLease>,
     keys: HashSet<u16>,
     buttons: HashSet<u8>,
 }
@@ -23,6 +25,8 @@ impl NativeInput {
             geometry,
             display,
             #[cfg(target_os = "macos")]
+            None,
+            #[cfg(target_os = "linux")]
             None,
         )
     }
@@ -34,10 +38,20 @@ impl NativeInput {
         let lease = crate::platform::macos_window::Lease::bind(identity, geometry)?;
         Self::build(geometry, None, Some(lease))
     }
+    #[cfg(target_os = "linux")]
+    pub fn new_window(
+        window: u32,
+        geometry: Geometry,
+        display: Option<String>,
+    ) -> anyhow::Result<Self> {
+        let lease = crate::platform::linux::WindowLease::bind(window, geometry)?;
+        Self::build(geometry, display, Some(lease))
+    }
     fn build(
         geometry: Geometry,
         display: Option<String>,
         #[cfg(target_os = "macos")] window: Option<crate::platform::macos_window::Lease>,
+        #[cfg(target_os = "linux")] window: Option<crate::platform::linux::WindowLease>,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             geometry.width > 0
@@ -85,12 +99,18 @@ impl NativeInput {
             display_geometry,
             #[cfg(target_os = "macos")]
             window,
+            #[cfg(target_os = "linux")]
+            window,
             keys: HashSet::new(),
             buttons: HashSet::new(),
         })
     }
     pub fn validate(&self, point: Option<(i32, i32)>) -> anyhow::Result<()> {
         #[cfg(target_os = "macos")]
+        if let Some(window) = &self.window {
+            return window.validate(self.geometry, point);
+        }
+        #[cfg(target_os = "linux")]
         if let Some(window) = &self.window {
             return window.validate(self.geometry, point);
         }
@@ -103,6 +123,10 @@ impl NativeInput {
     }
     pub fn prepare(&self) -> anyhow::Result<()> {
         #[cfg(target_os = "macos")]
+        if let Some(window) = &self.window {
+            window.focus()?;
+        }
+        #[cfg(target_os = "linux")]
         if let Some(window) = &self.window {
             window.focus()?;
         }
@@ -119,6 +143,12 @@ impl NativeInput {
             self.geometry = geometry;
             return Ok(());
         }
+        #[cfg(target_os = "linux")]
+        if let Some(window) = &mut self.window {
+            window.reconfigure(geometry)?;
+            self.geometry = geometry;
+            return Ok(());
+        }
         anyhow::ensure!(
             self.geometry == geometry,
             crate::error::BackendError::GeometryChanged
@@ -130,17 +160,17 @@ impl NativeInput {
         #[cfg(target_os = "windows")]
         crate::platform::windows_access::check()?;
         let (x, y) = map_point(self.geometry, x, y)?;
-        self.validate(Some((x, y)))?;
         #[cfg(target_os = "macos")]
         {
-            self.mouse.pointer((x, y), &self.buttons)
+            self.mouse.pointer((x, y), &self.buttons)?;
         }
         #[cfg(not(target_os = "macos"))]
         {
             self.enigo
                 .move_mouse(x, y, Coordinate::Abs)
-                .map_err(|_| anyhow::anyhow!("REMOTE_DESKTOP_INPUT_FAILED"))
+                .map_err(|_| anyhow::anyhow!("REMOTE_DESKTOP_INPUT_FAILED"))?;
         }
+        self.validate(Some((x, y)))
     }
     pub fn apply(&mut self, event: &Input) -> anyhow::Result<()> {
         self.validate(None)?;

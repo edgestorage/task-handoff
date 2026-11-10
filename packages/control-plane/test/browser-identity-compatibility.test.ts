@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createPublicKey, verify, sign, generateKeyPairSync } from "node:crypto";
 import { ControlPlaneIdentityService } from "../src/control-plane/identity/service.ts";
-import { ControlPlanePublicIdentityDocumentSchema, controlPlaneIdentitySigningInput, normalizeControlPlanePublicCapabilities, supportsControlPlaneBrowserChannel, requestsExtendedControlPlaneCapabilities } from "@task-handoff/protocol/control-plane-access";
+import { ControlPlanePublicIdentityDocumentSchema, controlPlaneIdentitySigningInput, normalizeControlPlanePublicCapabilities, supportsControlPlaneBrowserChannel, supportsControlPlaneRemoteDesktopRelay, requestsExtendedControlPlaneCapabilities } from "@task-handoff/protocol/control-plane-access";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
 
 test("mobile-v0.0.12 / v0.0.49 identity consumers keep their original signed projection unless extensions are requested", (t) => {
@@ -29,10 +29,12 @@ test("mobile-v0.0.12 / v0.0.49 identity consumers keep their original signed pro
   assert.equal(verify(null, Buffer.from(JSON.stringify(reconstructed)), key, Buffer.from(legacy.data.signature, "base64url")), true);
   const extended = identity.publicDocument("required", Date.now(), true);
   assert.equal(supportsControlPlaneBrowserChannel(extended.data.payload.capabilities), true);
+  assert.equal(supportsControlPlaneRemoteDesktopRelay(extended.data.payload.capabilities), true);
   assert.equal(verify(null, Buffer.from(controlPlaneIdentitySigningInput(extended.data.payload)), key, Buffer.from(extended.data.signature, "base64url")), true);
   assert.equal(requestsExtendedControlPlaneCapabilities("future, control-plane-identity-extensions-v1"), true);
   assert.equal(requestsExtendedControlPlaneCapabilities(undefined), false);
   assert.equal(supportsControlPlaneBrowserChannel(c), false);
+  assert.equal(supportsControlPlaneRemoteDesktopRelay(c), false);
 });
 
 test("future signed fields retain their wire order through response parsing, then normalize separately", (t) => {

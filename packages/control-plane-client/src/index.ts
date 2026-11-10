@@ -4,6 +4,7 @@ export * from "./ai-sessions.ts";
 export * from "./app-sessions.ts";
 export * from "./app-profiles.ts";
 export * from "./browser.ts";
+export * from "./remote-desktop.ts";
 export * from "./app-inventory.ts";
 export * from "./instance-shell.ts";
 export * from "./ai-session-state.ts";

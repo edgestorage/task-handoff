@@ -90,6 +90,7 @@ impl WindowCatalog {
             )?;
             let application = window.application();
             windows.push(NativeWindow {
+                identity: format!("wgc:{}:{}", window.get_window_handle().0, application.pid()),
                 unavailable_reason: None,
                 handle: Selection {
                     window: window.clone(),

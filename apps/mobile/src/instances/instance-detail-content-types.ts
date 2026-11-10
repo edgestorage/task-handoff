@@ -14,11 +14,13 @@ export type InstanceDetailContentProps = {
   onShowHistory(): void;
   onShowSessions(): void;
   onShowWorktrees(): void;
+  onOpenRemoteDesktop(): void;
   problemSessionCount: number;
   protocol: string;
   protocolCompatible: boolean;
   protocolWarning?: string;
   runtime: string;
+  remoteDesktopAvailable: boolean;
   status: string;
   statusTone: InstanceDetailStatusTone;
   workspace: string;

@@ -86,7 +86,10 @@ fn websocket_fallback_budget_reaches_full_hd_and_still_respects_explicit_resolut
         FALLBACK_LIMITS,
         Some((FALLBACK_MAX_WIDTH, FALLBACK_MAX_HEIGHT)),
     );
-    assert_eq!((full_hd.width, full_hd.height, full_hd.fps), (1920, 1080, 30));
+    assert_eq!(
+        (full_hd.width, full_hd.height, full_hd.fps),
+        (1920, 1080, 30)
+    );
     let capped = Budget::select_with_limits_and_resolution(
         1920,
         1080,

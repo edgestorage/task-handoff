@@ -42,7 +42,9 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
     }
     #[cfg(target_os = "linux")]
     {
-        capability.window_capture.reason = Some(BackendError::WindowUnsupported.to_string());
+        capability.capture_targets.push("window".into());
+        capability.window_capture.available = true;
+        capability.window_capture.reason = None;
     }
     capability.capture.backends = vec![if cfg!(target_os = "macos") {
         "screencapturekit"

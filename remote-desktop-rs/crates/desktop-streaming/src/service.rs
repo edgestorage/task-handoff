@@ -77,23 +77,75 @@ struct Service {
     input_guard: Option<crate::input_guard::Client>,
     mode: crate::capture::Mode,
     show_cursor: bool,
-    #[cfg(target_os = "macos")]
-    catalog: crate::platform::macos::WindowCatalog,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    catalog: Option<crate::platform::window::WindowCatalog>,
     pending_source: HashMap<String, crate::capture::Source>,
-    #[cfg(target_os = "macos")]
-    selected_window: HashMap<String, (String, crate::platform::macos::Target)>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    selected_window: HashMap<String, (String, crate::platform::window::WindowTarget)>,
     #[cfg(target_os = "linux")]
     surface: Option<crate::surface::Client>,
     events: mpsc::Sender<PeerEvent>,
     fallbacks: HashMap<String, FallbackRuntime>,
 }
 impl Service {
+    fn window_mode_supported(mode: crate::capture::Mode) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            mode == crate::capture::Mode::Local
+        }
+        #[cfg(target_os = "linux")]
+        {
+            matches!(
+                mode,
+                crate::capture::Mode::Local | crate::capture::Mode::Virtual
+            )
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = mode;
+            false
+        }
+    }
+    #[cfg(target_os = "linux")]
+    async fn ensure_surface(&mut self) -> anyhow::Result<()> {
+        if self.surface.is_none() {
+            self.surface = Some(crate::surface::Client::spawn(&component_executable()?).await?);
+        }
+        Ok(())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    async fn window_catalog(
+        &mut self,
+    ) -> anyhow::Result<&mut crate::platform::window::WindowCatalog> {
+        if self.catalog.is_none() {
+            anyhow::ensure!(
+                Self::window_mode_supported(self.mode),
+                crate::error::BackendError::WindowUnsupported
+            );
+            #[cfg(target_os = "macos")]
+            {
+                self.catalog = Some(Default::default());
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let mut config = if self.mode == crate::capture::Mode::Virtual {
+                    self.ensure_surface().await?;
+                    self.surface.as_ref().unwrap().config()
+                } else {
+                    crate::platform::linux::Config::environment(self.show_cursor)?
+                };
+                config.include_cursor = self.show_cursor;
+                self.catalog = Some(crate::platform::window::WindowCatalog::Linux(
+                    crate::platform::linux::WindowCatalog::new(config),
+                ));
+            }
+        }
+        Ok(self.catalog.as_mut().unwrap())
+    }
     async fn virtual_source(&mut self) -> anyhow::Result<crate::capture::Source> {
         #[cfg(target_os = "linux")]
         {
-            if self.surface.is_none() {
-                self.surface = Some(crate::surface::Client::spawn(&component_executable()?).await?);
-            }
+            self.ensure_surface().await?;
             let mut config = self.surface.as_ref().unwrap().config();
             config.include_cursor = self.show_cursor;
             Ok(crate::capture::Source::X11(Box::new(
@@ -121,7 +173,7 @@ impl Service {
     async fn effects(&mut self, id: &str, effects: Effects) {
         if effects.close_peer {
             self.pending_source.remove(id);
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
                 self.selected_window.remove(id);
             }
@@ -511,15 +563,24 @@ impl Service {
             Command::ListWindows { owner } => {
                 // Enumeration is an on-demand catalog read, not a viewer
                 // reservation. Active viewers may need it to switch scope.
-                #[cfg(target_os = "macos")]
-                if self.mode == crate::capture::Mode::Local {
-                    return Ok(match self.catalog.enumerate(owner.clone()).await {
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                {
+                    let catalog = match self.window_catalog().await {
+                        Ok(catalog) => catalog,
+                        Err(error) => {
+                            return Ok(Reply::Error {
+                                code: crate::error::BackendError::from_error(&error).to_string(),
+                            });
+                        }
+                    };
+                    return Ok(match catalog.enumerate(owner.clone()).await {
                         Ok(windows) => Reply::Windows { windows },
                         Err(e) => Reply::Error {
                             code: crate::error::BackendError::from_error(&e).to_string(),
                         },
                     });
                 }
+                #[allow(unreachable_code)]
                 let _ = owner;
                 Reply::Error {
                     code: crate::error::BackendError::WindowUnsupported.to_string(),
@@ -552,7 +613,7 @@ impl Service {
                 ..
             } => {
                 if matches!(capture_target, crate::session::CaptureTarget::Window { .. })
-                    && !(cfg!(target_os = "macos") && self.mode == crate::capture::Mode::Local)
+                    && !Self::window_mode_supported(self.mode)
                 {
                     return Ok(Reply::Error {
                         code: crate::error::BackendError::WindowUnsupported.to_string(),
@@ -561,8 +622,8 @@ impl Service {
                 // A same-target takeover uses the retained native selection owned by
                 // the current session, never consumes an old windowRef again or
                 // enumerates windows while the viewer authority actor is occupied.
-                #[cfg(target_os = "macos")]
-                let replacement_source = if let Command::Takeover {
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                let replacement_target = if let Command::Takeover {
                     viewer_session_id, ..
                 } = &r.command
                 {
@@ -572,19 +633,16 @@ impl Service {
                             owner,
                             capture_target
                         ));
-                        match crate::platform::macos::Capture::new_with_cursor(
-                            target.clone(),
-                            self.show_cursor,
-                        ) {
-                            Ok(mut capture) => {
-                                if let Err(error) = capture.refresh_geometry() {
+                        match target.source(self.show_cursor) {
+                            Ok(mut source) => match source.refresh_geometry() {
+                                Ok(_) => Some((target.clone(), source)),
+                                Err(error) => {
                                     return Ok(Reply::Error {
                                         code: crate::error::BackendError::from_error(&error)
                                             .to_string(),
                                     });
                                 }
-                                Some(capture)
-                            }
+                            },
                             Err(error) => {
                                 return Ok(Reply::Error {
                                     code: crate::error::BackendError::from_error(&error)
@@ -622,20 +680,18 @@ impl Service {
                     replacement,
                     now
                 ));
-                #[cfg(target_os = "macos")]
-                if let Some(capture) = replacement_source {
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                if let Some((target, source)) = replacement_target {
                     if let crate::session::CaptureTarget::Window { window_ref } = capture_target {
                         self.selected_window.insert(
                             snapshot.viewer_session_id.clone(),
-                            (window_ref.clone(), capture.retained_target()),
+                            (window_ref.clone(), target),
                         );
                     }
-                    self.pending_source.insert(
-                        snapshot.viewer_session_id.clone(),
-                        crate::capture::Source::Native(capture),
-                    );
+                    self.pending_source
+                        .insert(snapshot.viewer_session_id.clone(), source);
                 }
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
                 if let crate::session::CaptureTarget::Window { window_ref } = capture_target {
                     if !self
                         .pending_source
@@ -646,30 +702,25 @@ impl Service {
                             .values()
                             .find(|(reference, _)| reference == window_ref)
                             .map(|(_, target)| target.clone());
-                        let source = match retained {
-                            Some(target) => crate::platform::macos::Capture::new_with_cursor(
-                                target,
-                                self.show_cursor,
-                            )
-                            .map(crate::capture::Source::Native),
-                            None => self
-                                .catalog
-                                .consume(window_ref, owner)
-                                .await
-                                .map(crate::capture::Source::Native),
+                        let target = match retained {
+                            Some(target) => Ok(target),
+                            None => {
+                                self.window_catalog()
+                                    .await?
+                                    .consume(window_ref, owner)
+                                    .await
+                            }
                         };
-                        match source {
-                            Ok(crate::capture::Source::Native(capture)) => {
+                        match target.and_then(|target| {
+                            target
+                                .source(self.show_cursor)
+                                .map(|source| (target, source))
+                        }) {
+                            Ok((target, source)) => {
                                 self.selected_window.insert(
                                     snapshot.viewer_session_id.clone(),
-                                    (window_ref.clone(), capture.retained_target()),
+                                    (window_ref.clone(), target),
                                 );
-                                self.pending_source.insert(
-                                    snapshot.viewer_session_id.clone(),
-                                    crate::capture::Source::Native(capture),
-                                );
-                            }
-                            Ok(source) => {
                                 self.pending_source
                                     .insert(snapshot.viewer_session_id.clone(), source);
                             }
@@ -760,8 +811,8 @@ impl Service {
                     } else {
                         crate::input_guard::Backend::Native {
                             geometry,
-                            display,
-                            authority,
+                            display: display.clone(),
+                            authority: authority.clone(),
                         }
                     };
                     #[cfg(target_os = "macos")]
@@ -773,6 +824,21 @@ impl Service {
                                 })
                                 .unwrap_or(backend)
                         }
+                        _ => backend,
+                    };
+                    #[cfg(target_os = "linux")]
+                    let backend = match &source {
+                        crate::capture::Source::X11(c) => c
+                            .window_input()
+                            .map(
+                                |(window, geometry)| crate::input_guard::Backend::LinuxWindow {
+                                    window,
+                                    geometry,
+                                    display: display.clone(),
+                                    authority: authority.clone(),
+                                },
+                            )
+                            .unwrap_or(backend),
                         _ => backend,
                     };
                     let peer = match MediaPeer::with_source(
@@ -910,7 +976,7 @@ impl Service {
                 };
                 let configured = live.peer.configure_ice(ice_servers).await;
                 let preserve_fallback = live.fallback_active;
-                if let Err(_) = configured {
+                if configured.is_err() {
                     if !preserve_fallback {
                         self.fail(viewer_session_id).await;
                     }
@@ -1131,6 +1197,11 @@ impl Service {
                 geometry,
                 acknowledged,
             } => {
+                let input_was_held = self
+                    .registry
+                    .snapshot(&session, &owner)?
+                    .input_epoch
+                    .is_some();
                 let effects = self.registry.suspend_input(&session)?;
                 self.effects(&session, effects).await;
                 let guard = self
@@ -1154,6 +1225,18 @@ impl Service {
                     "REMOTE_DESKTOP_INPUT_GUARD_FAILED"
                 );
                 self.registry.capture_geometry(&session, geometry)?;
+                if input_was_held {
+                    let session_revision =
+                        self.registry.snapshot(&session, &owner)?.session_revision;
+                    self.live
+                        .get_mut(&session)
+                        .ok_or_else(|| anyhow::anyhow!("peer closed"))?
+                        .reply(
+                            Channel::Control,
+                            geometry_input_suspended_notice(session_revision),
+                        )
+                        .await?;
+                }
                 // Snapshot enters the actor's ordered output before another input
                 // can arm. Old revision/epoch is invalid even for move-only changes.
                 let _ = acknowledged.send(true);
@@ -1672,10 +1755,10 @@ pub async fn serve_mode_with_cursor(
         input_guard: None,
         mode,
         show_cursor,
-        #[cfg(target_os = "macos")]
-        catalog: Default::default(),
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        catalog: None,
         pending_source: HashMap::new(),
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         selected_window: HashMap::new(),
         #[cfg(target_os = "linux")]
         surface: None,
@@ -1910,9 +1993,32 @@ fn component_executable() -> anyhow::Result<std::path::PathBuf> {
     }
 }
 
+fn geometry_input_suspended_notice(session_revision: u64) -> serde_json::Value {
+    serde_json::json!({
+        "type": "input.suspended",
+        "payload": {
+            "cause": crate::error::BackendError::GeometryChanged.to_string(),
+            "recoverable": true,
+            "sessionRevision": session_revision,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn geometry_suspension_notice_carries_authoritative_revision() {
+        let notice = geometry_input_suspended_notice(17);
+        assert_eq!(notice["type"], "input.suspended");
+        assert_eq!(
+            notice["payload"]["cause"],
+            "REMOTE_DESKTOP_GEOMETRY_CHANGED"
+        );
+        assert_eq!(notice["payload"]["recoverable"], true);
+        assert_eq!(notice["payload"]["sessionRevision"], 17);
+    }
+
     #[tokio::test]
     async fn window_enumeration_cannot_stall_an_occupied_authority_actor() {
         let (events, _receiver) = mpsc::channel(1);
@@ -1922,10 +2028,10 @@ mod tests {
             input_guard: None,
             mode: crate::capture::Mode::Control,
             show_cursor: true,
-            #[cfg(target_os = "macos")]
-            catalog: Default::default(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            catalog: None,
             pending_source: HashMap::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             selected_window: HashMap::new(),
             #[cfg(target_os = "linux")]
             surface: None,
@@ -1968,10 +2074,10 @@ mod tests {
             input_guard: None,
             mode: crate::capture::Mode::Control,
             show_cursor: true,
-            #[cfg(target_os = "macos")]
-            catalog: Default::default(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            catalog: None,
             pending_source: HashMap::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             selected_window: HashMap::new(),
             #[cfg(target_os = "linux")]
             surface: None,
@@ -2037,10 +2143,10 @@ mod tests {
             input_guard: None,
             mode: crate::capture::Mode::Synthetic,
             show_cursor: true,
-            #[cfg(target_os = "macos")]
-            catalog: Default::default(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            catalog: None,
             pending_source: HashMap::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             selected_window: HashMap::new(),
             #[cfg(target_os = "linux")]
             surface: None,

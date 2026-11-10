@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["TaskHandoffRemoteDesktopModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.taskhandoffremotedesktop.TaskHandoffRemoteDesktopModule"]
+  }
+}

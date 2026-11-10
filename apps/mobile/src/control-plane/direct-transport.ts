@@ -18,6 +18,9 @@ import {
   normalizeMobileControlPlaneEvent,
   type MobileAppSessionTtyConnection,
   type MobileAppSessionTtyHandlers,
+  type MobileAuthenticatedWebSocket,
+  type MobileAuthenticatedWebSocketHandlers,
+  type MobileAuthenticatedWebSocketOptions,
   type MobileControlPlaneEvent,
   type MobileControlPlaneEventConnection,
   type MobileControlPlaneEventHandlers,
@@ -51,19 +54,20 @@ function normalizeIncomingEvent(event: unknown): MobileControlPlaneEvent | undef
 
 type WebSocketLike = {
   readyState: number;
+  binaryType?: string;
   addEventListener(type: 'open' | 'message' | 'error' | 'close', listener: (event: { data?: unknown }) => void): void;
   close(code?: number, reason?: string): void;
-  send(data: string): void;
+  send(data: string | ArrayBuffer | Uint8Array): void;
 };
-type WebSocketFactory = (url: string, headers: Record<string, string>) => WebSocketLike;
+type WebSocketFactory = (url: string, headers: Record<string, string>, protocols?: string | string[]) => WebSocketLike;
 
-function defaultWebSocketFactory(url: string, headers: Record<string, string>) {
+function defaultWebSocketFactory(url: string, headers: Record<string, string>, protocols?: string | string[]) {
   const ReactNativeWebSocket = WebSocket as unknown as new (
     target: string,
     protocols?: string | string[],
     options?: { headers?: Record<string, string> },
   ) => WebSocket;
-  return new ReactNativeWebSocket(url, undefined, { headers });
+  return new ReactNativeWebSocket(url, protocols, { headers });
 }
 
 function requestUrl(origin: string, route: string) {
@@ -371,6 +375,52 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     } satisfies MobileAppSessionTtyConnection;
   }
 
+  openAuthenticatedWebSocket(options: MobileAuthenticatedWebSocketOptions, handlers: MobileAuthenticatedWebSocketHandlers): MobileAuthenticatedWebSocket {
+    let socket: WebSocketLike | undefined;
+    let closed = false;
+    void (async () => {
+      try {
+        await this.ensureVerified();
+        const token = await this.sessionToken();
+        if (closed) return;
+        socket = (this.options.webSocketFactory ?? defaultWebSocketFactory)(
+          websocketRouteUrl(this.profile.access.origin, options.path),
+          { authorization: `Bearer ${token}`, ...options.headers },
+          options.protocols,
+        );
+        if (options.binaryType) socket.binaryType = options.binaryType;
+        socket.addEventListener('open', () => {
+          if (!closed) handlers.onOpen?.();
+        });
+        socket.addEventListener('message', (event) => {
+          if (closed) return;
+          const data = socketMessageData(event.data);
+          if (data !== undefined) handlers.onMessage(data);
+        });
+        socket.addEventListener('error', () => {
+          if (!closed) handlers.onError?.(new MobileControlPlaneTransportError('DIRECT_WEBSOCKET_FAILED', 'The Control Plane WebSocket connection failed.', true));
+        });
+        socket.addEventListener('close', (event) => {
+          const value = event as { code?: unknown; reason?: unknown };
+          if (!closed) handlers.onClose?.({
+            ...(typeof value.code === 'number' ? { code: value.code } : {}),
+            ...(typeof value.reason === 'string' ? { reason: value.reason } : {}),
+          });
+        });
+      } catch (cause) {
+        if (!closed) handlers.onError?.(asTransportError(cause));
+      }
+    })();
+    return {
+      get readyState() { return socket?.readyState ?? 0; },
+      send(data) { if (!closed && socket?.readyState === 1) socket.send(data); },
+      close(code = 1000, reason = 'Client closed') {
+        closed = true;
+        socket?.close(code, reason);
+      },
+    };
+  }
+
   async revalidate() {
     this.verified = undefined;
     await this.ensureVerified();
@@ -404,6 +454,12 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     if (!token) throw new MobileControlPlaneTransportError('DIRECT_SESSION_MISSING', 'The mobile Control Plane session is missing. Sign in again.');
     return token;
   }
+}
+
+function socketMessageData(data: unknown): string | ArrayBuffer | undefined {
+  if (typeof data === 'string' || data instanceof ArrayBuffer) return data;
+  if (ArrayBuffer.isView(data)) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  return undefined;
 }
 
 function requestWithUploadProgress<T>(

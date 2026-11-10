@@ -2,6 +2,8 @@ import { z } from "zod";
 
 // CP/client subprotocol. Cloud Relay sees only the enclosing encrypted data frame.
 export const RELAY_BROWSER_PROTOCOL_VERSION = "2026-11-07";
+/** Additive Control Plane WebSocket tunnel carried by the same byte channel. */
+export const RELAY_REMOTE_DESKTOP_CHANNEL_PROTOCOL_VERSION = "2026-11-10";
 export const RELAY_BROWSER_MAX_CHANNELS = 4;
 export const RELAY_BROWSER_WINDOW_BYTES = 128 * 1024;
 export const RELAY_BROWSER_MAX_MESSAGE_BYTES = 64 * 1024 + 9;
@@ -12,6 +14,13 @@ const TunnelIdSchema = z.number().int().positive().max(0xffff_ffff);
 
 export const RelayBrowserControlSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("browser-channel-open"), tunnelId: TunnelIdSchema, instanceId: z.string().min(1).max(160), protocolVersion: z.literal(RELAY_BROWSER_PROTOCOL_VERSION) }),
+  z.object({
+    type: z.literal("remote-desktop-channel-open"),
+    tunnelId: TunnelIdSchema,
+    path: z.string().min(1).max(4_096),
+    protocols: z.array(z.string().min(1).max(160)).min(1).max(4),
+    protocolVersion: z.literal(RELAY_REMOTE_DESKTOP_CHANNEL_PROTOCOL_VERSION),
+  }),
   z.object({ type: z.literal("browser-channel-opened"), tunnelId: TunnelIdSchema }),
   z.object({ type: z.literal("browser-channel-close"), tunnelId: TunnelIdSchema }),
   z.object({ type: z.literal("browser-channel-closed"), tunnelId: TunnelIdSchema }),
@@ -30,6 +39,9 @@ export type BrowserChannel = {
   send(message: BrowserChannelMessage): Promise<void>;
   close(): void;
 };
+export type RelayChannelTarget =
+  | { kind: "browser"; instanceId: string }
+  | { kind: "remote-desktop"; path: string; protocols: string[] };
 
 export function isRelayBrowserData(bytes: Uint8Array) { return bytes[0] === MAGIC; }
 export function encodeRelayBrowserData(frame: RelayBrowserData): Uint8Array {
@@ -73,11 +85,19 @@ export class RelayBrowserMultiplexer {
   private readonly wire: {
     control(value: RelayBrowserControl): void;
     data(value: RelayBrowserData): void;
-    accept?(instanceId: string, handlers: BrowserChannelHandlers): Promise<BrowserChannel>;
+    accept?(target: RelayChannelTarget, handlers: BrowserChannelHandlers): Promise<BrowserChannel>;
   };
   constructor(wire: RelayBrowserMultiplexer["wire"]) { this.wire = wire; }
 
   open(instanceId: string, handlers: BrowserChannelHandlers, signal?: AbortSignal): Promise<BrowserChannel> {
+    return this.openTarget({ kind: "browser", instanceId }, handlers, signal);
+  }
+
+  openRemoteDesktop(input: { path: string; protocols: string[] }, handlers: BrowserChannelHandlers, signal?: AbortSignal): Promise<BrowserChannel> {
+    return this.openTarget({ kind: "remote-desktop", path: input.path, protocols: [...input.protocols] }, handlers, signal);
+  }
+
+  private openTarget(target: RelayChannelTarget, handlers: BrowserChannelHandlers, signal?: AbortSignal): Promise<BrowserChannel> {
     if (this.closed || signal?.aborted) return Promise.reject(browserChannelError("BROWSER_CHANNEL_CLOSED"));
     let state: ChannelState;
     try { state = this.create(++this.nextId); } catch (error) { return Promise.reject(error); }
@@ -88,7 +108,17 @@ export class RelayBrowserMultiplexer {
       state.reject = (error) => { signal?.removeEventListener("abort", abort); reject(error); };
       signal?.addEventListener("abort", abort, { once: true });
       state.timer = setTimeout(() => this.end(state, browserChannelError("BROWSER_CHANNEL_OPEN_TIMEOUT"), true), 15_000);
-      try { this.wire.control({ type: "browser-channel-open", tunnelId: state.id, instanceId, protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION }); }
+      try {
+        this.wire.control(target.kind === "browser"
+          ? { type: "browser-channel-open", tunnelId: state.id, instanceId: target.instanceId, protocolVersion: RELAY_BROWSER_PROTOCOL_VERSION }
+          : {
+              type: "remote-desktop-channel-open",
+              tunnelId: state.id,
+              path: target.path,
+              protocols: target.protocols,
+              protocolVersion: RELAY_REMOTE_DESKTOP_CHANNEL_PROTOCOL_VERSION,
+            });
+      }
       catch { this.end(state, browserChannelError("BROWSER_CHANNEL_CLOSED")); }
     });
   }
@@ -96,14 +126,17 @@ export class RelayBrowserMultiplexer {
   control(raw: unknown) {
     const value = RelayBrowserControlSchema.parse(raw);
     if (this.closed) return;
-    if (value.type === "browser-channel-open") {
+    if (value.type === "browser-channel-open" || value.type === "remote-desktop-channel-open") {
       if (!this.wire.accept) throw browserChannelError("BROWSER_CHANNEL_OPEN_UNSUPPORTED");
       if (this.channels.has(value.tunnelId)) throw browserChannelError("BROWSER_CHANNEL_ID_REUSED");
       let state: ChannelState;
       try { state = this.create(value.tunnelId); }
       catch { this.wire.control({ type: "browser-channel-error", tunnelId: value.tunnelId, errorCode: "BROWSER_CHANNEL_LIMIT" }); return; }
       const connection = this.connection(state);
-      void this.wire.accept(value.instanceId, {
+      const target: RelayChannelTarget = value.type === "browser-channel-open"
+        ? { kind: "browser", instanceId: value.instanceId }
+        : { kind: "remote-desktop", path: value.path, protocols: value.protocols };
+      void this.wire.accept(target, {
         onMessage: (message) => connection.send(message),
         onClose: (error) => this.end(state, error, true),
       }).then((peer) => {

@@ -12,6 +12,7 @@ import {
   REMOTE_DESKTOP_FALLBACK_PROTOCOL_VERSION,
   REMOTE_DESKTOP_PROTOCOL_VERSION,
   REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL,
+  isRemoteDesktopLocalNetworkAddress,
 } from "@task-handoff/protocol/remote-desktop";
 import type { ControlPlaneService } from "../application/service.ts";
 import { assertCan, instanceScopeAllows } from "../auth/authorization.ts";
@@ -229,15 +230,18 @@ export function registerRemoteDesktopRoutes(options: {
   return access;
 }
 
-/** WebCodecs requires a secure context. Private HTTP is intentionally not a
- * fallback exception even though WebRTC signaling accepts it for LAN testing. */
+/** Native decoders and the browser fallback both require a secure context for
+ * the browser API surface. Private-LAN HTTP is explicitly allowed by the same
+ * deployment opt-in that already gates signaling, so a Control Plane reachable
+ * only on the LAN can still provide the WebSocket fallback. */
 function fallbackSecureContext(request: FastifyRequest) {
   if (request.protocol === "https") return true;
   const host = String(request.headers.host ?? "")
     .replace(/:\d+$/, "")
     .replace(/^\[|\]$/g, "")
     .toLowerCase();
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  return host === "localhost" || host === "127.0.0.1" || host === "::1"
+    || isRemoteDesktopLocalNetworkAddress(host);
 }
 
 function positiveInteger(value: string | undefined, fallback: number) {

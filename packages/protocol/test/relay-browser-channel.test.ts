@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { RelayBrowserMultiplexer, encodeRelayBrowserData, decodeRelayBrowserData, RELAY_BROWSER_MAX_MESSAGE_BYTES, RELAY_BROWSER_WINDOW_BYTES, type BrowserChannelHandlers, type BrowserChannel, type BrowserChannelMessage } from "../src/relay-browser-channel.ts";
+import { RelayBrowserMultiplexer, encodeRelayBrowserData, decodeRelayBrowserData, RELAY_BROWSER_MAX_MESSAGE_BYTES, RELAY_BROWSER_WINDOW_BYTES, type BrowserChannelHandlers, type BrowserChannel, type BrowserChannelMessage, type RelayChannelTarget } from "../src/relay-browser-channel.ts";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
 const message = (size = 16): BrowserChannelMessage => ({ bytes: new Uint8Array(size), binary: true });
-function pair(accept: (instanceId: string, handlers: BrowserChannelHandlers) => Promise<BrowserChannel>) {
+function pair(accept: (target: RelayChannelTarget, handlers: BrowserChannelHandlers) => Promise<BrowserChannel>) {
   const outbound: number[] = [];
   const server = new RelayBrowserMultiplexer({
     control: (value) => queueMicrotask(() => client.control(value)),
@@ -34,7 +34,10 @@ test("a stalled consumer cannot replenish relay credit; other browser channels k
   let release!: () => void;
   const consumed = new Promise<void>((resolve) => { release = resolve; });
   const received: string[] = [];
-  const p = pair(async (id) => ({ send: async () => { received.push(id); if (id === "slow") await consumed; }, close() {} }));
+  const p = pair(async (target) => {
+    const id = target.kind === "browser" ? target.instanceId : target.path;
+    return { send: async () => { received.push(id); if (id === "slow") await consumed; }, close() {} };
+  });
   t.after(p.close);
   const handlers = { onMessage: async () => {}, onClose() {} };
   const slow = await p.client.open("slow", handlers);
@@ -68,7 +71,8 @@ test("cancelling an opening browser closes a late upstream without reviving the 
 });
 
 test("one target error is isolated and reset rejects pending writes exactly once", async (t) => {
-  const p = pair(async (id) => {
+  const p = pair(async (target) => {
+    const id = target.kind === "browser" ? target.instanceId : target.path;
     if (id === "denied") throw Object.assign(new Error("denied"), { code: "CONTROL_PLANE_FORBIDDEN" });
     return { send: () => new Promise(() => {}), close() {} };
   });
@@ -81,4 +85,41 @@ test("one target error is isolated and reset rejects pending writes exactly once
   p.client.close(); p.client.close();
   await assert.rejects(waiting, { code: "BROWSER_CHANNEL_CLOSED" });
   assert.equal(closed, 1);
+});
+
+test("remote desktop opens the same multiplexed byte channel without changing browser wire shapes", async (t) => {
+  let target: RelayChannelTarget | undefined;
+  let upstreamHandlers: BrowserChannelHandlers | undefined;
+  const upstreamMessages: BrowserChannelMessage[] = [];
+  const p = pair(async (nextTarget, handlers) => {
+    target = nextTarget;
+    upstreamHandlers = handlers;
+    return {
+      async send(message) { upstreamMessages.push(message); },
+      close() {},
+    };
+  });
+  t.after(p.close);
+  const received: BrowserChannelMessage[] = [];
+  const channel = await p.client.openRemoteDesktop({
+    path: "/api/controlled-instances/instance_a/remote-desktop-sessions/viewer_a/signal?ticket=ticket_a",
+    protocols: ["taskhandoff.remote-desktop.2026-11-05"],
+  }, {
+    onMessage: async (value) => { received.push(value); },
+    onClose() {},
+  });
+  assert.deepEqual(target, {
+    kind: "remote-desktop",
+    path: "/api/controlled-instances/instance_a/remote-desktop-sessions/viewer_a/signal?ticket=ticket_a",
+    protocols: ["taskhandoff.remote-desktop.2026-11-05"],
+  });
+  const text = new TextEncoder().encode("{\"type\":\"signalAlive\"}");
+  await upstreamHandlers!.onMessage({ bytes: text, binary: false });
+  await tick();
+  assert.deepEqual(received.map(({ bytes, binary }) => ({ bytes, binary })), [{ bytes: text, binary: false }]);
+  await channel.send({ bytes: new Uint8Array([1, 2, 3]), binary: true });
+  await tick();
+  assert.deepEqual(upstreamMessages.map(({ bytes, binary }) => ({ bytes, binary })), [{ bytes: new Uint8Array([1, 2, 3]), binary: true }]);
+  await p.client.open("instance_browser", { onMessage: async () => {}, onClose() {} });
+  assert.deepEqual(target, { kind: "browser", instanceId: "instance_browser" });
 });

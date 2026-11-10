@@ -2,17 +2,8 @@
   <ConfigProvider :teleport-to="portalHost">
   <section ref="viewer" class="remote-desktop-viewer" :class="{ 'is-connected': Boolean(session), embedded }" :aria-label="t('instances.remoteDesktop.title')">
     <div class="remote-desktop-layout">
-    <header class="remote-desktop-head" :class="{ 'is-live': Boolean(session) }">
-      <div v-if="!session" class="remote-desktop-identity">
-        <span class="remote-desktop-mark" aria-hidden="true"><Monitor :size="18" /></span>
-        <div class="remote-desktop-heading">
-          <div class="remote-desktop-title-line">
-            <h2>{{ t("instances.remoteDesktop.title") }}</h2>
-          </div>
-          <p>{{ t("instances.remoteDesktop.chooseTargetHint") }}</p>
-        </div>
-      </div>
-      <div v-else class="remote-desktop-live-toolbar">
+    <header class="remote-desktop-head is-live">
+      <div class="remote-desktop-live-toolbar">
         <h2 class="sr-only">{{ t("instances.remoteDesktop.title") }}</h2>
         <div class="remote-desktop-live-main">
           <Popover v-model:open="scopeMenuOpen">
@@ -38,8 +29,8 @@
             <PopoverContent class="remote-desktop-scope-popover p-0" align="start" :collision-padding="10" :side-offset="6">
               <div class="remote-desktop-scope-head">
                 <div>
-                  <strong>{{ t("instances.remoteDesktop.switchScope") }}</strong>
-                  <p>{{ localScope ? t("instances.remoteDesktop.localScopeHint") : t("instances.remoteDesktop.sharedHint") }}</p>
+                  <strong>{{ session ? t("instances.remoteDesktop.switchScope") : t("instances.remoteDesktop.chooseTarget") }}</strong>
+                  <p>{{ session ? (localScope ? t("instances.remoteDesktop.localScopeHint") : t("instances.remoteDesktop.sharedHint")) : t("instances.remoteDesktop.chooseTargetHint") }}</p>
                 </div>
                 <Button v-if="windowCapture" variant="ghost" size="icon-sm" :disabled="windowsLoading" :aria-label="t('instances.remoteDesktop.refreshWindows')" :title="t('instances.remoteDesktop.refreshWindows')" @click="loadWindows">
                   <RefreshCw :class="{ 'remote-desktop-spin': windowsLoading }" :size="14" aria-hidden="true" />
@@ -96,13 +87,13 @@
               </ScrollArea>
             </PopoverContent>
           </Popover>
-          <Badge class="remote-desktop-state" :data-tone="connectionTone" variant="outline" role="status" aria-live="polite">
+          <Badge v-if="session" class="remote-desktop-state" :data-tone="connectionTone" variant="outline" role="status" aria-live="polite">
             <span class="remote-desktop-state-dot" aria-hidden="true" />
             <span class="remote-desktop-state-label">{{ connectionLabel }}</span>
           </Badge>
         </div>
         <div class="remote-desktop-live-actions">
-          <div class="remote-desktop-live-meta">
+          <div v-if="session" class="remote-desktop-live-meta">
             <TooltipProvider :delay-duration="120">
               <div v-if="visibleTransportIndicators.length" class="remote-desktop-transport-status" role="group" :aria-label="t('instances.remoteDesktop.transportStatus')">
                 <Tooltip v-for="transport in visibleTransportIndicators" :key="transport.key">
@@ -147,7 +138,7 @@
               <Clipboard :size="12" aria-hidden="true" />{{ clipboardStatus }}
             </span>
           </div>
-          <div class="remote-desktop-head-actions">
+          <div v-if="session" class="remote-desktop-head-actions">
             <Button :variant="inputEnabled ? 'secondary' : 'default'" size="sm" :aria-pressed="inputEnabled" :disabled="!signalingReady || fallbackSwitching || inputEnabled || controlRequestPending" :title="inputActionTitle" @click="primaryInputAction">
               <MousePointer2 :size="14" aria-hidden="true" />
               <span class="remote-desktop-action-label">{{ inputActionLabel }}</span>
@@ -301,7 +292,8 @@
       </span>
     </div>
 
-    <div v-else-if="!session" class="remote-desktop-setup">
+    <div v-else-if="!session" class="remote-desktop-stage remote-desktop-stage-setup">
+    <div class="remote-desktop-setup">
       <div class="remote-desktop-setup-main">
         <div class="remote-desktop-section-heading">
           <strong>{{ t("instances.remoteDesktop.chooseTarget") }}</strong>
@@ -415,6 +407,33 @@
           <Monitor :size="14" aria-hidden="true" />
           <span>{{ t("instances.remoteDesktop.localScopeHint") }}</span>
         </p>
+        <DropdownMenu>
+          <DropdownMenuTrigger as-child>
+            <Button variant="outline" size="sm" class="remote-desktop-setup-methods">
+              <Waypoints :size="14" aria-hidden="true" />
+              <span>{{ t("instances.remoteDesktop.connectionMethods") }}</span>
+              <small>{{ connectionMethodsSummary }}</small>
+              <ChevronDown :size="13" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent class="remote-desktop-connection-methods-menu" align="end" :collision-padding="10" :side-offset="6">
+            <p class="remote-desktop-actions-hint">{{ t("instances.remoteDesktop.connectionMethodsHint") }}</p>
+            <DropdownMenuCheckboxItem
+              v-for="method in connectionMethodOptions"
+              :key="method.key"
+              :model-value="method.enabled"
+              :disabled="method.disabled"
+              :title="method.disabledReason"
+              @update:model-value="setConnectionMethodEnabled(method.key, Boolean($event))"
+              @select.prevent
+            >
+              <span class="remote-desktop-connection-option">
+                <span>{{ method.label }}</span>
+                <small>{{ method.detail }}</small>
+              </span>
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div class="remote-desktop-connect-footer">
           <p v-if="target.kind === 'window' && !target.windowRef" class="remote-desktop-connect-hint">{{ t("instances.remoteDesktop.selectWindow") }}</p>
           <Button
@@ -429,6 +448,7 @@
           </Button>
         </div>
       </aside>
+    </div>
     </div>
 
     <div v-else ref="stage" class="remote-desktop-stage">
@@ -522,6 +542,8 @@ import {
 } from "@task-handoff/protocol/remote-desktop";
 import { createRemoteDesktopSession, forceStopRemoteDesktopSession, listRemoteDesktopWindows, requestRemoteDesktopFallback, stopRemoteDesktopSession, type RemoteDesktopCreated, type RemoteDesktopWindow } from "../../../api/remoteDesktop";
 import { translateApiError } from "../../../i18n/apiError";
+import { parseInputSuspension, shouldResumeAfterInputSuspension } from "./remoteDesktopInputSuspension";
+import { parseSelectedWindowInfo, resolveRefreshedWindow, selectedWindowInfo as toSelectedWindowInfo, type SelectedWindowInfo } from "./remoteDesktopWindowSelection";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -564,6 +586,7 @@ const TRANSPORT_RESOLUTION_PRESETS = [
 const TRANSPORT_FRAME_RATE_PRESETS = [60, 30, 24, 15] as const;
 type RemoteDesktopViewerPreferences = {
   target: TargetSelection;
+  selectedWindow?: SelectedWindowInfo;
   transportResolution: TransportResolutionValue;
   transportFrameRate: TransportFrameRateValue;
   transportAvailability: ConnectionMethodAvailability;
@@ -592,7 +615,8 @@ function loadViewerPreferences(instanceId: string): RemoteDesktopViewerPreferenc
     const transportAvailability = rawAvailability && CONNECTION_METHOD_KEYS.some((key) => rawAvailability[key] === true)
       ? Object.fromEntries(CONNECTION_METHOD_KEYS.map((key) => [key, rawAvailability[key] === true])) as ConnectionMethodAvailability
       : { p2p: true, websocket: true, turn: true };
-    return { target: target ?? { kind: "display" }, transportResolution, transportFrameRate, transportAvailability };
+    const selectedWindow = parseSelectedWindowInfo(value?.selectedWindow);
+    return { target: target ?? { kind: "display" }, selectedWindow, transportResolution, transportFrameRate, transportAvailability };
   } catch {
     return undefined;
   }
@@ -600,6 +624,7 @@ function loadViewerPreferences(instanceId: string): RemoteDesktopViewerPreferenc
 
 const viewerPreferences = loadViewerPreferences(props.instanceId);
 const target = ref<TargetSelection>(viewerPreferences?.target ?? { kind: "display" });
+const selectedWindowInfo = ref<SelectedWindowInfo | undefined>(viewerPreferences?.selectedWindow);
 const session = ref<RemoteDesktopCreated>();
 const snapshot = ref<DesktopSessionSnapshot>();
 const error = ref("");
@@ -643,6 +668,7 @@ function persistViewerPreferences() {
   try {
     window.localStorage?.setItem(`${VIEWER_PREFERENCES_PREFIX}${props.instanceId}`, JSON.stringify({
       target: target.value,
+      selectedWindow: target.value.kind === "window" ? selectedWindowInfo.value : undefined,
       transportResolution: transportResolution.value,
       transportFrameRate: transportFrameRate.value,
       transportAvailability: transportAvailability.value,
@@ -652,7 +678,7 @@ function persistViewerPreferences() {
   }
 }
 
-watch([target, transportResolution, transportFrameRate, transportAvailability], persistViewerPreferences, { deep: true });
+watch([target, selectedWindowInfo, transportResolution, transportFrameRate, transportAvailability], persistViewerPreferences, { deep: true });
 
 const video = ref<HTMLVideoElement>();
 const fallbackCanvas = ref<HTMLCanvasElement>();
@@ -876,9 +902,11 @@ const establishingHint = computed(() => fallbackSwitching.value
   ? t("instances.remoteDesktop.fallbackSwitchingHint")
   : t("instances.remoteDesktop.establishingHint"));
 
-const selectedWindow = computed(() => {
+const selectedWindow = computed<SelectedWindowInfo | undefined>(() => {
   const selection = target.value;
-  return selection.kind === "window" ? windows.value.find((item) => item.windowRef === selection.windowRef) : undefined;
+  if (selection.kind !== "window" || !selection.windowRef) return undefined;
+  return windows.value.find((item) => item.windowRef === selection.windowRef)
+    ?? (selectedWindowInfo.value?.windowRef === selection.windowRef ? selectedWindowInfo.value : undefined);
 });
 
 const filteredWindows = computed(() => {
@@ -1037,14 +1065,18 @@ async function loadWindows() {
   windowsLoading.value = true;
   windowError.value = "";
   try {
-    const previous = target.value.kind === "window" ? target.value.windowRef : undefined;
+    const previousRef = target.value.kind === "window" ? target.value.windowRef : undefined;
+    const previousSelection = selectedWindow.value;
     windows.value = (await listRemoteDesktopWindows(props.instanceId)).windows;
-    if (
-      !session.value
-      && previous
-      && !windows.value.some((item) => item.windowRef === previous && item.capturable)
-    ) {
-      target.value = { kind: "window" };
+    if (target.value.kind === "window" && previousRef) {
+      const resolved = resolveRefreshedWindow(windows.value, previousRef, previousSelection);
+      if (resolved) {
+        target.value = { kind: "window", windowRef: resolved.windowRef };
+        selectedWindowInfo.value = toSelectedWindowInfo(resolved);
+      } else if (!session.value) {
+        target.value = { kind: "window" };
+        selectedWindowInfo.value = undefined;
+      }
     }
   } catch (reason) {
     windowError.value = translateApiError(reason, t, t("instances.remoteDesktop.openFailed"));
@@ -1055,10 +1087,14 @@ async function loadWindows() {
 
 function selectDisplayTarget() {
   target.value = { kind: "display" };
+  selectedWindowInfo.value = undefined;
 }
 
 function chooseWindow() {
-  if (target.value.kind !== "window") target.value = { kind: "window" };
+  if (target.value.kind !== "window") {
+    target.value = { kind: "window" };
+    selectedWindowInfo.value = undefined;
+  }
   // Opening the picker is an explicit refresh point; it never polls.
   void loadWindows();
 }
@@ -1066,6 +1102,7 @@ function chooseWindow() {
 function selectWindow(item: RemoteDesktopWindow) {
   if (!item.capturable) return;
   target.value = { kind: "window", windowRef: item.windowRef };
+  selectedWindowInfo.value = toSelectedWindowInfo(item);
 }
 
 function sameTarget(left: TargetSelection, right: TargetSelection) {
@@ -1077,13 +1114,29 @@ function prepareScopeMenu() {
   if (!scopeSwitchBlocked.value && windowCapture.value) void loadWindows();
 }
 
-async function switchScope(next: TargetSelection) {
+async function switchScope(next: TargetSelection, nextWindow?: RemoteDesktopWindow) {
   scopeMenuOpen.value = false;
-  if (switchingScope.value || scopeSwitchBlocked.value || sameTarget(next, target.value)) return;
+  if (switchingScope.value || scopeSwitchBlocked.value || sameTarget(next, target.value)) {
+    if (next.kind === "window" && nextWindow) {
+      target.value = { kind: "window", windowRef: nextWindow.windowRef };
+      selectedWindowInfo.value = toSelectedWindowInfo(nextWindow);
+    }
+    return;
+  }
+  if (!session.value) {
+    target.value = next;
+    selectedWindowInfo.value = next.kind === "window"
+      ? (nextWindow ? toSelectedWindowInfo(nextWindow) : selectedWindowInfo.value)
+      : undefined;
+    return;
+  }
   switchingScope.value = true;
   try {
-    if (session.value && !(await closeCurrentSession())) return;
+    if (!(await closeCurrentSession())) return;
     target.value = next;
+    selectedWindowInfo.value = next.kind === "window"
+      ? (nextWindow ? toSelectedWindowInfo(nextWindow) : selectedWindowInfo.value)
+      : undefined;
     await connect();
   } finally {
     switchingScope.value = false;
@@ -1096,7 +1149,7 @@ function selectScopeDisplay() {
 
 function selectScopeWindow(item: RemoteDesktopWindow) {
   if (!item.capturable) return;
-  void switchScope({ kind: "window", windowRef: item.windowRef });
+  void switchScope({ kind: "window", windowRef: item.windowRef }, item);
 }
 
 async function connect() {
@@ -2048,7 +2101,21 @@ function handleControlValue(value: any) {
     inputResumePending = false;
     startInputAlive();
   } else if (value.type === "input.suspended") {
+    const notice = parseInputSuspension(value);
+    const shouldResume = shouldResumeAfterInputSuspension(notice, {
+      inputRequested,
+      isController: isController.value,
+      surfacePaused: surfacePaused(),
+      documentFocused: document.hasFocus(),
+    });
     releaseInputState();
+    if (notice.sessionRevision !== undefined && snapshot.value) {
+      snapshot.value = {
+        ...snapshot.value,
+        sessionRevision: Math.max(snapshot.value.sessionRevision, notice.sessionRevision),
+      };
+    }
+    if (shouldResume) resumeWanted();
   } else if (value.type === "clipboard.enabled") {
     clipboard.value = value.payload.enabled === true;
     clipboardBusy.value = false;
@@ -2601,64 +2668,19 @@ onBeforeUnmount(() => {
 .remote-desktop-head {
   display: flex;
   flex: 0 0 auto;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 11px 13px;
+  gap: 8px;
+  padding: 6px 9px;
   border-bottom: 1px solid var(--line-subtle);
   background: color-mix(in srgb, var(--surface-inset) 76%, var(--surface-raised));
 }
 
-.remote-desktop-head.is-live {
-  align-items: center;
-  gap: 8px;
-  padding: 6px 9px;
-}
-
-.remote-desktop-identity,
-.remote-desktop-heading,
-.remote-desktop-title-line,
 .remote-desktop-head-actions {
   display: flex;
   min-width: 0;
 }
 
-.remote-desktop-identity {
-  align-items: center;
-  gap: 10px;
-}
-
-.remote-desktop-heading {
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.remote-desktop-title-line {
-  align-items: center;
-  gap: 8px;
-}
-
-.remote-desktop-title-line h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 20px;
-}
-
-.remote-desktop-heading p {
-  margin: 0;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 17px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.remote-desktop-mark,
 .remote-desktop-unavailable-icon,
 .remote-desktop-preview-icon,
 .remote-desktop-target-icon,
@@ -2669,13 +2691,6 @@ onBeforeUnmount(() => {
   justify-content: center;
   color: var(--brand-accent-muted);
   background: var(--brand-accent-soft);
-}
-
-.remote-desktop-mark {
-  width: 32px;
-  height: 32px;
-  border: 1px solid color-mix(in srgb, var(--brand-accent) 24%, var(--line));
-  border-radius: 9px;
 }
 
 .remote-desktop-stage-target-icon {
@@ -3383,12 +3398,60 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+.remote-desktop-setup-methods {
+  display: grid;
+  width: 100%;
+  height: auto;
+  min-height: 32px;
+  grid-template-areas:
+    "icon label chevron"
+    "icon summary chevron";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  justify-content: stretch;
+  column-gap: 7px;
+  row-gap: 1px;
+  padding: 6px 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.remote-desktop-setup-methods > svg:first-child {
+  grid-area: icon;
+}
+
+.remote-desktop-setup-methods > svg:last-child {
+  grid-area: chevron;
+}
+
+.remote-desktop-setup-methods > span {
+  grid-area: label;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-desktop-setup-methods > small {
+  grid-area: summary;
+  color: var(--text-subtle);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+}
+
 .remote-desktop-stage {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
   background: var(--surface-inset);
+}
+
+.remote-desktop-stage-setup {
+  overflow: hidden;
 }
 
 .remote-desktop-scope-trigger {
@@ -3766,11 +3829,6 @@ onBeforeUnmount(() => {
 }
 
 @container (max-width: 520px) {
-  .remote-desktop-head:not(.is-live) {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .remote-desktop-head-actions {
     justify-content: flex-end;
   }

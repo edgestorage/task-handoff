@@ -54,6 +54,8 @@ export type NodeTunnelSessionOptions = {
   openAuxSocket(streamId: string, kind: "http" | "websocket"): Promise<NodeTunnelSessionSocket>;
   /** Builds the final headers (incoming init headers plus local node-agent auth) for one injected request. */
   buildLocalHeaders(route: string, method: string, body: string | Buffer | undefined, headers: Record<string, string>): Record<string, string>;
+  /** Test seam for the loopback WebSocket; production always uses `ws`. */
+  openLocalWebSocket?(url: URL, protocols: string[] | undefined, headers: Record<string, string>): NodeTunnelSessionSocket;
   /** URL the host injects for one local node-agent route: path-only for reverse tunnels, absolute for relay hosts. */
   injectUrl(route: string): string;
   /**
@@ -422,6 +424,9 @@ export class NodeTunnelSessionServer {
     const streamId = typeof record.streamId === "string" ? record.streamId : "";
     const route = typeof record.route === "string" ? record.route : "";
     const protocols = Array.isArray(record.protocols) ? record.protocols.filter((item): item is string => typeof item === "string") : undefined;
+    const forwardedHeaders = Object.fromEntries(Object.entries(
+      record.headers && typeof record.headers === "object" ? record.headers as Record<string, unknown> : {},
+    ).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
     void (async () => {
       let socket: NodeTunnelSessionSocket;
       try {
@@ -452,10 +457,11 @@ export class NodeTunnelSessionServer {
         return;
       }
       try {
-        const headers = this.options.buildLocalHeaders(route, "GET", undefined, {});
-        const upstream = protocols?.length
-          ? new WebSocket(this.localNodeAgentWsUrl(route), protocols, { headers })
-          : new WebSocket(this.localNodeAgentWsUrl(route), { headers });
+        const headers = this.options.buildLocalHeaders(route, "GET", undefined, forwardedHeaders);
+        const url = this.localNodeAgentWsUrl(route);
+        const upstream = this.options.openLocalWebSocket?.(url, protocols, headers) ?? (protocols?.length
+          ? new WebSocket(url, protocols, { headers })
+          : new WebSocket(url, { headers }));
         this.streams.set(streamId, { upstream, socket });
         upstream.on("open", () => {
           // WebSocket lifecycle control stays on the main channel; the

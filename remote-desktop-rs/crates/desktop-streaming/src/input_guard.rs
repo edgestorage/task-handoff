@@ -28,6 +28,13 @@ pub enum Backend {
         identity: crate::platform::macos_window::Identity,
         geometry: Geometry,
     },
+    #[cfg(target_os = "linux")]
+    LinuxWindow {
+        window: u32,
+        geometry: Geometry,
+        display: Option<String>,
+        authority: Option<std::path::PathBuf>,
+    },
     Native {
         geometry: Geometry,
         display: Option<String>,
@@ -224,6 +231,14 @@ pub fn run() -> anyhow::Result<()> {
         Backend::MacWindow { identity, geometry } => {
             NativeInput::new_window(identity, geometry).map(|n| Actuator::Native(Box::new(n)))
         }
+        #[cfg(target_os = "linux")]
+        Backend::LinuxWindow {
+            window,
+            geometry,
+            display,
+            ..
+        } => NativeInput::new_window(window, geometry, display)
+            .map(|n| Actuator::Native(Box::new(n))),
     };
     let mut actuator = match input {
         Ok(a) => a,
@@ -334,6 +349,7 @@ pub fn run() -> anyhow::Result<()> {
                         cause,
                         Some(
                             crate::error::BackendError::WindowFocusRequired
+                                | crate::error::BackendError::PointerTargetMismatch
                                 | crate::error::BackendError::GeometryChanged
                         )
                     ) {
@@ -391,6 +407,18 @@ impl Client {
                 .creation_flags(windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB);
         }
         if let Backend::Native {
+            display, authority, ..
+        } = &backend
+        {
+            if let Some(display) = display {
+                process.env("DISPLAY", display);
+            }
+            if let Some(authority) = authority {
+                process.env("XAUTHORITY", authority);
+            }
+        }
+        #[cfg(target_os = "linux")]
+        if let Backend::LinuxWindow {
             display, authority, ..
         } = &backend
         {

@@ -33,6 +33,8 @@ module.exports = () => {
   const cloudDiscovery = resolveCloudDiscovery(cloudEnvironment, variantName);
   const plugins = [
     ...(baseConfig.plugins || []),
+    ['@config-plugins/react-native-webrtc', { cameraPermission: false, microphonePermission: false }],
+    './plugins/with-task-handoff-remote-desktop',
     'expo-apple-authentication',
     './modules/task-handoff-browser/plugin/withTaskHandoffBrowser',
     './plugins/with-task-handoff-native-markdown',

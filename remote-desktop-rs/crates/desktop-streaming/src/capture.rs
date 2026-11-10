@@ -47,6 +47,10 @@ impl Source {
         }
     }
     pub fn refresh_geometry(&mut self) -> anyhow::Result<Geometry> {
+        #[cfg(target_os = "linux")]
+        if let Self::X11(c) = self {
+            return c.refresh_geometry();
+        }
         #[cfg(target_os = "macos")]
         if let Self::Native(c) = self {
             return c.refresh_geometry();

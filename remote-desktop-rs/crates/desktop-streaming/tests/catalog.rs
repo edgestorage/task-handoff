@@ -8,6 +8,7 @@ fn owner() -> Owner {
 }
 fn window() -> NativeWindow<u64> {
     NativeWindow {
+        identity: "x11:1193046:4242".into(),
         unavailable_reason: None,
         handle: 0x123456,
         title: "私有窗口".into(),
@@ -17,7 +18,7 @@ fn window() -> NativeWindow<u64> {
     }
 }
 #[test]
-fn window_references_are_opaque_single_use_owner_generation_and_boot_bound() {
+fn window_references_are_opaque_stable_and_owner_bound() {
     let now = Instant::now();
     let mut c = Catalog::default();
     let entry = c.publish(owner(), vec![window()], now).unwrap().remove(0);
@@ -26,6 +27,8 @@ fn window_references_are_opaque_single_use_owner_generation_and_boot_bound() {
         assert!(wire.get(forbidden).is_none());
     }
     assert_ne!(entry.window_ref, "1193046");
+    let refreshed = c.publish(owner(), vec![window()], now).unwrap().remove(0);
+    assert_eq!(entry.window_ref, refreshed.window_ref);
     let other = Owner {
         actor_id: "other".into(),
         ..owner()
@@ -40,10 +43,14 @@ fn window_references_are_opaque_single_use_owner_generation_and_boot_bound() {
         Err(CatalogError::InvalidReference)
     );
     let old = c.publish(owner(), vec![window()], now).unwrap().remove(0);
-    c.publish(owner(), vec![window()], now).unwrap();
+    let next = c.publish(owner(), vec![window()], now).unwrap().remove(0);
+    assert_eq!(old.window_ref, next.window_ref);
+    assert_eq!(c.consume(&old.window_ref, &owner(), now), Ok(0x123456));
+    let after_consume = c.publish(owner(), vec![window()], now).unwrap().remove(0);
+    assert_eq!(old.window_ref, after_consume.window_ref);
     assert_eq!(
-        c.consume(&old.window_ref, &owner(), now),
-        Err(CatalogError::InvalidReference)
+        c.consume(&after_consume.window_ref, &owner(), now),
+        Ok(0x123456)
     );
     let mut restarted = Catalog::<u64>::default();
     assert_eq!(

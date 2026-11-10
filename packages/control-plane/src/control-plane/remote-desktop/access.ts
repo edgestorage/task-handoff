@@ -27,6 +27,9 @@ type Entry = {
   captureTarget: DesktopCaptureTarget; attachToken?: string; ticket?: string; ticketExpiresAt: number;
   ice: DesktopIceConfig; socket?: NodeAgentWebSocket; release?: () => void;
   timers: Set<ReturnType<typeof setTimeout>>; closed: boolean;
+  transportLossTimer?: ReturnType<typeof setTimeout>;
+  upstreamHeartbeat?: ReturnType<typeof setInterval>;
+  closeUpstream?: () => void;
   fallback?: {
     generation: string;
     issuedAt: number;
@@ -37,6 +40,16 @@ type Entry = {
 };
 type FallbackRole = "media" | "control";
 type FallbackCapacity = { maxSessions: number; maxTotalBitrate: number };
+/** A Relay reconnect can close every browser tunnel in the same tick, in any
+ * order. Keep the component reservation long enough for the viewer to obtain a
+ * fresh signal or fallback pair instead of turning a transport interruption
+ * into a session stop. */
+const TRANSPORT_LOSS_GRACE_MS = 15_000;
+/** The component expires its signaling lease after six seconds. The browser
+ * socket may disappear independently of the Control Plane -> component attach
+ * channel, so keep that upstream channel alive from the Control Plane while the
+ * viewer obtains its fallback pair. */
+const UPSTREAM_SIGNAL_ALIVE_MS = 2_000;
 type Options = {
   request(instanceId: string, operation: DesktopManagedOperation, input: unknown): Promise<unknown>;
   attach(instanceId: string, socket: NodeAgentWebSocket): Promise<void>;
@@ -56,12 +69,28 @@ export class DesktopAccess {
   private readonly rates = new Map<string, number[]>();
   private readonly fallbackCapacity: FallbackCapacity;
   private readonly now: () => number;
-  constructor(private readonly options: Options) {
+  private readonly options: Options;
+  constructor(options: Options) {
+    this.options = options;
     this.now = options.now ?? Date.now;
     this.fallbackCapacity = options.fallbackCapacity ?? { maxSessions: 8, maxTotalBitrate: 32_000_000 };
   }
   private timer(entry: Entry, delay: number, callback: () => void) {
     const timer = setTimeout(() => { entry.timers.delete(timer); callback(); }, Math.max(0, delay)); timer.unref?.(); entry.timers.add(timer); return timer;
+  }
+  private clearTransportLoss(entry: Entry) {
+    if (!entry.transportLossTimer) return;
+    clearTimeout(entry.transportLossTimer);
+    entry.timers.delete(entry.transportLossTimer);
+    entry.transportLossTimer = undefined;
+  }
+  private retainAfterTransportLoss(entry: Entry, delay: number) {
+    if (entry.closed) return;
+    this.clearTransportLoss(entry);
+    entry.transportLossTimer = this.timer(entry, delay, () => {
+      entry.transportLossTimer = undefined;
+      if (!entry.closed && !entry.socket && !entry.fallback) void this.close(entry);
+    });
   }
   private purge() {
     const now = this.now();
@@ -145,6 +174,7 @@ export class DesktopAccess {
       || active.reduce((total, candidate) => total + (candidate.fallback?.bitrate ?? 0), bitrate) > this.fallbackCapacity.maxTotalBitrate) {
       throw failure("REMOTE_DESKTOP_FALLBACK_CAPACITY", 503);
     }
+    this.clearTransportLoss(entry);
     this.closeFallback(entry);
     const generation = `fgen_${randomBytes(12).toString("base64url")}`;
     const expiresAt = this.now() + 30_000;
@@ -177,9 +207,12 @@ export class DesktopAccess {
   async connectFallback(entry: Entry, role: FallbackRole, generation: string, socket: NodeAgentWebSocket) {
     const fallback = entry.fallback;
     if (entry.closed || !fallback || fallback.generation !== generation) throw failure("REMOTE_DESKTOP_FALLBACK_TICKET_INVALID", 401);
+    this.clearTransportLoss(entry);
     const previous = fallback.sockets.get(role);
-    if (previous && previous !== socket) previous.close(1000, "Remote desktop fallback replaced.");
     fallback.sockets.set(role, socket);
+    // Install the replacement before closing the old socket so a synchronous
+    // close cannot look like the current pair ending.
+    if (previous && previous !== socket) previous.close(1000, "Remote desktop fallback replaced.");
     socket.on("close", () => {
       // A replacement generation may close an older socket after the new pair
       // has already been installed. Only the currently owned generation may
@@ -191,6 +224,10 @@ export class DesktopAccess {
         fallback.sockets.delete(otherRole);
         other.close(1000, "Remote desktop fallback ended.");
       }
+      // With no signaling socket either, both transports are gone and the
+      // reservation must survive the same Relay interruption long enough for
+      // the viewer to replace the pair.
+      if (!entry.socket) this.retainAfterTransportLoss(entry, TRANSPORT_LOSS_GRACE_MS);
     });
     socket.on("error", () => socket.close(1011, "REMOTE_DESKTOP_FALLBACK_SOCKET_ERROR"));
     const headers = {
@@ -218,6 +255,7 @@ export class DesktopAccess {
   }
   async connect(entry: Entry, socket: NodeAgentWebSocket) {
     if (entry.closed || !entry.attachToken) throw failure("REMOTE_DESKTOP_TICKET_INVALID", 401);
+    this.clearTransportLoss(entry);
     entry.socket = socket;
     let closed = false, ready = false, count = 0, candidates = 0, rateAt = performance.now(), lastRevision = -1;
     let configuring: string | undefined; let negotiation: string | undefined; let renewal: DesktopIceConfig | undefined;
@@ -228,8 +266,21 @@ export class DesktopAccess {
     const fail = (code = "REMOTE_DESKTOP_SIGNAL_INVALID") => { send({ type: "error", code }); void this.close(entry); };
     const relay = new EventEmitter() as EventEmitter & NodeAgentWebSocket;
     relay.readyState = 1;
-    relay.close = () => { void this.close(entry); };
-    const forward = (value: unknown) => { if (!closed) relay.emit("message", Buffer.from(JSON.stringify(value)), false); };
+    relay.close = () => { relay.readyState = 3; void this.close(entry); };
+    // The browser socket and the upstream attach channel have independent
+    // lifetimes. A Relay outage closes the browser-facing socket first; the
+    // component must keep receiving liveness until fallback attaches or the
+    // transport-loss grace expires.
+    entry.closeUpstream = () => {
+      if (relay.readyState === 3) return;
+      relay.readyState = 3;
+      relay.emit("close", 1000, "Remote desktop session ended.");
+    };
+    const forwardUpstream = (value: unknown) => {
+      if (entry.closed || relay.readyState !== 1) return;
+      relay.emit("message", Buffer.from(JSON.stringify(value)), false);
+    };
+    const forward = (value: unknown) => { if (!closed) forwardUpstream(value); };
     const installExpiry = (ice: DesktopIceConfig) => {
       if (expiryTimer) { clearTimeout(expiryTimer); entry.timers.delete(expiryTimer); }
       if (ice.iceCredentialsExpiresAt !== null) expiryTimer = this.timer(entry, ice.iceCredentialsExpiresAt - this.now(), () => void this.close(entry));
@@ -304,15 +355,28 @@ export class DesktopAccess {
         else if (message.type !== "acknowledged") throw new Error();
       } catch { fail(); }
     };
-    socket.on("close", () => { closed = true; relay.readyState = 3; relay.emit("close"); void this.close(entry); });
-    socket.on("error", () => void this.close(entry));
+    const signalLost = () => {
+      if (entry.socket === socket) entry.socket = undefined;
+      if (entry.closed) return;
+      this.retainAfterTransportLoss(entry, TRANSPORT_LOSS_GRACE_MS);
+    };
+    socket.on("close", () => { closed = true; signalLost(); });
+    socket.on("error", signalLost);
     socket.on("message", (data: unknown, binary: unknown) => {
       try {
         if (closed) return;
         const now = performance.now(); if (now - rateAt >= 1000) { rateAt = now; count = 0; }
         const text = String(data); if (binary || Buffer.byteLength(text) > 512 * 1024 || ++count > 64) throw new Error();
         const message = DesktopSignalSchema.parse(JSON.parse(text));
-        if (!ready || (configuring && message.type !== "signalAlive")) throw new Error();
+        // Liveness may arrive immediately after the socket opens, before the
+        // component has sent its first snapshot. Accept it instead of failing
+        // the viewer, but only relay it once the upstream binding is ready so
+        // the component can renew its own six-second signal lease.
+        if (message.type === "signalAlive") {
+          if (ready) forward(message);
+          return;
+        }
+        if (!ready || configuring) throw new Error();
         if (message.type === "stop") { void this.close(entry); return; }
         // Browser acknowledgements are transport-local. The component's own
         // configuration acknowledgement is the authority used by relay.send.
@@ -333,12 +397,19 @@ export class DesktopAccess {
       if (entry.closed || closed) return;
       forward({ requestId: randomBytes(16).toString("hex"), owner: desktopOwner(entry.principal), viewerSessionId: entry.viewerSessionId, captureTarget: entry.captureTarget, attachToken: entry.attachToken });
       entry.attachToken = undefined;
+      const heartbeat = () => forwardUpstream({ type: "signalAlive", requestId: randomBytes(16).toString("hex") });
+      heartbeat();
+      entry.upstreamHeartbeat = setInterval(heartbeat, UPSTREAM_SIGNAL_ALIVE_MS);
+      entry.upstreamHeartbeat.unref?.();
       installExpiry(entry.ice);
     } catch { await this.close(entry); }
   }
   bind(entry: Entry, release: () => void) { if (entry.closed) release(); else entry.release = release; }
   async close(entry: Entry, stop = true) {
     if (entry.closed) return; entry.closed = true;
+    this.clearTransportLoss(entry);
+    if (entry.upstreamHeartbeat) clearInterval(entry.upstreamHeartbeat);
+    entry.upstreamHeartbeat = undefined;
     if (entry.ticket) this.tickets.delete(entry.ticket);
     this.closeFallback(entry);
     entry.attachToken = undefined; entry.ticket = undefined;
@@ -349,6 +420,8 @@ export class DesktopAccess {
     for (const timer of entry.timers) clearTimeout(timer); entry.timers.clear(); entry.release?.();
     entry.socket?.close(1000, "Remote desktop session ended.");
     if (stop) await this.options.request(entry.instanceId, "stop", { requestId: randomBytes(16).toString("hex"), owner: desktopOwner(entry.principal), viewerSessionId: entry.viewerSessionId }).catch(() => undefined);
+    entry.closeUpstream?.();
+    entry.closeUpstream = undefined;
   }
   async invalidate(test: (principal: DesktopPrincipal, instanceId: string, nodeId: string) => boolean) {
     await Promise.all([...this.entries.values()].filter(entry => test(entry.principal, entry.instanceId, entry.nodeId)).map(entry => this.close(entry)));

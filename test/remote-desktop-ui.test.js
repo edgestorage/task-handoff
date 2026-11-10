@@ -145,6 +145,14 @@ test('remote desktop connection methods can disable any two paths but never the 
   assert.match(viewer, /activeTransportAvailability\.value = \{ \.\.\.transportAvailability\.value \}/);
 });
 
+test('remote desktop connection methods remain configurable before a session starts', () => {
+  const setup = viewer.slice(viewer.indexOf('remote-desktop-stage-setup'), viewer.indexOf('<div v-else ref="stage"'));
+  assert.match(setup, /remote-desktop-setup-methods/);
+  assert.match(setup, /v-for="method in connectionMethodOptions"/);
+  assert.match(setup, /setConnectionMethodEnabled\(method\.key, Boolean\(\$event\)\)/);
+  assert.match(setup, /connectionMethodsHint/);
+});
+
 test('remote desktop applies connection methods to ICE, peer setup, and WebSocket fallback', () => {
   assert.match(viewer, /new RTCPeerConnection\(iceConfiguration\(\)\)/);
   assert.doesNotMatch(viewer, /new RTCPeerConnection\(\)/);
@@ -192,8 +200,10 @@ test('remote desktop viewer separates setup, connection and live-session states'
   assert.match(viewer, /remote-desktop-connect-panel/);
   assert.match(viewer, /remote-desktop-stage/);
   assert.match(viewer, /remote-desktop-surface/);
-  assert.match(viewer, /remote-desktop-head\.is-live/);
+  assert.match(viewer, /remote-desktop-head is-live/);
+  assert.match(viewer, /remote-desktop-stage-setup/);
   assert.match(viewer, /remote-desktop-live-toolbar/);
+  assert.match(viewer, /if \(!session\.value\) \{\n\s+target\.value = next;/);
   assert.equal((viewer.match(/<header\b/g) ?? []).length, 1);
   assert.doesNotMatch(viewer, /remote-desktop-stage-bar/);
   assert.doesNotMatch(viewer, /remote-desktop-controls/);
@@ -282,12 +292,15 @@ test('remote desktop viewers share one transferable control lease', () => {
 test('remote desktop live scope is switchable through a fresh session', () => {
   assert.match(viewer, /remote-desktop-scope-trigger/);
   assert.match(viewer, /remote-desktop-scope-popover/);
+  assert.match(viewer, /resolveRefreshedWindow/);
+  assert.match(viewer, /selectedWindowInfo\.value\?\.windowRef === selection\.windowRef/);
+  assert.match(viewer, /selectedWindow: target\.value\.kind === ["']window["'] \? selectedWindowInfo\.value : undefined/);
   assert.match(viewer, /function selectScopeDisplay\(\)/);
   assert.match(viewer, /function selectScopeWindow\(/);
   const switchBlock = viewer.slice(viewer.indexOf('async function switchScope'), viewer.indexOf('function selectScopeDisplay'));
   assert.ok(switchBlock.indexOf('await closeCurrentSession()') >= 0);
   assert.ok(switchBlock.indexOf('await connect()') > switchBlock.indexOf('await closeCurrentSession()'));
-  assert.match(viewer, /!session\.value\s*&& previous/);
+  assert.match(viewer, /else if \(!session\.value\)/);
   assert.doesNotMatch(viewer, /remote-desktop-control-meta/);
   assert.doesNotMatch(viewer, /remote-desktop-scope-note-stage/);
 });

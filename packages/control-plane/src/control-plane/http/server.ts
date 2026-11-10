@@ -1,5 +1,6 @@
 import { registerRemoteDesktopRoutes } from "./remote-desktop-routes.ts";
 import type { DesktopAccess, DesktopPrincipal } from "../remote-desktop/access.ts";
+import { openRemoteDesktopRelayChannel } from "../remote-desktop/relay-channel.ts";
 import { BrowserRelayService } from "../instances/browser-relay-service.ts";
 import { CONTROL_PLANE_CAPABILITY_HEADER, requestsExtendedControlPlaneCapabilities } from "@task-handoff/protocol/control-plane-access";
 import path from "node:path";
@@ -647,6 +648,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const browserRelay = new BrowserRelayService(service, events);
   const cloudRelayBridge = {
     openBrowser: (actor: ControlPlaneActor, instanceId: string, handlers: import("@task-handoff/protocol/relay-browser-channel").BrowserChannelHandlers) => browserRelay.open(actor, instanceId, handlers),
+    openRemoteDesktop: (actor: ControlPlaneActor, input: { path: string; protocols: string[] }, handlers: import("@task-handoff/protocol/relay-browser-channel").BrowserChannelHandlers) =>
+      openRemoteDesktopRelayChannel({ service, access: () => desktopAccess }, actor, input, handlers),
     async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean }) {
       const method = String(input?.method || "GET").toUpperCase();
       const requestPath = String(input?.path || "");

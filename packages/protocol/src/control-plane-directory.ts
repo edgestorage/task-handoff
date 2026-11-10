@@ -2,6 +2,11 @@ import { z } from "zod";
 import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionPermissionModeSchema, InstanceBoardAiSummarySchema } from "./ai-sessions.ts";
 import { AiSessionProviderCapabilitiesSchema } from "./ai-session-provider-capabilities.ts";
 import { InstanceShellCapabilitiesSchema, INSTANCE_SHELL_PROTOCOL_VERSION, type InstanceShellCapabilities } from "./instance-shell.ts";
+import {
+  RemoteDesktopCapabilitiesSchema,
+  normalizeRemoteDesktopCapabilities,
+  type RemoteDesktopCapabilities,
+} from "./remote-desktop.ts";
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -44,7 +49,19 @@ export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
     const parsed = InstanceShellCapabilitiesSchema.safeParse(value);
     return parsed.success ? parsed.data : undefined;
   }, InstanceShellCapabilitiesSchema.optional()),
+  // Compatibility for v0.0.50: older directory producers omit this additive
+  // projection. An invalid value disables only remote desktop.
+  remoteDesktop: z.preprocess((value) => value === undefined ? undefined : normalizeRemoteDesktopCapabilities(value), RemoteDesktopCapabilitiesSchema.optional()),
 }).passthrough();
+
+export function directoryRemoteDesktopCapabilities(capabilities: unknown): RemoteDesktopCapabilities | undefined {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success ? parsed.data.remoteDesktop : undefined;
+}
+
+export function supportsDirectoryRemoteDesktop(capabilities: unknown) {
+  return directoryRemoteDesktopCapabilities(capabilities)?.available === true;
+}
 
 export function directoryInstanceShellCapabilities(capabilities: unknown): InstanceShellCapabilities | undefined {
   const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);

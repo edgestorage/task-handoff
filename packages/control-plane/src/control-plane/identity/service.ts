@@ -82,7 +82,10 @@ export class ControlPlaneIdentityService {
       authentication,
       // Compatibility for mobile-v0.0.12 / v0.0.49: legacy clients reconstruct
       // signed identities through a fixed schema. Only opt-in clients see this.
-      ...(extendedCapabilities ? { browserTunnel: { direct: true, cloudRelay: true } } : {}),
+      ...(extendedCapabilities ? {
+        browserTunnel: { direct: true, cloudRelay: true },
+        remoteDesktop: { direct: true, cloudRelay: true },
+      } : {}),
       aiSessions: true,
       nodes: true,
       instanceBoard: true,

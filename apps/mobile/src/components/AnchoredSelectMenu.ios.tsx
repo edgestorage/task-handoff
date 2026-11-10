@@ -37,7 +37,10 @@ export function AnchoredSelectMenu<Value extends string>(props: AnchoredSelectMe
                 <Button modifiers={[buttonStyle('plain')]} onPress={() => select(option.value)} role={option.danger ? 'destructive' : 'default'}>
                   <HStack alignment="center" spacing={10} modifiers={[frame({ width: ANCHORED_SELECT_MENU_CONTENT_WIDTH, alignment: 'leading' }), padding({ horizontal: ANCHORED_SELECT_MENU_HORIZONTAL_PADDING, vertical: 9 })]}>
                     {option.systemImage ? <Image color={option.danger ? colors.error : colors.textMuted} size={18} systemName={option.systemImage} /> : null}
-                    <Text modifiers={[font({ textStyle: 'body', weight: 'medium' }), foregroundStyle(option.danger ? colors.error : 'primary'), lineLimit(1)]}>{option.label}</Text>
+                    <VStack alignment="leading" spacing={1}>
+                      <Text modifiers={[font({ textStyle: 'body', weight: 'medium' }), foregroundStyle(option.danger ? colors.error : 'primary'), lineLimit(1)]}>{option.label}</Text>
+                      {option.description ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textMuted), lineLimit(2)]}>{option.description}</Text> : null}
+                    </VStack>
                     <Spacer />
                     {option.value === props.selectedValue ? <Image color={colors.primary} size={15} systemName="checkmark" /> : null}
                   </HStack>

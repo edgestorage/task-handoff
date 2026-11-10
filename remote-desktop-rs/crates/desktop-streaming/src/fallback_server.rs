@@ -169,8 +169,8 @@ async fn connection(hub: Hub, role: Role, mut socket: WebSocket) {
         viewer: viewer.clone(),
         owner,
         capture_target: attach.capture_target,
-        media: (role == Role::Media).then(|| media_tx),
-        control: (role == Role::Control).then(|| control_tx),
+        media: (role == Role::Media).then_some(media_tx),
+        control: (role == Role::Control).then_some(control_tx),
         reply: reply_tx,
     };
     if hub.events.send(event).await.is_err() {

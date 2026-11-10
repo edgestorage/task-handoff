@@ -11,6 +11,10 @@ export const REMOTE_DESKTOP_CHANNEL_VERSION = "2026-11-05";
 export const REMOTE_DESKTOP_FALLBACK_PROTOCOL_VERSION = "2026-11-09";
 export const REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL = "taskhandoff.remote-desktop.fallback.media.v1";
 export const REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL = "taskhandoff.remote-desktop.fallback.control.v1";
+/** Control-plane WebSocket paths that the Cloud Relay byte-channel may carry. */
+export type RemoteDesktopRelayTarget =
+  | { kind: "signal"; instanceId: string; sessionId: string; ticket: string }
+  | { kind: "fallback"; instanceId: string; sessionId: string; role: "media" | "control"; ticket: string };
 export const REMOTE_DESKTOP_FALLBACK_MEDIA_CHUNK_BYTES = 16 * 1024;
 export const REMOTE_DESKTOP_FALLBACK_HEADER_BYTES = 25;
 export const REMOTE_DESKTOP_FALLBACK_MAX_CHUNKS = 1024;
@@ -18,6 +22,45 @@ export const REMOTE_DESKTOP_FALLBACK_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 export const REMOTE_DESKTOP_MAX_MESSAGE_BYTES = 16 * 1024;
 export const REMOTE_DESKTOP_MAX_CLIPBOARD_TEXT_BYTES = 32 * 1024;
 export const REMOTE_DESKTOP_MAX_CLIPBOARD_WIRE_BYTES = 64 * 1024;
+
+export function remoteDesktopRelaySubprotocol(target: RemoteDesktopRelayTarget) {
+  if (target.kind === "signal") return REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL;
+  return target.role === "media"
+    ? REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL
+    : REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL;
+}
+
+/** Parse only the two Control Plane WebSocket routes that own one-time desktop
+ * tickets. This runs on both sides of the Relay so a compromised client cannot
+ * turn the byte-channel into an arbitrary outbound socket. */
+export function parseRemoteDesktopRelayPath(input: unknown): RemoteDesktopRelayTarget | undefined {
+  if (typeof input !== "string" || input.length < 1 || input.length > 4_096 || !input.startsWith("/api/")) return undefined;
+  let url: URL;
+  try { url = new URL(input, "http://control-plane.invalid"); }
+  catch { return undefined; }
+  if (url.origin !== "http://control-plane.invalid" || url.username || url.password || url.hash) return undefined;
+  const query = [...url.searchParams.entries()];
+  if (query.length !== 1 || query[0][0] !== "ticket" || !query[0][1] || query[0][1].length > 128) return undefined;
+  const ticket = query[0][1];
+  const signal = url.pathname.match(/^\/api\/controlled-instances\/([^/]+)\/remote-desktop-sessions\/([^/]+)\/signal$/);
+  if (signal) {
+    const instanceId = decodePathSegment(signal[1]);
+    const sessionId = decodePathSegment(signal[2]);
+    return instanceId && sessionId ? { kind: "signal", instanceId, sessionId, ticket } : undefined;
+  }
+  const fallback = url.pathname.match(/^\/api\/controlled-instances\/([^/]+)\/remote-desktop-sessions\/([^/]+)\/fallback\/(media|control)$/);
+  if (!fallback) return undefined;
+  const instanceId = decodePathSegment(fallback[1]);
+  const sessionId = decodePathSegment(fallback[2]);
+  return instanceId && sessionId ? { kind: "fallback", instanceId, sessionId, role: fallback[3] as "media" | "control", ticket } : undefined;
+}
+
+function decodePathSegment(value: string) {
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded && !decoded.includes("/") && !decoded.includes("\\") ? decoded : undefined;
+  } catch { return undefined; }
+}
 const Name = z.string().min(1);
 const Names = z.array(Name);
 /** Additive fallback capability. Older peers omit it and keep WebRTC only. */
@@ -299,4 +342,7 @@ export const DesktopSignalSchema = z.discriminatedUnion("type", [
 ]);
 export type DesktopSessionSnapshot = z.infer<typeof DesktopSessionSnapshotSchema>;
 export type DesktopCaptureTarget = z.infer<typeof DesktopCaptureTargetSchema>;
+export type DesktopWindow = z.infer<typeof DesktopWindowSchema>;
+export type DesktopIceServer = z.infer<typeof DesktopIceServerSchema>;
 export type DesktopIceConfig = z.infer<typeof DesktopIceConfigSchema>;
+export type DesktopCreated = z.infer<typeof DesktopCreatedSchema>;

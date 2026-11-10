@@ -333,6 +333,7 @@ impl WindowCatalog {
                     .err()
                     .map(|e| BackendError::from_error(e).to_string());
                 result.push(crate::catalog::NativeWindow {
+                    identity: format!("sck:{}:{}", window.window_id(), app.process_id()),
                     handle: capture.ok(),
                     unavailable_reason: reason,
                     title: window.title().unwrap_or_default(),
@@ -356,10 +357,19 @@ impl WindowCatalog {
         reference: &str,
         owner: &crate::session::Owner,
     ) -> anyhow::Result<Capture> {
-        let mut capture = self
-            .references
-            .consume(reference, owner, Instant::now())?
-            .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?;
+        let retained = match self.references.consume(reference, owner, Instant::now()) {
+            Ok(capture) => capture,
+            Err(crate::catalog::CatalogError::InvalidReference) => {
+                // Stable window identities survive refreshes, but retained
+                // native captures are short-lived. Re-enumerate and resolve the
+                // same reference instead of rotating it.
+                self.enumerate(owner.clone()).await?;
+                self.references.consume(reference, owner, Instant::now())?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let mut capture =
+            retained.ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?;
         capture.refresh_geometry()?;
         Ok(capture)
     }

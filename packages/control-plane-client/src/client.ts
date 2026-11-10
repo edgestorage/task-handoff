@@ -9,6 +9,7 @@ import { createControlPlaneResourcesApi } from "./resources.ts";
 import { createControlPlaneTriggersApi } from "./triggers.ts";
 import { createControlPlaneUsersApi } from "./users.ts";
 import { createControlPlaneBrowserApi } from "./browser.ts";
+import { createControlPlaneRemoteDesktopApi } from "./remote-desktop.ts";
 import { createControlPlaneStoriesApi } from "./stories.ts";
 import { createControlPlaneAgentsApi } from "./agents.ts";
 import { createControlPlaneRepositoryApi } from "./repository.ts";
@@ -42,6 +43,7 @@ export function createControlPlaneClient(transport: ControlPlaneClientTransport)
     appProfiles: createControlPlaneAppProfilesApi(compatibleTransport),
     apps: createControlPlaneAppManagementApi(compatibleTransport),
     browser: createControlPlaneBrowserApi(compatibleTransport),
+    remoteDesktop: createControlPlaneRemoteDesktopApi(compatibleTransport),
     resources: createControlPlaneResourcesApi(compatibleTransport),
     triggers: createControlPlaneTriggersApi(compatibleTransport),
     stories: createControlPlaneStoriesApi(compatibleTransport),

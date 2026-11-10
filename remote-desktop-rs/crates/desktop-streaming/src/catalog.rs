@@ -1,4 +1,5 @@
-//! Opaque, short-lived window selection. Native handles never cross IPC/wire.
+//! Opaque, process-stable window identity with short-lived native handles.
+//! Native handles never cross IPC/wire.
 use crate::session::{secret, Owner};
 use std::{
     collections::HashMap,
@@ -12,6 +13,9 @@ pub const MAX_CATALOG_BYTES: usize = 512 * 1024;
 pub use remote_desktop_protocol::model::WindowEntry;
 /// Platform-only input to publication; H may hold a retained SCWindow/WGC item.
 pub struct NativeWindow<H> {
+    /// Stable platform identity used only inside the component to keep the
+    /// public opaque reference stable across catalog refreshes.
+    pub identity: String,
     pub unavailable_reason: Option<String>,
     pub handle: H,
     pub title: String,
@@ -26,6 +30,7 @@ struct Reference<H> {
 }
 pub struct Catalog<H> {
     references: HashMap<String, Reference<H>>,
+    identities: HashMap<String, String>,
 }
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CatalogError {
@@ -38,6 +43,7 @@ impl<H> Default for Catalog<H> {
     fn default() -> Self {
         Self {
             references: HashMap::new(),
+            identities: HashMap::new(),
         }
     }
 }
@@ -47,8 +53,9 @@ impl<H> Catalog<H> {
     pub fn invalidate(&mut self) {
         self.references.clear();
     }
-    /// Refresh invalidates the preceding generation, including on enumeration
-    /// failure. One catalog per component bounds retained native handles to 256.
+    /// Refresh invalidates retained native handles, including on enumeration
+    /// failure. Stable wire identities survive so the same native window keeps
+    /// the same opaque reference.
     pub fn publish(
         &mut self,
         owner: Owner,
@@ -64,6 +71,7 @@ impl<H> Catalog<H> {
             return Err(CatalogError::TooLarge);
         }
         let mut references = HashMap::new();
+        let mut identities = HashMap::new();
         let mut entries = Vec::new();
         for w in windows {
             // Filtering platform shell/cloaked/protected windows belongs in the
@@ -74,7 +82,12 @@ impl<H> Catalog<H> {
             let capturable = w.unavailable_reason.is_none()
                 && w.width <= MAX_CAPTURE_DIMENSION
                 && w.height <= MAX_CAPTURE_DIMENSION;
-            let window_ref = secret();
+            let window_ref = self
+                .identities
+                .get(&w.identity)
+                .cloned()
+                .unwrap_or_else(secret);
+            identities.insert(w.identity, window_ref.clone());
             entries.push(WindowEntry {
                 window_ref: window_ref.clone(),
                 title: w.title,
@@ -106,10 +119,12 @@ impl<H> Catalog<H> {
             return Err(CatalogError::TooLarge);
         }
         self.references = references;
+        self.identities = identities;
         Ok(entries)
     }
-    /// Validate owner before removing: a rejected caller cannot consume another
-    /// actor's reference. The caller must revalidate native identity before use.
+    /// Resolve the current native handle for a stable window reference. The
+    /// reference itself remains stable; only this retained handle is consumed.
+    /// A later resolve re-enumerates and receives the same reference again.
     pub fn consume(
         &mut self,
         window_ref: &str,

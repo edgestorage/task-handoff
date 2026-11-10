@@ -4,6 +4,8 @@ export type PersistedPreferenceStore<T> = {
   get(): T;
   subscribe(listener: () => void): () => void;
   update(patch: Partial<T>): void;
+  /** Starts (or joins) the one-time storage read used by subscribe/get. */
+  ready(): Promise<void>;
 };
 
 /**
@@ -30,23 +32,29 @@ export function createPersistedPreferenceStore<T>(options: {
     for (const listener of listeners) listener();
   };
 
+  const beginHydration = () => {
+    hydration ??= (async () => {
+      try {
+        const stored = parse(await SecureStore.getItemAsync(storageKey));
+        // A user change that landed while storage was being read wins over the persisted snapshot.
+        if (mutated || !stored) return;
+        preferences = stored;
+        notify();
+      } catch {
+        // Keep the in-memory defaults active even when device storage is unavailable.
+      }
+    })();
+    return hydration;
+  };
+
   return {
     get: () => preferences,
     subscribe(listener: () => void) {
       listeners.add(listener);
-      hydration ??= (async () => {
-        try {
-          const stored = parse(await SecureStore.getItemAsync(storageKey));
-          // A user change that landed while storage was being read wins over the persisted snapshot.
-          if (mutated || !stored) return;
-          preferences = stored;
-          notify();
-        } catch {
-          // Keep the in-memory defaults active even when device storage is unavailable.
-        }
-      })();
+      void beginHydration();
       return () => { listeners.delete(listener); };
     },
+    ready: beginHydration,
     update(patch: Partial<T>) {
       mutated = true;
       preferences = { ...preferences, ...patch };

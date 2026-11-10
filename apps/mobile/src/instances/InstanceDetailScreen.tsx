@@ -3,6 +3,7 @@ import * as Crypto from 'expo-crypto';
 import { router, Stack } from 'expo-router';
 import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
+import { supportsDirectoryRemoteDesktop } from '@task-handoff/protocol/control-plane-directory';
 
 import { mobileAiSessionStore } from '../ai-sessions/store';
 import { useActiveAiSessions } from '../ai-sessions/use-active-sessions';
@@ -162,6 +163,7 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
       nodeName={node?.name || instance.nodeId}
       onCreateSession={() => router.push({ pathname: '/sessions/new', params: { instanceId } })}
       onLifecycleAction={requestLifecycleAction}
+      onOpenRemoteDesktop={() => router.push({ pathname: '/remote-desktop/[instanceId]' as never, params: { instanceId } })}
       onShowHistory={() => router.push({ pathname: '/history/[instanceId]', params: { instanceId } })}
       onShowSessions={() => {
         if (controlPlaneId) mobileAiSessionStore.setScope(controlPlaneId, { kind: 'instance', instanceId });
@@ -173,6 +175,7 @@ export function InstanceDetailScreen({ embeddedHeader = false, instanceId, pane 
       protocolCompatible={instance.protocol.compatible}
       protocolWarning={instance.protocol.warning}
       runtime={`${instance.runtime.name || instance.runtime.id}${instance.runtime.type ? ` · ${instance.runtime.type}` : ''}`}
+      remoteDesktopAvailable={supportsDirectoryRemoteDesktop(instance.capabilities)}
       status={`${instance.status} · ${instance.connectionStatus} · ${instance.health}`}
       statusTone={instance.ready && instance.connectionStatus === 'online' ? 'healthy' : instance.status === 'failed' || instance.status === 'unhealthy' ? 'error' : 'muted'}
       workspace={instance.workspace.path || instance.workspace.status}

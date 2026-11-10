@@ -4,7 +4,9 @@ const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const loopbackAddresses = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 /** Non-local signaling must be WSS unless the deployment explicitly opts into
- * private-LAN HTTP. Origin equality and a private client address are required. */
+ * private-LAN HTTP. Browser clients must present the Control Plane origin;
+ * authenticated native clients (React Native WebSocket) do not send one, and
+ * their bearer ticket already prevents cross-site WebSocket reuse. */
 export function remoteDesktopSignalOriginAllowed(input: {
   requestProtocol: string;
   host?: string;
@@ -17,9 +19,10 @@ export function remoteDesktopSignalOriginAllowed(input: {
   try {
     const expected = new URL(input.publicBaseUrl?.trim() || `${input.requestProtocol}://${input.host}`);
     const actual = new URL(`${input.requestProtocol}://${input.host}`);
+    const originMatches = input.origin === undefined || input.origin === expected.origin;
     const local = loopbackHosts.has(actual.hostname)
       && loopbackAddresses.has(input.remoteAddress ?? "")
-      && input.origin === actual.origin;
+      && (input.origin === undefined || input.origin === actual.origin);
     const privateHttp = input.allowInsecurePrivateNetwork
       && input.requestProtocol === "http"
       && actual.protocol === "http:"
@@ -28,9 +31,9 @@ export function remoteDesktopSignalOriginAllowed(input: {
       && isRemoteDesktopLocalNetworkAddress(actual.hostname)
       && isRemoteDesktopLocalNetworkAddress(expected.hostname)
       && isRemoteDesktopLocalNetworkAddress(input.remoteAddress ?? "")
-      && input.origin === expected.origin;
+      && originMatches;
     const secure = expected.protocol === "https:" && input.requestProtocol === "https";
-    return local || (input.origin === expected.origin && (privateHttp || secure));
+    return local || (originMatches && (privateHttp || secure));
   } catch {
     return false;
   }

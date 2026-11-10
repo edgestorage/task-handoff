@@ -1347,3 +1347,48 @@ test('browser channel capability is optional, relays binary data, and reset clos
   await expect(channel.send({ bytes: new Uint8Array([1]), binary: true })).rejects.toMatchObject({ code: 'BROWSER_CHANNEL_CLOSED' });
   h.transport.suspend();
 });
+
+test('remote desktop signaling and fallback sockets use the Cloud Relay byte channel', async () => {
+  const h = harness();
+  await h.transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  const current = h.channels[0];
+  current.channel.sendBrowser = jest.fn();
+  jest.mocked(current.channel.send).mockImplementation((value: any) => {
+    if (value.type === 'request') queueMicrotask(() => current.emit({ type: 'response', id: value.id, status: 200, body: { data: {
+      payload: { version: 1, kind: 'control-plane', controlPlaneId: 'local_cp', publicKey: { algorithm: 'Ed25519', encoding: 'base64url', value: 'a'.repeat(43), fingerprint: profile.identity.publicKeyFingerprint },
+        capabilities: { ...profile.capabilities, remoteDesktop: { direct: true, cloudRelay: true } }, protocolVersion: '2026-10-01', issuedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      signature: 's'.repeat(86),
+    } } }));
+    if (value.type === 'remote-desktop-channel-open') queueMicrotask(() => current.emit({ type: 'browser-channel-opened', tunnelId: value.tunnelId }));
+  });
+  const onOpen = jest.fn();
+  const onMessage = jest.fn();
+  const onClose = jest.fn();
+  const socket = h.transport.openAuthenticatedWebSocket!({
+    path: '/api/controlled-instances/inst_a/remote-desktop-sessions/rdv_a/signal?ticket=ticket_a',
+    protocols: ['taskhandoff.remote-desktop.2026-11-05'],
+  }, { onOpen, onMessage, onClose });
+  expect(socket.readyState).toBe(0);
+  for (let attempt = 0; attempt < 20 && !onOpen.mock.calls.length; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(onOpen).toHaveBeenCalledTimes(1);
+  expect(socket.readyState).toBe(1);
+  socket.send('{"type":"signalAlive"}');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(current.channel.sendBrowser).toHaveBeenCalledWith(expect.objectContaining({ tunnelId: 1, binary: false }));
+  current.emit({ type: 'browser-channel-data', browserData: {
+    tunnelId: 1, bytes: new TextEncoder().encode('{"type":"ready"}'), binary: false,
+  } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(onMessage).toHaveBeenCalledWith('{"type":"ready"}');
+  current.emit({ type: 'browser-channel-data', browserData: {
+    tunnelId: 1, bytes: new Uint8Array([1, 2, 3]), binary: true,
+  } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(onMessage.mock.calls.at(-1)?.[0]).toBeInstanceOf(ArrayBuffer);
+  socket.close();
+  expect(socket.readyState).toBe(3);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  h.transport.suspend();
+});

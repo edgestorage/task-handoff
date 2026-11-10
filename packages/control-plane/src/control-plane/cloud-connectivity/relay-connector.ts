@@ -48,6 +48,7 @@ import type { TrustedDeviceSessionRegistry } from "../device-trust/trusted-devic
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: any; binaryResponse?: unknown; bodyId?: number; responseId?: number; offset?: number; event?: unknown; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null; sentAt?: string; receivedAt?: string };
 export type RelaySessionBridge = {
   openBrowser?(actor: ControlPlaneActor, instanceId: string, handlers: BrowserChannelHandlers): Promise<BrowserChannel>;
+  openRemoteDesktop?(actor: ControlPlaneActor, input: { path: string; protocols: string[] }, handlers: BrowserChannelHandlers): Promise<BrowserChannel>;
   request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean }): Promise<{ status: number; body?: unknown; binary?: { bytes: Uint8Array; contentType?: string; filename?: string } }>;
   subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: EventEnvelope) => void, aiSessionTransient?: AiSessionTransientSubscription, resourceMetricInstanceIds?: string[]): () => void;
   openTty?(actor: ControlPlaneActor, input: { instanceId: string; sessionId: string }, listener: (message: RelayEnvelope) => void): Promise<{ send(data: string): void; resize(cols: number, rows: number): void; close(): void }>;
@@ -585,20 +586,38 @@ export class EncryptedControlPlaneRelaySession {
     this.browser = new RelayBrowserMultiplexer({
       control: (value) => this.send(value),
       data: (value) => this.sendBrowserData(value),
-      accept: async (instanceId, handlers) => {
-        if (!this.bridge.openBrowser) throw relayError("BROWSER_CHANNEL_UNSUPPORTED");
-        return this.bridge.openBrowser(this.actor, instanceId, handlers);
+      accept: async (target, handlers) => {
+        if (target.kind === "browser") {
+          if (!this.bridge.openBrowser) throw relayError("BROWSER_CHANNEL_UNSUPPORTED");
+          return this.bridge.openBrowser(this.actor, target.instanceId, handlers);
+        }
+        if (!this.bridge.openRemoteDesktop) throw relayError("REMOTE_DESKTOP_CHANNEL_UNSUPPORTED");
+        return this.bridge.openRemoteDesktop(this.actor, { path: target.path, protocols: target.protocols }, handlers);
       },
     });
   }
   start() {
     this.socket.on("message", (raw, isBinary) => {
-      void this.receive(raw, isBinary).catch((error) => {
-        if (error?.code !== "RELAY_FRAME_SEQUENCE_INVALID") this.diagnostics?.onProtocolError?.({
-          errorCode: typeof error?.code === "string" ? error.code.slice(0, 80) : "RELAY_FRAME_INVALID",
+      void this.receive(raw, isBinary).catch((error: unknown) => {
+        const detail = error && typeof error === "object" ? error as { code?: unknown; message?: unknown; name?: unknown } : {};
+        if (detail.code !== "RELAY_FRAME_SEQUENCE_INVALID") this.diagnostics?.onProtocolError?.({
+          errorCode: typeof detail.code === "string" ? detail.code.slice(0, 80) : "RELAY_FRAME_INVALID",
           channelId: this.channelId, role: "client", expectedSequence: this.receiveSequence, receiveCounter: this.receiveCounter,
         });
-        this.socket.close(4400, "encrypted-protocol-error");
+        this.trace?.record({
+          channelId: this.channelId,
+          direction: "in",
+          kind: "channel-error",
+          plaintext: Buffer.alloc(0),
+          sealedBytes: 0,
+          wireBytes: 0,
+          detail: {
+            code: boundedText(detail.code, 160) ?? "RELAY_CHANNEL_ERROR",
+            message: boundedText(detail.message, 512),
+            name: boundedText(detail.name, 96),
+          },
+        });
+        if (this.socket.readyState < WebSocket.CLOSING) this.socket.close(4400, "encrypted-protocol-error");
       });
     });
     this.socket.once("close", (code, reason) => {
@@ -678,7 +697,13 @@ export class EncryptedControlPlaneRelaySession {
     await this.dispatch(envelope);
   }
   private async dispatch(value: RelayEnvelope) {
-    if (value.type.startsWith("browser-channel-")) { this.browser.control(value); return; }
+    // Both tunnel families share the multiplexer's credit/window state machine;
+    // only the open frame differs. Keeping this list explicit prevents an
+    // unknown envelope from being mistaken for a desktop control frame.
+    if (value.type.startsWith("browser-channel-") || value.type === "remote-desktop-channel-open") {
+      this.browser.control(value);
+      return;
+    }
     if (value.type === "response-ack") {
       const ack = RelayResponseAckSchema.safeParse(value);
       if (!ack.success) throw relayError("RELAY_RESPONSE_ACK_INVALID");

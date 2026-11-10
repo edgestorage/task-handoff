@@ -60,6 +60,19 @@ export function InstanceDetailContent(props: InstanceDetailContentProps) {
           </HStack> : null}
         </Section>
 
+        {props.remoteDesktopAvailable ? <Section>
+          <Button onPress={props.onOpenRemoteDesktop}>
+            <HStack spacing={10}>
+              <Image color={colors.primary} size={19} systemName="display" />
+              <VStack alignment="leading" spacing={2} modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}>
+                <Text modifiers={[font({ weight: 'medium' })]}>{t('remoteDesktop.open')}</Text>
+                <Text modifiers={[font({ size: 12 }), foregroundStyle('secondary')]}>{t('remoteDesktop.openDescription')}</Text>
+              </VStack>
+              <Image color={colors.textMuted} size={12} systemName="chevron.right" />
+            </HStack>
+          </Button>
+        </Section> : null}
+
         <Section title={t('nav.instance').toLocaleUpperCase()}>
           <ValueRow icon="server.rack" label={t('nav.node')} value={props.nodeName} />
           <ValueRow icon="shippingbox" label={t('instance.runtime')} value={props.runtime} />

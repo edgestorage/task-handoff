@@ -1,5 +1,5 @@
 import { browserChannelError, RelayBrowserMultiplexer, type RelayBrowserData, type BrowserChannelHandlers } from '@task-handoff/protocol/relay-browser-channel';
-import { probeControlPlaneBrowserChannel } from '@task-handoff/control-plane-client';
+import { probeControlPlaneBrowserChannel, probeControlPlaneRemoteDesktopRelay } from '@task-handoff/control-plane-client';
 import type { z } from 'zod';
 import * as Crypto from 'expo-crypto';
 import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
@@ -22,11 +22,12 @@ import { selectRelayCandidate, type RelayProbeResult, type RelaySelectionFallbac
 import { RelayWinnerCache, type RelayWinnerEntry } from './relay-winner-cache';
 import { COMPACT_EVENT_ENVELOPE_VERSION, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
 import { RELAY_BODY_CHUNK_BYTES, RelayBinaryResponseSchema, type RelayBodyFrame } from '@task-handoff/protocol/relay-body';
-import { MOBILE_CONTROL_PLANE_CLOSED_MESSAGE, MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError, mobileEventKeepaliveFrame, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
+import { MOBILE_CONTROL_PLANE_CLOSED_MESSAGE, MOBILE_EVENT_KEEPALIVE_INTERVAL_MS, MobileControlPlaneTransportError, mobileEventKeepaliveFrame, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileAuthenticatedWebSocket, type MobileAuthenticatedWebSocketHandlers, type MobileAuthenticatedWebSocketOptions, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
 import { createEphemeralRelayProofKey, type RelayProofKeyProvider, type DeviceAuthInput } from './relay-proof-key';
 import type { RelayPendingOperation, RelaySessionStore } from './relay-session-store';
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 import { isMobileDeviceTrustError } from './device-trust-error';
+import { openRelayRemoteDesktopWebSocket } from './relay-websocket';
 
 type RelayEnvelope = { type: string; browserData?: RelayBrowserData; id?: string; status?: number; body?: unknown; binaryResponse?: unknown; bodyId?: number; responseId?: number; offset?: number; bytes?: Uint8Array; final?: boolean; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
 export type RelaySessionRenewal = { leaseExpiresAt: string; generation: number; committed: boolean };
@@ -189,6 +190,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   readonly currentCapabilities: ControlPlanePublicCapabilities | undefined = undefined;
   private browser?: RelayBrowserMultiplexer;
   private browserSupport?: Promise<boolean>;
+  private remoteDesktopSupport?: Promise<boolean>;
   private channel?: Promise<EncryptedRelayChannel>;
   private channelValue?: EncryptedRelayChannel;
   private session?: ActiveRelaySession;
@@ -662,6 +664,20 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
         this.ttyStreams.delete(streamId);
       },
     };
+  }
+
+  openAuthenticatedWebSocket(options: MobileAuthenticatedWebSocketOptions, handlers: MobileAuthenticatedWebSocketHandlers): MobileAuthenticatedWebSocket {
+    return openRelayRemoteDesktopWebSocket(options, handlers, async (input, signal, relay) => {
+      if (!await this.supportsRemoteDesktopRelay()) {
+        throw new MobileControlPlaneTransportError('REMOTE_DESKTOP_TRANSPORT_UNAVAILABLE', 'The Control Plane does not expose remote desktop over Cloud Relay.');
+      }
+      const browser = this.browser;
+      if (!browser) throw new MobileControlPlaneTransportError('REMOTE_DESKTOP_TRANSPORT_UNAVAILABLE', 'The Cloud Relay channel is unavailable.');
+      return browser.openRemoteDesktop(input, {
+        onMessage: async (message) => { relay.onMessage(message); },
+        onClose: (error) => { relay.onClose(error); },
+      }, signal);
+    });
   }
 
   async revalidate(signal?: AbortSignal) {
@@ -1173,6 +1189,13 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     return this.browserSupport;
   }
 
+  async supportsRemoteDesktopRelay(): Promise<boolean> {
+    const channel = await this.ensureChannel();
+    if (!channel.sendBrowser) return false;
+    this.remoteDesktopSupport ??= probeControlPlaneRemoteDesktopRelay(this, this.profile.identity.publicKeyFingerprint);
+    return this.remoteDesktopSupport;
+  }
+
   async openBrowserChannel(instanceId: string, handlers: BrowserChannelHandlers, signal?: AbortSignal) {
     if (!await this.supportsBrowserChannel()) throw transportError('TRANSPORT_BROWSER_CHANNEL_UNAVAILABLE');
     if (signal?.aborted || !this.browser) throw transportError('BROWSER_CHANNEL_CANCELLED');
@@ -1183,6 +1206,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     const previous = this.channelValue;
     this.browser?.close(browserChannelError('BROWSER_CHANNEL_REPLACED'));
     this.browserSupport = undefined;
+    this.remoteDesktopSupport = undefined;
     this.browser = new RelayBrowserMultiplexer({
       control: (value) => this.sendOrReset(channel, value),
       data: (value) => {
@@ -1587,6 +1611,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     this.browser?.close(normalize(error));
     this.browser = undefined;
     this.browserSupport = undefined;
+    this.remoteDesktopSupport = undefined;
     this.channelValue?.close(4000, 'reset');
     this.channelValue = undefined;
     this.channel = undefined;

@@ -76,6 +76,27 @@ export interface MobileAppSessionTtyConnection {
   close(): void;
 }
 
+export type MobileAuthenticatedWebSocketHandlers = {
+  onOpen?(): void;
+  onMessage(data: string | ArrayBuffer): void;
+  onError?(error: MobileControlPlaneTransportError): void;
+  onClose?(event: { code?: number; reason?: string }): void;
+};
+
+export type MobileAuthenticatedWebSocketOptions = {
+  /** Same-origin absolute path, including any one-time query ticket. */
+  path: string;
+  protocols?: string | string[];
+  binaryType?: 'arraybuffer';
+  headers?: Record<string, string>;
+};
+
+export interface MobileAuthenticatedWebSocket {
+  readonly readyState: number;
+  send(data: string | ArrayBuffer | Uint8Array): void;
+  close(code?: number, reason?: string): void;
+}
+
 export interface MobileControlPlaneTransport extends ControlPlaneClientTransport {
   readonly profile: MobileControlPlaneProfile;
   readonly currentCapabilities?: ControlPlanePublicCapabilities;
@@ -89,6 +110,10 @@ export interface MobileControlPlaneTransport extends ControlPlaneClientTransport
   authorizeDeviceTrustRetry?(): void;
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection;
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection;
+  /** Optional generic authenticated socket for remote desktop signaling and
+   * fallback. Relay profiles without a byte-preserving channel must reject it
+   * instead of inventing a parallel proxy protocol. */
+  openAuthenticatedWebSocket?(options: MobileAuthenticatedWebSocketOptions, handlers: MobileAuthenticatedWebSocketHandlers): MobileAuthenticatedWebSocket;
 }
 
 export class MobileControlPlaneTransportError extends Error {

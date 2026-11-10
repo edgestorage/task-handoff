@@ -28,6 +28,7 @@ export const ControlPlanePublicCapabilitiesSchema = z.object({
   localCliSessions: z.boolean().optional(),
   accessManagement: ControlPlaneAccessManagementCapabilitySchema.optional(),
   browserTunnel: z.object({ direct: z.boolean().optional(), cloudRelay: z.boolean().optional() }).optional(),
+  remoteDesktop: z.object({ direct: z.boolean().optional(), cloudRelay: z.boolean().optional() }).optional(),
 }).strict();
 
 export function normalizeControlPlanePublicCapabilities(capabilities: unknown) {
@@ -93,6 +94,12 @@ export const ControlPlanePublicIdentityPayloadSchema = z.unknown().transform((in
 
 export function supportsControlPlaneBrowserChannel(capabilities: unknown) {
   return normalizeControlPlanePublicCapabilities(capabilities)?.browserTunnel?.cloudRelay === true;
+}
+
+/** Cloud Relay carries desktop sockets as a generic encrypted byte-channel;
+ * missing capability always means the older Control Plane cannot decode it. */
+export function supportsControlPlaneRemoteDesktopRelay(capabilities: unknown) {
+  return normalizeControlPlanePublicCapabilities(capabilities)?.remoteDesktop?.cloudRelay === true;
 }
 
 export const ControlPlanePublicIdentityDocumentSchema = z.object({
