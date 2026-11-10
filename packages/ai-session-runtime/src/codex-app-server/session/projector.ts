@@ -226,16 +226,6 @@ export class CodexAppServerSessionProjector {
     });
   }
 
-  applyThreadListEntry(thread: CodexThread, context: ThreadProjectionContext = {}) {
-    const threadId = typeof thread.id === "string" ? thread.id : undefined;
-    if (!threadId || thread.ephemeral === true) {
-      return;
-    }
-    const existing = this.options.findSession(threadId);
-    const lifecycle = this.options.attachApprovalLifecycle(existing?.id, lifecycleForStatus(thread.status || {}));
-    return this.options.registry.applyAdapterSnapshot(this.threadSnapshotBase(thread, context, existing, lifecycle));
-  }
-
   private threadSnapshotBase(
     thread: CodexThread,
     context: ThreadProjectionContext,

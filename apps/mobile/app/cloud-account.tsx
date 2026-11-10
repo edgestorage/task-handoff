@@ -10,9 +10,11 @@ import { Icon } from '../src/components/Icon';
 import { OneTimeCodeInput } from '../src/components/OneTimeCodeInput';
 import { ProviderIcon } from '../src/components/ProviderIcon';
 import { useMobileTheme } from '../src/components/theme';
+import { openAppBrowser } from '../src/browser/app-browser';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
 import { hasActiveCloudAccount, mobileCloudAccountSession as account, saveActiveCloudAccountReference } from '../src/control-plane/runtime';
 import { useI18n } from '../src/i18n';
+import { legalPageUrl } from '../src/legal/links';
 import { isMobileFeatureEnabled, mobileAppScheme } from '../src/platform/build-variant';
 import { nativeAppleAuthentication } from '../src/platform/apple-authentication';
 
@@ -148,8 +150,8 @@ function CloudAccountContent() {
             <Text style={[styles.termsText, { color: colors.text }]}>{t('cloudAccount.acceptTerms')}</Text>
           </Pressable>
           <View style={styles.policyLinks}>
-            <Pressable accessibilityRole="link" onPress={() => void WebBrowser.openBrowserAsync(`${account.origin}/terms`)}><Text style={[styles.termsText, { color: colors.primary }]}>{t('cloudAccount.terms')}</Text></Pressable>
-            <Pressable accessibilityRole="link" onPress={() => void WebBrowser.openBrowserAsync(`${account.origin}/privacy`)}><Text style={[styles.termsText, { color: colors.primary }]}>{t('cloudAccount.privacy')}</Text></Pressable>
+            <Pressable accessibilityRole="link" onPress={() => void openAppBrowser(legalPageUrl('terms', locale, account.origin))}><Text style={[styles.termsText, { color: colors.primary }]}>{t('cloudAccount.terms')}</Text></Pressable>
+            <Pressable accessibilityRole="link" onPress={() => void openAppBrowser(legalPageUrl('privacy', locale, account.origin))}><Text style={[styles.termsText, { color: colors.primary }]}>{t('cloudAccount.privacy')}</Text></Pressable>
           </View>
         </> : mode === 'verify' ? <>
           <CloudAuthLabel>{t('cloudAccount.verificationCode')}</CloudAuthLabel>

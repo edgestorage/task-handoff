@@ -3582,28 +3582,153 @@ test("ai session registry only treats transcript scans as active when file size 
   assert.notEqual(registry.get(first.id)?.updatedAt, firstUpdatedAt);
 });
 
-test("codex app server discovery continues when optional thread-list enrichment fails", async () => {
+test("codex app server discovery resumes recoverable sessions without scanning thread history", async () => {
   const applied = [];
+  const resumed = [];
   const discovery = new CodexAppServerSessionDiscovery({
-    applyThreadListEntry: (thread) => applied.push(thread),
     applyThreadSnapshot: (thread) => applied.push(thread),
-    ensureThreadSubscribed: async () => undefined,
+    recoverableThreadIds: () => ["thread_active"],
+    ensureThreadSubscribed: async (_client, threadId) => {
+      resumed.push(threadId);
+      return { id: threadId, name: "Active thread" };
+    },
   });
   const client = Object.assign(new EventEmitter(), {
     async start() {},
     stop() {},
-    async listLoadedThreadIds() { return ["thread_loaded"]; },
-    async listThreads() { throw new Error("thread/list is unavailable"); },
-    async readThread(threadId) { return { id: threadId, name: "Loaded thread" }; },
+    async listLoadedThreadIds() { throw new Error("discovery must not scan loaded threads"); },
+    async listThreads() { throw new Error("discovery must not scan the thread catalog"); },
+    async readThread() { throw new Error("discovery must not read thread history"); },
+    async resumeThread() { throw new Error("the subscription helper owns resume"); },
   });
 
   await discovery.sync(client);
 
-  assert.deepEqual(applied, [{ id: "thread_loaded", name: "Loaded thread" }]);
+  assert.deepEqual(resumed, ["thread_active"]);
+  assert.deepEqual(applied, [{ id: "thread_active", name: "Active thread" }]);
 });
 
-test("codex thread-list summaries preserve authoritative conversation activity before thread reads complete", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-list-summary-"));
+test("codex app server bridge only recovers sessions with active work or demand", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-demand-recovery-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const start = (providerSessionId, status = "idle") => registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId,
+    cwd: "/workspace",
+    status,
+    phase: "unknown",
+  });
+
+  start("thread_idle");
+  const activeTurn = start("thread_active_turn");
+  registry.patch(activeTurn.id, { activeTurnId: "turn_pending" });
+  start("thread_running", "running");
+  start("thread_waiting", "waiting");
+  const queued = start("thread_queued");
+  registry.enqueueMessage(queued.id, "queued follow up");
+  const paused = start("thread_paused");
+  registry.enqueueMessage(paused.id, "paused follow up");
+  registry.setQueuePaused(paused.id, true);
+  const closed = start("thread_closed", "running");
+  registry.patch(closed.id, { actions: { send: false, close: false } });
+
+  class FakeCodexAppServerClient extends EventEmitter {
+    constructor() {
+      super();
+      this.resumedThreads = [];
+    }
+    async start() {}
+    async listLoadedThreadIds() { throw new Error("periodic discovery must not list loaded threads"); }
+    async readThread() { throw new Error("periodic discovery must not read thread history"); }
+    async resumeThread(threadId) {
+      this.resumedThreads.push(threadId);
+      return { id: threadId, cwd: "/workspace", status: { type: "active", activeFlags: [] }, turns: [] };
+    }
+    stop() {}
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+  await bridge.sync();
+
+  assert.deepEqual(fake.resumedThreads.sort(), [
+    "thread_active_turn",
+    "thread_queued",
+    "thread_running",
+    "thread_waiting",
+  ]);
+});
+
+test("codex app server bridge resumes a cold session only when its timeline is opened", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-timeline-demand-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_timeline_demand",
+    cwd: "/workspace",
+    status: "idle",
+    phase: "unknown",
+  });
+  const thread = {
+    id: "thread_timeline_demand",
+    cwd: "/workspace",
+    status: { type: "idle" },
+    turns: [{
+      id: "turn_timeline",
+      status: "completed",
+      items: [{ type: "agentMessage", text: "Loaded on demand" }],
+    }],
+  };
+  class FakeCodexAppServerClient extends EventEmitter {
+    constructor() {
+      super();
+      this.resumedThreads = [];
+      this.loadedThreadIds = [];
+    }
+    async start() {}
+    async listLoadedThreadIds() {
+      this.loadedThreadIds.push("listed");
+      return [];
+    }
+    async readThread() { return thread; }
+    async resumeThread(threadId) {
+      this.resumedThreads.push(threadId);
+      return thread;
+    }
+    stop() {}
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    timelineStorePath: path.join(root, "timelines"),
+  });
+  await bridge.sync();
+  assert.deepEqual(fake.resumedThreads, []);
+  assert.deepEqual(fake.loadedThreadIds, []);
+
+  const timeline = await bridge.timeline(session);
+
+  assert.deepEqual(fake.resumedThreads, ["thread_timeline_demand"]);
+  assert.deepEqual(fake.loadedThreadIds, ["listed"]);
+  assert.ok(timeline.items.some((item) => item.type === "ai-message" && item.text === "Loaded on demand"));
+});
+
+// Most bridge tests exercise event projection rather than discovery. Production
+// discovery no longer scans loaded threads, so feed those snapshots explicitly.
+async function syncCodexThreadSnapshots(bridge, client, appSessions = []) {
+  await bridge.sync(appSessions);
+  const loadedThreadIds = client.listLoadedThreadIds ? await client.listLoadedThreadIds() : [];
+  for (const threadId of loadedThreadIds) {
+    const thread = client.readThread ? await client.readThread(threadId, { includeTurns: true }) : undefined;
+    if (thread) client.emit("event", { type: "thread", thread });
+  }
+}
+
+test("codex app server periodic discovery leaves idle registered and unowned loaded threads untouched", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-idle-discovery-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const existing = registry.applyAdapterSnapshot({
     agent: "codex",
@@ -3635,34 +3760,9 @@ test("codex thread-list summaries preserve authoritative conversation activity b
   const client = Object.assign(new EventEmitter(), {
     async start() {},
     stop() {},
-    async listLoadedThreadIds() { return ["thread_existing"]; },
-    async listThreads() {
-      return [
-        { id: "thread_existing", cwd: "/workspace", name: "Existing", status: { type: "idle" }, turns: [] },
-        { id: "thread_child", parentThreadId: "thread_existing", cwd: "/workspace", name: "Child", status: { type: "idle" }, turns: [] },
-      ];
-    },
-    async readThread(threadId) {
-      assert.equal(registry.snapshot().sessions.find((session) => session.id === existing.id)?.lastUserMessageAt, "2026-09-09T17:48:38.000Z");
-      assert.deepEqual(registry.getByProviderSessionId("codex", "thread_child")?.lineage, {
-        kind: "subagent",
-        parentProviderSessionId: "thread_existing",
-      });
-      return {
-        id: threadId,
-        cwd: "/workspace",
-        name: "Existing",
-        status: { type: "idle" },
-        turns: [
-          {
-            id: "turn_latest",
-            status: "completed",
-            startedAt: Date.parse("2026-09-09T17:48:38.000Z") / 1000,
-            items: [{ type: "userMessage", content: [{ type: "text", text: "latest prompt" }] }],
-          },
-        ],
-      };
-    },
+    async listLoadedThreadIds() { throw new Error("discovery must not scan loaded threads"); },
+    async listThreads() { throw new Error("discovery must not scan the thread catalog"); },
+    async readThread() { throw new Error("discovery must not read thread history"); },
   });
 
   await new CodexAppServerSessionBridge(registry, client).sync();
@@ -3671,6 +3771,7 @@ test("codex thread-list summaries preserve authoritative conversation activity b
   assert.equal(session.turns.at(-1).id, "turn_latest");
   assert.equal(session.turns.at(-1).userPrompt, "latest prompt");
   assert.equal(registry.snapshot().sessions.find((entry) => entry.id === existing.id)?.lastUserMessageAt, "2026-09-09T17:48:38.000Z");
+  assert.equal(registry.getByProviderSessionId("codex", "thread_child"), undefined);
 });
 
 test("codex app server bridge does not persist discovered threads without an AI or App owner", async () => {
@@ -3679,8 +3780,8 @@ test("codex app server bridge does not persist discovered threads without an AI 
   const client = Object.assign(new EventEmitter(), {
     async start() {},
     stop() {},
-    async listLoadedThreadIds() { return ["thread-unbound"]; },
-    async readThread() { return { id: "thread-unbound", cwd: "/workspace", status: { type: "idle" }, turns: [] }; },
+    async listLoadedThreadIds() { throw new Error("discovery must not scan loaded threads"); },
+    async readThread() { throw new Error("discovery must not read thread history"); },
   });
   const bridge = new CodexAppServerSessionBridge(registry, client, { projectUnboundThreads: false });
 
@@ -3797,15 +3898,23 @@ test("codex approval coordinator invalidates pending resolvers when the connecti
   assert.equal(responses, 0);
 });
 
-test("codex app server bridge syncs loaded threads and status notifications", async () => {
+test("codex app server bridge recovers an active thread and projects status notifications", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-app-server-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_1",
+    cwd: "/workspace",
+    status: "running",
+    phase: "thinking",
+  });
   class FakeCodexAppServerClient extends EventEmitter {
     constructor() {
       super();
       this.started = false;
       this.stopped = false;
-      this.reads = [];
+      this.resumedThreads = [];
       this.threads = [
         {
           id: "thread_1",
@@ -3830,11 +3939,10 @@ test("codex app server bridge syncs loaded threads and status notifications", as
     async start() {
       this.started = true;
     }
-    async listLoadedThreadIds() {
-      return this.threads.map((thread) => thread.id);
-    }
-    async readThread(threadId, options) {
-      this.reads.push({ threadId, options });
+    async listLoadedThreadIds() { throw new Error("discovery must not scan loaded threads"); }
+    async readThread() { throw new Error("discovery must not read thread history"); }
+    async resumeThread(threadId) {
+      this.resumedThreads.push(threadId);
       return this.threads.find((thread) => thread.id === threadId);
     }
     async respondToApproval() {}
@@ -3854,7 +3962,7 @@ test("codex app server bridge syncs loaded threads and status notifications", as
   assert.equal(synced.appId, "codex-app-server");
   assert.equal(synced.status, "running");
   assert.equal(synced.phase, "thinking");
-  assert.deepEqual(fake.reads, [{ threadId: "thread_1", options: { includeTurns: true } }]);
+  assert.deepEqual(fake.resumedThreads, ["thread_1"]);
   assert.equal(synced.transcriptPath, undefined);
   assert.equal(synced.userPrompt, "Implement the app-server sourced receiver");
   assert.equal("userPrompts" in synced, false);
@@ -3941,7 +4049,7 @@ test("codex app server bridge preserves context compaction results across realti
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   let session = registry.list()[0];
   assert.deepEqual(session.turns[0].contextCompactions, [{ id: "context_compaction:turn_snapshot", status: "completed" }]);
 
@@ -3989,7 +4097,7 @@ test("codex app server bridge preserves context compaction results across realti
       items: [{ type: "contextCompaction", id: "item-47" }],
     }],
   };
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   session = registry.list()[0];
   assert.deepEqual(session.turns.find((turn) => turn.id === "turn_live").contextCompactions, [{
     id: "context_compaction:turn_live",
@@ -4051,7 +4159,7 @@ test("codex app server bridge projects realtime tool activity and replaces it fr
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   let session = registry.list()[0];
   assert.equal(session.toolCallsSinceLastMessage, 1);
   assert.equal(session.currentTool.id, "snapshot_cmd");
@@ -4093,7 +4201,7 @@ test("codex app server bridge projects realtime tool activity and replaces it fr
       ],
     }],
   };
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   session = registry.list()[0];
   assert.equal(session.toolCallsSinceLastMessage, 1);
   assert.equal(session.currentTool, undefined);
@@ -4136,7 +4244,7 @@ test("codex app server bridge removes completed sub-agents independently from to
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   let session = registry.list()[0];
   assert.deepEqual(session.subAgents.map((agent) => [agent.threadId, agent.status]), [["thread_child", "running"]]);
 
@@ -4190,7 +4298,7 @@ test("codex app server bridge reconciles out-of-order child lifecycle with paren
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
 
   fake.emit("event", {
     type: "turn-completed",
@@ -4249,8 +4357,9 @@ test("codex app server bridge omits completed children restored from thread snap
     stop() {}
   }
 
-  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient());
-  await bridge.sync();
+  const client = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, client);
+  await syncCodexThreadSnapshots(bridge, client);
 
   const parent = registry.getByProviderSessionId("codex", "thread_parent");
   assert.deepEqual(parent.subAgents, []);
@@ -4290,8 +4399,9 @@ test("codex app server bridge repeated snapshots keep completed turns stable", a
     stop() {}
   }
 
-  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient());
-  await bridge.sync([
+  const client = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, client);
+  await syncCodexThreadSnapshots(bridge, client, [
     {
       id: "app_codex",
       appId: "codex",
@@ -4305,7 +4415,7 @@ test("codex app server bridge repeated snapshots keep completed turns stable", a
   const firstTurn = { ...first.turns[0] };
 
   await new Promise((resolve) => setTimeout(resolve, 5));
-  await bridge.sync([
+  await syncCodexThreadSnapshots(bridge, client, [
     {
       id: "app_codex",
       appId: "codex",
@@ -4341,8 +4451,9 @@ test("codex app server bridge does not expose approval actions before the reques
     stop() {}
   }
 
-  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient());
-  await bridge.sync();
+  const client = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, client);
+  await syncCodexThreadSnapshots(bridge, client);
 
   const waiting = registry.list()[0];
   assert.equal(waiting.status, "waiting");
@@ -4385,7 +4496,7 @@ test("codex app server failed turns keep errors out of assistant messages", asyn
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
 
   const session = registry.list()[0];
   registry.applyRealtimeEvent(session.id, {
@@ -4429,7 +4540,7 @@ test("codex app server waits for final turn failure before exposing retry errors
   const bridge = new CodexAppServerSessionBridge(registry, fake, {
     onTimelineItem: (event) => timelineItems.push(event.item),
   });
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   const session = registry.list()[0];
   registry.applyRealtimeEvent(session.id, {
     kind: "send-ack",
@@ -4542,8 +4653,9 @@ test("codex failed thread snapshots restore the AI session error", async () => {
     stop() {}
   }
 
-  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient());
-  await bridge.sync();
+  const client = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, client);
+  await syncCodexThreadSnapshots(bridge, client);
   const failed = registry.list()[0];
   assert.equal(failed.status, "failed");
   assert.equal(failed.error, "The restored model request failed. Provider remained unavailable. Codex error: httpConnectionFailed (HTTP 502)");
@@ -4643,7 +4755,7 @@ test("codex app server bridge emits raw message deltas without persisting partia
   const bridge = new CodexAppServerSessionBridge(registry, fake, {
     onMessageDelta: (event) => deltas.push(event),
   });
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   const session = registry.list()[0];
   fake.emit("event", { type: "agent-message-delta", threadId: "thread_delta", turnId: "turn_delta", itemId: "item_delta", delta: "hel" });
   fake.emit("event", { type: "agent-message-delta", threadId: "thread_delta", turnId: "turn_delta", itemId: "item_delta", delta: "lo" });
@@ -4671,7 +4783,7 @@ test("codex app server bridge emits complete timeline items, preserves identity,
     onTimelineItem: (event) => items.push(event.item),
   });
   bridge.subscribeTimelineItems((event) => providerItems.push(event.item));
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
 
   const command = { type: "commandExecution", id: "cmd_live", command: "pnpm test" };
   fake.emit("event", codexNotification("item/started", { threadId: "thread_items", turnId: "turn_items", item: command }));
@@ -4737,7 +4849,8 @@ test("codex app server bridge clears activity for empty idle thread snapshots", 
     stop() {}
   }
 
-  await new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient()).sync([
+  const client = new FakeCodexAppServerClient();
+  await syncCodexThreadSnapshots(new CodexAppServerSessionBridge(registry, client), client, [
     {
       id: "app_codex",
       appId: "codex",
@@ -5472,7 +5585,8 @@ test("codex app server bridge does not use thread preview as ai response", async
     stop() {}
   }
 
-  await new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient()).sync([
+  const client = new FakeCodexAppServerClient();
+  await syncCodexThreadSnapshots(new CodexAppServerSessionBridge(registry, client), client, [
     {
       id: "app_codex",
       appId: "codex",
@@ -5516,8 +5630,9 @@ test("codex app server bridge does not bind loaded threads by cwd", async () => 
     stop() {}
   }
 
-  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient());
-  await bridge.sync([
+  const client = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, client);
+  await syncCodexThreadSnapshots(bridge, client, [
     {
       id: "app_running",
       appId: "codex",
@@ -5600,8 +5715,9 @@ test("codex app server bridge does not guess a binding from single app or duplic
     stop() {}
   }
 
-  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexAppServerClient());
-  await bridge.sync([
+  const client = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, client);
+  await syncCodexThreadSnapshots(bridge, client, [
     {
       id: "app_one",
       appId: "codex",
@@ -5848,7 +5964,7 @@ test("codex app server bridge controls turns through the ai session provider int
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   const session = registry.list()[0];
 
   const sent = await bridge.sendMessage(session, { message: "first" });
@@ -6222,7 +6338,7 @@ test("codex app server bridge records sent prompt even when provider omits turn 
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   const session = registry.list()[0];
   const sent = await bridge.sendMessage(session, { message: "最新消息" });
 
@@ -6254,7 +6370,7 @@ test("codex app server bridge updates user prompts from app-server item notifica
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   fake.emit("event", {
     type: "user-message",
     threadId: "thread_item",
@@ -6303,7 +6419,7 @@ test("codex app server bridge resolves app-server approval requests structurally
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   fake.emit("event", {
     type: "approval-request",
     request: {
@@ -6339,6 +6455,14 @@ test("codex app server bridge resolves app-server approval requests structurally
 test("codex app server bridge resumes thread to attach pending approval requests", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-app-approval-resume-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_resume_approval",
+    cwd: "/workspace",
+    status: "waiting",
+    phase: "approval",
+  });
   class FakeCodexAppServerClient extends EventEmitter {
     constructor() {
       super();
@@ -6346,17 +6470,8 @@ test("codex app server bridge resumes thread to attach pending approval requests
       this.resumedThreads = [];
     }
     async start() {}
-    async listLoadedThreadIds() {
-      return ["thread_resume_approval"];
-    }
-    async readThread() {
-      return {
-        id: "thread_resume_approval",
-        cwd: "/workspace",
-        status: { type: "active", activeFlags: ["waitingOnApproval"] },
-        turns: [{ id: "turn_previous", items: [{ type: "agentMessage", text: "Existing assistant response" }] }],
-      };
-    }
+    async listLoadedThreadIds() { throw new Error("periodic recovery must not scan loaded threads"); }
+    async readThread() { throw new Error("periodic recovery must not read thread history"); }
     async resumeThread(threadId) {
       this.resumedThreads.push(threadId);
       queueMicrotask(() => {
@@ -6406,21 +6521,27 @@ test("codex app server bridge resumes thread to attach pending approval requests
   assert.notEqual(registry.get(waiting.id).summary, "Codex approval allowed.");
 });
 
-test("codex app server bridge subscribes each loaded thread once per connection epoch", async () => {
+test("codex app server bridge subscribes each recoverable thread once per connection epoch", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-thread-subscriptions-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  for (const providerSessionId of ["thread_one", "thread_two"]) {
+    registry.start({
+      agent: "codex",
+      creationSource: "ai-session",
+      providerSessionId,
+      cwd: "/workspace",
+      status: "running",
+      phase: "thinking",
+    });
+  }
   class FakeCodexAppServerClient extends EventEmitter {
     constructor() {
       super();
       this.resumedThreads = [];
     }
     async start() {}
-    async listLoadedThreadIds() {
-      return ["thread_one", "thread_two"];
-    }
-    async readThread(threadId) {
-      return { id: threadId, cwd: "/workspace", status: { type: "active" }, turns: [] };
-    }
+    async listLoadedThreadIds() { throw new Error("recovery must not scan loaded threads"); }
+    async readThread() { throw new Error("recovery must not read thread history"); }
     async resumeThread(threadId) {
       this.resumedThreads.push(threadId);
       return { id: threadId, cwd: "/workspace", status: { type: "active" }, turns: [] };
@@ -6432,29 +6553,38 @@ test("codex app server bridge subscribes each loaded thread once per connection 
   const bridge = new CodexAppServerSessionBridge(registry, fake);
   await bridge.sync();
   await bridge.sync();
-  assert.deepEqual(fake.resumedThreads, ["thread_one", "thread_two"]);
+  assert.deepEqual(fake.resumedThreads.slice().sort(), ["thread_one", "thread_two"]);
 
   bridge.stop();
   await bridge.sync();
-  assert.deepEqual(fake.resumedThreads, ["thread_one", "thread_two", "thread_one", "thread_two"]);
+  assert.deepEqual(fake.resumedThreads.slice(2).sort(), ["thread_one", "thread_two"]);
 });
 
-test("codex app server bridge resumes persisted AI sessions after an app-server connection change", async () => {
+test("codex app server bridge recovers only active persisted AI sessions after an app-server connection change", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-persisted-thread-resume-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   registry.start({
     agent: "codex",
     creationSource: "ai-session",
-    providerSessionId: "thread_persisted",
+    providerSessionId: "thread_idle",
     cwd: "/workspace",
     status: "idle",
+  });
+  registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_active",
+    cwd: "/workspace",
+    status: "running",
+    phase: "thinking",
   });
   const closing = registry.start({
     agent: "codex",
     creationSource: "ai-session",
     providerSessionId: "thread_closing",
     cwd: "/workspace",
-    status: "idle",
+    status: "running",
+    phase: "thinking",
   });
   registry.patch(closing.id, {
     actions: { send: false, interrupt: false, approval: false, openApp: false, close: false },
@@ -6463,35 +6593,26 @@ test("codex app server bridge resumes persisted AI sessions after an app-server 
     constructor() {
       super();
       this.resumedThreads = [];
-      this.loadedThreads = new Set();
     }
     async start() {}
-    async listLoadedThreadIds() {
-      return [...this.loadedThreads];
-    }
+    async listLoadedThreadIds() { throw new Error("recovery must not scan loaded threads"); }
+    async readThread() { throw new Error("recovery must not read thread history"); }
     async resumeThread(threadId) {
       this.resumedThreads.push(threadId);
-      this.loadedThreads.add(threadId);
-      return { id: threadId, cwd: "/workspace", status: { type: "idle" }, turns: [] };
+      return { id: threadId, cwd: "/workspace", status: { type: "active", activeFlags: [] }, turns: [] };
     }
-    stop() {
-      this.loadedThreads.clear();
-    }
+    stop() {}
   }
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
   await bridge.sync();
   await bridge.sync();
-  assert.deepEqual(fake.resumedThreads, ["thread_persisted"]);
-
-  fake.loadedThreads.clear();
-  await bridge.sync();
-  assert.deepEqual(fake.resumedThreads, ["thread_persisted", "thread_persisted"]);
+  assert.deepEqual(fake.resumedThreads, ["thread_active"]);
 
   bridge.stop();
   await bridge.sync();
-  assert.deepEqual(fake.resumedThreads, ["thread_persisted", "thread_persisted", "thread_persisted"]);
+  assert.deepEqual(fake.resumedThreads, ["thread_active", "thread_active"]);
 });
 
 test("codex app server bridge resumes a persisted thread before send in each connection generation", async () => {
@@ -6579,18 +6700,24 @@ test("codex app server bridge resumes a persisted thread before send in each con
 test("codex app server bridge isolates thread subscription failures and retries only failures", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-thread-subscription-failure-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  for (const providerSessionId of ["thread_failing", "thread_healthy"]) {
+    registry.start({
+      agent: "codex",
+      creationSource: "ai-session",
+      providerSessionId,
+      cwd: "/workspace",
+      status: "running",
+      phase: "thinking",
+    });
+  }
   class FakeCodexAppServerClient extends EventEmitter {
     constructor() {
       super();
       this.resumedThreads = [];
     }
     async start() {}
-    async listLoadedThreadIds() {
-      return ["thread_failing", "thread_healthy"];
-    }
-    async readThread(threadId) {
-      return { id: threadId, cwd: "/workspace", status: { type: "active" }, turns: [] };
-    }
+    async listLoadedThreadIds() { throw new Error("recovery must not scan loaded threads"); }
+    async readThread() { throw new Error("recovery must not read thread history"); }
     async resumeThread(threadId) {
       this.resumedThreads.push(threadId);
       if (threadId === "thread_failing") throw new Error("resume failed");
@@ -6604,7 +6731,8 @@ test("codex app server bridge isolates thread subscription failures and retries 
   await bridge.sync();
   assert.deepEqual(registry.list().map((session) => session.providerSessionId).sort(), ["thread_failing", "thread_healthy"]);
   await bridge.sync();
-  assert.deepEqual(fake.resumedThreads, ["thread_failing", "thread_healthy", "thread_failing"]);
+  assert.deepEqual(fake.resumedThreads.slice(0, 2).sort(), ["thread_failing", "thread_healthy"]);
+  assert.deepEqual(fake.resumedThreads.slice(2), ["thread_failing"]);
 });
 
 test("codex app server client responds to permission approvals with granted permission profile", async () => {
@@ -6728,7 +6856,7 @@ test("codex app server bridge ignores idle thread status while a sent turn has n
 
   const fake = new FakeCodexAppServerClient();
   const bridge = new CodexAppServerSessionBridge(registry, fake);
-  await bridge.sync();
+  await syncCodexThreadSnapshots(bridge, fake);
   const session = registry.list()[0];
   await bridge.sendMessage(session, { message: "nihao" });
 

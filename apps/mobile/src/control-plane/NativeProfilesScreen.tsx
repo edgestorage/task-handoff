@@ -9,10 +9,9 @@ export type NativeProfilesScreenProps = {
   profilesLoaded: boolean;
   testMode: boolean;
   onAdd(): void;
+  onOpenAbout(): void;
   onOpenCloudAccount(): void;
-  onOpenMarkdownDemo(): void;
   onOpen(profile: MobileControlPlaneProfile): void;
-  showMarkdownDemo: boolean;
 };
 
 export function NativeProfilesScreen(_props: NativeProfilesScreenProps) {

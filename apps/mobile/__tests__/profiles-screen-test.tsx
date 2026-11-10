@@ -60,6 +60,23 @@ test('keeps diagnostic logging out of the initial profile screen', async () => {
   expect(screen.queryByTestId('diagnostic-logs-toggle')).toBeNull();
 });
 
+test('offers About from the empty Settings state', async () => {
+  const screen = await render(<SafeAreaProvider initialMetrics={metrics}><ProfilesWelcome onAdd={jest.fn()} /></SafeAreaProvider>);
+
+  await fireEvent.press(screen.getByTestId('settings-about'));
+  expect(mockPush).toHaveBeenCalledWith('/about');
+});
+
+test('offers About from saved Settings', async () => {
+  mockStore.list.mockResolvedValue([direct]);
+  mockStore.active.mockResolvedValue(direct);
+  const screen = await render(<SafeAreaProvider initialMetrics={metrics}><ProfilesScreen /></SafeAreaProvider>);
+  await waitFor(() => expect(screen.getByText('https://direct.example.com')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('settings-about'));
+  expect(mockPush).toHaveBeenCalledWith('/about');
+});
+
 test('marks only the active profile when a direct and cloud Relay profile share one Control Plane', async () => {
   mockStore.list.mockResolvedValue([direct, relay]);
   mockStore.active.mockResolvedValue(relay);

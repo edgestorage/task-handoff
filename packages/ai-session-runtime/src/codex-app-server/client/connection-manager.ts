@@ -250,14 +250,6 @@ export class CodexAppServerConnectionManager {
     return attempt;
   }
 
-  reconcileLoadedThreadIds(connection: CodexAppServerConnection, loadedThreadIds: readonly string[]) {
-    if (!this.isCurrent(connection)) return;
-    const loaded = new Set(loadedThreadIds);
-    for (const threadId of this.subscribedThreadIds) {
-      if (!loaded.has(threadId)) this.subscribedThreadIds.delete(threadId);
-    }
-  }
-
   private resumeOptionsFor(threadId: string, override: CodexThreadResumeOptions | null | undefined) {
     if (override !== undefined) return override ?? undefined;
     return this.options.threadResumeOptions?.(threadId);

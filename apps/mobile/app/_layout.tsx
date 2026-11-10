@@ -98,6 +98,9 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="index" options={{ headerShown: false }} />
                     <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                     <Stack.Screen name="profiles" options={{ title: t('nav.settings'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="about" options={{ title: t('about.title'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="licenses/index" options={{ title: t('about.licenses'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="licenses/[licenseId]" options={{ title: t('about.licenses'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="control-planes/add" options={{ title: t('nav.addControlPlane'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="control-planes/[controlPlaneId]" options={{ title: t('nav.controlPlane'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="cloud-account" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />

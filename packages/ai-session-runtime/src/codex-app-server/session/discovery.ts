@@ -2,69 +2,24 @@ import type { CodexAppServerClientLike } from "../client/contract";
 import type { CodexThread } from "../protocol/types";
 
 type SessionDiscoveryOptions = {
-  applyThreadListEntry: (thread: CodexThread) => void;
   applyThreadSnapshot: (thread: CodexThread) => void;
   ensureThreadSubscribed: (client: CodexAppServerClientLike, threadId: string) => Promise<CodexThread | undefined>;
-  reconcileLoadedThreadIds?: (client: CodexAppServerClientLike, loadedThreadIds: readonly string[]) => void;
-  recoverableThreadIds?: () => string[];
+  recoverableThreadIds: () => string[];
 };
 
 export class CodexAppServerSessionDiscovery {
   constructor(private readonly options: SessionDiscoveryOptions) {}
 
+  /**
+   * Reconciles sessions that have explicit runtime demand. Enumerating loaded
+   * threads and reading them with turns re-parses complete rollout histories
+   * and can keep the app-server busy with otherwise idle sessions. User-driven
+   * access goes through ensureThreadReady instead.
+   */
   async sync(client: CodexAppServerClientLike, isCurrent: () => boolean = () => true) {
-    const loadedThreadIds = await client.listLoadedThreadIds();
-    if (!isCurrent()) return;
-    this.options.reconcileLoadedThreadIds?.(client, loadedThreadIds);
-    const threadsById = new Map<string, CodexThread>();
-    if (client.listThreads) {
-      try {
-        for (const thread of await client.listThreads()) {
-          if (!isCurrent()) return;
-          const id = typeof thread.id === "string" ? thread.id : undefined;
-          if (id) {
-            threadsById.set(id, thread);
-            // Codex thread/list always returns turns=[]; it is a discovery
-            // summary, not an authoritative empty conversation snapshot.
-            this.options.applyThreadListEntry(thread);
-          }
-        }
-      } catch {
-        // The loaded-thread list is authoritative. Thread-list enrichment is
-        // optional, so a failure here must not discard otherwise readable
-        // loaded threads.
-      }
-    }
-    for (const threadId of loadedThreadIds) {
-      let thread = threadsById.get(threadId);
-      if (client.readThread) {
-        try {
-          thread = {
-            ...(thread || {}),
-            ...await client.readThread(threadId, { includeTurns: true }),
-          };
-        } catch {
-          thread ||= { id: threadId };
-        }
-      }
-      if (!isCurrent()) return;
-      this.options.applyThreadSnapshot(thread || { id: threadId });
-      if (client.resumeThread) {
-        try {
-          const resumed = await this.options.ensureThreadSubscribed(client, threadId);
-          if (!isCurrent()) return;
-          if (resumed) {
-            this.options.applyThreadSnapshot(resumed);
-          }
-        } catch {
-          // A failed subscription is retried on the next discovery pass without
-          // preventing other loaded threads from being synchronized.
-        }
-      }
-    }
-    const loadedThreadIdSet = new Set(loadedThreadIds);
-    for (const threadId of this.options.recoverableThreadIds?.() || []) {
-      if (loadedThreadIdSet.has(threadId) || !client.resumeThread) continue;
+    const threadIds = new Set(this.options.recoverableThreadIds());
+    for (const threadId of threadIds) {
+      if (!isCurrent() || !client.resumeThread) return;
       try {
         const resumed = await this.options.ensureThreadSubscribed(client, threadId);
         if (!isCurrent()) return;

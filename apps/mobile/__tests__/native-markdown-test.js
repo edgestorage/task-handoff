@@ -355,12 +355,18 @@ test('the demo compares Markdown on the session background', () => {
   expect(demoSource).toContain('{ backgroundColor: colors.background, borderColor: colors.border }');
 });
 
-test('Settings exposes the Markdown demo entry outside production builds', () => {
-  expect(profilesSource).toContain('isMobileTestMode || isMobileStagingMode');
-  expect(profilesSource).toContain("router.push('/markdown-demo')");
-  expect(profilesSource).toContain('testID="settings-markdown-demo"');
-  expect(nativeProfilesSource).toContain('props.showMarkdownDemo');
-  expect(nativeProfilesSource).toContain("t('demo.markdown')");
+test('Settings does not expose the Markdown demo entry', () => {
+  expect(profilesSource).not.toContain('/markdown-demo');
+  expect(profilesSource).not.toContain('settings-markdown-demo');
+  expect(nativeProfilesSource).not.toContain('showMarkdownDemo');
+  expect(nativeProfilesSource).not.toContain("t('demo.markdown')");
+});
+
+test('both Settings renderers expose the About entry', () => {
+  expect(profilesSource).toContain("router.push('/about'");
+  expect(profilesSource).toContain('testID="settings-about"');
+  expect(nativeProfilesSource).toContain('props.onOpenAbout');
+  expect(nativeProfilesSource).toContain("t('about.title')");
 });
 
 test('Expo autolinking includes the local native module directory', () => {

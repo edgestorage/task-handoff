@@ -29,6 +29,8 @@ describe('mobile i18n', () => {
     expect(translate('en-US', 'controlPlane.closedTitle')).toBe('Control Plane closed');
     expect(translate('zh-CN', 'controlPlane.closedTitle')).toBe('控制面板已关闭');
     expect(translate('zh-CN', 'diagnostics.title')).toBe('诊断日志');
+    expect(translate('zh-CN', 'about.title')).toBe('关于 TaskHandoff');
+    expect(translate('en-US', 'licenses.packageCount', { count: 3 })).toBe('3 packages');
   });
 
   test('normalizes and resolves the persisted appearance preference', () => {

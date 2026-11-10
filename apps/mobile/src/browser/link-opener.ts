@@ -1,10 +1,9 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { ControlPlaneInstanceDirectoryCapabilities } from '@task-handoff/protocol/control-plane-directory';
-import * as WebBrowser from 'expo-web-browser';
-
 import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 import type { MobileControlPlaneProfile } from '../control-plane/profile';
 import { mobileBrowserCapability, type MobileBrowserCapability } from '../control-plane/browser-context';
+import { openAppBrowser } from './app-browser';
 import { mobileBrowserController } from './controller';
 import { normalizeBrowserAddress } from './url';
 
@@ -31,11 +30,7 @@ type EmbeddedWebBrowserDependencies = {
 const defaultDependencies: EmbeddedWebBrowserDependencies = {
   browserCapability: mobileBrowserCapability,
   createTab: (input) => mobileBrowserController.create(input),
-  openAppBrowser: (url) => WebBrowser.openBrowserAsync(url, {
-    enableBarCollapsing: true,
-    presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
-    showTitle: true,
-  }),
+  openAppBrowser,
   diagnostic: (level, event, data) => diagnosticLog[level](event, data),
 };
 

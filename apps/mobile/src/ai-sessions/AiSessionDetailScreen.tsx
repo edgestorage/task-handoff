@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { Stack, useNavigation, useRouter, type NativeStackHeaderItem, type NativeStackHeaderItemMenuAction } from 'expo-router';
+import { Stack, useNavigation, useRouter, type NativeStackHeaderItem, type NativeStackHeaderItemButton, type NativeStackHeaderItemMenuAction } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { AccessibilityInfo, Alert, findNodeHandle, Platform, Pressable, StyleSheet, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
@@ -248,10 +248,12 @@ export function AiSessionDetailScreen({
     ...(triggers.available ? [{ type: 'action' as const, label: t('triggers.sessionTitle'), onPress: () => handleMenuEvent('triggers') }] : []),
     { type: 'action' as const, label: closing ? t('sessions.closing') : t('sessions.closeSession'), onPress: () => handleMenuEvent('close'), destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' },
   ] satisfies NativeStackHeaderItemMenuAction[];
+  const resourceIconSize = 20;
+  const resourceSymbolPointSize = 18;
   const nativeHeaderRightItems = () => [
     {
       accessibilityLabel: t(resourceExpanded ? 'sessionResources.collapse' : 'sessionResources.expand'),
-      icon: { name: 'rectangle.stack', type: 'sfSymbol' as const },
+      icon: { name: 'rectangle.stack', pointSize: resourceSymbolPointSize, type: 'sfSymbol' as const } as NativeStackHeaderItemButton['icon'],
       identifier: 'session-resources',
       label: t('sessionResources.title'),
       onPress: toggleResources,
@@ -277,7 +279,7 @@ export function AiSessionDetailScreen({
   const headerActions = <View style={styles.headerActions}>
     <Pressable ref={resourceButton} accessibilityRole="button" accessibilityLabel={t(resourceExpanded ? 'sessionResources.collapse' : 'sessionResources.expand')} hitSlop={6}
       accessibilityState={{ expanded: resourceExpanded }} onPress={toggleResources} style={({ pressed }) => [styles.resourceButton, resourceExpanded && { backgroundColor: colors.primarySoft }, pressed && styles.menuButtonPressed]} testID="session-resource-toggle">
-      <Icon color={colors.primary} name="albums-outline" size={22} />
+      <Icon color={colors.primary} name="albums-outline" size={resourceIconSize} />
     </Pressable>{menu}
   </View>;
   const menuRef = useRef<ReactNode>(headerActions);

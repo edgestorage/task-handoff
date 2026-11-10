@@ -1,5 +1,28 @@
+diff --git a/ios/RNSBarButtonItem.mm b/ios/RNSBarButtonItem.mm
+index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..54941e827fa040c0e4bc7181e2335e0cc646ebca 100644
+--- a/ios/RNSBarButtonItem.mm
++++ b/ios/RNSBarButtonItem.mm
+@@ -136,7 +136,17 @@ + (void)resolveImageFromConfig:(NSDictionary *)dict
+ {
+   NSString *sfSymbolName = dict[@"sfSymbolName"];
+   if (sfSymbolName != nil) {
+-    completionBlock([UIImage systemImageNamed:sfSymbolName]);
++    NSNumber *pointSize = dict[@"icon"][@"pointSize"];
++    if (pointSize != nil) {
++      // TaskHandoff: keep UIKit's native bar-button selected styling while allowing a smaller symbol.
++      UIImageSymbolConfiguration *configuration =
++          [UIImageSymbolConfiguration configurationWithPointSize:pointSize.doubleValue
++                                                          weight:UIImageSymbolWeightRegular
++                                                           scale:UIImageSymbolScaleMedium];
++      completionBlock([UIImage systemImageNamed:sfSymbolName withConfiguration:configuration]);
++    } else {
++      completionBlock([UIImage systemImageNamed:sfSymbolName]);
++    }
+     return;
+   }
+ 
 diff --git a/ios/RNSScreen.mm b/ios/RNSScreen.mm
-index 9b66012..4066bf4 100644
+index 9b66012dc8db1e3af0cb5457f8dad86e7f2fe5e3..4066bf48ab4ea902642848da956633c45ea6b993 100644
 --- a/ios/RNSScreen.mm
 +++ b/ios/RNSScreen.mm
 @@ -599,6 +599,11 @@ - (void)didMoveToWindow
@@ -55,7 +78,7 @@ index 9b66012..4066bf4 100644
  
  - (instancetype)initWithView:(UIView *)view
 diff --git a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm b/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
-index f0a72cc..b0b35d8 100644
+index f0a72ccece723748ba57e9b54174a5f999bf6173..b0b35d899ea69fcb03f1006239e4ce7e686729e1 100644
 --- a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
 +++ b/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
 @@ -160,6 +160,9 @@ - (void)didMoveToWindow
@@ -69,10 +92,10 @@ index f0a72cc..b0b35d8 100644
  }
  
 diff --git a/ios/gamma/split/RNSSplitHostComponentView.mm b/ios/gamma/split/RNSSplitHostComponentView.mm
-index 3c1b9d5..7964132 100644
+index 3c1b9d5b88c868f976cbedddc7fb3fbc57ddfe9e..79641323de70ad30c5f97ba9ebfe12dbd3a1383e 100644
 --- a/ios/gamma/split/RNSSplitHostComponentView.mm
 +++ b/ios/gamma/split/RNSSplitHostComponentView.mm
-@@ -130,4 +130,26 @@ - (void)didMoveToWindow
+@@ -130,6 +130,28 @@ - (void)didMoveToWindow
                         toViewControllerManaging:self.reactSuperview
                                withContainerView:self];
    }
@@ -99,7 +122,9 @@ index 3c1b9d5..7964132 100644
 +    [weakSelf recoverEmptySplitControllerIfNeeded];
 +  });
  }
-@@ -161,4 +183,7 @@ - (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childCompone
+ 
+ RNS_IGNORE_SUPER_CALL_BEGIN
+@@ -161,6 +183,9 @@ - (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childCompone
    childScreen.splitHost = self;
    [_reactSubviews insertObject:childScreen atIndex:index];
    _hasModifiedReactSubviewsInCurrentTransaction = true;
@@ -107,8 +132,50 @@ index 3c1b9d5..7964132 100644
 +  // A host attached before its columns mount has no controller update in the first transaction.
 +  [self scheduleSplitControllerRecovery];
  }
+ 
+ - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
+diff --git a/ios/gamma/split/RNSSplitHostController.swift b/ios/gamma/split/RNSSplitHostController.swift
+index 510006b8f22828b518b5283fe408664d7b05738d..3136fd5089e0d4bf9b2f37395731085bcf20fe7d 100644
+--- a/ios/gamma/split/RNSSplitHostController.swift
++++ b/ios/gamma/split/RNSSplitHostController.swift
+@@ -55,6 +55,18 @@ public class RNSSplitHostController: UISplitViewController, ReactMountingTransac
+ 
+     super.init(style: RNSSplitHostController.styleByNumberOfColumns(numberOfColumns))
+ 
++    // TaskHandoff mounts Split.Host only while its usable width fits both panes;
++    // MasterDetailLayout owns the compact transition by unmounting this host.
++    // iPhone landscape can still inherit a compact horizontal size class. UIKit
++    // then tries to collapse our nested navigation stacks into one another,
++    // looping in _collapseViewController before the first frame is committed.
++    // Keep this wide-only container expanded using the public trait override.
++    #if !os(tvOS)
++      if #available(iOS 17.0, *) {
++        traitOverrides.horizontalSizeClass = .regular
++      }
++    #endif
++
+     delegate = self
+   }
+ 
+@@ -62,6 +74,16 @@ public class RNSSplitHostController: UISplitViewController, ReactMountingTransac
+     return nil
+   }
+ 
++  override public func didMove(toParent parent: UIViewController?) {
++    super.didMove(toParent: parent)
++    #if !os(tvOS)
++      if #unavailable(iOS 17.0) {
++        parent?.setOverrideTraitCollection(
++          UITraitCollection(horizontalSizeClass: .regular), forChild: self)
++      }
++    #endif
++  }
++
+   // MARK: Signals
+ 
+   @objc
 diff --git a/ios/gamma/split/RNSSplitNavigationController.swift b/ios/gamma/split/RNSSplitNavigationController.swift
-index 6fb3c84..6192e0e 100644
+index 6fb3c84295572c6b6371f732e935c365b50fd2e4..6192e0e79f1aa3e51738d246d3681024eaa78249 100644
 --- a/ios/gamma/split/RNSSplitNavigationController.swift
 +++ b/ios/gamma/split/RNSSplitNavigationController.swift
 @@ -19,6 +19,7 @@ protocol RNSSplitNavigationControllerViewFrameObserver: AnyObject {
@@ -174,7 +241,7 @@ index 6fb3c84..6192e0e 100644
      viewFrameOriginChangeObserver?.splitNavCtrlViewDidChangeFrameOrigin(self)
    }
 diff --git a/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.h b/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.h
-index b1c43b7..9caae56 100644
+index b1c43b7d04da93062e4dcf953154a732c2c50ded..9caae561b0af62ebf5ba1e8c44d8765ff2b55809 100644
 --- a/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.h
 +++ b/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.h
 @@ -12,4 +12,5 @@
@@ -184,7 +251,7 @@ index b1c43b7..9caae56 100644
 ++ (BOOL)hasOnlyAutomaticEffects:(nonnull id<RNSScrollEdgeEffectProviding>)provider;
  @end
 diff --git a/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.mm b/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.mm
-index c0fb133..3c521e7 100644
+index c0fb1333ea2ab281f057cff15b2d0aad7f0043f1..3c521e7ff7c341b3edb335563f03234057d1d007 100644
 --- a/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.mm
 +++ b/ios/helpers/scroll-view/RNSScrollEdgeEffectApplicator.mm
 @@ -20,6 +20,14 @@ + (void)applyToScrollView:(nonnull UIScrollView *)scrollView
@@ -202,41 +269,3 @@ index c0fb133..3c521e7 100644
  #if RNS_IPHONE_OS_VERSION_AVAILABLE(26_0)
  + (void)configureEffect:(UIScrollEdgeEffect *)edgeEffect
                 withEnum:(RNSScrollEdgeEffect)effectEnum API_AVAILABLE(ios(26.0))
-diff --git a/ios/gamma/split/RNSSplitHostController.swift b/ios/gamma/split/RNSSplitHostController.swift
---- a/ios/gamma/split/RNSSplitHostController.swift
-+++ b/ios/gamma/split/RNSSplitHostController.swift
-@@ -54,12 +54,34 @@
-     self.fixedColumnsCount = numberOfColumns
-
-     super.init(style: RNSSplitHostController.styleByNumberOfColumns(numberOfColumns))
-+
-+    // TaskHandoff mounts Split.Host only while its usable width fits both panes;
-+    // MasterDetailLayout owns the compact transition by unmounting this host.
-+    // iPhone landscape can still inherit a compact horizontal size class. UIKit
-+    // then tries to collapse our nested navigation stacks into one another,
-+    // looping in _collapseViewController before the first frame is committed.
-+    // Keep this wide-only container expanded using the public trait override.
-+    #if !os(tvOS)
-+      if #available(iOS 17.0, *) {
-+        traitOverrides.horizontalSizeClass = .regular
-+      }
-+    #endif
-
-     delegate = self
-   }
-
-   required init?(coder aDecoder: NSCoder) {
-     return nil
-+  }
-+
-+  override public func didMove(toParent parent: UIViewController?) {
-+    super.didMove(toParent: parent)
-+    #if !os(tvOS)
-+      if #unavailable(iOS 17.0) {
-+        parent?.setOverrideTraitCollection(
-+          UITraitCollection(horizontalSizeClass: .regular), forChild: self)
-+      }
-+    #endif
-   }
-
-   // MARK: Signals

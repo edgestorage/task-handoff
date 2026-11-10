@@ -11,7 +11,7 @@ import { sameMobileControlPlaneProfileIdentity, type MobileControlPlaneProfile }
 import { mobileProfileStore as profiles } from '../src/control-plane/runtime';
 import { useCloudAccountState, type CloudAccountState } from '../src/control-plane/use-cloud-account-state';
 import { useMobileTheme, type AppearancePreference } from '../src/components/theme';
-import { isMobileFeatureEnabled, isMobileStagingMode, isMobileTestMode } from '../src/platform/build-variant';
+import { isMobileFeatureEnabled, isMobileTestMode } from '../src/platform/build-variant';
 import { NativeProfilesScreen } from '../src/control-plane/NativeProfilesScreen';
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { useI18n, type LocalePreference } from '../src/i18n';
@@ -22,7 +22,6 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
   const { t } = useI18n();
   const cloudAccount = useCloudAccountState();
   const cloudAccountEnabled = isMobileFeatureEnabled('officialAccount');
-  const showMarkdownDemo = isMobileTestMode || isMobileStagingMode;
   const [error, setError] = useState<string>();
   const [savedProfiles, setSavedProfiles] = useState<MobileControlPlaneProfile[]>([]);
   const [activeProfile, setActiveProfile] = useState<MobileControlPlaneProfile>();
@@ -68,7 +67,6 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
             cloudAccount={cloudAccountEnabled ? cloudAccount : undefined}
             onAdd={() => router.push('/control-planes/add')}
             onOpenCloudAccount={openCloudAccount}
-            onOpenMarkdownDemo={showMarkdownDemo ? () => router.push('/markdown-demo') : undefined}
           />
         </Screen>
       </SafeAreaView>
@@ -84,10 +82,9 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
       profilesLoaded={profilesLoaded}
       testMode={isMobileTestMode}
       onAdd={() => router.push('/control-planes/add')}
+      onOpenAbout={() => router.push('/about' as never)}
       onOpenCloudAccount={openCloudAccount}
-      onOpenMarkdownDemo={() => router.push('/markdown-demo')}
       onOpen={(profile) => router.push({ pathname: '/control-planes/[controlPlaneId]', params: { controlPlaneId: profile.identity.controlPlaneId, fingerprint: profile.identity.publicKeyFingerprint, kind: profile.access.kind } })}
-      showMarkdownDemo={showMarkdownDemo}
     /></>;
   }
 
@@ -140,8 +137,8 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
           </View>
           <LanguageRow />
           <AppearanceRow />
-          {showMarkdownDemo ? <MarkdownDemoRow /> : null}
           <DiagnosticLogsRow />
+          <AboutRow />
         </View>
         {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text> : null}
       </Screen>
@@ -149,11 +146,10 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
   );
 }
 
-export function ProfilesWelcome({ cloudAccount, onAdd, onOpenCloudAccount, onOpenMarkdownDemo }: {
+export function ProfilesWelcome({ cloudAccount, onAdd, onOpenCloudAccount }: {
   cloudAccount?: CloudAccountState;
   onAdd: () => void;
   onOpenCloudAccount?: () => void;
-  onOpenMarkdownDemo?: () => void;
 }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
@@ -183,20 +179,20 @@ export function ProfilesWelcome({ cloudAccount, onAdd, onOpenCloudAccount, onOpe
       <View style={styles.welcomeFooter}>
         <LanguageRow compact />
         <AppearanceRow compact />
-        {onOpenMarkdownDemo ? <MarkdownDemoRow compact onPress={onOpenMarkdownDemo} /> : null}
+        <AboutRow compact />
         <Text style={[styles.requirement, { color: colors.textMuted }]}>{isMobileTestMode ? t('profiles.requirementTest') : t('profiles.requirement')}</Text>
       </View>
     </View>
   );
 }
 
-function MarkdownDemoRow({ compact = false, onPress = () => router.push('/markdown-demo') }: { compact?: boolean; onPress?: () => void }) {
+function AboutRow({ compact = false }: { compact?: boolean }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   return (
-    <Pressable accessibilityRole="button" onPress={onPress} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]} testID="settings-markdown-demo">
-      <Icon color={colors.textMuted} name="document-text-outline" size={18} />
-      <Text style={[styles.languageLabel, { color: colors.text }]}>{t('demo.markdown')}</Text>
+    <Pressable accessibilityRole="button" onPress={() => router.push('/about' as never)} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]} testID="settings-about">
+      <Icon color={colors.textMuted} name="information-circle-outline" size={18} />
+      <Text style={[styles.languageLabel, { color: colors.text }]}>{t('about.title')}</Text>
       <Icon color={colors.textMuted} name="chevron-forward" size={12} />
     </Pressable>
   );

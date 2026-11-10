@@ -49,6 +49,14 @@ Production domain declarations and restrictions are build-time environment varia
 
 The Control Plane and Node Agent release bundles inline the same variables at build time and ignore runtime overrides, so their trust roots are fixed by the signed artifact. Packaged desktop builds materialize the values for their child processes. `TASK_HANDOFF_CLOUD_SERVICE_ORIGINS` optionally adds ordered Coordinator fallback origins.
 
+## Legal and license information
+
+Settings exposes a single About entry on both platform renderers and in the empty Settings state. Privacy and terms open the localized cloud-hosted legal pages with `?lang=zh|en`, so the mobile app does not keep a second copy of the policy text. Open-source licenses are bundled for offline use.
+
+`src/licenses/generated-license-data.json` is generated from the production dependency graph. Do not edit it by hand. Package license files are preferred, duplicate text is stored once, and packages without a bundled license file fall back to the standard SPDX text. The application `LICENSE` and `NOTICE` are included as the project entry.
+
+Run `licenses:generate` after dependency changes. `licenses:check` is part of `release:check` and fails when the checked-in inventory is stale.
+
 ## Commands
 
 Run commands from the repository root:
@@ -57,6 +65,8 @@ Run commands from the repository root:
 pnpm --filter @task-handoff/mobile lint
 pnpm --filter @task-handoff/mobile typecheck
 pnpm --filter @task-handoff/mobile test
+pnpm --filter @task-handoff/mobile licenses:generate
+pnpm --filter @task-handoff/mobile licenses:check
 pnpm --filter @task-handoff/mobile e2e:ios
 pnpm --filter @task-handoff/mobile prebuild:check
 pnpm --filter @task-handoff/mobile ios

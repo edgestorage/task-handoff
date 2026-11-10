@@ -150,7 +150,6 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       validateReferences: (session, references) => this.mentions.validateReferences(session, references),
     });
     this.discovery = new CodexAppServerSessionDiscovery({
-      applyThreadListEntry: (thread) => this.upsertThreadListEntry(thread, { bindAppSession: true }),
       applyThreadSnapshot: (thread) => this.upsertThread(thread, { bindAppSession: true }),
       recoverableThreadIds: () => this.registry.list()
         .filter((session) => (
@@ -158,12 +157,14 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
           && Boolean(session.providerSessionId)
           && session.actions?.send !== false
           && session.actions?.close !== false
+          && (
+            session.status === "running"
+            || session.status === "waiting"
+            || Boolean(session.activeTurnId)
+            || (session.queue.pendingCount > 0 && session.queue.paused !== true)
+          )
         ))
         .map((session) => session.providerSessionId as string),
-      reconcileLoadedThreadIds: (client, loadedThreadIds) => {
-        const connection = this.connection.connectionFor(client);
-        if (connection) this.connection.reconcileLoadedThreadIds(connection, loadedThreadIds);
-      },
       ensureThreadSubscribed: (client, threadId) => {
         const connection = this.connection.connectionFor(client);
         return connection
@@ -804,18 +805,6 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   }
 
   private upsertThread(thread: CodexThread, options: { bindAppSession: boolean; creationSource?: AiSessionStatus["creationSource"] }) {
-    this.upsertThreadProjection(thread, options, "snapshot");
-  }
-
-  private upsertThreadListEntry(thread: CodexThread, options: { bindAppSession: boolean; creationSource?: AiSessionStatus["creationSource"] }) {
-    this.upsertThreadProjection(thread, options, "list-entry");
-  }
-
-  private upsertThreadProjection(
-    thread: CodexThread,
-    options: { bindAppSession: boolean; creationSource?: AiSessionStatus["creationSource"] },
-    projection: "snapshot" | "list-entry",
-  ) {
     const id = typeof thread.id === "string" ? thread.id : undefined;
     if (!id || thread.ephemeral === true) {
       return;
@@ -827,8 +816,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return;
     }
     const context = { appSessionId, creationSource: options.creationSource };
-    if (projection === "list-entry") this.projector.applyThreadListEntry(thread, context);
-    else this.projector.applyThreadSnapshot(thread, context);
+    this.projector.applyThreadSnapshot(thread, context);
   }
 
   private recordTimelineHistorySource(thread: CodexThread) {
