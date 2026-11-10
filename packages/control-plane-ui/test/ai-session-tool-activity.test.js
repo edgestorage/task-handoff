@@ -25,13 +25,16 @@ test("tool activity uses the authoritative API projection", () => {
   assert.doesNotMatch(activity, /watch\(\(\) => props/);
 });
 
-test("expanded tool activity consumes live items without triggering timeline reloads", () => {
+test("tool activity starts expansion only after its bounded window is ready", () => {
   const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
   assert.doesNotMatch(activity, /requestExpand|activityRevision/);
   assert.match(activity, /const expanded = ref\(false\);/);
+  assert.match(activity, /const expandPending = ref\(false\);/);
   assert.match(activity, /const emit = defineEmits<\{ addToConversation: \[content: string\]; load: \[\] \}>\(\);/);
-  assert.match(activity, /function toggleExpanded\(event: MouseEvent\) \{[\s\S]*beginDisclosureTransition\(event\.currentTarget as Element\);[\s\S]*expanded\.value = !expanded\.value;/);
-  assert.match(activity, /expanded\.value = !expanded\.value;[\s\S]*!props\.contentLoaded && !props\.loading && !props\.unavailable[\s\S]*emit\("load"\)/);
+  assert.match(activity, /if \(props\.contentLoaded \|\| props\.unavailable\) \{[\s\S]*expanded\.value = true;[\s\S]*return;/);
+  assert.match(activity, /expandPending\.value = true;[\s\S]*if \(!props\.loading\) emit\("load"\)/);
+  assert.match(activity, /watch\(\(\) => \[props\.contentLoaded, props\.loading, props\.error, props\.unavailable\][\s\S]*beginDisclosureTransition\(trigger\);[\s\S]*expanded\.value = true;[\s\S]*expandPending\.value = false;/);
+  assert.match(activity, /<div v-if="interactive && expanded" class="ai-session-tool-activity-expanded">/);
 });
 
 test("unhydrated tool activity shows loading until the bounded window arrives", () => {

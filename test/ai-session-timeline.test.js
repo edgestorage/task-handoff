@@ -375,9 +375,18 @@ test("legacy Codex restores adapter-owned item events after a full process resta
   }
 
   const firstRegistry = createAiSessionRegistry({ dir: registryPath });
+  firstRegistry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: snapshot.id,
+    cwd: "/workspace",
+    status: "idle",
+    phase: "unknown",
+  });
   const firstClient = new RestartableCodexClient();
   const firstBridge = new CodexAppServerSessionBridge(firstRegistry, firstClient, { timelineStorePath });
   await firstBridge.sync();
+  await firstBridge.readSession(snapshot.id);
   const session = firstRegistry.getByProviderSessionId("codex", snapshot.id);
   assert.ok(session);
 
@@ -429,13 +438,22 @@ test("legacy Codex uses thread/read plus adapter-owned item history without call
   }
 
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: snapshot.id,
+    cwd: "/workspace",
+    status: "idle",
+    phase: "unknown",
+  });
   const client = new UnsupportedTimelineCodexClient();
   const timelineStorePath = path.join(root, "timeline");
   const bridge = new CodexAppServerSessionBridge(registry, client, { timelineStorePath });
   await bridge.sync();
+  await bridge.readSession(snapshot.id);
   const session = registry.getByProviderSessionId("codex", snapshot.id);
   assert.ok(session);
-  const discoveryReads = reads;
+  const readsBeforeTimeline = reads;
   assert.deepEqual(bridge.timelineCapabilities(), {
     sessionRead: true,
     turnRead: true,
@@ -456,7 +474,7 @@ test("legacy Codex uses thread/read plus adapter-owned item history without call
   assert.deepEqual(timeline.items.map((item) => item.id), ["command_old", "command_new"]);
   assert.equal(timeline.items[1].output, "passed");
   assert.equal(JSON.stringify(fs.readdirSync(timelineStorePath).map((name) => fs.readFileSync(path.join(timelineStorePath, name), "utf8"))).includes("command_new"), true);
-  assert.equal(reads, discoveryReads + 1);
+  assert.equal(reads, readsBeforeTimeline + 1);
   assert.equal(itemReads, 0);
   bridge.stop();
 });
@@ -487,10 +505,19 @@ test("Codex bridge returns one authoritative turn Timeline", async () => {
   }
 
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: snapshot.id,
+    cwd: "/workspace",
+    status: "idle",
+    phase: "unknown",
+  });
   const client = new TurnTimelineCodexClient();
   const timelineStorePath = path.join(root, "timeline");
   const bridge = new CodexAppServerSessionBridge(registry, client, { timelineStorePath });
   await bridge.sync();
+  await bridge.readSession(snapshot.id);
   assert.deepEqual(bridge.timelineCapabilities(), {
     sessionRead: true,
     turnRead: true,

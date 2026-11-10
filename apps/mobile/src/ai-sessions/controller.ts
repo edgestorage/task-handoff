@@ -6,7 +6,9 @@ import {
   AiSessionPatchEventSchema,
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
+  AiSessionTimelineItemDeltaEventSchema,
   AiSessionTimelineItemEventSchema,
+  normalizeAiSessionTimelineItemDeltaEvent,
   type AiSessionStreamEvent,
 } from '@task-handoff/protocol/ai-sessions';
 import { safeParseResponse } from '@task-handoff/protocol/response-validation';
@@ -261,6 +263,20 @@ export class MobileAiSessionController {
       if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
       this.store.applyTimelineItem(this.controlPlaneId, parsed.data);
       return true;
+    }
+    if (event.type === AiSessionEventType.TimelineItemDelta) {
+      if (event.id && this.seenTransientEventIds.has(event.id)) return true;
+      if (event.id) this.rememberTransientEventId(event.id);
+      const instanceId = event.scope?.instanceId || '';
+      let payload: unknown;
+      try {
+        payload = normalizeAiSessionTimelineItemDeltaEvent(event.payload, instanceId);
+      } catch {
+        return false;
+      }
+      const parsed = safeParseResponse(AiSessionTimelineItemDeltaEventSchema, payload);
+      if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
+      return this.store.applyTimelineItemDelta(this.controlPlaneId, parsed.data);
     }
     const schemas = {
       [AiSessionEventType.Snapshot]: AiSessionSnapshotEventSchema,

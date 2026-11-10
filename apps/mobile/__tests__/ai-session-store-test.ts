@@ -413,6 +413,23 @@ describe('MobileAiSessionStore identity isolation', () => {
     expect(store.timelineTurnState('cp-a', 'instance-1', 'session-1', { id: 'turn-1', providerTurnId: 'provider-turn-1' }).items).toEqual([
       expect.objectContaining({ id: 'command-1', status: 'running' }),
     ]);
+
+    expect(controller.applyEvent({
+      type: AiSessionEventType.TimelineItemDelta,
+      topic: 'ai.sessions',
+      scope: { instanceId: 'instance-1' },
+      payload: {
+        sessionId: 'session-1',
+        turnId: 'provider-turn-1',
+        itemId: 'command-1',
+        field: 'output',
+        delta: ' completed',
+        generatedAt: updatedAt,
+      },
+    })).toBe(true);
+    expect(store.timelineTurnState('cp-a', 'instance-1', 'session-1', { id: 'turn-1', providerTurnId: 'provider-turn-1' }).items).toEqual([
+      expect.objectContaining({ id: 'command-1', output: ' completed' }),
+    ]);
   });
 
   test('turn timeline snapshots merge live lifecycle updates and become stale on reconnect', () => {
@@ -477,6 +494,79 @@ describe('MobileAiSessionStore identity isolation', () => {
     });
     store.resolveSessionTimelineNotModified('cp-session-revision', 'instance-1', 'session-1', 'timeline-session-r1');
     expect(store.timelineTurnState('cp-session-revision', 'instance-1', 'session-1', turns[1]).status).toBe('ready');
+  });
+
+  test('timeline deltas append output and survive an item event arriving after its deltas', () => {
+    const store = new MobileAiSessionStore();
+    const event = {
+      instanceId: 'instance-1',
+      sessionId: 'session-1',
+      providerSessionId: 'provider-session',
+      generatedAt: '2026-08-05T00:01:00.000Z',
+    };
+    store.applyTimelineItem('cp-delta', {
+      ...event,
+      item: { id: 'command-1', turnId: 'turn-1', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'running', output: 'head' },
+    });
+    expect(store.applyTimelineItemDelta('cp-delta', {
+      ...event,
+      turnId: 'turn-1',
+      itemId: 'command-1',
+      field: 'output',
+      delta: '-tail',
+    })).toBe(true);
+    expect(store.timelineTurnState('cp-delta', 'instance-1', 'session-1', { id: 'turn-1' }).items[0]).toMatchObject({ output: 'head-tail' });
+
+    expect(store.applyTimelineItemDelta('cp-delta', {
+      ...event,
+      turnId: 'turn-2',
+      itemId: 'command-2',
+      field: 'output',
+      delta: ' queued',
+    })).toBe(true);
+    store.applyTimelineItem('cp-delta', {
+      ...event,
+      item: { id: 'command-2', turnId: 'turn-2', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'running', output: 'start' },
+    });
+    expect(store.timelineTurnState('cp-delta', 'instance-1', 'session-1', { id: 'turn-2' }).items[0]).toMatchObject({ output: 'start queued' });
+  });
+
+  test('session sync delta updates same-position items and restores unaffected Turn state after reconnect', () => {
+    const store = new MobileAiSessionStore();
+    const turns = [
+      { id: 'turn-1', providerTurnId: 'provider-turn-1' },
+      { id: 'turn-2', providerTurnId: 'provider-turn-2' },
+    ];
+    const itemA = { id: 'message-1', turnId: 'provider-turn-1', type: 'ai-message' as const, text: 'Before' };
+    const itemB = { id: 'message-2', turnId: 'provider-turn-2', type: 'ai-message' as const, text: 'Untouched' };
+    store.resolveSessionTimelineSyncSnapshot('cp-session-delta', 'instance-1', 'session-1', turns, [
+      { revision: 'revision-1', item: itemA },
+      { revision: 'revision-2', item: itemB },
+    ], 'timeline-r1');
+    const untouched = store.timelineTurnState('cp-session-delta', 'instance-1', 'session-1', turns[1]).items[0];
+    store.recoverTimelines('cp-session-delta');
+
+    store.applySessionTimelineSyncDelta('cp-session-delta', 'instance-1', 'session-1', turns, {
+      kind: 'delta',
+      revision: 'timeline-r2',
+      upserted: [{
+        revision: 'revision-3',
+        item: { ...itemA, text: 'After' },
+      }],
+      removed: [],
+      order: ['message-1', 'message-2'],
+    });
+
+    expect(store.timelineTurnState('cp-session-delta', 'instance-1', 'session-1', turns[0])).toMatchObject({
+      status: 'ready',
+      revision: 'timeline-r2',
+      items: [{ id: 'message-1', text: 'After' }],
+    });
+    expect(store.timelineTurnState('cp-session-delta', 'instance-1', 'session-1', turns[1])).toMatchObject({
+      status: 'ready',
+      revision: 'timeline-r2',
+    });
+    expect(store.timelineTurnState('cp-session-delta', 'instance-1', 'session-1', turns[1]).items[0]).toBe(untouched);
   });
 
   test('reconnect preserves live-only timeline items until an authoritative reader can replace them', () => {

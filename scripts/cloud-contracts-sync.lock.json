@@ -49,6 +49,8 @@
         "MobileTokenResponseSchema",
         "NormalizedEmailSchema",
         "OfficialAccountSchema",
+        "PasskeySummary",
+        "PasskeySummarySchema",
         "PkceMethodSchema",
         "ProviderAccountConfirmationRequest",
         "ProviderAccountConfirmationRequestSchema",

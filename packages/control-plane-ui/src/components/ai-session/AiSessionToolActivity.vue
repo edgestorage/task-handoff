@@ -17,12 +17,15 @@
       type="button"
       class="ai-session-tool-activity-trigger"
       :aria-expanded="expanded"
+      :aria-busy="awaitingContent"
       @click="toggleExpanded"
     >
-      <ChevronRight :size="15" :class="{ open: expanded }" />
+      <LoaderCircle v-if="awaitingContent" class="ai-session-tool-activity-loading-icon" :size="15" :aria-label="t('sessions.timeline.loading')" />
+      <ChevronRight v-else :size="15" :class="{ open: expanded }" />
       <span ref="activityTextEl" :data-status-text="statusText">{{ statusText }}</span>
     </button>
     <span v-else ref="activityTextEl" :data-status-text="statusText">{{ statusText }}</span>
+    <span v-if="loadFailed && !expanded" class="ai-session-tool-activity-error" role="alert">{{ t("sessions.timeline.activityLoadFailed") }}</span>
     <Transition
       name="tool-activity-expand"
       @before-enter="prepareDisclosureEnter"
@@ -61,7 +64,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronRight } from "@lucide/vue";
+import { ChevronRight, LoaderCircle } from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionLifecycle, AiSessionPhase, AiSessionTool } from "../../api/types";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
@@ -123,6 +126,8 @@ const displayNodes = computed<TimelineTurnNode[]>(() => props.nodes.length
 const count = computed(() => Math.max(0, props.toolCallsSinceLastMessage));
 const visible = computed(() => props.status === "running" || props.status === "waiting");
 const expanded = ref(false);
+const expandPending = ref(false);
+const triggerElement = ref<HTMLElement>();
 const shimmerDuration = ref(2.2);
 const shimmerSweepStop = ref("50%");
 const activityTextEl = ref<HTMLElement>();
@@ -149,10 +154,35 @@ watch(activityTextEl, (element) => {
 }, { flush: "post" });
 
 onBeforeUnmount(() => resizeObserver?.disconnect());
+const loadFailed = computed(() => Boolean(props.error) && !props.contentLoaded && !props.loading && !props.unavailable);
+const awaitingContent = computed(() => expandPending.value && !loadFailed.value);
+watch(() => [props.contentLoaded, props.loading, props.error, props.unavailable] as const, () => {
+  if (!expandPending.value || (!props.contentLoaded && !props.unavailable)) return;
+  const trigger = triggerElement.value;
+  if (trigger) beginDisclosureTransition(trigger);
+  expanded.value = true;
+  expandPending.value = false;
+});
 function toggleExpanded(event: MouseEvent) {
-  beginDisclosureTransition(event.currentTarget as Element);
-  expanded.value = !expanded.value;
-  if (expanded.value && !props.contentLoaded && !props.loading && !props.unavailable) emit("load");
+  const trigger = event.currentTarget as HTMLElement;
+  triggerElement.value = trigger;
+  if (expanded.value) {
+    beginDisclosureTransition(trigger);
+    expanded.value = false;
+    return;
+  }
+  if (expandPending.value) {
+    if (loadFailed.value) emit("load");
+    else expandPending.value = false;
+    return;
+  }
+  if (props.contentLoaded || props.unavailable) {
+    beginDisclosureTransition(trigger);
+    expanded.value = true;
+    return;
+  }
+  expandPending.value = true;
+  if (!props.loading) emit("load");
 }
 const statusText = computed(() => {
   if (props.phase === "approval") {
@@ -221,6 +251,14 @@ const statusText = computed(() => {
 .ai-session-tool-activity-trigger > span { font-weight: 400; }
 .ai-session-tool-activity-trigger > svg { flex: 0 0 auto; color: var(--text-muted); transition: transform 120ms ease; }
 .ai-session-tool-activity-trigger > svg.open { transform: rotate(90deg); }
+.ai-session-tool-activity-loading-icon { animation: tool-activity-spin 800ms linear infinite; }
+.ai-session-tool-activity-error {
+  flex: 0 0 100%;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  padding-left: 20px;
+}
 .ai-session-tool-activity-expanded {
   flex: 0 0 100%;
   min-width: 0;
@@ -302,6 +340,8 @@ const statusText = computed(() => {
     -webkit-mask-position: calc(100% + 72px) 0;
   }
 }
+
+@keyframes tool-activity-spin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
   .ai-session-tool-activity-expanded { transition-duration: 0ms; }

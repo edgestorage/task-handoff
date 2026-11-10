@@ -807,23 +807,23 @@ test("Codex bridge Fork projects forkedFromId without using thread sessionId as 
   assert.deepEqual(forked.lineage, { kind: "fork", parentProviderSessionId: "thread-source" });
 });
 
-test("Codex discovery projects persisted multi-level subagents independently from activity summaries", async () => {
+test("Codex thread reads project persisted multi-level subagents independently from activity summaries", async () => {
   const { registry } = runtime();
+  const threads = [
+    { id: "thread-parent", cwd: "/workspace", ephemeral: false, turns: [] },
+    { id: "thread-child", parentThreadId: "thread-parent", cwd: "/workspace", ephemeral: false, turns: [] },
+    { id: "thread-grandchild", parentThreadId: "thread-child", cwd: "/workspace", ephemeral: false, turns: [] },
+    { id: "thread-fork", forkedFromId: "thread-parent", cwd: "/workspace", ephemeral: false, turns: [] },
+  ];
   class FakeClient extends EventEmitter {
     async start() {}
     stop() {}
     async listLoadedThreadIds() { return []; }
-    async listThreads() {
-      return [
-        { id: "thread-parent", cwd: "/workspace", ephemeral: false, turns: [] },
-        { id: "thread-child", parentThreadId: "thread-parent", cwd: "/workspace", ephemeral: false, turns: [] },
-        { id: "thread-grandchild", parentThreadId: "thread-child", cwd: "/workspace", ephemeral: false, turns: [] },
-        { id: "thread-fork", forkedFromId: "thread-parent", cwd: "/workspace", ephemeral: false, turns: [] },
-      ];
-    }
+    async readThread(threadId) { return threads.find((thread) => thread.id === threadId); }
   }
   const bridge = new CodexAppServerSessionBridge(registry, new FakeClient());
   await bridge.sync();
+  for (const thread of threads) await bridge.readSession(thread.id);
 
   assert.deepEqual(registry.getByProviderSessionId("codex", "thread-child").lineage, {
     kind: "subagent",

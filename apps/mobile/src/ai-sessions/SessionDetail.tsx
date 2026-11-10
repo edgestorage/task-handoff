@@ -57,6 +57,7 @@ type DetailItem = {
   history?: DetailItem[];
   historyStatus?: MobileTurnTimelineState['status'];
   historyError?: string;
+  activityStatus?: 'idle' | MobileToolActivityWindow['status'];
   turn?: DetailTurn;
   interactive?: boolean;
   actions?: { timestamp?: string; continuable?: boolean };
@@ -72,6 +73,7 @@ export function SessionDetail({
   toolActivityWindows = {},
   timelineEnabled = false,
   timelineHistoryEnabled = timelineEnabled,
+  toolActivityEnabled = true,
   onLoadTimeline,
   onLoadToolActivity,
   onRetryTimeline,
@@ -104,6 +106,7 @@ export function SessionDetail({
   toolActivityWindows?: Readonly<Record<string, MobileToolActivityWindow>>;
   timelineEnabled?: boolean;
   timelineHistoryEnabled?: boolean;
+  toolActivityEnabled?: boolean;
   onLoadTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onLoadToolActivity?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onRetryTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
@@ -317,7 +320,7 @@ export function SessionDetail({
   const listEmptyComponent = contentLoading ? null : <EmptyState icon="chatbubble-outline" iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />;
   const renderDetailItem = ({ item }: { item: DetailItem }) => <View
     testID={`session-detail-item-${item.role}`}
-  ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onAddToConversation={onAddToConversation} onContinueFromTurn={onContinueFromTurn} onLoadTimeline={onLoadTimeline} onLoadToolActivity={onLoadToolActivity} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} onRetryTimeline={onRetryTimeline} trimEnd={trimEndItemIds.has(item.id)} /></View>;
+  ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onAddToConversation={onAddToConversation} onContinueFromTurn={onContinueFromTurn} onLoadTimeline={onLoadTimeline} onLoadToolActivity={toolActivityEnabled ? onLoadToolActivity : undefined} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} onRetryTimeline={onRetryTimeline} trimEnd={trimEndItemIds.has(item.id)} /></View>;
   return (
     <SessionAttachmentContext.Provider value={instanceId && session ? { client, instanceId, sessionId: session.id } : undefined}>
     <Profiler id="detail" onRender={recordDetailRender}>
@@ -596,9 +599,19 @@ function appendCurrentActivity(items: DetailItem[], text: string, turn: DetailTu
       ? [{ id: `${turn.id}:tool-window`, role: 'activity', activities: [...window.items] }]
       : []
     : trailing;
+  const currentActivity: DetailItem = {
+    id: `${turn.id}:current-activity`,
+    role: 'current',
+    text,
+    history: activityHistory,
+    activityStatus: window?.status ?? 'idle',
+    interactive: true,
+    streaming: running,
+    turn,
+  };
   return [
     ...items.slice(0, splitIndex),
-    { id: `${turn.id}:current-activity`, role: 'current' as const, text, history: activityHistory, interactive: true, streaming: running, turn },
+    currentActivity,
     ...notices,
   ];
 }
@@ -768,16 +781,42 @@ function TimelineCurrentActivity({ item, onLoad, onAddToConversation, onOpenBuil
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
+  const [expandPending, setExpandPending] = useState(false);
   const nodes = item.history ?? [];
   const interactive = Boolean(item.interactive);
+  const status = item.activityStatus ?? 'idle';
+  const failed = status === 'error';
+  const loading = expandPending && status !== 'ready' && status !== 'error';
+  const revealed = expanded || (expandPending && status === 'ready');
+  const toggleExpanded = () => {
+    if (revealed) {
+      setExpanded(false);
+      setExpandPending(false);
+      return;
+    }
+    if (expandPending) {
+      if (failed) onLoad?.();
+      else setExpandPending(false);
+      return;
+    }
+    if (status === 'ready' || !onLoad) {
+      setExpanded(true);
+      return;
+    }
+    setExpandPending(true);
+    onLoad();
+  };
   const content = <>
-    {interactive ? <DisclosureChevron color={colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} /> : null}
+    {interactive ? loading
+      ? <ActivityIndicator animating color={colors.textMuted} size="small" testID="session-current-activity-loading" />
+      : <DisclosureChevron color={colors.textMuted} expanded={revealed} size={mobileWebMetric(15)} /> : null}
     <ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={Boolean(item.streaming)} textStyle={styles.currentActivityText}>{item.text ?? ''}</ToolActivityText>
   </>;
   return <View style={styles.currentActivity}>
-    {interactive ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => { if (!expanded) onLoad?.(); setExpanded((value) => !value); }} style={styles.currentActivityHeader}>{content}</Pressable>
+    {interactive ? <Pressable accessibilityRole="button" accessibilityState={{ busy: loading, expanded: revealed }} onPress={toggleExpanded} style={styles.currentActivityHeader}>{content}</Pressable>
       : <View style={styles.currentActivityHeader}>{content}</View>}
-    <AnimatedDisclosure expanded={expanded} spacing={mobileWebMetric(10)}><View style={styles.currentActivityItems} testID="session-current-activity-items">{nodes.length ? nodes.map((node) => node.role === 'activity'
+    {failed ? <Text accessibilityLiveRegion="polite" style={[styles.currentActivityError, { color: colors.textMuted }]}>{t('sessions.timelineLoadFailed')}</Text> : null}
+    <AnimatedDisclosure expanded={revealed} spacing={mobileWebMetric(10)}><View style={styles.currentActivityItems} testID="session-current-activity-items">{nodes.length ? nodes.map((node) => node.role === 'activity'
       ? <TimelineActivityGroup activities={node.activities ?? []} key={node.id} summaryVisible={false} />
       : <DetailItemContent conversation={false} item={node} key={node.id} onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} timelineNested />) : <Text style={[styles.currentActivityEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoActivities')}</Text>}</View></AnimatedDisclosure>
   </View>;
@@ -896,6 +935,7 @@ const styles = StyleSheet.create({
   currentActivityHeader: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebType.bodyLine },
   currentActivityText: { fontSize: mobileWebType.body, fontWeight: '400', lineHeight: mobileWebType.bodyLine },
   currentActivityEmpty: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
+  currentActivityError: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, marginLeft: mobileWebMetric(20) },
   currentActivityItems: { gap: mobileWebMetric(6), marginLeft: mobileWebMetric(20) },
   conversationEmpty: { paddingVertical: 32 },
   userMessage: { alignSelf: 'flex-end', maxWidth: '90%', minWidth: 0 },

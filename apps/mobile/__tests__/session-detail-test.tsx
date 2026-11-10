@@ -1004,6 +1004,71 @@ test('timeline detail follows the Web three-part layout around the final AI resp
   await screen.unmount();
 });
 
+test('current tool activity waits for its loaded window before expanding', async () => {
+  const load = jest.fn();
+  const timelines = { 'turn-1': { status: 'ready' as const, items: [] } };
+  const screen = await render(<SessionDetail
+    messages={[]}
+    onLoadToolActivity={load}
+    session={session}
+    timelineEnabled
+    timelines={timelines}
+  />);
+  const trigger = screen.getByRole('button', { name: 'shell · pnpm test' });
+
+  await fireEvent.press(trigger);
+  expect(load).toHaveBeenCalledWith(expect.objectContaining({ id: 'turn-1' }));
+  expect(trigger.props.accessibilityState).toEqual(expect.objectContaining({ busy: true, expanded: false }));
+  expect(screen.queryByTestId('session-current-activity-items')).toBeNull();
+
+  await screen.rerender(<SessionDetail
+    messages={[]}
+    onLoadToolActivity={load}
+    session={session}
+    timelineEnabled
+    timelines={timelines}
+    toolActivityWindows={{ 'turn-1': { status: 'loading', items: [], total: 0, truncated: false } }}
+  />);
+  expect(screen.getByRole('button', { name: 'shell · pnpm test' }).props.accessibilityState).toEqual(expect.objectContaining({ busy: true, expanded: false }));
+  expect(screen.queryByTestId('session-current-activity-items')).toBeNull();
+
+  await screen.rerender(<SessionDetail
+    messages={[]}
+    onLoadToolActivity={load}
+    session={session}
+    timelineEnabled
+    timelines={timelines}
+    toolActivityWindows={{ 'turn-1': {
+      status: 'ready',
+      items: [{ id: 'window-command', turnId: 'turn-1', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'running', input: 'pnpm test' }],
+      total: 1,
+      truncated: false,
+    } }}
+  />);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'shell · pnpm test' }).props.accessibilityState).toEqual(expect.objectContaining({ busy: false, expanded: true })));
+  screen.getByTestId('session-current-activity-items');
+  screen.getByText('Running command');
+  expect(load).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+});
+
+test('current tool activity without the capability opens live content without waiting', async () => {
+  const load = jest.fn();
+  const screen = await render(<SessionDetail
+    messages={[]}
+    onLoadToolActivity={load}
+    session={session}
+    timelineEnabled
+    timelines={{ 'turn-1': { status: 'ready', items: [] } }}
+    toolActivityEnabled={false}
+  />);
+  await fireEvent.press(screen.getByRole('button', { name: 'shell · pnpm test' }));
+  expect(load).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'shell · pnpm test' }).props.accessibilityState).toEqual(expect.objectContaining({ busy: false, expanded: true }));
+  screen.getByTestId('session-current-activity-items');
+  await screen.unmount();
+});
+
 test('completed timeline exposes loading, failure retry, and empty history states', async () => {
   const completed = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
@@ -1504,6 +1569,78 @@ test('returning to a mobile session applies only changed Timeline items from HTT
   const refreshed = mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, sessionA.id, sessionA.turns![0]);
   expect(refreshed.items.map((item) => item.id)).toEqual(['message-a1', 'message-a2']);
   expect(refreshed.items[0]).toBe(untouchedItem);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
+});
+
+test('entering a session and reconnecting refresh an already cached timeline without expanding it again', async () => {
+  const controlPlaneId = 'cp-timeline-auto-recovery';
+  const instanceId = 'instance-timeline-auto-recovery';
+  const current = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-auto-recovery',
+    status: 'idle',
+    turns: [{
+      ...session.turns![0],
+      id: 'turn-timeline-auto-recovery',
+      providerTurnId: 'provider-turn-timeline-auto-recovery',
+      status: 'completed',
+    }],
+  });
+  const turn = current.turns![0];
+  mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, current.id, turn, [
+    { id: 'message-before', turnId: turn.providerTurnId!, type: 'ai-message', text: 'Before leaving' },
+  ], 'timeline-auto-r1');
+  const syncTurnTimeline = jest.fn(async (
+    _instanceId: string,
+    _sessionId: string,
+    _turnId: string,
+    _knownItems: Array<{ id: string; revision: string }>,
+  ) => ({
+    kind: 'delta' as const,
+    revision: 'timeline-auto-r2',
+    upserted: [{
+      revision: 'timeline-auto-item-2',
+      item: { id: 'message-after', turnId: turn.providerTurnId!, type: 'ai-message' as const, text: 'While away' },
+    }],
+    removed: [],
+    order: ['message-before', 'message-after'],
+  }));
+  const client = { aiSessions: { syncTurnTimeline } } as unknown as ControlPlaneClient;
+  function Harness() {
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, current.id, rerender), []);
+    const currentTurn = current.turns![0];
+    return <SessionWorkspace
+      client={client}
+      controlPlaneId={controlPlaneId}
+      detailMode="turn"
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [], toolActivityAgents: [] } }}
+      instanceId={instanceId}
+      messages={[]}
+      session={current}
+      timelines={{ [currentTurn.id]: mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, current.id, currentTurn) }}
+    />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  await waitFor(() => expect(syncTurnTimeline).toHaveBeenCalledTimes(1));
+  expect(syncTurnTimeline).toHaveBeenCalledWith(instanceId, current.id, turn.id, []);
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, current.id, turn).items.map((item) => item.id)).toEqual([
+    'message-before',
+    'message-after',
+  ]));
+  await act(async () => mobileAiSessionStore.recoverTimelines(controlPlaneId));
+  await waitFor(() => expect(syncTurnTimeline).toHaveBeenCalledTimes(2));
+  expect(syncTurnTimeline.mock.calls[1]).toEqual([
+    instanceId,
+    current.id,
+    turn.id,
+    [{ id: 'message-after', revision: 'timeline-auto-item-2' }],
+  ]);
+  expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, current.id, turn).status).toBe('ready');
   await screen.unmount();
   mobileAiSessionStore.clearProfile(controlPlaneId);
 });

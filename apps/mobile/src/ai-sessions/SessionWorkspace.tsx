@@ -399,12 +399,16 @@ export function SessionWorkspace({
     timelineRefreshScope.current = refreshScope;
     const turns = aiSessionDisplayTurns(timelineSession);
     const visibleTurns = detailMode === 'conversation' ? turns : turns.slice(selectedTurnIndex, selectedTurnIndex + 1);
-    const loadableTurns = visibleTurns.filter((turn) => (
-      requestedTimelineTurns.current.has(JSON.stringify([controlPlaneId, instanceId, timelineSession.id, turn.id]))
-    )).filter((turn) => {
+    const resumedTurns = resumed ? turns.filter((turn) => {
+      const status = timelineStates[turn.id]?.status;
+      return Boolean(status && status !== 'idle' && status !== 'loading');
+    }) : [];
+    const candidateTurns = [...new Map([...visibleTurns, ...resumedTurns].map((turn) => [turn.id, turn])).values()];
+    const loadableTurns = candidateTurns.filter((turn) => {
       const state = timelineStates[turn.id];
-      if (state?.status && !['idle', 'stale'].includes(state.status) && !(resumed && state.status === 'ready')) return false;
-      return true;
+      if (state?.status === 'loading') return false;
+      if (resumed) return Boolean(state && state.status !== 'idle');
+      return !state || state.status === 'idle' || state.status === 'stale';
     });
     if (!loadableTurns.length) return;
     if (supportsTurnTimeline) {
@@ -934,6 +938,7 @@ export function SessionWorkspace({
           onModeChange={setDetailMode}
           onLoadTimeline={requestTimelineLoad}
           onLoadToolActivity={toolActivity.load}
+          toolActivityEnabled={supportsToolActivity}
           toolActivityWindows={toolActivity.windows}
           onOpenBuiltinBrowser={onOpenBuiltinBrowser}
           onOpenFile={onOpenFile}
