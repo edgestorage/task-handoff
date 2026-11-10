@@ -60,6 +60,16 @@ function licenseFiles(directory) {
   return files.sort(compareText);
 }
 
+function isPlatformConditionalPackage(directory) {
+  if (!directory) return false;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
+    return ['os', 'cpu', 'libc'].some((field) => Array.isArray(manifest[field]) && manifest[field].length > 0);
+  } catch {
+    return false;
+  }
+}
+
 function textKind(file) {
   return path.basename(file).toLowerCase().startsWith('notice') ? 'notice' : 'license';
 }
@@ -82,6 +92,10 @@ function main() {
   const jsonStart = inventoryJson.indexOf('{');
   if (jsonStart < 0) throw new Error('pnpm licenses did not return a JSON inventory.');
   const inventory = JSON.parse(inventoryJson.slice(jsonStart));
+  // Optional native packages selected by the install host (for example
+  // fsevents and lightningcss platform binaries) must not make the checked-in
+  // inventory depend on whether CI or a developer runs the generator. Their
+  // portable parent packages remain represented in the inventory.
   const packages = Object.entries(inventory).flatMap(([declaredLicense, entries]) => entries.flatMap((entry) => entry.versions.map((version, index) => ({
     name: entry.name,
     version,
@@ -89,7 +103,9 @@ function main() {
     author: typeof entry.author === 'string' ? entry.author : undefined,
     homepage: safeHomepage(entry.homepage),
     directory: entry.paths[index] ?? entry.paths[0],
-  })))).sort((left, right) => compareText(left.name, right.name) || compareText(left.version, right.version));
+  }))))
+    .filter((pkg) => !isPlatformConditionalPackage(pkg.directory))
+    .sort((left, right) => compareText(left.name, right.name) || compareText(left.version, right.version));
 
   const texts = new Map();
   const spdxFallbackPackages = [];
