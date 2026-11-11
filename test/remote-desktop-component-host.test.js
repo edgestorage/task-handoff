@@ -10,6 +10,32 @@ require.extensions[".ts"] = (module, filename) => {
 const { DesktopComponentHost, DesktopFrameReader, desktopIpcFrame, DESKTOP_IPC_VERSION, MAX_DESKTOP_IPC_FRAME } = require("../packages/controlled-instance/src/remote-desktop/component-host.ts");
 const fixture = require("../remote-desktop-rs/crates/desktop-streaming/fixtures/contract.json");
 const steps = require("../remote-desktop-rs/crates/desktop-streaming/fixtures/adapter-contract.json");
+
+function fakeHandshakeBinary(directory, protocolVersion, nonce) {
+  const binary = path.join(directory, `fake-component-${protocolVersion}-${nonce || "echo"}.js`);
+  const responseNonce = nonce === undefined ? "hello.nonce" : JSON.stringify(nonce);
+  fs.writeFileSync(binary, `#!${process.execPath}\n${[
+    'const net=require("node:net");',
+    'const args=process.argv.slice(2);',
+    'const endpoint=args[args.indexOf("--ipc")+1];',
+    'const frame=value=>{const body=Buffer.from(JSON.stringify(value));const head=Buffer.alloc(4);head.writeUInt32BE(body.length);return Buffer.concat([head,body]);};',
+    'let buffered=Buffer.alloc(0);',
+    'const connect=hello=>{const socket=net.createConnection(endpoint);socket.on("connect",()=>socket.write(frame({protocolVersion:' + JSON.stringify(protocolVersion) + ',nonce:' + responseNonce + '})));socket.on("close",()=>process.exit(0));};',
+    'process.stdin.on("data",chunk=>{buffered=Buffer.concat([buffered,chunk]);if(buffered.length<4)return;const length=buffered.readUInt32BE(0);if(buffered.length<length+4)return;const hello=JSON.parse(buffered.subarray(4,length+4).toString("utf8"));process.stdin.pause();connect(hello);});',
+  ].join("\n")}\n`, { mode: 0o755 });
+  return binary;
+}
+
+test("private IPC distinguishes protocol mismatch and authentication failure", async () => {
+  const directory = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "desktop-handshake-"));
+  try {
+    await assert.rejects(DesktopComponentHost.spawn(fakeHandshakeBinary(directory, "1999-01-01"), "control"), /REMOTE_DESKTOP_PROTOCOL_MISMATCH/);
+    await assert.rejects(DesktopComponentHost.spawn(fakeHandshakeBinary(directory, DESKTOP_IPC_VERSION, "wrong-nonce"), "control"), /REMOTE_DESKTOP_IPC_AUTH_FAILED/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("private IPC consumes shared framing, fragmented/coalesced packets, and rejects oversized frames", () => {
   assert.equal(DESKTOP_IPC_VERSION, fixture.ipcVersion);
   assert.equal(MAX_DESKTOP_IPC_FRAME, fixture.maxIpcFrame);
@@ -48,7 +74,7 @@ test("production Node host consumes shared session contract and restart invalida
   const second = await DesktopComponentHost.spawn(binary,"control");
   try {
     assert.notEqual(second.bootId,host.bootId);
-    assert.equal((await second.request("stale",{ type:"attach",owner:{actorId:"adapter-actor",deviceSessionId:"adapter-device"},viewerSessionId:session,captureTarget:{kind:"display"},attachToken:token })).type,"error");
+    assert.equal((await second.request("stale",{ type:"attach",owner:{actorId:"adapter-actor",deviceSessionId:"adapter-device"},viewerSessionId:session,captureSelection:{sourceRef:"display"},attachToken:token })).type,"error");
   } finally { await second.close(); }
 });
 

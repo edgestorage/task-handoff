@@ -23,7 +23,10 @@ jest.mock('../modules/task-handoff-remote-desktop/src', () => ({
   configureRemoteDesktopDecoder: jest.fn(async () => undefined),
   decodeRemoteDesktopFrame: jest.fn(async () => undefined),
   resetRemoteDesktopDecoder: jest.fn(async () => undefined),
+  startRemoteDesktopTextInputObservation: jest.fn(() => false),
+  stopRemoteDesktopTextInputObservation: jest.fn(),
   subscribeRemoteDesktopDecoderErrors: jest.fn(() => ({ remove: jest.fn() })),
+  subscribeRemoteDesktopTextInput: jest.fn(() => ({ remove: jest.fn() })),
 }));
 
 jest.mock('../src/observability/diagnostic-logs', () => ({
@@ -50,7 +53,7 @@ function createdSession() {
       viewerCount: 1,
       transport: 'webrtc',
       phase: 'starting',
-      captureTarget: { kind: 'display' },
+      captureSelection: { sourceRef: 'display-primary' },
       sessionExpiresAt: Date.now() + 60_000,
       idleExpiresAt: null,
       mediaPaused: false,
@@ -60,7 +63,7 @@ function createdSession() {
     iceServers: [],
     iceCredentialsExpiresAt: null,
     ticketExpiresAt: Date.now() + 60_000,
-    protocolVersion: '2026-11-05',
+    protocolVersion: '2026-11-11',
   };
 }
 
@@ -92,6 +95,18 @@ function setup(availability: { p2p: boolean; turn: boolean; websocket: boolean }
   });
   const transport = { openAuthenticatedWebSocket } as unknown as MobileControlPlaneTransport;
   const api = {
+    sources: jest.fn(async () => ({
+      sources: [{
+        sourceRef: 'display-primary',
+        kind: 'display',
+        title: 'Primary display',
+        subtitle: null,
+        width: 1920,
+        height: 1080,
+        capturable: true,
+        reason: null,
+      }],
+    })),
     createSession: jest.fn(async () => createdSession()),
     fallback: jest.fn(async () => fallbackSession()),
     stop: jest.fn(async () => ({ stopped: true })),
@@ -100,7 +115,7 @@ function setup(availability: { p2p: boolean; turn: boolean; websocket: boolean }
     api,
     transport,
     instanceId: 'instance_1',
-    target: { kind: 'display' },
+    target: { kind: 'display', sourceRef: 'display-primary' },
     resolution: 'auto',
     frameRate: 'auto',
     transportAvailability: availability,
@@ -332,6 +347,246 @@ test('geometry suspension renews input against the suspension revision', async (
     .map(([data]) => JSON.parse(String(data)))
     .find((message) => message.type === 'input.resume');
   expect(resumed?.payload).toEqual({ sessionRevision: 9 });
+
+  await controller.close();
+});
+
+test('an inactive channel does not steal control and preserves explicit input intent', async () => {
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
+
+  controller.enableInput();
+  control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 5 } }));
+  expect(controller.getSnapshot().inputEnabled).toBe(true);
+  expect(controller.getSnapshot().inputRequested).toBe(true);
+
+  controller.setActive(false);
+  control.handlers.onMessage(JSON.stringify({
+    type: 'control.changed',
+    payload: { isController: false, viewerCount: 2, controlRevision: 2 },
+  }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().paused).toBe(true);
+  expect(controller.getSnapshot().inputEnabled).toBe(false);
+  expect(controller.getSnapshot().inputRequested).toBe(true);
+
+  control.send.mockClear();
+  controller.setActive(true);
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputRequested).toBe(true);
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .some((message) => message.type === 'control.request')).toBe(false);
+
+  controller.enableInput();
+  await flushMicrotasks();
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .some((message) => message.type === 'control.request')).toBe(true);
+
+  sockets[0].handlers.onMessage(JSON.stringify({
+    type: 'snapshot',
+    snapshot: { ...createdSession().snapshot, transport: 'websocket', phase: 'connected', isController: false },
+  }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputRequested).toBe(true);
+
+  control.handlers.onMessage(JSON.stringify({
+    type: 'control.changed',
+    payload: { isController: true, viewerCount: 2, controlRevision: 3 },
+  }));
+  await flushMicrotasks();
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .some((message) => message.type === 'input.resume')).toBe(true);
+
+  await controller.close();
+});
+
+test('automatically acquires control when nobody holds input', async () => {
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  sockets[0].handlers.onMessage(JSON.stringify({
+    type: 'snapshot',
+    snapshot: { ...createdSession().snapshot, transport: 'websocket', phase: 'active', isController: false, hasController: false },
+  }));
+  await flushMicrotasks();
+
+  expect(controller.getSnapshot().inputRequested).toBe(true);
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .some((message) => message.type === 'control.request')).toBe(true);
+
+  await controller.close();
+});
+
+test('retries input resume with the latest revision after a recoverable rejection', async () => {
+  jest.useFakeTimers();
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
+
+  controller.disableInput();
+  sockets[0].handlers.onMessage(JSON.stringify({
+    type: 'snapshot',
+    snapshot: { ...createdSession().snapshot, sessionRevision: 4, transport: 'websocket', phase: 'active', isController: true, hasController: true },
+  }));
+  await flushMicrotasks();
+  control.send.mockClear();
+
+  controller.enableInput();
+  await flushMicrotasks();
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .find((message) => message.type === 'input.resume')?.payload).toEqual({ sessionRevision: 4 });
+
+  sockets[0].handlers.onMessage(JSON.stringify({
+    type: 'snapshot',
+    snapshot: { ...createdSession().snapshot, sessionRevision: 5, transport: 'websocket', phase: 'active', isController: true, hasController: true },
+  }));
+  control.handlers.onMessage(JSON.stringify({ type: 'error', payload: { code: 'REMOTE_DESKTOP_STALE_EPOCH' } }));
+  await flushMicrotasks();
+
+  expect(controller.getSnapshot().inputPending).toBe(false);
+  expect(controller.getSnapshot().error).toBeUndefined();
+
+  jest.advanceTimersByTime(250);
+  await flushMicrotasks();
+  const resumes = control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .filter((message) => message.type === 'input.resume');
+  expect(resumes.at(-1)?.payload).toEqual({ sessionRevision: 5 });
+
+  control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 9 } }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputEnabled).toBe(true);
+  expect(controller.getSnapshot().inputPending).toBe(false);
+
+  control.handlers.onMessage(JSON.stringify({ type: 'error', payload: { code: 'REMOTE_DESKTOP_INVALID_STATE' } }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputEnabled).toBe(true);
+  expect(controller.getSnapshot().error).toBeUndefined();
+
+  await controller.close();
+  jest.useRealTimers();
+});
+
+test('retries input resume when the acknowledgement never arrives', async () => {
+  jest.useFakeTimers();
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
+
+  controller.disableInput();
+  control.send.mockClear();
+  controller.enableInput();
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputPending).toBe(true);
+
+  jest.advanceTimersByTime(2_500);
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputPending).toBe(false);
+
+  sockets[0].handlers.onMessage(JSON.stringify({
+    type: 'snapshot',
+    snapshot: { ...createdSession().snapshot, sessionRevision: 6, transport: 'websocket', phase: 'active', isController: true, hasController: true },
+  }));
+  control.handlers.onMessage(JSON.stringify({ type: 'error', payload: { code: 'REMOTE_DESKTOP_STALE_EPOCH' } }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().error).toBeUndefined();
+
+  jest.advanceTimersByTime(500);
+  await flushMicrotasks();
+  const resumes = control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .filter((message) => message.type === 'input.resume');
+  expect(resumes).toHaveLength(3);
+  expect(resumes.at(-1)?.payload).toEqual({ sessionRevision: 6 });
+  expect(controller.getSnapshot().inputPending).toBe(true);
+
+  control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 10 } }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputEnabled).toBe(true);
+
+  await controller.close();
+  jest.useRealTimers();
+});
+
+test('does not request control while another viewer is controlling', async () => {
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  sockets[0].handlers.onMessage(JSON.stringify({
+    type: 'snapshot',
+    snapshot: { ...createdSession().snapshot, transport: 'websocket', phase: 'active', isController: false, hasController: true },
+  }));
+  await flushMicrotasks();
+
+  expect(controller.getSnapshot().inputRequested).toBe(true);
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .some((message) => message.type === 'control.request')).toBe(false);
+
+  await controller.close();
+});
+
+test('manual input disable stays disabled when control becomes available', async () => {
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  controller.disableInput();
+  control.send.mockClear();
+  sockets[0].handlers.onMessage(JSON.stringify({
+    type: 'snapshot',
+    snapshot: { ...createdSession().snapshot, transport: 'websocket', phase: 'active', isController: false, hasController: false },
+  }));
+  await flushMicrotasks();
+
+  expect(controller.getSnapshot().inputRequested).toBe(false);
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .some((message) => message.type === 'control.request')).toBe(false);
 
   await controller.close();
 });

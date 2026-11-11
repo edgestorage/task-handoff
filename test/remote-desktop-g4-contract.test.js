@@ -1,10 +1,12 @@
 const assert=require('node:assert/strict');const fs=require('node:fs');const os=require('node:os');const path=require('node:path');const crypto=require('node:crypto');const test=require('node:test');const ts=require('typescript');require('./workspace-require.js').registerWorkspaceRequire();require.extensions['.ts']=(m,f)=>m._compile(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,esModuleInterop:true},fileName:f}).outputText,f);
 const protocol=require('../packages/protocol/src/remote-desktop.ts');const {DesktopTurnIssuer}=require('../packages/control-plane/src/control-plane/remote-desktop/turn.ts');
 test('public desktop schemas project bounded snapshot, SDP and candidates',()=>{
- const snapshot=protocol.DesktopSessionSnapshotSchema.parse({viewerSessionId:'v',sessionRevision:1,controlRevision:2,isController:false,hasController:false,viewerCount:3,transport:'websocket-fallback',phase:'starting',captureTarget:{kind:'display'},sessionExpiresAt:1,idleExpiresAt:null,mediaPaused:false,reason:null,inputEpoch:3});
+ const snapshot=protocol.DesktopSessionSnapshotSchema.parse({viewerSessionId:'v',sessionRevision:1,controlRevision:2,isController:false,hasController:false,viewerCount:3,transport:'websocket-fallback',phase:'starting',captureSelection:{sourceRef:'display-primary'},sessionExpiresAt:1,idleExpiresAt:null,mediaPaused:false,reason:null,inputEpoch:3});
  assert.equal(snapshot.controlRevision,2);assert.equal(snapshot.isController,false);assert.equal(snapshot.hasController,false);assert.equal(snapshot.viewerCount,3);assert.equal(snapshot.transport,'websocket-fallback');assert.equal('inputEpoch' in snapshot,false);
- const legacy=protocol.DesktopSessionSnapshotSchema.parse({viewerSessionId:'v',sessionRevision:1,phase:'starting',captureTarget:{kind:'display'},sessionExpiresAt:1,idleExpiresAt:null,mediaPaused:false,reason:null});
+ const legacy=protocol.DesktopSessionSnapshotSchema.parse({viewerSessionId:'v',sessionRevision:1,phase:'starting',captureSelection:{sourceRef:'display-primary'},sessionExpiresAt:1,idleExpiresAt:null,mediaPaused:false,reason:null});
  assert.equal(legacy.controlRevision,0);assert.equal(legacy.isController,true);assert.equal(legacy.hasController,true);assert.equal(legacy.viewerCount,1);assert.equal(legacy.transport,'webrtc');
+const stopped=protocol.DesktopSessionSnapshotSchema.parse({viewerSessionId:'v',sessionRevision:2,controlRevision:2,isController:false,hasController:false,viewerCount:0,transport:'webrtc',phase:'stopped',captureSelection:{sourceRef:'display-primary'},sessionExpiresAt:1,idleExpiresAt:null,mediaPaused:true,reason:null});
+assert.equal(stopped.viewerCount,0);assert.equal(stopped.phase,'stopped');
  assert.equal(protocol.desktopSdpAllowed('v=0\nm=video 9 UDP/TLS/RTP/SAVPF 96\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel'),true);
  assert.equal(protocol.desktopSdpAllowed('v=0\nm=audio 9 UDP/TLS/RTP/SAVPF 111\nm=video 9 UDP/TLS/RTP/SAVPF 96\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel'),false);
  assert.equal(protocol.DesktopSignalSchema.safeParse({type:'candidate',requestId:'r',candidate:{candidate:'x',sdpMid:'0',sdpMLineIndex:0}}).success,true);
@@ -16,21 +18,21 @@ test('TURN issuer uses deployment secret and rejects unhealthy clock or unsuppor
  fs.writeFileSync(clock,JSON.stringify({measuredAt:Date.now()-120000,offsetMs:0,synchronized:true}));assert.throws(()=>new DesktopTurnIssuer(config,'secret').issue(),/TURN/);fs.rmSync(dir,{recursive:true,force:true});
 });
 
-test('window directory is bounded and contains no operating-system handles',()=>{
- const valid={windowRef:'wr_opaque_1',title:'Editor',applicationName:'Code',width:1280,height:720,capturable:true,reason:null};
- assert.equal(protocol.DesktopWindowSchema.safeParse(valid).success,true);
- assert.equal(protocol.DesktopWindowsSchema.safeParse([valid]).success,true);
- assert.equal(protocol.DesktopWindowsSchema.safeParse(Array.from({length:257},(_,i)=>({...valid,windowRef:`w${i}`}))).success,false);
- assert.equal(protocol.DesktopWindowSchema.safeParse({...valid,hwnd:12}).success,true);
- const projected=protocol.DesktopWindowSchema.parse({...valid,hwnd:12,pid:3,path:'/tmp/secret'});
+test('source directory is bounded and contains no operating-system handles',()=>{
+ const valid={sourceRef:'src_opaque_1',kind:'window',title:'Editor',subtitle:'Code',width:1280,height:720,capturable:true,reason:null};
+ assert.equal(protocol.DesktopSourceSchema.safeParse(valid).success,true);
+ assert.equal(protocol.DesktopSourcesSchema.safeParse([valid]).success,true);
+ assert.equal(protocol.DesktopSourcesSchema.safeParse(Array.from({length:257},(_,i)=>({...valid,sourceRef:`w${i}`}))).success,false);
+ assert.equal(protocol.DesktopSourceSchema.safeParse({...valid,hwnd:12}).success,true);
+ const projected=protocol.DesktopSourceSchema.parse({...valid,hwnd:12,pid:3,path:'/tmp/secret'});
  assert.equal('hwnd' in projected,false);assert.equal('pid' in projected,false);assert.equal('path' in projected,false);
 });
 
-test('capability absence disables only remote desktop and malformed window refs are rejected',()=>{
+test('capability absence disables only remote desktop and malformed source refs are rejected',()=>{
  const unavailable=protocol.normalizeRemoteDesktopCapabilities({available:true,windowCapture:{available:true}});
- assert.equal(unavailable.available,false);assert.equal(unavailable.captureTargets.length,0);
- assert.equal(protocol.DesktopCaptureTargetSchema.safeParse({kind:'window',windowRef:''}).success,false);
- assert.equal(protocol.DesktopCaptureTargetSchema.safeParse({kind:'window',windowRef:'x',pid:3}).success,false);
+ assert.equal(unavailable.available,false);assert.equal(unavailable.sourceProviders.length,0);
+ assert.equal(protocol.DesktopCaptureSelectionSchema.safeParse({sourceRef:''}).success,false);
+ assert.equal(protocol.DesktopCaptureSelectionSchema.safeParse({sourceRef:'x',windowRef:'forged'}).success,false);
 });
 
 test('fallback media frames validate their fixed header and payload boundary',()=>{

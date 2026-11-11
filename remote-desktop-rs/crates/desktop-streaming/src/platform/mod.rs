@@ -14,6 +14,8 @@ pub mod windows_job;
 pub use apple_windows as native_capture;
 #[cfg(target_os = "macos")]
 pub use macos as native_capture;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub mod display;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod display_geometry;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]

@@ -1,20 +1,27 @@
 //! Projections owned by the component, not a second session registry.
 use serde::{Deserialize, Serialize};
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Owner {
     pub actor_id: String,
     pub device_session_id: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum CaptureTarget {
-    Display,
-    Window { window_ref: String },
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalizedRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureSelection {
+    pub source_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_region: Option<NormalizedRect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_region: Option<NormalizedRect>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,7 +64,7 @@ pub struct Snapshot {
     #[serde(default = "default_transport")]
     pub transport: String,
     pub phase: Phase,
-    pub capture_target: CaptureTarget,
+    pub capture_selection: CaptureSelection,
     pub session_expires_at: u64,
     pub idle_expires_at: Option<u64>,
     pub input_epoch: Option<u64>,
@@ -86,12 +93,13 @@ pub struct CaptureGeometry {
     pub height: u32,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WindowEntry {
-    pub window_ref: String,
+pub struct CaptureSource {
+    pub source_ref: String,
+    pub kind: String,
     pub title: String,
-    pub application_name: String,
+    pub subtitle: Option<String>,
     pub width: u32,
     pub height: u32,
     pub capturable: bool,

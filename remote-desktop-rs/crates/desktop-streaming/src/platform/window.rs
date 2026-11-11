@@ -18,7 +18,7 @@ impl WindowCatalog {
     pub async fn enumerate(
         &mut self,
         owner: crate::session::Owner,
-    ) -> anyhow::Result<Vec<crate::catalog::WindowEntry>> {
+    ) -> anyhow::Result<Vec<crate::catalog::CaptureSource>> {
         match self {
             #[cfg(target_os = "macos")]
             Self::Macos(catalog) => catalog.enumerate(owner).await,

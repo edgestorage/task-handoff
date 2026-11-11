@@ -46,7 +46,7 @@ test("a malformed directory remote desktop document disables only this domain", 
 test("relay desktop paths are restricted to one-time signal and fallback WebSockets", () => {
   const signal = parseRemoteDesktopRelayPath("/api/controlled-instances/inst_a/remote-desktop-sessions/rdv_a/signal?ticket=ticket_a");
   assert.deepEqual(signal, { kind: "signal", instanceId: "inst_a", sessionId: "rdv_a", ticket: "ticket_a" });
-  assert.equal(remoteDesktopRelaySubprotocol(signal!), "taskhandoff.remote-desktop.2026-11-05");
+  assert.equal(remoteDesktopRelaySubprotocol(signal!), "taskhandoff.remote-desktop.2026-11-11");
   const fallback = parseRemoteDesktopRelayPath("/api/controlled-instances/inst_a/remote-desktop-sessions/rdv_a/fallback/media?ticket=ticket_a");
   assert.deepEqual(fallback, { kind: "fallback", instanceId: "inst_a", sessionId: "rdv_a", role: "media", ticket: "ticket_a" });
   assert.equal(remoteDesktopRelaySubprotocol(fallback!), "taskhandoff.remote-desktop.fallback.media.v1");

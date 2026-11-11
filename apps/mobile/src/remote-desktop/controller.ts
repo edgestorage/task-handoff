@@ -11,6 +11,14 @@ import type {
   DesktopIceServer,
   DesktopSessionSnapshot,
 } from '@task-handoff/protocol/remote-desktop';
+import {
+  isRecoverableRemoteDesktopInputResumeError,
+  parseRemoteDesktopWebRTCStats,
+  remoteDesktopInputResumeRetryDelayMs,
+  REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS,
+  type createControlPlaneRemoteDesktopApi,
+  type RemoteDesktopWebRTCStats,
+} from '@task-handoff/control-plane-client';
 import { RTCPeerConnection } from 'react-native-webrtc';
 
 import {
@@ -22,10 +30,10 @@ import {
 } from '../../modules/task-handoff-remote-desktop/src';
 import { diagnosticLog } from '../observability/diagnostic-logs';
 import type { MobileAuthenticatedWebSocket, MobileControlPlaneTransport } from '../control-plane/transport';
-import type { createControlPlaneRemoteDesktopApi } from '@task-handoff/control-plane-client';
 import {
   REMOTE_DESKTOP_RESOLUTION_PRESETS,
-  captureTargetForProtocol,
+  captureSelectionForProtocol,
+  resolvePersistedCaptureTarget,
   type PersistedCaptureTarget,
   type RemoteDesktopFrameRate,
   type RemoteDesktopResolution,
@@ -101,6 +109,9 @@ export class RemoteDesktopController {
   private signalOpen = false;
   private inputEpoch = 0;
   private inputAliveTimer?: ReturnType<typeof setInterval>;
+  private inputResumeAckTimer?: ReturnType<typeof setTimeout>;
+  private inputResumeRetryTimer?: ReturnType<typeof setTimeout>;
+  private inputResumeRetryCount = 0;
   private signalAliveTimer?: ReturnType<typeof setInterval>;
   private offerInFlight = false;
   private fallbackHeadStartTimer?: ReturnType<typeof setTimeout>;
@@ -151,10 +162,20 @@ export class RemoteDesktopController {
     if (this.destroyed || this.starting || this.session) return;
     this.starting = true;
     this.stopping = false;
-    this.update({ phase: 'connecting', error: undefined });
+    this.update({ phase: 'connecting', error: undefined, inputRequested: true, transportDiagnostics: undefined });
     this.armStartupTimeout();
     try {
-      const created = await this.input.api.createSession(this.input.instanceId, captureTargetForProtocol(this.snapshotValue.target));
+      const selection = await this.resolveCaptureSelection();
+      if (!selection) {
+        this.clearStartupTimeout();
+        this.update({
+          phase: 'error',
+          error: { code: 'REMOTE_DESKTOP_SOURCE_SELECTION_REQUIRED', message: 'Select a capture source before connecting.' },
+          paused: false,
+        });
+        return;
+      }
+      const created = await this.input.api.createSession(this.input.instanceId, selection);
       if (this.destroyed || this.stopping) {
         await this.input.api.stop(this.input.instanceId, created.snapshot.viewerSessionId).catch(() => undefined);
         return;
@@ -200,7 +221,7 @@ export class RemoteDesktopController {
     // A new capture target is a new component session. Keeping the old
     // reservation alive leaves the component busy for the replacement.
     await this.stopCurrentSession(true);
-    this.update({ target, error: undefined, phase: 'connecting', streamURL: undefined, videoWidth: 0, videoHeight: 0, path: undefined, signalingReady: false });
+    this.update({ target, error: undefined, phase: 'connecting', streamURL: undefined, videoWidth: 0, videoHeight: 0, path: undefined, transportDiagnostics: undefined, signalingReady: false, inputRequested: true });
     if (this.active) await this.start();
   }
 
@@ -217,6 +238,15 @@ export class RemoteDesktopController {
     if (this.snapshotValue.phase === 'connecting' || this.snapshotValue.phase === 'reconnecting') this.armStartupTimeout();
     this.requestKeyframe();
     if (this.snapshotValue.inputRequested) this.resumeWanted();
+  }
+
+  private async resolveCaptureSelection() {
+    const current = this.snapshotValue.target;
+    const { sources } = await this.input.api.sources(this.input.instanceId);
+    const resolved = resolvePersistedCaptureTarget(sources, current);
+    if (!resolved) return undefined;
+    if (!sameTarget(current, resolved)) this.update({ target: resolved });
+    return captureSelectionForProtocol(resolved);
   }
 
   setResolution(resolution: RemoteDesktopResolution) {
@@ -521,7 +551,7 @@ export class RemoteDesktopController {
     }
     if (!snapshot.isController) {
       this.releaseInputState();
-      this.update({ inputRequested: false, controlRequestPending: false });
+      this.update({ controlRequestPending: false });
     } else if (this.snapshotValue.controlRequestPending) {
       this.update({ controlRequestPending: false });
       if (this.snapshotValue.inputRequested) this.resumeWanted();
@@ -532,6 +562,7 @@ export class RemoteDesktopController {
       hasController: snapshot.hasController,
       viewerCount: snapshot.viewerCount,
     });
+    if (this.active && this.snapshotValue.inputRequested) this.resumeWanted();
     if (snapshot.transport === 'webrtc' && this.fallbackState !== 'idle') this.commitTransportUpgrade();
   }
 
@@ -800,8 +831,8 @@ export class RemoteDesktopController {
     diagnosticLog.info('remote.desktop.fallback.ready', { attempt: this.fallbackAttempt });
     this.fallbackNeedsKeyframe = true;
     this.fallbackFirstFrame = false;
-    this.update({ phase: this.snapshotValue.paused ? 'paused' : 'connected', path: 'websocket', streamURL: undefined, error: undefined });
-    this.updateTransportState('websocket', 'active');
+    this.update({ phase: this.snapshotValue.paused ? 'paused' : 'connected', streamURL: undefined, error: undefined });
+    this.applyPath('websocket');
     this.sendVisibility();
     this.applyStreamResolution();
     this.requestFallbackKeyframe();
@@ -884,7 +915,7 @@ export class RemoteDesktopController {
     this.fallbackCodec = '';
     this.fallbackConfigKey = '';
     this.fallbackNeedsKeyframe = true;
-    this.update({ path: this.snapshotValue.path === 'websocket' ? undefined : this.snapshotValue.path, streamURL: this.snapshotValue.streamURL, phase: this.snapshotValue.paused ? 'paused' : 'connected' });
+    this.update({ path: this.snapshotValue.path === 'websocket' ? undefined : this.snapshotValue.path, transportDiagnostics: undefined, streamURL: this.snapshotValue.streamURL, phase: this.snapshotValue.paused ? 'paused' : 'connected' });
     this.applyPath(this.snapshotValue.path);
     this.sendVisibility();
     this.requestKeyframe();
@@ -919,8 +950,11 @@ export class RemoteDesktopController {
   private handleControlValue(value: any) {
     if (value?.type === 'input.resumed') {
       this.inputEpoch = Number(value.payload?.inputEpoch) || 0;
+      this.clearInputResumeTimers();
+      this.inputResumeRetryCount = 0;
       this.startInputAlive();
       this.update({ inputEnabled: true, inputPending: false, inputRequested: true });
+      diagnosticLog.info('remote.desktop.input.resumed', { inputEpoch: this.inputEpoch });
     } else if (value?.type === 'input.suspended') {
       const payload = value.payload ?? {};
       const sessionRevision = Number.isSafeInteger(payload.sessionRevision) && payload.sessionRevision >= 0
@@ -934,6 +968,11 @@ export class RemoteDesktopController {
         && this.active
         && !this.snapshotValue.paused;
       this.releaseInputState();
+      diagnosticLog.info('remote.desktop.input.suspended', {
+        cause: typeof payload.cause === 'string' ? payload.cause : undefined,
+        recoverable: payload.recoverable === true,
+        sessionRevision,
+      });
       if (sessionRevision !== undefined && this.snapshotValue.session) {
         this.update({
           session: {
@@ -948,32 +987,89 @@ export class RemoteDesktopController {
       this.update({
         isController,
         controlRequestPending: false,
-        hasController: isController ? true : this.snapshotValue.hasController,
+        hasController: true,
         viewerCount: Number.isInteger(value.payload?.viewerCount) ? value.payload.viewerCount : this.snapshotValue.viewerCount,
         ...(value.payload?.controlRevision !== undefined ? { session: this.snapshotValue.session ? { ...this.snapshotValue.session, controlRevision: Number(value.payload.controlRevision) || 0, isController } : undefined } : {}),
       });
       if (!isController) {
         this.releaseInputState();
-        this.update({ inputRequested: false });
       } else if (this.snapshotValue.inputRequested) {
         this.resumeWanted();
       }
     } else if (value?.type === 'error') {
       const code = typeof value.payload?.code === 'string' ? value.payload.code : 'REMOTE_DESKTOP_MESSAGE_INVALID';
       if (code === 'REMOTE_DESKTOP_WEBRTC_NOT_READY') return;
-      this.releaseInputState();
+      if (code === 'REMOTE_DESKTOP_INVALID_STATE' && this.snapshotValue.inputEnabled) {
+        diagnosticLog.info('remote.desktop.input.late-error.ignored', { code });
+        return;
+      }
+      const retryingInput = (
+        this.snapshotValue.inputPending
+        || this.inputResumeRetryTimer !== undefined
+        || this.inputResumeRetryCount > 0
+      ) && isRecoverableRemoteDesktopInputResumeError(code);
+      this.releaseInputState(!retryingInput);
+      if (retryingInput) {
+        diagnosticLog.warn('remote.desktop.input.resume.error', {
+          code,
+          sessionRevision: this.snapshotValue.session?.sessionRevision,
+        });
+        this.scheduleInputResumeRetry(code);
+        return;
+      }
       this.update({ controlRequestPending: false, error: { code, message: code } });
     }
   }
 
   private resumeWanted() {
     if (this.destroyed || !this.active || this.snapshotValue.paused || this.snapshotValue.inputEnabled || this.snapshotValue.inputPending) return;
+    if (this.snapshotValue.session?.phase !== 'active' && this.snapshotValue.phase !== 'connected') return;
+    if (this.snapshotValue.session?.mediaPaused) return;
     if (!this.snapshotValue.isController) {
-      this.requestControl();
+      if (!this.snapshotValue.hasController) this.requestControl();
       return;
     }
-    const sent = this.wire('control', 'input.resume', { sessionRevision: this.snapshotValue.session?.sessionRevision });
-    if (sent) this.update({ inputPending: true });
+    const sessionRevision = this.snapshotValue.session?.sessionRevision;
+    const sent = this.wire('control', 'input.resume', { sessionRevision });
+    if (sent) {
+      diagnosticLog.info('remote.desktop.input.resume.sent', {
+        attempt: this.inputResumeRetryCount + 1,
+        sessionRevision,
+      });
+      this.update({ inputPending: true });
+      this.armInputResumeAckTimeout();
+    }
+  }
+
+  private armInputResumeAckTimeout() {
+    this.clearInputResumeAckTimer();
+    this.inputResumeAckTimer = setTimeout(() => {
+      this.inputResumeAckTimer = undefined;
+      if (this.destroyed || !this.active || this.snapshotValue.paused || !this.snapshotValue.inputRequested || !this.snapshotValue.isController || this.snapshotValue.inputEnabled) return;
+      diagnosticLog.warn('remote.desktop.input.resume.timeout', {
+        attempt: this.inputResumeRetryCount + 1,
+        sessionRevision: this.snapshotValue.session?.sessionRevision,
+      });
+      this.update({ inputPending: false });
+      this.scheduleInputResumeRetry('ack-timeout');
+    }, REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS);
+  }
+
+  private scheduleInputResumeRetry(reason: string) {
+    if (this.inputResumeRetryTimer || this.destroyed || !this.active || this.snapshotValue.paused || !this.snapshotValue.inputRequested || !this.snapshotValue.isController || this.snapshotValue.inputEnabled) return;
+    const attempt = this.inputResumeRetryCount;
+    this.inputResumeRetryCount += 1;
+    const delayMs = remoteDesktopInputResumeRetryDelayMs(attempt);
+    diagnosticLog.info('remote.desktop.input.resume.retry', {
+      attempt: attempt + 1,
+      delayMs,
+      reason,
+      sessionRevision: this.snapshotValue.session?.sessionRevision,
+    });
+    this.inputResumeRetryTimer = setTimeout(() => {
+      this.inputResumeRetryTimer = undefined;
+      this.resumeWanted();
+    }, delayMs);
   }
 
   private suspendInput() {
@@ -981,8 +1077,10 @@ export class RemoteDesktopController {
     this.releaseInputState();
   }
 
-  private releaseInputState() {
+  private releaseInputState(resetRetry = true) {
     this.stopInputAlive();
+    this.clearInputResumeTimers();
+    if (resetRetry) this.inputResumeRetryCount = 0;
     this.inputEpoch = 0;
     this.update({ inputEnabled: false, inputPending: false });
   }
@@ -1124,37 +1222,29 @@ export class RemoteDesktopController {
   private async refreshTransportPath(peer: RTCPeerConnection) {
     try {
       const stats = await peer.getStats();
-      let pair: any;
-      stats.forEach((report: any) => {
-        if (report?.type === 'transport' && report.selectedCandidatePairId) pair ??= stats.get(report.selectedCandidatePairId);
-      });
-      if (!pair) {
-        stats.forEach((report: any) => {
-          if (!pair && report?.type === 'candidate-pair' && report.state === 'succeeded' && report.nominated) pair = report;
-        });
-      }
-      if (!pair) return;
-      const local = typeof pair.localCandidateId === 'string' ? stats.get(pair.localCandidateId) : undefined;
-      const remote = typeof pair.remoteCandidateId === 'string' ? stats.get(pair.remoteCandidateId) : undefined;
-      const relay = local?.candidateType === 'relay' || remote?.candidateType === 'relay';
-      const path: RemoteDesktopPath = relay ? 'turn' : 'p2p';
+      const diagnostics = parseRemoteDesktopWebRTCStats(stats as Parameters<typeof parseRemoteDesktopWebRTCStats>[0]);
+      const path = diagnostics?.path;
+      if (!path) return;
       if (path === 'turn' && !this.snapshotValue.transportAvailability.turn) return;
       if (path === 'p2p' && !this.snapshotValue.transportAvailability.p2p) return;
-      if (this.snapshotValue.path !== path) this.update({ path });
-      this.applyPath(path);
+      this.applyPath(path, diagnostics);
     } catch {
       // Stats are diagnostic; media state changes still drive the session.
     }
   }
 
-  private applyPath(path?: RemoteDesktopPath) {
+  private applyPath(path?: RemoteDesktopPath, diagnostics?: RemoteDesktopWebRTCStats) {
     const availability = this.snapshotValue.transportAvailability;
     const states: Record<RemoteDesktopTransportKey, RemoteDesktopTransportState> = {
       p2p: availability.p2p ? (path === 'p2p' ? 'active' : 'pending') : 'idle',
       turn: availability.turn ? (path === 'turn' ? 'active' : 'pending') : 'idle',
       websocket: this.fallbackState === 'active' ? 'active' : this.fallbackState === 'switching' || this.fallbackState === 'reconnecting' ? 'pending' : this.fallbackState === 'failed' ? 'failed' : 'idle',
     };
-    this.update({ path, transportStates: states });
+    const nextDiagnostics = path === 'p2p' || path === 'turn' ? diagnostics : undefined;
+    if (this.snapshotValue.path === path
+      && sameTransportStates(this.snapshotValue.transportStates, states)
+      && sameTransportDiagnostics(this.snapshotValue.transportDiagnostics, nextDiagnostics)) return;
+    this.update({ path, transportStates: states, transportDiagnostics: nextDiagnostics });
   }
 
   private updateTransportState(key: RemoteDesktopTransportKey, state: RemoteDesktopTransportState) {
@@ -1166,7 +1256,7 @@ export class RemoteDesktopController {
     // reservation must be released first; otherwise the component reports the
     // instance as busy and the new transport never starts.
     await this.stopCurrentSession(true);
-    this.update({ phase: 'connecting', error: undefined, streamURL: undefined, path: undefined, signalingReady: false, videoWidth: 0, videoHeight: 0 });
+    this.update({ phase: 'connecting', error: undefined, streamURL: undefined, path: undefined, transportDiagnostics: undefined, signalingReady: false, videoWidth: 0, videoHeight: 0, inputRequested: true });
     await this.start();
   }
 
@@ -1201,6 +1291,7 @@ export class RemoteDesktopController {
       videoWidth: 0,
       videoHeight: 0,
       path: undefined,
+      transportDiagnostics: undefined,
       signalingReady: false,
       inputEnabled: false,
       inputPending: false,
@@ -1252,8 +1343,20 @@ export class RemoteDesktopController {
     this.clearFallbackRetry();
     this.clearFallbackUpgrade();
     this.stopStatsWatch();
+    this.clearInputResumeTimers();
     if (this.availabilityTimer) clearTimeout(this.availabilityTimer);
     this.availabilityTimer = undefined;
+  }
+
+  private clearInputResumeTimers() {
+    this.clearInputResumeAckTimer();
+    if (this.inputResumeRetryTimer) clearTimeout(this.inputResumeRetryTimer);
+    this.inputResumeRetryTimer = undefined;
+  }
+
+  private clearInputResumeAckTimer() {
+    if (this.inputResumeAckTimer) clearTimeout(this.inputResumeAckTimer);
+    this.inputResumeAckTimer = undefined;
   }
 
   private fallbackWidth() {
@@ -1301,7 +1404,7 @@ export class RemoteDesktopController {
     await resetRemoteDesktopDecoder().catch(() => undefined);
     this.session = undefined;
     this.fallbackState = 'failed';
-    this.update({ phase: 'error', error: { code, message }, inputEnabled: false, inputRequested: false, inputPending: false, signalingReady: false, streamURL: undefined });
+    this.update({ phase: 'error', error: { code, message }, inputEnabled: false, inputRequested: false, inputPending: false, signalingReady: false, streamURL: undefined, transportDiagnostics: undefined });
     if (session) await this.input.api.stop(this.input.instanceId, session.snapshot.viewerSessionId).catch(() => undefined);
   }
 
@@ -1313,11 +1416,31 @@ export class RemoteDesktopController {
 
 function sameTarget(left: PersistedCaptureTarget, right: PersistedCaptureTarget) {
   if (left.kind !== right.kind) return false;
-  return left.kind === 'display' || (right.kind === 'window' && left.windowRef === right.windowRef);
+  if (left.sourceRef || right.sourceRef) return left.sourceRef === right.sourceRef;
+  return left.title === right.title
+    && left.subtitle === right.subtitle
+    && left.width === right.width
+    && left.height === right.height;
 }
 
 function sameAvailability(left: RemoteDesktopTransportAvailability, right: RemoteDesktopTransportAvailability) {
   return left.p2p === right.p2p && left.turn === right.turn && left.websocket === right.websocket;
+}
+
+function sameTransportStates(
+  left: RemoteDesktopSnapshot['transportStates'],
+  right: RemoteDesktopSnapshot['transportStates'],
+) {
+  return left.p2p === right.p2p && left.turn === right.turn && left.websocket === right.websocket;
+}
+
+function sameTransportDiagnostics(left?: RemoteDesktopWebRTCStats, right?: RemoteDesktopWebRTCStats) {
+  if (!left || !right) return left === right;
+  return left.path === right.path
+    && left.protocol === right.protocol
+    && left.localCandidateType === right.localCandidateType
+    && left.remoteCandidateType === right.remoteCandidateType
+    && left.latencyMs === right.latencyMs;
 }
 
 function clamp01(value: number) { return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0)); }

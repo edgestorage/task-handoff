@@ -57,7 +57,7 @@ Unicode clipboard, BUSY and stop/reconnect. It stops its viewers and closes its
 second test tab. No product services, native permissions or managed instances are
 required.
 
-## Private IPC contract (2026-11-07)
+## Private IPC contract (2026-11-11)
 
 The host creates a private temporary directory (0700 on Unix), binds an endpoint
 using `controlled_instance_core::local_ipc`, then starts its own component with
@@ -356,7 +356,7 @@ deferred by the user. Formal LAN150ms/TURN/weak-network gates belong toG6.
 
 ## macOS window lifecycle evidence
 
-The private host supports owner-bound `listWindows` and window reserve/attach.
+The private host supports owner-bound `listSources` and source reserve/attach.
 Each selection retains its SCK filter and AX window authority. No raw OS IDs
 cross that boundary. Input resume requires the current sessionRevision and
 only publishes an epoch after actual foreground/AX focus validation. Native

@@ -2,7 +2,7 @@
 use desktop_streaming::{
     contract::{Command, Reply},
     host::TestHost,
-    session::{CaptureTarget, Owner},
+    session::{CaptureSelection, Owner},
 };
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -35,7 +35,11 @@ async fn main() -> anyhow::Result<()> {
             "create",
             Command::Reserve {
                 owner: owner.clone(),
-                capture_target: CaptureTarget::Display,
+                capture_selection: CaptureSelection {
+                    source_ref: "synthetic-display".into(),
+                    stream_region: None,
+                    control_region: None,
+                },
             },
         )
         .await?
@@ -48,7 +52,11 @@ async fn main() -> anyhow::Result<()> {
             Command::Attach {
                 owner: owner.clone(),
                 viewer_session_id: snapshot.viewer_session_id.clone(),
-                capture_target: CaptureTarget::Display,
+                capture_selection: CaptureSelection {
+                    source_ref: "synthetic-display".into(),
+                    stream_region: None,
+                    control_region: None,
+                },
                 attach_token,
             },
         )

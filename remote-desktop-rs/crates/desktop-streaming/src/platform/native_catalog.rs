@@ -2,7 +2,7 @@
 //! adapter; the service must not expose window capture until focus/hit testing
 //! and geometry transitions are integrated and validated on each platform.
 use crate::{
-    catalog::{Catalog, NativeWindow, WindowEntry, MAX_WINDOWS},
+    catalog::{CaptureSource, Catalog, NativeSource, MAX_SOURCES},
     error::BackendError,
     session::Owner,
     traits::Geometry,
@@ -76,7 +76,7 @@ async fn enumerate() -> anyhow::Result<CapturableContent> {
         .map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))
 }
 impl WindowCatalog {
-    pub async fn enumerate(&mut self, owner: Owner) -> anyhow::Result<Vec<WindowEntry>> {
+    pub async fn enumerate(&mut self, owner: Owner) -> anyhow::Result<Vec<CaptureSource>> {
         self.references.invalidate();
         let content = enumerate().await?;
         let mut windows = Vec::new();
@@ -89,19 +89,22 @@ impl WindowCatalog {
                 rect.size.height,
             )?;
             let application = window.application();
-            windows.push(NativeWindow {
+            let (title, subtitle) =
+                crate::catalog::source_labels(window.title(), application.name());
+            windows.push(NativeSource {
                 identity: format!("wgc:{}:{}", window.get_window_handle().0, application.pid()),
                 unavailable_reason: None,
                 handle: Selection {
                     window: window.clone(),
                     pid: application.pid(),
                 },
-                title: window.title(),
-                application_name: application.name(),
+                kind: "window".into(),
+                title,
+                subtitle,
                 width: geometry.width,
                 height: geometry.height,
             });
-            if windows.len() > MAX_WINDOWS {
+            if windows.len() > MAX_SOURCES {
                 break;
             }
         }

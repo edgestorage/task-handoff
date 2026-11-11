@@ -18,8 +18,8 @@
           :active="isActiveTab(instanceId, tab.key)"
           :can-manage="canManage"
           :capabilities="instanceCapabilities[instanceId]"
-          :instance-id="instanceId"
           embedded
+          :instance-id="instanceId"
         />
       </div>
     </div>

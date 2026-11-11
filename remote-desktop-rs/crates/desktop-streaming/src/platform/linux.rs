@@ -1,7 +1,7 @@
 //! X11/XShm/XDamage and XFixes. The connection owns all native handles; no
 //! display/handle identifiers enter a public session or persisted business model.
 use crate::{
-    catalog::{Catalog, CatalogError, NativeWindow, WindowEntry},
+    catalog::{CaptureSource, Catalog, CatalogError, NativeSource},
     error::BackendError,
     traits::{Geometry, RawFrame},
 };
@@ -9,12 +9,14 @@ use std::{fs::File, os::unix::fs::FileExt, time::Instant};
 use x11rb::{
     connection::Connection,
     protocol::{
+        composite::{ConnectionExt as _, Redirect},
         damage::{ConnectionExt as _, ReportLevel},
+        randr::ConnectionExt as _,
         shm::ConnectionExt as _,
         xfixes::ConnectionExt as _,
         xproto::{
             Atom, AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as _,
-            EventMask, ImageFormat, ImageOrder, InputFocus, MapState, StackMode, Window,
+            EventMask, ImageFormat, ImageOrder, InputFocus, MapState, Pixmap, StackMode, Window,
         },
         Event,
     },
@@ -26,6 +28,24 @@ pub struct Config {
     pub cookie: Option<Vec<u8>>,
     pub authority: Option<std::path::PathBuf>,
     pub include_cursor: bool,
+}
+#[derive(Clone)]
+pub struct DisplayTarget {
+    config: Config,
+    output: String,
+    geometry: Geometry,
+}
+impl DisplayTarget {
+    pub fn source(&self, show_cursor: bool) -> anyhow::Result<crate::capture::Source> {
+        let mut config = self.config.clone();
+        config.include_cursor = show_cursor;
+        let capture = if self.output.is_empty() {
+            Capture::open(&config)?
+        } else {
+            Capture::open_output(&config, &self.output, self.geometry)?
+        };
+        Ok(crate::capture::Source::X11(Box::new(capture)))
+    }
 }
 impl Config {
     pub fn environment(include_cursor: bool) -> anyhow::Result<Self> {
@@ -120,6 +140,18 @@ struct PopupCapture {
     window: Window,
     damage: u32,
 }
+struct CompositeWindow {
+    window: Window,
+    pixmap: Pixmap,
+    x: i32,
+    y: i32,
+    width: u16,
+    height: u16,
+}
+struct CompositeCapture {
+    window: Window,
+    windows: Vec<CompositeWindow>,
+}
 pub struct Capture {
     conn: RustConnection,
     root: Window,
@@ -131,9 +163,13 @@ pub struct Capture {
     base: Vec<u8>,
     dirty: bool,
     include_cursor: bool,
+    capture_origin: (i16, i16),
+    display_output: Option<String>,
     last_cursor: (i16, i16, u32),
     popup_policy: Option<PopupPolicy>,
     popups: Vec<PopupCapture>,
+    composite: Option<CompositeCapture>,
+    composite_dirty: bool,
 }
 impl Capture {
     pub fn open(config: &Config) -> anyhow::Result<Self> {
@@ -161,6 +197,29 @@ impl Capture {
             DrawableTarget::Display,
             geometry,
             config.include_cursor,
+            None,
+        )
+    }
+    pub fn open_output(config: &Config, output: &str, geometry: Geometry) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            std::env::var_os("WSL_DISTRO_NAME").is_none(),
+            BackendError::WslUnsupported
+        );
+        validate_geometry(geometry)?;
+        let (conn, screen_index) = connect(config)?;
+        initialize(&conn)?;
+        let (root, depth, visual) = {
+            let screen = &conn.setup().roots[screen_index];
+            (screen.root, screen.root_depth, screen.root_visual)
+        };
+        validate_visual(&conn, screen_index, depth, visual)?;
+        Self::create(
+            conn,
+            root,
+            DrawableTarget::Display,
+            geometry,
+            config.include_cursor,
+            Some(output.to_owned()),
         )
     }
     pub fn open_window(
@@ -200,6 +259,7 @@ impl Capture {
             DrawableTarget::Window(WindowHandle { window, pid }),
             geometry,
             config.include_cursor,
+            None,
         )
     }
     fn create(
@@ -208,6 +268,7 @@ impl Capture {
         target: DrawableTarget,
         geometry: Geometry,
         include_cursor: bool,
+        display_output: Option<String>,
     ) -> anyhow::Result<Self> {
         let (segment, file) = allocate_shm(&conn, geometry)?;
         let damage = conn.generate_id()?;
@@ -216,6 +277,15 @@ impl Capture {
         let popup_policy = match &target {
             DrawableTarget::Display => None,
             DrawableTarget::Window(handle) => PopupPolicy::new(&conn, handle.pid)?,
+        };
+        let capture_origin = match &target {
+            DrawableTarget::Display => (
+                i16::try_from(geometry.x)
+                    .map_err(|_| anyhow::anyhow!(BackendError::InvalidGeometry))?,
+                i16::try_from(geometry.y)
+                    .map_err(|_| anyhow::anyhow!(BackendError::InvalidGeometry))?,
+            ),
+            DrawableTarget::Window(_) => (0, 0),
         };
         let mut capture = Self {
             conn,
@@ -228,9 +298,13 @@ impl Capture {
             base: vec![0; frame_bytes(geometry)?],
             dirty: true,
             include_cursor,
+            capture_origin,
+            display_output,
             last_cursor: (i16::MIN, i16::MIN, 0),
             popup_policy,
             popups: Vec::new(),
+            composite: None,
+            composite_dirty: false,
         };
         if capture.popup_policy.is_some() {
             capture
@@ -242,6 +316,7 @@ impl Capture {
                 .check()?;
             capture.refresh_popups()?;
         }
+        capture.enable_composite();
         capture.conn.flush()?;
         Ok(capture)
     }
@@ -259,16 +334,19 @@ impl Capture {
     }
     fn current_geometry(&self) -> anyhow::Result<Geometry> {
         match self.target {
-            DrawableTarget::Display => {
-                let actual = self.conn.get_geometry(self.root)?.reply()?;
-                Ok(Geometry {
-                    x: 0,
-                    y: 0,
-                    width: actual.width.into(),
-                    height: actual.height.into(),
-                    scale: 1.0,
-                })
-            }
+            DrawableTarget::Display => match &self.display_output {
+                Some(output) => monitor_geometry(&self.conn, self.root, output),
+                None => {
+                    let actual = self.conn.get_geometry(self.root)?.reply()?;
+                    Ok(Geometry {
+                        x: 0,
+                        y: 0,
+                        width: actual.width.into(),
+                        height: actual.height.into(),
+                        scale: 1.0,
+                    })
+                }
+            },
             DrawableTarget::Window(handle) => window_geometry(&self.conn, self.root, handle.window),
         }
     }
@@ -299,9 +377,7 @@ impl Capture {
         while let Some(event) = self.conn.poll_for_event()? {
             match event {
                 Event::DamageNotify(_) => self.dirty = true,
-                Event::MapNotify(_) => {
-                    self.dirty |= self.refresh_popups()?;
-                }
+                Event::MapNotify(event) => self.handle_structure_event(event.window)?,
                 Event::UnmapNotify(event) => self.handle_structure_event(event.window)?,
                 Event::DestroyNotify(event) => self.handle_structure_event(event.window)?,
                 Event::ConfigureNotify(event) => self.handle_structure_event(event.window)?,
@@ -316,6 +392,9 @@ impl Capture {
                 BackendError::GeometryChanged
             ),
             DrawableTarget::Window(_) => self.apply_geometry(actual)?,
+        }
+        if self.composite_dirty && self.composite.is_some() && self.refresh_composite().is_err() {
+            self.disable_composite();
         }
         let cursor = if self.include_cursor {
             Some(self.conn.xfixes_get_cursor_image()?.reply()?)
@@ -341,24 +420,31 @@ impl Capture {
                     .damage_subtract(popup.damage, 0u32, 0u32)?
                     .check()?;
             }
-            self.conn
-                .shm_get_image(
-                    self.drawable(),
-                    0,
-                    0,
-                    self.geometry.width as u16,
-                    self.geometry.height as u16,
-                    u32::MAX,
-                    ImageFormat::Z_PIXMAP.into(),
-                    self.segment,
-                    0,
-                )?
-                .reply()?;
-            self.file.read_exact_at(&mut self.base, 0)?;
+            if self.composite.is_some() && self.read_composite_frame().is_err() {
+                self.disable_composite();
+            }
+            if self.composite.is_none() {
+                self.conn
+                    .shm_get_image(
+                        self.drawable(),
+                        self.capture_origin.0,
+                        self.capture_origin.1,
+                        self.geometry.width as u16,
+                        self.geometry.height as u16,
+                        u32::MAX,
+                        ImageFormat::Z_PIXMAP.into(),
+                        self.segment,
+                        0,
+                    )?
+                    .reply()?;
+                self.file.read_exact_at(&mut self.base, 0)?;
+            }
             self.dirty = false;
         }
         let mut bgra = self.base.clone();
-        self.composite_popups(&mut bgra)?;
+        if self.composite.is_none() {
+            self.composite_popups(&mut bgra)?;
+        }
         if let Some(cursor) = cursor {
             self.last_cursor = (cursor.x, cursor.y, cursor.cursor_serial);
             for row in 0..cursor.height as usize {
@@ -391,12 +477,183 @@ impl Capture {
             captured_at: Instant::now(),
         }))
     }
-    fn handle_structure_event(&mut self, window: Window) -> anyhow::Result<()> {
-        if self.event_affects_capture(window)? {
-            self.dirty = true;
+    fn enable_composite(&mut self) {
+        if !matches!(self.target, DrawableTarget::Window(_)) {
+            return;
         }
-        if self.refresh_popups()? {
+        if self.try_enable_composite().is_err() {
+            self.disable_composite();
+        }
+    }
+    fn try_enable_composite(&mut self) -> anyhow::Result<()> {
+        let extension = self.conn.query_extension(b"Composite")?.reply()?;
+        if !extension.present {
+            return Ok(());
+        }
+        let version = self.conn.composite_query_version(0, 4)?.reply()?;
+        if version.major_version != 0 || version.minor_version < 2 {
+            return Ok(());
+        }
+        let Some(top_level) = self.target_top_level()? else {
+            return Ok(());
+        };
+        self.composite = Some(CompositeCapture {
+            window: top_level,
+            windows: Vec::new(),
+        });
+        self.composite_dirty = true;
+        self.refresh_composite()
+    }
+    fn refresh_composite(&mut self) -> anyhow::Result<()> {
+        let Some(composite) = self.composite.as_ref() else {
+            self.composite_dirty = false;
+            return Ok(());
+        };
+        let top_level = composite.window;
+        anyhow::ensure!(
+            self.target_top_level()?
+                .is_some_and(|window| window == top_level),
+            BackendError::WindowUnavailable
+        );
+        let target_geometry = self.geometry;
+        let mut desired = Vec::with_capacity(self.popups.len() + 1);
+        desired.push(top_level);
+        desired.extend(self.popups.iter().map(|popup| popup.window));
+        let conn = &self.conn;
+        let root = self.root;
+        let composite = self.composite.as_mut().expect("composite checked above");
+        let mut previous = std::mem::take(&mut composite.windows);
+        let mut next = Vec::with_capacity(desired.len());
+        let outcome = (|| -> anyhow::Result<()> {
+            for window in desired {
+                let geometry = if window == top_level {
+                    target_geometry
+                } else {
+                    match window_geometry(conn, root, window) {
+                        Ok(geometry) => geometry,
+                        Err(_) => continue,
+                    }
+                };
+                let existing = previous.iter().position(|capture| capture.window == window);
+                let reused = existing.is_some();
+                let entry =
+                    existing
+                        .map(|index| previous.swap_remove(index))
+                        .unwrap_or(CompositeWindow {
+                            window,
+                            pixmap: 0,
+                            x: geometry.x,
+                            y: geometry.y,
+                            width: geometry.width as u16,
+                            height: geometry.height as u16,
+                        });
+                next.push(entry);
+                let entry = next.last_mut().unwrap();
+                if !reused {
+                    conn.composite_redirect_window(window, Redirect::AUTOMATIC)?
+                        .check()?;
+                }
+                if entry.pixmap != 0 {
+                    conn.free_pixmap(entry.pixmap)?.check()?;
+                }
+                entry.pixmap = conn.generate_id()?;
+                conn.composite_name_window_pixmap(window, entry.pixmap)?
+                    .check()?;
+                entry.x = geometry.x;
+                entry.y = geometry.y;
+                entry.width = geometry.width as u16;
+                entry.height = geometry.height as u16;
+            }
+            Ok(())
+        })();
+        if let Err(error) = outcome {
+            previous.extend(next);
+            composite.windows = previous;
+            return Err(error);
+        }
+        for removed in previous {
+            release_composite_window(conn, &removed);
+        }
+        composite.windows = next;
+        self.composite_dirty = false;
+        Ok(())
+    }
+    fn disable_composite(&mut self) {
+        let Some(composite) = self.composite.take() else {
+            self.composite_dirty = false;
+            return;
+        };
+        for window in &composite.windows {
+            release_composite_window(&self.conn, window);
+        }
+        self.composite_dirty = false;
+        self.dirty = true;
+    }
+    fn read_composite_frame(&mut self) -> anyhow::Result<()> {
+        let geometry = self.geometry;
+        let stride = geometry.width as usize * 4;
+        let mut frame = vec![0; frame_bytes(geometry)?];
+        let windows: Vec<_> = self
+            .composite
+            .as_ref()
+            .expect("composite checked by caller")
+            .windows
+            .iter()
+            .map(|window| {
+                (
+                    window.pixmap,
+                    window.x,
+                    window.y,
+                    window.width,
+                    window.height,
+                )
+            })
+            .collect();
+        let target_right = geometry.x + geometry.width as i32;
+        let target_bottom = geometry.y + geometry.height as i32;
+        for (index, (pixmap, x, y, width, height)) in windows.into_iter().enumerate() {
+            let left = geometry.x.max(x);
+            let top = geometry.y.max(y);
+            let right = target_right.min(x + width as i32);
+            let bottom = target_bottom.min(y + height as i32);
+            if left >= right || top >= bottom {
+                continue;
+            }
+            let width = (right - left) as u16;
+            let height = (bottom - top) as u16;
+            let pixels = match self.read_pixels(
+                pixmap,
+                (left - x) as i16,
+                (top - y) as i16,
+                width,
+                height,
+            ) {
+                Ok(pixels) => pixels,
+                Err(error) if index == 0 => return Err(error),
+                Err(_) => continue,
+            };
+            let source_stride = width as usize * 4;
+            let destination_x = (left - geometry.x) as usize;
+            let destination_y = (top - geometry.y) as usize;
+            for row in 0..height as usize {
+                let source = row * source_stride;
+                let destination = (destination_y + row) * stride + destination_x * 4;
+                frame[destination..destination + source_stride]
+                    .copy_from_slice(&pixels[source..source + source_stride]);
+                for alpha in (destination + 3..destination + source_stride).step_by(4) {
+                    frame[alpha] = 255;
+                }
+            }
+        }
+        self.base = frame;
+        Ok(())
+    }
+    fn handle_structure_event(&mut self, window: Window) -> anyhow::Result<()> {
+        let affects_capture = self.event_affects_capture(window)?;
+        let popups_changed = self.refresh_popups()?;
+        if affects_capture || popups_changed {
             self.dirty = true;
+            self.composite_dirty |= self.composite.is_some();
         }
         Ok(())
     }
@@ -507,7 +764,7 @@ impl Capture {
     }
     fn read_pixels(
         &self,
-        drawable: Window,
+        drawable: u32,
         x: i16,
         y: i16,
         width: u16,
@@ -533,6 +790,11 @@ impl Capture {
 }
 impl Drop for Capture {
     fn drop(&mut self) {
+        if let Some(composite) = self.composite.take() {
+            for window in &composite.windows {
+                release_composite_window(&self.conn, window);
+            }
+        }
         for popup in &self.popups {
             let _ = self.conn.damage_destroy(popup.damage);
         }
@@ -540,6 +802,12 @@ impl Drop for Capture {
         let _ = self.conn.shm_detach(self.segment);
         let _ = self.conn.flush();
     }
+}
+fn release_composite_window(conn: &RustConnection, window: &CompositeWindow) {
+    if window.pixmap != 0 {
+        let _ = conn.free_pixmap(window.pixmap);
+    }
+    let _ = conn.composite_unredirect_window(window.window, Redirect::AUTOMATIC);
 }
 pub struct WindowCatalog {
     config: Config,
@@ -555,7 +823,7 @@ impl WindowCatalog {
     pub async fn enumerate(
         &mut self,
         owner: crate::session::Owner,
-    ) -> anyhow::Result<Vec<WindowEntry>> {
+    ) -> anyhow::Result<Vec<CaptureSource>> {
         self.references.invalidate();
         let config = self.config.clone();
         let windows = tokio::task::spawn_blocking(move || enumerate_windows(&config)).await??;
@@ -752,6 +1020,98 @@ fn connect(config: &Config) -> anyhow::Result<(RustConnection, usize)> {
         Ok(x11rb::connect(Some(&config.display))?)
     }
 }
+
+pub fn enumerate_displays(config: &Config) -> anyhow::Result<Vec<NativeSource<DisplayTarget>>> {
+    let (conn, screen_index) = connect(config)?;
+    let screen = &conn.setup().roots[screen_index];
+    let root = screen.root;
+    let fallback = || NativeSource {
+        identity: format!("x11-screen:{}", root),
+        unavailable_reason: None,
+        handle: DisplayTarget {
+            config: config.clone(),
+            output: String::new(),
+            geometry: Geometry {
+                x: 0,
+                y: 0,
+                width: screen.width_in_pixels.into(),
+                height: screen.height_in_pixels.into(),
+                scale: 1.0,
+            },
+        },
+        kind: "display".into(),
+        title: "Display 1".into(),
+        subtitle: None,
+        width: screen.width_in_pixels.into(),
+        height: screen.height_in_pixels.into(),
+    };
+    let Ok(cookie) = conn.randr_get_monitors(root, true) else {
+        return Ok(vec![fallback()]);
+    };
+    let Ok(reply) = cookie.reply() else {
+        return Ok(vec![fallback()]);
+    };
+    let monitors = if reply.monitors.is_empty() {
+        return Ok(vec![fallback()]);
+    } else {
+        reply.monitors
+    };
+    let mut sources = Vec::with_capacity(monitors.len());
+    for (index, monitor) in monitors.into_iter().enumerate() {
+        if monitor.width == 0 || monitor.height == 0 {
+            continue;
+        }
+        let output = atom_name(&conn, monitor.name).unwrap_or_else(|| format!("display-{index}"));
+        let geometry = Geometry {
+            x: monitor.x.into(),
+            y: monitor.y.into(),
+            width: monitor.width.into(),
+            height: monitor.height.into(),
+            scale: 1.0,
+        };
+        sources.push(NativeSource {
+            identity: format!("x11-monitor:{}", monitor.name),
+            unavailable_reason: None,
+            handle: DisplayTarget {
+                config: config.clone(),
+                output: output.clone(),
+                geometry,
+            },
+            kind: "display".into(),
+            title: output,
+            subtitle: monitor.primary.then(|| "Primary".into()),
+            width: geometry.width,
+            height: geometry.height,
+        });
+    }
+    Ok(if sources.is_empty() {
+        vec![fallback()]
+    } else {
+        sources
+    })
+}
+
+fn monitor_geometry(conn: &RustConnection, root: Window, output: &str) -> anyhow::Result<Geometry> {
+    let reply = conn.randr_get_monitors(root, true)?.reply()?;
+    for monitor in reply.monitors {
+        if atom_name(conn, monitor.name).as_deref() == Some(output) {
+            return Ok(Geometry {
+                x: monitor.x.into(),
+                y: monitor.y.into(),
+                width: monitor.width.into(),
+                height: monitor.height.into(),
+                scale: 1.0,
+            });
+        }
+    }
+    anyhow::bail!(BackendError::GeometryChanged)
+}
+
+fn atom_name(conn: &RustConnection, atom: Atom) -> Option<String> {
+    let value = conn.get_atom_name(atom).ok()?.reply().ok()?.name;
+    let value = String::from_utf8_lossy(&value).trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
 fn initialize(conn: &RustConnection) -> anyhow::Result<()> {
     conn.shm_query_version()?.reply()?;
     conn.damage_query_version(1, 1)?.reply()?;
@@ -900,13 +1260,13 @@ impl Atoms {
         })
     }
 }
-fn enumerate_windows(config: &Config) -> anyhow::Result<Vec<NativeWindow<WindowHandle>>> {
+fn enumerate_windows(config: &Config) -> anyhow::Result<Vec<NativeSource<WindowHandle>>> {
     let (conn, screen_index) = connect(config)?;
     let root = conn.setup().roots[screen_index].root;
     let atoms = Atoms::new(&conn)?;
     let mut result = Vec::new();
     for window in client_windows(&conn, root, &atoms)? {
-        if result.len() >= crate::catalog::MAX_WINDOWS {
+        if result.len() >= crate::catalog::MAX_SOURCES {
             break;
         }
         let Some(entry) = inspect_window(&conn, screen_index, root, &atoms, window) else {
@@ -929,7 +1289,7 @@ fn client_windows(
                 property,
                 AtomEnum::WINDOW,
                 0,
-                crate::catalog::MAX_WINDOWS as u32,
+                crate::catalog::MAX_SOURCES as u32,
             )?
             .reply()?;
         let mut windows: Vec<Window> = reply
@@ -952,7 +1312,7 @@ fn inspect_window(
     root: Window,
     atoms: &Atoms,
     window: Window,
-) -> Option<NativeWindow<WindowHandle>> {
+) -> Option<NativeSource<WindowHandle>> {
     let attributes = conn.get_window_attributes(window).ok()?.reply().ok()?;
     if attributes.override_redirect {
         return None;
@@ -974,6 +1334,7 @@ fn inspect_window(
     }
     let title = window_title(conn, window, atoms);
     let application_name = window_application(conn, window, atoms);
+    let (title, subtitle) = crate::catalog::source_labels(title, application_name);
     let pid = property_u32(conn, window, atoms.wm_pid, AtomEnum::CARDINAL)
         .and_then(|v| v.first().copied());
     let unavailable_reason = if hidden {
@@ -983,12 +1344,13 @@ fn inspect_window(
     } else {
         None
     };
-    Some(NativeWindow {
+    Some(NativeSource {
         identity: format!("x11:{}:{}", window, pid.unwrap_or_default()),
         unavailable_reason,
         handle: WindowHandle { window, pid },
+        kind: "window".into(),
         title,
-        application_name,
+        subtitle,
         width: geometry.width.into(),
         height: geometry.height.into(),
     })

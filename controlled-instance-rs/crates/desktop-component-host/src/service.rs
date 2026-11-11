@@ -14,6 +14,8 @@ use tokio::sync::{broadcast, Mutex};
 #[derive(Clone)]
 pub struct DesktopPackage {
     pub binary: PathBuf,
+    /// Managed-app release metadata used only for update reconciliation. Component
+    /// compatibility is owned by the IPC protocol handshake.
     pub version: String,
 }
 #[derive(Clone)]
@@ -102,19 +104,16 @@ impl DesktopService {
             .into();
             capability
         };
-        let package = match (self.installed)() {
-            Ok(Some(package)) => package,
+        match (self.installed)() {
+            Ok(Some(_)) => {}
             Ok(None) => return closed("REMOTE_DESKTOP_NOT_INSTALLED"),
             Err(_) => return closed("REMOTE_DESKTOP_PACKAGE_INVALID"),
-        };
+        }
         if !self.settings.enabled() {
             return closed("REMOTE_DESKTOP_DISABLED");
         }
         if self.disposed.load(std::sync::atomic::Ordering::SeqCst) || !(self.can_start)() {
             return closed("REMOTE_DESKTOP_UPDATING");
-        }
-        if package.version != self.version {
-            return closed("REMOTE_DESKTOP_VERSION_MISMATCH");
         }
         self.projected
             .read()
@@ -133,7 +132,6 @@ impl DesktopService {
                     | "REMOTE_DESKTOP_PACKAGE_INVALID"
                     | "REMOTE_DESKTOP_DISABLED"
                     | "REMOTE_DESKTOP_UPDATING"
-                    | "REMOTE_DESKTOP_VERSION_MISMATCH"
             )
         }) {
             let _ = self.events.send(DesktopEvent::Changed);
@@ -199,19 +197,18 @@ impl DesktopService {
             !self.disposed.load(std::sync::atomic::Ordering::SeqCst) && (self.can_start)(),
             "REMOTE_DESKTOP_UPDATING"
         );
-        anyhow::ensure!(
-            package.version == self.version,
-            "REMOTE_DESKTOP_VERSION_MISMATCH"
-        );
         if host.as_ref().is_none_or(ComponentHost::is_closed) {
             let child = match ComponentHost::spawn(&package.binary, self.mode).await {
                 Ok(child) => child,
                 Err(error) => {
+                    let reason = if error.to_string() == "REMOTE_DESKTOP_PROTOCOL_MISMATCH" {
+                        "REMOTE_DESKTOP_PROTOCOL_MISMATCH"
+                    } else {
+                        "REMOTE_DESKTOP_COMPONENT_START_FAILED"
+                    };
                     *self.projected.write().unwrap() = Some((
                         String::new(),
-                        RemoteDesktopCapabilities::unavailable(
-                            "REMOTE_DESKTOP_COMPONENT_START_FAILED",
-                        ),
+                        RemoteDesktopCapabilities::unavailable(reason),
                     ));
                     return Err(error);
                 }
@@ -330,7 +327,7 @@ mod tests {
     use super::*;
     use crate::model::Owner;
     #[tokio::test]
-    async fn disabled_mismatch_reconciles_only_on_explicit_request_and_never_installs_absence() {
+    async fn package_version_only_drives_update_reconciliation_and_never_gates_use() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         let dir = tempfile::tempdir().unwrap();
         let present = Arc::new(AtomicBool::new(false));
@@ -365,6 +362,11 @@ mod tests {
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         service.reconcile().await;
         assert_eq!(requests.load(Ordering::SeqCst), 2);
+        service.settings.set(true).unwrap();
+        assert_eq!(
+            service.status().reason.as_deref(),
+            Some("REMOTE_DESKTOP_NOT_PROBED")
+        );
         assert!(service.host.lock().await.is_none());
         service.close().await.unwrap();
         service.reconcile().await;
@@ -389,7 +391,7 @@ mod tests {
             },
             || true,
         );
-        let command = || Command::ListWindows {
+        let command = || Command::ListSources {
             owner: Owner {
                 actor_id: "actor".into(),
                 device_session_id: "device".into(),

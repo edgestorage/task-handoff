@@ -1366,7 +1366,7 @@ test('remote desktop signaling and fallback sockets use the Cloud Relay byte cha
   const onClose = jest.fn();
   const socket = h.transport.openAuthenticatedWebSocket!({
     path: '/api/controlled-instances/inst_a/remote-desktop-sessions/rdv_a/signal?ticket=ticket_a',
-    protocols: ['taskhandoff.remote-desktop.2026-11-05'],
+    protocols: ['taskhandoff.remote-desktop.2026-11-11'],
   }, { onOpen, onMessage, onClose });
   expect(socket.readyState).toBe(0);
   for (let attempt = 0; attempt < 20 && !onOpen.mock.calls.length; attempt += 1) {

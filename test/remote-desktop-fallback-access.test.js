@@ -24,7 +24,7 @@ const principal = {
   },
   deviceSessionId: "device_1",
 };
-const captureTarget = { kind: "display" };
+const captureSelection = { sourceRef: "display" };
 const ice = { iceServers: [], iceCredentialsExpiresAt: null };
 
 function accessFor(t, { now = { value: 0 }, capacity, fallback } = {}) {
@@ -41,7 +41,7 @@ function accessFor(t, { now = { value: 0 }, capacity, fallback } = {}) {
             viewerSessionId: `rdv_${requests.length}`,
             sessionRevision: 1,
             phase: "negotiating",
-            captureTarget,
+            captureSelection,
             sessionExpiresAt: now.value + 60_000,
             idleExpiresAt: null,
             mediaPaused: true,
@@ -64,7 +64,7 @@ function accessFor(t, { now = { value: 0 }, capacity, fallback } = {}) {
 }
 
 async function createSession(access, instanceId, requestId) {
-  return access.create(principal, instanceId, "node_1", requestId, captureTarget);
+  return access.create(principal, instanceId, "node_1", requestId, captureSelection);
 }
 
 function ticket(url, role) {

@@ -6,6 +6,7 @@ export type RemoteDesktopTransform = { scale: number; translateX: number; transl
 export const IDENTITY_REMOTE_DESKTOP_TRANSFORM: RemoteDesktopTransform = { scale: 1, translateX: 0, translateY: 0 };
 export const MIN_REMOTE_DESKTOP_ZOOM = 1;
 export const MAX_REMOTE_DESKTOP_ZOOM = 4;
+export const REMOTE_DESKTOP_MIN_VISIBLE_EDGE = 24;
 
 /** The visible video rectangle produced by `objectFit: contain`. */
 export function remoteDesktopContainRect(viewport: RemoteDesktopSize, content: RemoteDesktopSize): RemoteDesktopRect {
@@ -21,14 +22,16 @@ export function remoteDesktopContainRect(viewport: RemoteDesktopSize, content: R
 /**
  * Converts a view-space touch into normalized remote-desktop coordinates. The
  * transform matches the wrapper style: scale and translate around view center.
- * Touches in the contain letterbox are ignored instead of being clamped onto an
- * edge, which would make the remote cursor drift away from the visible frame.
+ * Touches in the contain letterbox are ignored by default so the remote cursor
+ * does not drift away from the visible frame. Surfaces that need letterbox
+ * gestures can opt into clamping the point onto the nearest content edge.
  */
 export function remoteDesktopPointForTouch(
   point: RemoteDesktopPoint,
   viewport: RemoteDesktopSize,
   content: RemoteDesktopSize,
   transform: RemoteDesktopTransform = IDENTITY_REMOTE_DESKTOP_TRANSFORM,
+  clampToContent = false,
 ): RemoteDesktopPoint | undefined {
   const rect = remoteDesktopContainRect(viewport, content);
   if (rect.width <= 0 || rect.height <= 0) return undefined;
@@ -37,7 +40,7 @@ export function remoteDesktopPointForTouch(
   const centerY = viewport.height / 2;
   const unscaledX = centerX + (point.x - centerX - transform.translateX) / scale;
   const unscaledY = centerY + (point.y - centerY - transform.translateY) / scale;
-  if (unscaledX < rect.x || unscaledX > rect.x + rect.width || unscaledY < rect.y || unscaledY > rect.y + rect.height) return undefined;
+  if (!clampToContent && (unscaledX < rect.x || unscaledX > rect.x + rect.width || unscaledY < rect.y || unscaledY > rect.y + rect.height)) return undefined;
   return {
     x: clamp((unscaledX - rect.x) / rect.width, 0, 1),
     y: clamp((unscaledY - rect.y) / rect.height, 0, 1),
@@ -90,9 +93,12 @@ export function constrainRemoteDesktopTransform(
 function constrainAxis(translate: number, viewportSize: number, rectStart: number, rectSize: number, center: number, scale: number) {
   const left = center + scale * (rectStart - center);
   const transformedSize = rectSize * scale;
-  if (transformedSize <= viewportSize) return viewportSize / 2 - center - scale * (rectStart + rectSize / 2 - center);
-  const min = viewportSize - (left + transformedSize);
-  const max = -left;
+  const centered = viewportSize / 2 - center - scale * (rectStart + rectSize / 2 - center);
+  if (scale <= MIN_REMOTE_DESKTOP_ZOOM + 0.001) return centered;
+  // Once zoomed, the frame may leave the viewport in either direction. Keep a
+  // narrow edge visible so the user can always pan it back into view.
+  const min = REMOTE_DESKTOP_MIN_VISIBLE_EDGE - (left + transformedSize);
+  const max = viewportSize - REMOTE_DESKTOP_MIN_VISIBLE_EDGE - left;
   return clamp(translate, min, max);
 }
 
@@ -108,6 +114,22 @@ export function remoteDesktopTouchMidpoint(a: RemoteDesktopPoint, b: RemoteDeskt
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
+export function remoteDesktopTouchOrientation(a: RemoteDesktopPoint, b: RemoteDesktopPoint): 'horizontal' | 'vertical' {
+  return Math.abs(a.x - b.x) >= Math.abs(a.y - b.y) ? 'horizontal' : 'vertical';
+}
+
+/**
+ * A wheel event must scroll at the stationary pointer. In trackpad mode that is
+ * the virtual cursor; in direct mode it is the last real pointer position.
+ */
+export function remoteDesktopScrollAnchor(
+  mouseMode: 'direct' | 'trackpad',
+  cursor: RemoteDesktopPoint,
+  pointer?: RemoteDesktopPoint,
+): RemoteDesktopPoint {
+  return mouseMode === 'trackpad' ? cursor : pointer ?? cursor;
+}
+
 /**
  * Classifies the first meaningful movement of a two-finger gesture. Fingers
  * moving together are a scroll; changing spacing is a pinch. Keeping the
@@ -118,9 +140,11 @@ export function remoteDesktopMultiTouchIntent(
   currentMidpoint: RemoteDesktopPoint,
   startDistance: number,
   currentDistance: number,
+  startOrientation: 'horizontal' | 'vertical' = 'horizontal',
 ): 'pending' | 'scroll' | 'pinch' {
   const travel = remoteDesktopTouchDistance(startMidpoint, currentMidpoint);
   const spread = Math.abs(currentDistance - startDistance);
   if (travel < 8 && spread < 10) return 'pending';
-  return spread >= Math.max(12, travel) ? 'pinch' : 'scroll';
+  if (spread >= Math.max(12, travel)) return 'pinch';
+  return startOrientation === 'horizontal' ? 'scroll' : 'pending';
 }

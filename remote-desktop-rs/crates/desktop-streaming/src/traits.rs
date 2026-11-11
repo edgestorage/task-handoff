@@ -1,5 +1,5 @@
 //! Platform backends own OS handles. Capture and input share one geometry.
-use crate::session::CaptureTarget;
+use crate::session::CaptureSelection;
 use async_trait::async_trait;
 use std::time::Duration;
 
@@ -72,7 +72,7 @@ pub trait CaptureCatalog: Send {
 }
 #[async_trait]
 pub trait CaptureSource: Send {
-    async fn open(&mut self, target: &CaptureTarget) -> Result<Geometry>;
+    async fn open(&mut self, selection: &CaptureSelection) -> Result<Geometry>;
     async fn frame(&mut self) -> Result<RawFrame>;
     async fn pause(&mut self) -> Result<()>;
 }

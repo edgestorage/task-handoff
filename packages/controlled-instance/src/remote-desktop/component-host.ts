@@ -10,19 +10,19 @@ import path from "node:path";
 import { z } from "zod";
 import { RemoteDesktopCapabilitiesSchema } from "@task-handoff/protocol/remote-desktop";
 
-export const DESKTOP_IPC_VERSION = "2026-11-07";
+export const DESKTOP_IPC_VERSION = "2026-11-11";
 export const MAX_DESKTOP_IPC_FRAME = 1024 * 1024;
 const DEADLINE = 5000;
 // Commands that create capture/peer state can legitimately outlive the IPC
 // liveness window. The component's own negotiation deadline is 5s; leave
 // ample headroom so the host never kills a peer before its reply is framed.
 const LONG_COMMAND_DEADLINE = 20_000;
-const COMMAND_DEADLINE = new Set(["probe", "reserve", "takeover", "attach", "offer", "listWindows"]);
+const COMMAND_DEADLINE = new Set(["probe", "reserve", "takeover", "attach", "offer", "listSources"]);
 const Capability = RemoteDesktopCapabilitiesSchema;
 // Older components omit fallback fields; absence only disables fallback and
 // must not invalidate the WebRTC capability document.
 const Welcome = z.object({
-  protocolVersion: z.literal(DESKTOP_IPC_VERSION),
+  protocolVersion: z.string(),
   bootId: z.string().min(1),
   capability: Capability,
   fallbackUrl: z.string().max(4096).default(""),
@@ -105,7 +105,11 @@ export class DesktopComponentHost extends EventEmitter {
     if (!path.isAbsolute(binary)) throw new Error("REMOTE_DESKTOP_PACKAGE_INVALID");
     const host = new DesktopComponentHost();
     try { await host.start(binary, mode); return host; }
-    catch { await host.close(); throw new Error("REMOTE_DESKTOP_COMPONENT_START_FAILED"); }
+    catch (error) {
+      await host.close();
+      if (error instanceof Error && (error.message === "REMOTE_DESKTOP_PROTOCOL_MISMATCH" || error.message === "REMOTE_DESKTOP_IPC_AUTH_FAILED")) throw error;
+      throw new Error("REMOTE_DESKTOP_COMPONENT_START_FAILED");
+    }
   }
   private async start(binary: string, mode: "local" | "virtual" | "control") {
     this.directory = fs.mkdtempSync(path.join(process.platform === "darwin" ? "/private/tmp" : os.tmpdir(), "th-desktop-host-"));
@@ -125,14 +129,22 @@ export class DesktopComponentHost extends EventEmitter {
         socket.on("data", (bytes: Buffer) => {
           try { reader.push(bytes, (value) => {
             if (!authenticated) {
-              const received = z.object({ protocolVersion: z.literal(DESKTOP_IPC_VERSION), nonce: z.string() }).parse(value);
+              const received = z.object({ protocolVersion: z.string(), nonce: z.string() }).parse(value);
+              if (received.protocolVersion !== DESKTOP_IPC_VERSION) throw new Error("REMOTE_DESKTOP_PROTOCOL_MISMATCH");
               const actual = Buffer.from(received.nonce); const expected = Buffer.from(nonce);
               if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw new Error("REMOTE_DESKTOP_IPC_AUTH_FAILED");
               authenticated = true; socket.write(desktopIpcFrame(hello));
             } else if (!this.welcome) {
-              this.welcome = Welcome.parse(value); this.server?.close(); settle();
+              const welcome = Welcome.parse(value);
+              if (welcome.protocolVersion !== DESKTOP_IPC_VERSION) throw new Error("REMOTE_DESKTOP_PROTOCOL_MISMATCH");
+              this.welcome = welcome; this.server?.close(); settle();
             } else { this.receive(value); }
-          }); } catch { settle(new Error("REMOTE_DESKTOP_IPC_INVALID")); void this.close(); }
+          }); } catch (cause) {
+            const error = cause instanceof Error && (cause.message === "REMOTE_DESKTOP_PROTOCOL_MISMATCH" || cause.message === "REMOTE_DESKTOP_IPC_AUTH_FAILED")
+              ? cause
+              : new Error("REMOTE_DESKTOP_IPC_INVALID");
+            settle(error); void this.close();
+          }
         });
         socket.on("error", () => { settle(new Error("REMOTE_DESKTOP_IPC_CLOSED")); void this.close(); });
         socket.on("close", () => { settle(new Error("REMOTE_DESKTOP_IPC_CLOSED")); void this.close(); });

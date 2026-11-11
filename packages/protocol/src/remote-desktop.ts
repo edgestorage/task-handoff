@@ -4,7 +4,7 @@ import { z } from "zod";
  * negotiated limits, owned by the instance/component; none is persisted on a
  * node/instance record. Package and enable intent retain their existing owners.
  * The independent desktop subprotocol does not change the instance protocol. */
-export const REMOTE_DESKTOP_PROTOCOL_VERSION = "2026-11-05";
+export const REMOTE_DESKTOP_PROTOCOL_VERSION = "2026-11-11";
 /** Browser DataChannel envelope version. Independent from signaling and IPC. */
 export const REMOTE_DESKTOP_CHANNEL_VERSION = "2026-11-05";
 /** WebSocket fallback date version. It does not upgrade the WebRTC or instance protocol. */
@@ -93,8 +93,7 @@ export const RemoteDesktopCapabilitiesSchema = z.object({
   runtimeKind: Name,
   platform: Name,
   desktopSource: Name,
-  captureTargets: Names,
-  windowCapture: z.object({ available:z.boolean(), reason:z.string().nullable() }).strip(),
+  sourceProviders: z.array(z.object({ kind:Name, available:z.boolean(), reason:z.string().nullable() }).strip()).max(32),
   capture: z.object({ backends:Names, cursor:z.boolean() }).strip(),
   encoders: Names,
   input: z.object({ backends:Names, textCommit:z.boolean(), keyboardLayout:z.boolean() }).strip(),
@@ -111,8 +110,8 @@ export type RemoteDesktopCapabilities = z.infer<typeof RemoteDesktopCapabilities
 export function unsupportedRemoteDesktopCapabilities(reason = "REMOTE_DESKTOP_UNSUPPORTED"): RemoteDesktopCapabilities {
   return {
     available:false,status:"unavailable",reason,protocolVersion:REMOTE_DESKTOP_PROTOCOL_VERSION,
-    runtimeKind:"unknown",platform:"unknown",desktopSource:"none",captureTargets:[],
-    windowCapture:{available:false,reason},capture:{backends:[],cursor:false},encoders:[],
+    runtimeKind:"unknown",platform:"unknown",desktopSource:"none",sourceProviders:[],
+    capture:{backends:[],cursor:false},encoders:[],
     input:{backends:[],textCommit:false,keyboardLayout:false},transport:[],
     video:{codecs:[],maxWidth:0,maxHeight:0,maxFrameRate:0},
     features:{clipboard:false,keyboard:false,mouse:false},viewerLimit:0,
@@ -129,7 +128,7 @@ export const InstanceCapabilitiesChangedEventSchema = z.object({}).strip();
 /** Browser/CP boundary. Snapshot fields are explicitly projected: input epoch,
  * boot IDs and attach credentials belong to other boundaries. Session revision
  * and deadlines are written only by the component; readers accept future phases. */
-export const REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL = "taskhandoff.remote-desktop.2026-11-05";
+export const REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL = "taskhandoff.remote-desktop.2026-11-11";
 /** Deployment opt-in for private-LAN HTTP signaling. This is intentionally a
  * literal-IP check: hostnames are not resolved during a WebSocket handshake. */
 export function isRemoteDesktopLocalNetworkAddress(value: string) {
@@ -150,11 +149,16 @@ export function isRemoteDesktopLocalNetworkAddress(value: string) {
 }
 const utf8 = (value: string) => new TextEncoder().encode(value).byteLength;
 export const DesktopRequestIdSchema = z.string().min(1).refine(value => utf8(value) <= 128);
-export const DesktopCaptureTargetSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("display") }).strict(),
-  z.object({ kind: z.literal("window"), windowRef: z.string().min(1).max(4096) }).strict(),
-]);
-export const DesktopCreateSchema = z.object({ requestId: DesktopRequestIdSchema, captureTarget: DesktopCaptureTargetSchema }).strict();
+export const DesktopNormalizedRectSchema = z.object({
+  x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
+  width: z.number().finite().positive().max(1), height: z.number().finite().positive().max(1),
+}).strict().refine(value => value.x + value.width <= 1 && value.y + value.height <= 1);
+export const DesktopCaptureSelectionSchema = z.object({
+  sourceRef: z.string().min(1).max(4096),
+  streamRegion: DesktopNormalizedRectSchema.optional(),
+  controlRegion: DesktopNormalizedRectSchema.optional(),
+}).strict();
+export const DesktopCreateSchema = z.object({ requestId: DesktopRequestIdSchema, selection: DesktopCaptureSelectionSchema }).strict();
 export const DesktopSessionSnapshotSchema = z.object({
   viewerSessionId: z.string().min(1), sessionRevision: z.number().int().nonnegative(),
   // Compatibility for v0.0.50-V: older single-viewer components omit these.
@@ -162,20 +166,23 @@ export const DesktopSessionSnapshotSchema = z.object({
   controlRevision: z.number().int().nonnegative().default(0),
   isController: z.boolean().default(true),
   hasController: z.boolean().default(true),
-  viewerCount: z.number().int().positive().default(1),
+  // A terminal session has no live viewers; keep that authoritative state
+  // readable instead of requiring every recovery snapshot to invent a viewer.
+  viewerCount: z.number().int().nonnegative().default(1),
   // Component-owned transport state. Missing values keep the WebRTC baseline
   // for older components; readers accept future transport names.
   transport: z.string().min(1).default("webrtc"),
-  phase: z.string().min(1), captureTarget: DesktopCaptureTargetSchema,
+  phase: z.string().min(1), captureSelection: DesktopCaptureSelectionSchema,
   sessionExpiresAt: z.number().int().nonnegative(), idleExpiresAt: z.number().int().nonnegative().nullable(),
   mediaPaused: z.boolean(), reason: z.string().nullable(),
 }).strip();
-export const DesktopWindowSchema = z.object({
-  windowRef: z.string().min(1).max(4096), title: z.string().refine(value => utf8(value) <= 512),
-  applicationName: z.string().refine(value => utf8(value) <= 256), width: z.number().int().nonnegative(),
-  height: z.number().int().nonnegative(), capturable: z.boolean(), reason: z.string().nullable(),
+export const DesktopSourceSchema = z.object({
+  sourceRef: z.string().min(1).max(4096), kind: Name.refine(value => utf8(value) <= 64),
+  title: z.string().refine(value => utf8(value) <= 512), subtitle: z.string().refine(value => utf8(value) <= 256).nullable(),
+  width: z.number().int().nonnegative(), height: z.number().int().nonnegative(),
+  capturable: z.boolean(), reason: z.string().nullable(),
 }).strip();
-export const DesktopWindowsSchema = z.array(DesktopWindowSchema).max(256).refine(value => utf8(JSON.stringify(value)) <= 512 * 1024);
+export const DesktopSourcesSchema = z.array(DesktopSourceSchema).max(256).refine(value => utf8(JSON.stringify(value)) <= 512 * 1024);
 export const DesktopIceServerSchema = z.object({
   urls: z.array(z.string().min(1).max(2048)).min(1).max(16), username: z.string().max(1024).optional(), credential: z.string().max(1024).optional(),
 }).strip();
@@ -341,8 +348,8 @@ export const DesktopSignalSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("acknowledged"), requestId: DesktopRequestIdSchema }).strict(),
 ]);
 export type DesktopSessionSnapshot = z.infer<typeof DesktopSessionSnapshotSchema>;
-export type DesktopCaptureTarget = z.infer<typeof DesktopCaptureTargetSchema>;
-export type DesktopWindow = z.infer<typeof DesktopWindowSchema>;
+export type DesktopCaptureSelection = z.infer<typeof DesktopCaptureSelectionSchema>;
+export type DesktopSource = z.infer<typeof DesktopSourceSchema>;
 export type DesktopIceServer = z.infer<typeof DesktopIceServerSchema>;
 export type DesktopIceConfig = z.infer<typeof DesktopIceConfigSchema>;
 export type DesktopCreated = z.infer<typeof DesktopCreatedSchema>;

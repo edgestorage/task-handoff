@@ -1,4 +1,5 @@
 import type { DesktopSessionSnapshot } from '@task-handoff/protocol/remote-desktop';
+import type { RemoteDesktopWebRTCStats } from '@task-handoff/control-plane-client';
 
 import type {
   PersistedCaptureTarget,
@@ -22,6 +23,7 @@ export type RemoteDesktopSnapshot = {
   videoWidth: number;
   videoHeight: number;
   path?: RemoteDesktopPath;
+  transportDiagnostics?: RemoteDesktopWebRTCStats;
   signalingReady: boolean;
   paused: boolean;
   inputEnabled: boolean;
@@ -45,7 +47,7 @@ export const emptyRemoteDesktopSnapshot: RemoteDesktopSnapshot = {
   signalingReady: false,
   paused: false,
   inputEnabled: false,
-  inputRequested: false,
+  inputRequested: true,
   inputPending: false,
   controlRequestPending: false,
   isController: true,

@@ -16,6 +16,16 @@ pub enum Target {
     Display(SCDisplay),
     Window(SCWindow),
 }
+#[derive(Clone)]
+pub struct DisplayTarget {
+    display: SCDisplay,
+}
+impl DisplayTarget {
+    pub fn source(&self, show_cursor: bool) -> anyhow::Result<crate::capture::Source> {
+        Capture::new_with_cursor(Target::Display(self.display.clone()), show_cursor)
+            .map(crate::capture::Source::Native)
+    }
+}
 struct Output(FrameMailbox<(CMSampleBuffer, Instant)>);
 impl SCStreamOutputTrait for Output {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, kind: SCStreamOutputType) {
@@ -300,11 +310,39 @@ impl Drop for Capture {
 pub struct WindowCatalog {
     references: crate::catalog::Catalog<Option<Capture>>,
 }
+pub fn enumerate_displays() -> anyhow::Result<Vec<crate::catalog::NativeSource<DisplayTarget>>> {
+    preflight()?;
+    let content =
+        SCShareableContent::get().map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))?;
+    let main_id = core_graphics::display::CGDisplay::main().id;
+    let mut displays = content.displays();
+    displays.sort_by_key(|display| display.display_id() != main_id);
+    let mut sources = Vec::with_capacity(displays.len());
+    for (index, display) in displays.into_iter().enumerate() {
+        let width = display.width();
+        let height = display.height();
+        if width == 0 || height == 0 {
+            continue;
+        }
+        sources.push(crate::catalog::NativeSource {
+            identity: format!("sck-display:{}", display.display_id()),
+            unavailable_reason: None,
+            handle: DisplayTarget { display },
+            kind: "display".into(),
+            title: format!("Display {}", index + 1),
+            subtitle: (index == 0 && main_id != 0).then(|| "Primary".into()),
+            width,
+            height,
+        });
+    }
+    anyhow::ensure!(!sources.is_empty(), BackendError::NoInteractiveSession);
+    Ok(sources)
+}
 impl WindowCatalog {
     pub async fn enumerate(
         &mut self,
         owner: crate::session::Owner,
-    ) -> anyhow::Result<Vec<crate::catalog::WindowEntry>> {
+    ) -> anyhow::Result<Vec<crate::catalog::CaptureSource>> {
         self.references.invalidate();
         let windows = tokio::task::spawn_blocking(|| {
             preflight()?;
@@ -332,16 +370,22 @@ impl WindowCatalog {
                     .as_ref()
                     .err()
                     .map(|e| BackendError::from_error(e).to_string());
-                result.push(crate::catalog::NativeWindow {
+                let application_name = app.application_name();
+                let (title, subtitle) = crate::catalog::source_labels(
+                    window.title().unwrap_or_default(),
+                    application_name,
+                );
+                result.push(crate::catalog::NativeSource {
                     identity: format!("sck:{}:{}", window.window_id(), app.process_id()),
                     handle: capture.ok(),
                     unavailable_reason: reason,
-                    title: window.title().unwrap_or_default(),
-                    application_name: app.application_name(),
+                    kind: "window".into(),
+                    title,
+                    subtitle,
                     width: g.width,
                     height: g.height,
                 });
-                if result.len() > crate::catalog::MAX_WINDOWS {
+                if result.len() > crate::catalog::MAX_SOURCES {
                     break;
                 }
             }

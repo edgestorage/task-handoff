@@ -15,7 +15,7 @@ use objc2_core_foundation::{
 };
 use std::{ptr::NonNull, sync::mpsc, time::Duration};
 
-#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Identity {
     pub window: u32,
     pub pid: i32,
@@ -128,7 +128,7 @@ impl Native {
         // downcasts for each value rather than assuming every element is AX.
         let list = unsafe { CFRetained::cast_unchecked::<AxArray<AxType>>(list) };
         anyhow::ensure!(
-            list.len() <= crate::catalog::MAX_WINDOWS,
+            list.len() <= crate::catalog::MAX_SOURCES,
             BackendError::WindowUnavailable
         );
         let mut matched = None;

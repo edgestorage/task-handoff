@@ -11,7 +11,7 @@ const {
   DESKTOP_FALLBACK_ACTOR_HEADER,
   DESKTOP_FALLBACK_DEVICE_HEADER,
   DESKTOP_FALLBACK_GENERATION_HEADER,
-  DESKTOP_FALLBACK_TARGET_HEADER,
+  DESKTOP_FALLBACK_SELECTION_HEADER,
   DESKTOP_FALLBACK_VIEWER_HEADER,
 } = require("../packages/runtime-shared/src/remote-desktop-managed.ts");
 
@@ -22,7 +22,7 @@ const context = {
   [DESKTOP_FALLBACK_GENERATION_HEADER]: "fgen_1",
   [DESKTOP_FALLBACK_ACTOR_HEADER]: "user:user_1",
   [DESKTOP_FALLBACK_DEVICE_HEADER]: "device_1",
-  [DESKTOP_FALLBACK_TARGET_HEADER]: JSON.stringify({ kind: "display" }),
+  [DESKTOP_FALLBACK_SELECTION_HEADER]: JSON.stringify({ sourceRef: "display-primary" }),
 };
 
 test("control plane fallback reuses the node-agent WebSocket proxy with role context", () => {
@@ -122,7 +122,7 @@ test("node agent proxies one fallback role through the instance credential and r
     viewerSessionId: "rdv_viewer",
     actorId: "user:user_1",
     deviceSessionId: "device_1",
-    captureTarget: { kind: "display" },
+    captureSelection: { sourceRef: "display-primary" },
   });
   assert.deepEqual(upstream.sent[1].data, Buffer.from([1, 2, 3]));
   assert.deepEqual(upstream.sent[1].options, { binary: true });
@@ -179,7 +179,7 @@ test("node agent rejects malformed fallback context before opening upstream", as
     {
       headers: {
         ...context,
-        [DESKTOP_FALLBACK_TARGET_HEADER]: JSON.stringify({ kind: "window" }),
+        [DESKTOP_FALLBACK_SELECTION_HEADER]: JSON.stringify({ sourceRef: "" }),
         "sec-websocket-protocol": mediaProtocol,
       },
     },

@@ -6,6 +6,7 @@ import { unsupportedRemoteDesktopCapabilities, normalizeRemoteDesktopCapabilitie
 export type DesktopPackage = { binary: string; version: string };
 export type DesktopServiceOptions = {
   dataDir: string;
+  /** Managed-app release metadata used only for update reconciliation. */
   version: string;
   mode: "local" | "virtual";
   // Derived from App ownership/detection. Never search PATH or adopt a process.
@@ -38,7 +39,6 @@ export class DesktopService extends EventEmitter {
     if (!installed) return closed("REMOTE_DESKTOP_NOT_INSTALLED");
     if (!this.settings.get().enabled) return closed("REMOTE_DESKTOP_DISABLED");
     if (this.disposed || !this.options.canStart()) return closed("REMOTE_DESKTOP_UPDATING");
-    if (installed.version !== this.options.version) return closed("REMOTE_DESKTOP_VERSION_MISMATCH");
     return this.projected ?? closed(this.failure ?? "REMOTE_DESKTOP_NOT_PROBED");
   }
   /** Reconcile only an already owned package through the existing App queue.
@@ -54,7 +54,7 @@ export class DesktopService extends EventEmitter {
   /** Startup, explicit preflight and package terminal events only; never polling. */
   refresh() { return this.serial(()=>this.refreshInside()); }
   private async refreshInside() {
-    if (this.status().reason && ["REMOTE_DESKTOP_NOT_INSTALLED","REMOTE_DESKTOP_PACKAGE_INVALID","REMOTE_DESKTOP_DISABLED","REMOTE_DESKTOP_UPDATING","REMOTE_DESKTOP_VERSION_MISMATCH"].includes(this.status().reason!)) { this.emit("changed"); return this.status(); }
+    if (this.status().reason && ["REMOTE_DESKTOP_NOT_INSTALLED","REMOTE_DESKTOP_PACKAGE_INVALID","REMOTE_DESKTOP_DISABLED","REMOTE_DESKTOP_UPDATING"].includes(this.status().reason!)) { this.emit("changed"); return this.status(); }
     try {
       const reply=await (await this.ensure()).request("preflight",{type:"probe"});
       if(reply.type!=="capability")throw new Error("REMOTE_DESKTOP_COMPONENT_UNAVAILABLE");
@@ -78,7 +78,6 @@ export class DesktopService extends EventEmitter {
     if (!installed) throw new Error("REMOTE_DESKTOP_NOT_INSTALLED");
     if (!this.settings.get().enabled) throw new Error("REMOTE_DESKTOP_DISABLED");
     if (this.disposed || !this.options.canStart()) throw new Error("REMOTE_DESKTOP_UPDATING");
-    if (installed.version !== this.options.version) throw new Error("REMOTE_DESKTOP_VERSION_MISMATCH");
     if (this.host && !this.host.closed) return this.host;
     const host = await DesktopComponentHost.spawn(installed.binary,this.options.mode);
     // An install operation may have entered its queue during the handshake.

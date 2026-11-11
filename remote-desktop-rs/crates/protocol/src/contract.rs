@@ -1,8 +1,8 @@
 //! Host/component boundary only. Never re-export from the public protocol crate.
-use crate::model::{CaptureTarget, Owner, Snapshot};
+use crate::model::{CaptureSelection, CaptureSource, Owner, Snapshot};
 use serde::{Deserialize, Serialize};
 
-pub const IPC_VERSION: &str = "2026-11-07";
+pub const IPC_VERSION: &str = "2026-11-11";
 pub const CHANNEL_VERSION: &str = "2026-11-05";
 pub const MAX_IPC_FRAME: usize = 1024 * 1024;
 
@@ -50,13 +50,13 @@ pub enum Command {
     Takeover {
         owner: Owner,
         viewer_session_id: String,
-        capture_target: CaptureTarget,
+        capture_selection: CaptureSelection,
     },
     // Only the dedicated trusted management transport may issue this command.
     ForceStop {
         viewer_session_id: String,
     },
-    ListWindows {
+    ListSources {
         owner: Owner,
     },
     Metrics {
@@ -65,12 +65,12 @@ pub enum Command {
     },
     Reserve {
         owner: Owner,
-        capture_target: CaptureTarget,
+        capture_selection: CaptureSelection,
     },
     Attach {
         owner: Owner,
         viewer_session_id: String,
-        capture_target: CaptureTarget,
+        capture_selection: CaptureSelection,
         attach_token: String,
     },
     Snapshot {
@@ -126,8 +126,8 @@ pub enum Reply {
     Capability {
         capability: Box<ComponentCapability>,
     },
-    Windows {
-        windows: Vec<crate::model::WindowEntry>,
+    Sources {
+        sources: Vec<CaptureSource>,
     },
     Metrics {
         metrics: MediaMetrics,

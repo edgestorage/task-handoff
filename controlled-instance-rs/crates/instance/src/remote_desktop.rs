@@ -119,7 +119,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
             get(settings).put(update_settings),
         )
         .route("/api/internal/remote-desktop/preflight", post(preflight))
-        .route("/api/internal/remote-desktop/windows", post(windows))
+        .route("/api/internal/remote-desktop/sources", post(sources))
         .route("/api/internal/remote-desktop/reserve", post(reserve))
         .route("/api/internal/remote-desktop/snapshot", post(snapshot))
         .route("/api/internal/remote-desktop/stop", post(stop))
@@ -168,6 +168,27 @@ async fn update_settings(
 fn valid_identifier(value: &str) -> bool {
     !value.is_empty() && value.chars().map(char::len_utf16).sum::<usize>() <= 4096
 }
+fn valid_source_ref(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 4096
+}
+fn valid_region(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object.len() != 4 {
+        return false;
+    }
+    let values = ["x", "y", "width", "height"].map(|key| {
+        object
+            .get(key)
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite())
+    });
+    let [Some(x), Some(y), Some(width), Some(height)] = values else {
+        return false;
+    };
+    x >= 0.0 && y >= 0.0 && width > 0.0 && height > 0.0 && x + width <= 1.0 && y + height <= 1.0
+}
 fn command(value: Value, kind: &str, fields: &[&str]) -> Result<(String, Command), ()> {
     let Value::Object(mut input) = value else {
         return Err(());
@@ -200,17 +221,20 @@ fn command(value: Value, kind: &str, fields: &[&str]) -> Result<(String, Command
             }
         }
     }
-    if let Some(target) = input.get("captureTarget") {
-        let object = target.as_object().ok_or(())?;
-        match object.get("kind").and_then(Value::as_str) {
-            Some("display") if object.len() == 1 => {}
-            Some("window")
-                if object.len() == 2
-                    && object
-                        .get("windowRef")
-                        .and_then(Value::as_str)
-                        .is_some_and(valid_identifier) => {}
-            _ => return Err(()),
+    if let Some(selection) = input.get("captureSelection") {
+        let object = selection.as_object().ok_or(())?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "sourceRef" | "streamRegion" | "controlRegion"))
+            || !object
+                .get("sourceRef")
+                .and_then(Value::as_str)
+                .is_some_and(valid_source_ref)
+            || ["streamRegion", "controlRegion"]
+                .iter()
+                .any(|key| object.get(*key).is_some_and(|value| !valid_region(value)))
+        {
+            return Err(());
         }
     }
     input.insert("type".into(), json!(kind));
@@ -235,11 +259,11 @@ async fn execute(
         Err(error) => failed(&error_code(&error)),
     }
 }
-async fn windows(
+async fn sources(
     State(state): State<AppState>,
     body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
-    execute(state, body, "listWindows", &["requestId", "owner"]).await
+    execute(state, body, "listSources", &["requestId", "owner"]).await
 }
 async fn reserve(
     State(state): State<AppState>,
@@ -249,7 +273,7 @@ async fn reserve(
         state,
         body,
         "reserve",
-        &["requestId", "owner", "captureTarget"],
+        &["requestId", "owner", "captureSelection"],
     )
     .await
 }
@@ -285,7 +309,7 @@ async fn takeover(
         state,
         body,
         "takeover",
-        &["requestId", "owner", "viewerSessionId", "captureTarget"],
+        &["requestId", "owner", "viewerSessionId", "captureSelection"],
     )
     .await
 }
@@ -424,7 +448,7 @@ async fn signaling(service: DesktopService, mut socket: WebSocket) {
                 "requestId",
                 "owner",
                 "viewerSessionId",
-                "captureTarget",
+                "captureSelection",
                 "attachToken",
             ],
         )?;
@@ -514,19 +538,19 @@ mod tests {
     #[test]
     fn trusted_boundary_rejects_extra_nested_fields_and_invalid_identifiers() {
         let owner = json!({"actorId":"actor","deviceSessionId":"device"});
-        let allowed = ["requestId", "owner", "captureTarget"];
+        let allowed = ["requestId", "owner", "captureSelection"];
         assert!(command(
-            json!({"requestId":"r","owner":owner,"captureTarget":{"kind":"display"}}),
+            json!({"requestId":"r","owner":owner,"captureSelection":{"sourceRef":"display-primary"}}),
             "reserve",
             &allowed
         )
         .is_ok());
         for value in [
-            json!({"requestId":"r","owner":{"actorId":"actor","deviceSessionId":"device","extra":true},"captureTarget":{"kind":"display"}}),
-            json!({"requestId":"r","owner":owner,"captureTarget":{"kind":"display","windowRef":"forged"}}),
-            json!({"requestId":"r","owner":owner,"captureTarget":{"kind":"window","windowRef":""}}),
-            json!({"requestId":"r","owner":{"actorId":"","deviceSessionId":"device"},"captureTarget":{"kind":"display"}}),
-            json!({"requestId":"x".repeat(4097),"owner":owner,"captureTarget":{"kind":"display"}}),
+            json!({"requestId":"r","owner":{"actorId":"actor","deviceSessionId":"device","extra":true},"captureSelection":{"sourceRef":"display-primary"}}),
+            json!({"requestId":"r","owner":owner,"captureSelection":{"sourceRef":"display-primary","windowRef":"forged"}}),
+            json!({"requestId":"r","owner":owner,"captureSelection":{"sourceRef":""}}),
+            json!({"requestId":"r","owner":{"actorId":"","deviceSessionId":"device"},"captureSelection":{"sourceRef":"display-primary"}}),
+            json!({"requestId":"x".repeat(4097),"owner":owner,"captureSelection":{"sourceRef":"display-primary"}}),
         ] {
             assert!(command(value, "reserve", &allowed).is_err());
         }

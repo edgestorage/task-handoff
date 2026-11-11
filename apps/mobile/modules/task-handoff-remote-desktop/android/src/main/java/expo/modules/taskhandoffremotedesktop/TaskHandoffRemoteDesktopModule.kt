@@ -1,15 +1,36 @@
 package expo.modules.taskhandoffremotedesktop
 
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.inputmethod.BaseInputConnection
+import android.widget.EditText
+import com.facebook.react.uimanager.util.ReactFindViewUtil
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.records.Field
 import expo.modules.kotlin.records.Record
 import kotlinx.coroutines.launch
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class TaskHandoffRemoteDesktopModule : Module() {
+  private var observedTextInput: EditText? = null
+  private var textInputWatcher: TextWatcher? = null
+  private var textInputObservationToken = 0
+
+  private fun stopTextInputObservation() {
+    textInputObservationToken += 1
+    val editText = observedTextInput
+    val watcher = textInputWatcher
+    observedTextInput = null
+    textInputWatcher = null
+    if (editText != null && watcher != null) editText.post { editText.removeTextChangedListener(watcher) }
+  }
+
   override fun definition() = ModuleDefinition {
     Name("TaskHandoffRemoteDesktop")
-    Events("onRemoteDesktopDecoderError")
+    Events("onRemoteDesktopDecoderError", "onRemoteDesktopTextInput")
 
     OnCreate {
       RemoteDesktopDecoderEngine.onError = { code, message ->
@@ -18,6 +39,45 @@ class TaskHandoffRemoteDesktopModule : Module() {
     }
 
     Function("isAvailable") { true }
+
+    Function("startTextInputObservation") { nativeID: String ->
+      stopTextInputObservation()
+      val token = textInputObservationToken
+      val activity = appContext.currentActivity
+      if (activity == null) false else {
+        val matched = AtomicBoolean(false)
+        val latch = CountDownLatch(1)
+        activity.runOnUiThread {
+          val decorView = activity.window?.decorView
+          if (decorView != null && token == textInputObservationToken) {
+            val editText = ReactFindViewUtil.findView(decorView, nativeID) as? EditText
+            if (editText != null && editText.isFocused) {
+              val watcher = object : TextWatcher {
+                override fun beforeTextChanged(text: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(text: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(text: Editable?) {
+                  sendEvent("onRemoteDesktopTextInput", mapOf(
+                    "text" to (text?.toString() ?: ""),
+                    "composing" to (text != null && BaseInputConnection.getComposingSpanStart(text) >= 0),
+                  ))
+                }
+              }
+              editText.addTextChangedListener(watcher)
+              observedTextInput = editText
+              textInputWatcher = watcher
+              matched.set(true)
+            }
+          }
+          latch.countDown()
+        }
+        latch.await(1, TimeUnit.SECONDS)
+        matched.get()
+      }
+    }
+
+    Function("stopTextInputObservation") {
+      stopTextInputObservation()
+    }
 
     AsyncFunction("configure") { input: RemoteDesktopCodecConfigRecord, promise: expo.modules.kotlin.Promise ->
       appContext.modulesQueue.launch {
@@ -63,6 +123,7 @@ class TaskHandoffRemoteDesktopModule : Module() {
     }
 
     OnDestroy {
+      stopTextInputObservation()
       RemoteDesktopDecoderEngine.onError = null
       RemoteDesktopDecoderEngine.close()
     }

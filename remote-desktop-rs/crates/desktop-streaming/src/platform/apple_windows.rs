@@ -14,6 +14,55 @@ pub enum Target {
     Display(CapturableDisplay),
     Window(CapturableWindow),
 }
+#[derive(Clone)]
+pub struct DisplayTarget {
+    display: CapturableDisplay,
+}
+impl DisplayTarget {
+    pub fn source(&self, show_cursor: bool) -> anyhow::Result<crate::capture::Source> {
+        Capture::new_with_cursor(Target::Display(self.display.clone()), show_cursor)
+            .map(crate::capture::Source::Native)
+    }
+}
+pub async fn enumerate_displays() -> anyhow::Result<Vec<crate::catalog::NativeSource<DisplayTarget>>>
+{
+    #[cfg(target_os = "windows")]
+    {
+        crate::platform::windows_access::prepare_dpi()?;
+        crate::platform::windows_access::check()?;
+    }
+    anyhow::ensure!(
+        CaptureStream::test_access(false).is_some(),
+        BackendError::ScreenPermissionRequired
+    );
+    let content = CapturableContent::new(CapturableContentFilter::DISPLAYS)
+        .await
+        .map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))?;
+    let mut sources = Vec::new();
+    for (index, display) in content.displays().enumerate() {
+        let rect = display.rect();
+        let width = rect.size.width.round();
+        let height = rect.size.height.round();
+        if width < 1.0 || height < 1.0 {
+            continue;
+        }
+        sources.push(crate::catalog::NativeSource {
+            identity: format!(
+                "wgc-display:{}:{}:{}:{}",
+                rect.origin.x, rect.origin.y, width, height
+            ),
+            unavailable_reason: None,
+            handle: DisplayTarget { display },
+            kind: "display".into(),
+            title: format!("Display {}", index + 1),
+            subtitle: None,
+            width: width as u32,
+            height: height as u32,
+        });
+    }
+    anyhow::ensure!(!sources.is_empty(), BackendError::NoInteractiveSession);
+    Ok(sources)
+}
 pub struct Capture {
     config: CaptureConfig,
     stream: Option<CaptureStream>,

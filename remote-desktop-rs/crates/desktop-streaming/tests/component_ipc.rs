@@ -2,7 +2,7 @@ use desktop_streaming::{
     contract::*,
     framing,
     host::TestHost,
-    session::{CaptureTarget, Owner, Phase},
+    session::{CaptureSelection, Owner, Phase},
 };
 use std::{path::Path, time::Duration};
 fn binary() -> &'static Path {
@@ -12,6 +12,13 @@ fn owner() -> Owner {
     Owner {
         actor_id: "fixture-actor".into(),
         device_session_id: "fixture-device".into(),
+    }
+}
+fn selection(source_ref: &str) -> CaptureSelection {
+    CaptureSelection {
+        source_ref: source_ref.into(),
+        stream_region: None,
+        control_region: None,
     }
 }
 #[tokio::test]
@@ -27,7 +34,7 @@ async fn independent_process_authenticates_reserves_attaches_reports_events_and_
             "create",
             Command::Reserve {
                 owner: owner(),
-                capture_target: CaptureTarget::Display,
+                capture_selection: selection("display"),
             },
         )
         .await
@@ -47,7 +54,7 @@ async fn independent_process_authenticates_reserves_attaches_reports_events_and_
             "second",
             Command::Reserve {
                 owner: owner(),
-                capture_target: CaptureTarget::Display,
+                capture_selection: selection("display"),
             },
         )
         .await
@@ -61,7 +68,7 @@ async fn independent_process_authenticates_reserves_attaches_reports_events_and_
     let command = || Command::Attach {
         owner: owner(),
         viewer_session_id: id.clone(),
-        capture_target: CaptureTarget::Display,
+        capture_selection: selection("display"),
         attach_token: attach_token.clone(),
     };
     assert!(matches!(
@@ -136,22 +143,35 @@ async fn component_exits_on_host_stdin_eof_even_with_incomplete_ipc_frame() {
 }
 
 #[tokio::test]
-async fn unavailable_window_target_cannot_fall_through_to_a_display_or_consume_the_slot() {
+async fn distinct_source_selections_are_preserved_without_native_fallback() {
     let mut host = TestHost::spawn_synthetic(binary()).await.unwrap();
-    assert!(
-        matches!(host.request("window", Command::Reserve { owner:owner(), capture_target:CaptureTarget::Window { window_ref:"opaque-unverified".into() } }).await.unwrap(), Reply::Error { code } if code=="REMOTE_DESKTOP_WINDOW_CAPTURE_UNSUPPORTED")
-    );
-    assert!(matches!(
-        host.request(
+    let Reply::Reserved { snapshot, .. } = host
+        .request(
+            "source",
+            Command::Reserve {
+                owner: owner(),
+                capture_selection: selection("opaque-unverified"),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("source reserve");
+    };
+    assert_eq!(snapshot.capture_selection, selection("opaque-unverified"));
+    let Reply::Reserved { snapshot, .. } = host
+        .request(
             "display",
             Command::Reserve {
                 owner: owner(),
-                capture_target: CaptureTarget::Display
-            }
+                capture_selection: selection("display"),
+            },
         )
         .await
-        .unwrap(),
-        Reply::Reserved { .. }
-    ));
+        .unwrap()
+    else {
+        panic!("display reserve");
+    };
+    assert_eq!(snapshot.capture_selection, selection("display"));
     host.shutdown().await.unwrap();
 }

@@ -26,6 +26,7 @@ async function appFor(t,instance){
   t.after(async()=>{for(const socket of app.websocketServer.clients)socket.terminate();await app.close();});return app;
 }
 const headers={authorization:'Bearer trusted'};
+const captureSelection={sourceRef:'display-primary'};
 test('desktop routes require header credential and validate nested input before invoking component',async t=>{
   const instance=service(t);let calls=0;instance.request=async()=>{calls++;throw Error('unexpected');};
   const app=await appFor(t,instance);
@@ -34,9 +35,9 @@ test('desktop routes require header credential and validate nested input before 
     assert.equal(r.statusCode,403);assert.equal(r.headers['cache-control'],'no-store');
   }
   for(const payload of [
-    {requestId:'r',owner:{...owner,extra:1},captureTarget:{kind:'display'}},
-    {requestId:'r',owner,captureTarget:{kind:'display',windowRef:'forged'}},
-    {requestId:'r',owner,captureTarget:{kind:'window',windowRef:''}},
+    {requestId:'r',owner:{...owner,extra:1},captureSelection},
+    {requestId:'r',owner,captureSelection:{...captureSelection,windowRef:'forged'}},
+    {requestId:'r',owner,captureSelection:{sourceRef:''}},
   ])assert.equal((await app.inject({method:'POST',url:'/api/internal/remote-desktop/reserve',headers,payload})).statusCode,400);
   assert.equal(calls,0);
   assert.equal((await app.inject({method:'PUT',url:'/api/internal/remote-desktop/settings',headers,payload:{enabled:true,extra:1}})).statusCode,400);
@@ -44,7 +45,7 @@ test('desktop routes require header credential and validate nested input before 
 });
 test('no package, disabled state, uninstall and drain never spawn an implicit component',async t=>{
   let installed;const instance=service(t,{installedPackage:()=>installed});
-  const command={type:'listWindows',owner};
+  const command={type:'listSources',owner};
   await assert.rejects(instance.request('r',command),/NOT_INSTALLED/);
   installed={binary:'/must-not-be-executed',version:'1'};
   await assert.rejects(instance.request('r',command),/DISABLED/);
@@ -71,7 +72,7 @@ test('invalid attach cannot close the valid session; disconnect during pending a
     return {type:'ok'};
   };
   const app=await appFor(t,instance);
-  const attach={requestId:'r',owner,viewerSessionId:'viewer',captureTarget:{kind:'display'},attachToken:'invalid'};
+  const attach={requestId:'r',owner,viewerSessionId:'viewer',captureSelection,attachToken:'invalid'};
   let client=await app.injectWS('/api/internal/remote-desktop/attach',{headers});
   const closed=once(client,'close');client.send(JSON.stringify(attach));await closed;
   await new Promise(resolve=>setImmediate(resolve));
@@ -97,7 +98,7 @@ test('attach binding forwards configureIce and candidates to the component',{tim
   const app=await appFor(t,instance);
   const client=await app.injectWS('/api/internal/remote-desktop/attach',{headers});
   client.on('message',data=>replies.push(JSON.parse(data.toString())));
-  client.send(JSON.stringify({requestId:'a',owner,viewerSessionId:'viewer',captureTarget:{kind:'display'},attachToken:'valid'}));
+  client.send(JSON.stringify({requestId:'a',owner,viewerSessionId:'viewer',captureSelection,attachToken:'valid'}));
   const wait=async(predicate)=>{while(!predicate())await new Promise(resolve=>setImmediate(resolve));};
   await wait(()=>replies.some(message=>message.type==='snapshot'));
   client.send(JSON.stringify({type:'configureIce',requestId:'c1',iceServers:[],iceCredentialsExpiresAt:null}));

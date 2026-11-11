@@ -113,7 +113,6 @@ test("large JSON response diagnostics report sizes and sequence without response
   assert.ok(Number(entry.wireBytes) < Number(entry.plaintextBytes));
   assert.ok(!JSON.stringify(entry).includes("private-timeline-text"));
 });
-
 // Compatibility for v0.0.51: legacy JSON callers cannot consume chunk metadata,
 // but an oversized response must leave their channel sequence and nonce usable.
 test("an oversized legacy JSON response fails only its request without skipping sequence or nonce", async () => {

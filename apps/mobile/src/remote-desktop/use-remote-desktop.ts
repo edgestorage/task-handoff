@@ -118,6 +118,11 @@ export function useRemoteDesktop(instanceId: string) {
     updateRemoteDesktopPreferences(controlPlaneId, instanceId, { mouseMode });
   }, [controlPlaneId, instanceId]);
 
+  const setInputEnabled = useCallback((enabled: boolean) => {
+    if (enabled) controller?.enableInput();
+    else controller?.disableInput();
+  }, [controller]);
+
   const setTransportAvailability = useCallback((availability: RemoteDesktopTransportAvailability) => {
     updateRemoteDesktopPreferences(controlPlaneId, instanceId, { transportAvailability: { ...availability } });
     controller?.setTransportAvailability(availability);
@@ -140,9 +145,9 @@ export function useRemoteDesktop(instanceId: string) {
     await controller?.start();
   }, [controller]);
 
-  const loadWindows = useCallback(async (signal?: AbortSignal) => {
+  const loadSources = useCallback(async (signal?: AbortSignal) => {
     if (!runtime.api) throw new Error('The active Control Plane client is unavailable.');
-    return (await runtime.api.remoteDesktop.windows(instanceId, signal)).windows;
+    return (await runtime.api.remoteDesktop.sources(instanceId, signal)).sources;
   }, [instanceId, runtime.api]);
 
   return {
@@ -150,12 +155,13 @@ export function useRemoteDesktop(instanceId: string) {
     capability,
     controller,
     instance: instance as ControlPlaneInstanceDirectoryEntry | undefined,
-    loadWindows,
+    loadSources,
     preferences,
     ready: Boolean(runtime.api && runtime.transport && controller),
     reconnect,
     disconnect,
     setFrameRate,
+    setInputEnabled,
     setMouseMode,
     setResolution,
     setTarget,

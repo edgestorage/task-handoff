@@ -1,4 +1,4 @@
-import type { DesktopCaptureTarget } from '@task-handoff/protocol/remote-desktop';
+import type { DesktopCaptureSelection, DesktopSource } from '@task-handoff/protocol/remote-desktop';
 
 import { createPersistedPreferenceStore } from '../platform/persisted-preferences';
 
@@ -8,9 +8,14 @@ export type RemoteDesktopMouseMode = 'direct' | 'trackpad';
 export type RemoteDesktopTransportKey = 'p2p' | 'turn' | 'websocket';
 export type RemoteDesktopTransportAvailability = Record<RemoteDesktopTransportKey, boolean>;
 
-export type PersistedCaptureTarget =
-  | { kind: 'display' }
-  | { kind: 'window'; windowRef: string; title?: string; applicationName?: string };
+export type PersistedCaptureTarget = {
+  kind: string;
+  sourceRef?: string;
+  title?: string;
+  subtitle?: string;
+  width?: number;
+  height?: number;
+};
 
 export type RemoteDesktopInstancePreferences = {
   target: PersistedCaptureTarget;
@@ -69,15 +74,49 @@ export function remoteDesktopPreferencesFor(controlPlaneId: string | undefined, 
   return remoteDesktopPreferenceStore.get().byInstance[remoteDesktopPreferencesKey(controlPlaneId, instanceId)] ?? defaultRemoteDesktopPreferences;
 }
 
-export function updateRemoteDesktopPreferences(controlPlaneId: string | undefined, instanceId: string, patch: Partial<RemoteDesktopInstancePreferences>) {
+export function updateRemoteDesktopPreferences(
+  controlPlaneId: string | undefined,
+  instanceId: string,
+  patch: Partial<RemoteDesktopInstancePreferences>,
+) {
   const key = remoteDesktopPreferencesKey(controlPlaneId, instanceId);
   const all = remoteDesktopPreferenceStore.get();
   const current = all.byInstance[key] ?? defaultRemoteDesktopPreferences;
   remoteDesktopPreferenceStore.update({ byInstance: { ...all.byInstance, [key]: { ...current, ...patch } } });
 }
 
-export function captureTargetForProtocol(target: PersistedCaptureTarget): DesktopCaptureTarget {
-  return target.kind === 'window' ? { kind: 'window', windowRef: target.windowRef } : { kind: 'display' };
+export function persistedCaptureTarget(source: DesktopSource): PersistedCaptureTarget {
+  return {
+    kind: source.kind,
+    sourceRef: source.sourceRef,
+    title: source.title,
+    ...(source.subtitle !== null ? { subtitle: source.subtitle } : {}),
+    width: source.width,
+    height: source.height,
+  };
+}
+
+export function captureSelectionForProtocol(target: PersistedCaptureTarget): DesktopCaptureSelection | undefined {
+  return target.sourceRef ? { sourceRef: target.sourceRef } : undefined;
+}
+
+export function resolvePersistedCaptureTarget(sources: readonly DesktopSource[], target: PersistedCaptureTarget): PersistedCaptureTarget | undefined {
+  const capturable = sources.filter((source) => source.capturable);
+  const exact = target.sourceRef ? capturable.find((source) => source.kind === target.kind && source.sourceRef === target.sourceRef) : undefined;
+  if (exact) return persistedCaptureTarget(exact);
+  if (target.title !== undefined) {
+    const scored = capturable
+      .filter((source) => source.kind === target.kind)
+      .map((source) => ({ source, score: sourceIdentityScore(source, target) }))
+      .filter((entry) => entry.score > 0);
+    if (!scored.length) return undefined;
+    const best = Math.max(...scored.map((entry) => entry.score));
+    const matches = scored.filter((entry) => entry.score === best);
+    return matches.length === 1 ? persistedCaptureTarget(matches[0].source) : undefined;
+  }
+  if (target.sourceRef) return undefined;
+  const first = capturable.find((source) => source.kind === target.kind);
+  return first ? persistedCaptureTarget(first) : undefined;
 }
 
 export function transportEnabledCount(availability: RemoteDesktopTransportAvailability) {
@@ -115,11 +154,25 @@ function sanitizeInstancePreferences(value: Record<string, unknown>): RemoteDesk
 function sanitizeTarget(value: unknown): PersistedCaptureTarget {
   if (!value || typeof value !== 'object') return { kind: 'display' };
   const record = value as Record<string, unknown>;
-  if (record.kind !== 'window' || typeof record.windowRef !== 'string' || !record.windowRef.trim()) return { kind: 'display' };
+  const kind = typeof record.kind === 'string' && record.kind.trim() && record.kind.length <= 64 ? record.kind.trim() : 'display';
+  const rawSourceRef = typeof record.sourceRef === 'string' ? record.sourceRef : undefined;
+  const sourceRef = rawSourceRef?.trim();
+  const hasWidth = Number.isSafeInteger(record.width) && Number(record.width) >= 0;
+  const hasHeight = Number.isSafeInteger(record.height) && Number(record.height) >= 0;
   return {
-    kind: 'window',
-    windowRef: record.windowRef.trim(),
+    kind,
+    ...(sourceRef && sourceRef.length <= 4096 ? { sourceRef } : {}),
     ...(typeof record.title === 'string' && record.title.trim() ? { title: record.title.trim() } : {}),
-    ...(typeof record.applicationName === 'string' && record.applicationName.trim() ? { applicationName: record.applicationName.trim() } : {}),
+    ...(typeof record.subtitle === 'string' && record.subtitle.trim() ? { subtitle: record.subtitle.trim() } : {}),
+    ...(hasWidth && hasHeight ? { width: Number(record.width), height: Number(record.height) } : {}),
   };
+}
+
+function sourceIdentityScore(source: DesktopSource, target: PersistedCaptureTarget) {
+  if (source.kind !== target.kind) return 0;
+  let score = 2;
+  if (target.subtitle !== undefined && source.subtitle === target.subtitle) score += 6;
+  if (source.title === target.title) score += 4;
+  if (source.width === target.width && source.height === target.height) score += 1;
+  return score;
 }

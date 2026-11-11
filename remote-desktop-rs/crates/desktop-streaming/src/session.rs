@@ -24,7 +24,9 @@ pub fn secret() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub use remote_desktop_protocol::model::{CaptureGeometry, CaptureTarget, Owner, Phase, Snapshot};
+pub use remote_desktop_protocol::model::{
+    CaptureGeometry, CaptureSelection, Owner, Phase, Snapshot,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -76,7 +78,7 @@ pub struct Effects {
 struct ReservationMemo {
     request_id: String,
     owner: Owner,
-    target: CaptureTarget,
+    selection: CaptureSelection,
     replacement: Option<String>,
     session_id: String,
     expires: Instant,
@@ -138,10 +140,15 @@ impl Registry {
         matches!(phase, Phase::Stopped | Phase::Failed)
     }
 
-    fn viewer_count(&self) -> u64 {
+    fn viewer_count(&self, id: &str) -> u64 {
+        let Some(selection) = self.sessions.get(id).map(|s| &s.snapshot.capture_selection) else {
+            return 0;
+        };
         self.sessions
             .values()
-            .filter(|s| !Self::terminal(s.snapshot.phase))
+            .filter(|s| {
+                !Self::terminal(s.snapshot.phase) && &s.snapshot.capture_selection == selection
+            })
             .count() as u64
     }
 
@@ -163,7 +170,7 @@ impl Registry {
     fn publish(&mut self, id: &str) {
         let is_controller = self.is_holder(id);
         let has_controller = self.live_holder().is_some();
-        let viewer_count = self.viewer_count();
+        let viewer_count = self.viewer_count(id);
         let control_revision = self.control_revision;
         let Some(session) = self.sessions.get_mut(id) else {
             return;
@@ -207,17 +214,17 @@ impl Registry {
         &mut self,
         request_id: &str,
         owner: Owner,
-        target: CaptureTarget,
+        selection: CaptureSelection,
         now: Instant,
     ) -> Result<(Snapshot, String), Error> {
-        self.reserve_for(request_id, owner, target, None, now)
+        self.reserve_for(request_id, owner, selection, None, now)
     }
 
     pub fn reserve_for(
         &mut self,
         request_id: &str,
         owner: Owner,
-        target: CaptureTarget,
+        selection: CaptureSelection,
         replacement: Option<&str>,
         now: Instant,
     ) -> Result<(Snapshot, String), Error> {
@@ -234,7 +241,7 @@ impl Registry {
             .iter()
             .find(|memo| memo.owner == owner && memo.request_id == request_id)
         {
-            if memo.target != target || memo.replacement.as_deref() != replacement {
+            if memo.selection != selection || memo.replacement.as_deref() != replacement {
                 return Err(Error::RequestConflict);
             }
             let Some(session) = self.sessions.get(&memo.session_id) else {
@@ -263,7 +270,7 @@ impl Registry {
             if session.owner.actor_id != owner.actor_id {
                 return Err(Error::Forbidden);
             }
-            if session.snapshot.capture_target != target {
+            if session.snapshot.capture_selection != selection {
                 return Err(Error::UnsupportedTarget);
             }
         }
@@ -275,12 +282,6 @@ impl Registry {
             .collect::<Vec<_>>();
         if active.len() >= MAX_VIEWERS {
             return Err(Error::Busy);
-        }
-        if active
-            .iter()
-            .any(|session| session.snapshot.capture_target != target)
-        {
-            return Err(Error::UnsupportedTarget);
         }
         let token = secret();
         let wall = SystemTime::now()
@@ -306,7 +307,7 @@ impl Registry {
                     transport_generation: 0,
                     transport: "webrtc".into(),
                     phase: Phase::Starting,
-                    capture_target: target.clone(),
+                    capture_selection: selection.clone(),
                     session_expires_at: wall + MAX_SESSION.as_millis() as u64,
                     idle_expires_at: None,
                     input_epoch: None,
@@ -330,7 +331,7 @@ impl Registry {
             request_id: request_id.into(),
             replacement: replacement.map(str::to_owned),
             owner,
-            target,
+            selection,
             session_id: id.clone(),
             expires: now + STARTING,
         });
@@ -354,14 +355,14 @@ impl Registry {
         &mut self,
         id: &str,
         owner: &Owner,
-        target: &CaptureTarget,
+        selection: &CaptureSelection,
         token: &str,
         now: Instant,
     ) -> Result<Snapshot, Error> {
         let session = self.owned(id, owner)?;
         if session.snapshot.phase != Phase::Starting
             || session.stage_deadline.is_some_and(|t| now >= t)
-            || &session.snapshot.capture_target != target
+            || &session.snapshot.capture_selection != selection
             || !session
                 .attach_token
                 .as_ref()
@@ -508,6 +509,11 @@ impl Registry {
         let epoch = self.prepare_input(id, now)?;
         self.commit_input(id, epoch, now)?;
         Ok(epoch)
+    }
+
+    pub fn live_input_epoch(&self, id: &str, now: Instant) -> Option<u64> {
+        let epoch = self.sessions.get(id)?.snapshot.input_epoch?;
+        self.check_epoch(id, epoch, now).ok().map(|()| epoch)
     }
 
     pub fn input_alive(&mut self, id: &str, epoch: u64, now: Instant) -> Result<(), Error> {
@@ -684,13 +690,13 @@ impl Registry {
         &self,
         id: &str,
         owner: &Owner,
-        target: &CaptureTarget,
+        selection: &CaptureSelection,
     ) -> Result<(), Error> {
         let session = self.sessions.get(id).ok_or(Error::NotFound)?;
         if session.owner.actor_id != owner.actor_id {
             return Err(Error::Forbidden);
         }
-        if &session.snapshot.capture_target != target {
+        if &session.snapshot.capture_selection != selection {
             return Err(Error::UnsupportedTarget);
         }
         Ok(())
@@ -701,7 +707,7 @@ impl Registry {
         request_id: &str,
         id: &str,
         owner: &Owner,
-        target: &CaptureTarget,
+        selection: &CaptureSelection,
         now: Instant,
     ) -> Result<Effects, Error> {
         self.reservations.retain(|memo| memo.expires > now);
@@ -710,7 +716,7 @@ impl Registry {
             .iter()
             .find(|memo| memo.owner == *owner && memo.request_id == request_id)
         {
-            if memo.replacement.as_deref() != Some(id) || memo.target != *target {
+            if memo.replacement.as_deref() != Some(id) || memo.selection != *selection {
                 return Err(Error::RequestConflict);
             }
             return Ok(Effects::default());
@@ -721,7 +727,7 @@ impl Registry {
         if self.reservations.len() >= 128 {
             return Err(Error::RateLimited);
         }
-        self.validate_takeover_target(id, owner, target)?;
+        self.validate_takeover_target(id, owner, selection)?;
         Ok(self.begin_drain(id, now, None))
     }
 

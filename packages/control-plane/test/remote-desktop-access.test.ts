@@ -24,7 +24,7 @@ const snapshot = {
   viewerSessionId: "rdv_a",
   sessionRevision: 1,
   phase: "starting",
-  captureTarget: { kind: "display" as const },
+  captureSelection: { sourceRef: "display-primary" },
   sessionExpiresAt: Date.now() + 30_000,
   idleExpiresAt: null,
   mediaPaused: true,
@@ -60,7 +60,7 @@ test("signal liveness before the first component snapshot is accepted and forwar
     issueIce() { return { iceServers: [], iceCredentialsExpiresAt: null }; },
   });
 
-  const created = await access.create(principal, "inst_a", "node_a", "request_a", { kind: "display" });
+  const created = await access.create(principal, "inst_a", "node_a", "request_a", { sourceRef: "display-primary" });
   const entry = access.consume(principal, "inst_a", created.snapshot.viewerSessionId, created.ticket);
   const socket = new FakeSocket();
   const connecting = access.connect(entry, socket as never);
@@ -98,7 +98,7 @@ test("signaling loss keeps the reservation long enough for fallback to take over
     issueIce() { return { iceServers: [], iceCredentialsExpiresAt: null }; },
   });
 
-  const created = await access.create(principal, "inst_a", "node_a", "request_a", { kind: "display" });
+  const created = await access.create(principal, "inst_a", "node_a", "request_a", { sourceRef: "display-primary" });
   const entry = access.consume(principal, "inst_a", created.snapshot.viewerSessionId, created.ticket);
   const signal = new FakeSocket();
   await access.connect(entry, signal as never);
@@ -134,7 +134,7 @@ test("browser signaling loss keeps the upstream attach alive until fallback take
     issueIce() { return { iceServers: [], iceCredentialsExpiresAt: null }; },
   });
 
-  const created = await access.create(principal, "inst_a", "node_a", "request_a", { kind: "display" });
+  const created = await access.create(principal, "inst_a", "node_a", "request_a", { sourceRef: "display-primary" });
   const entry = access.consume(principal, "inst_a", created.snapshot.viewerSessionId, created.ticket);
   const signal = new FakeSocket();
   await access.connect(entry, signal as never);
@@ -181,7 +181,7 @@ test("simultaneous signal and fallback loss keeps the reservation for a replacem
     issueIce() { return { iceServers: [], iceCredentialsExpiresAt: null }; },
   });
 
-  const created = await access.create(principal, "inst_a", "node_a", "request_a", { kind: "display" });
+  const created = await access.create(principal, "inst_a", "node_a", "request_a", { sourceRef: "display-primary" });
   const entry = access.consume(principal, "inst_a", created.snapshot.viewerSessionId, created.ticket);
   const signal = new FakeSocket();
   await access.connect(entry, signal as never);
@@ -226,7 +226,7 @@ test("fallback closing before signal still gets the full replacement grace windo
     issueIce() { return { iceServers: [], iceCredentialsExpiresAt: null }; },
   });
 
-  const created = await access.create(principal, "inst_a", "node_a", "request_a", { kind: "display" });
+  const created = await access.create(principal, "inst_a", "node_a", "request_a", { sourceRef: "display-primary" });
   const entry = access.consume(principal, "inst_a", created.snapshot.viewerSessionId, created.ticket);
   const signal = new FakeSocket();
   await access.connect(entry, signal as never);

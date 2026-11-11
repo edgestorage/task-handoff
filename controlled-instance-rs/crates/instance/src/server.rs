@@ -15039,7 +15039,7 @@ mod tests {
             }
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(body_json(response).await["data"]["enabled"], false);
-            let response=app.clone().oneshot(Request::builder().method("POST").uri("/api/internal/remote-desktop/windows").header(header::AUTHORIZATION,format!("Bearer {credential}")).header(header::CONTENT_TYPE,"application/json").body(Body::from(r#"{"requestId":"r","owner":{"actorId":"actor","deviceSessionId":"device"}}"#)).unwrap()).await.unwrap();
+            let response=app.clone().oneshot(Request::builder().method("POST").uri("/api/internal/remote-desktop/sources").header(header::AUTHORIZATION,format!("Bearer {credential}")).header(header::CONTENT_TYPE,"application/json").body(Body::from(r#"{"requestId":"r","owner":{"actorId":"actor","deviceSessionId":"device"}}"#)).unwrap()).await.unwrap();
             assert_eq!(response.status(), StatusCode::CONFLICT);
             assert_eq!(
                 body_json(response).await["error"]["code"],

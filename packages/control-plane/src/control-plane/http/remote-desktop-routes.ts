@@ -6,7 +6,7 @@ import {
   DesktopCreateSchema,
   DesktopFallbackRequestSchema,
   DesktopRequestIdSchema,
-  DesktopWindowsSchema,
+  DesktopSourcesSchema,
   REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL,
   REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL,
   REMOTE_DESKTOP_FALLBACK_PROTOCOL_VERSION,
@@ -63,19 +63,15 @@ export function registerRemoteDesktopRoutes(options: {
     if (available && !capability.available) throw failure("REMOTE_DESKTOP_UNSUPPORTED");
     return { instance, principal, capability };
   }
-  app.get(`${base}/remote-desktop/windows`, noStore, async request => {
+  app.get(`${base}/remote-desktop/sources`, noStore, async request => {
     const { instance, principal, capability } = await authorize(request);
-    if (!capability.windowCapture.available || !capability.captureTargets.includes("window")) throw failure("REMOTE_DESKTOP_WINDOW_UNSUPPORTED");
-    const result = await service.desktopRequest(instance.id, "windows", { requestId: randomBytes(16).toString("hex"), owner: desktopOwner(principal) }) as Record<string, unknown>;
-    return { data: { windows: DesktopWindowsSchema.parse(result.windows) } };
+    if (!capability.sourceProviders.some(provider => provider.available)) throw failure("REMOTE_DESKTOP_SOURCE_UNSUPPORTED");
+    const result = await service.desktopRequest(instance.id, "sources", { requestId: randomBytes(16).toString("hex"), owner: desktopOwner(principal) }) as Record<string, unknown>;
+    return { data: { sources: DesktopSourcesSchema.parse(result.sources) } };
   });
   async function create(request: FastifyRequest, takeover = false) {
     const { instance, principal, capability } = await authorize(request);
     const input = DesktopCreateSchema.parse(request.body);
-    if (input.captureTarget.kind === "window" && (!capability.windowCapture.available || !capability.captureTargets.includes("window"))) {
-      throw failure("REMOTE_DESKTOP_WINDOW_UNSUPPORTED");
-    }
-    if (!capability.captureTargets.includes(input.captureTarget.kind)) throw failure("REMOTE_DESKTOP_TARGET_UNSUPPORTED");
     // Docker bridge has no browser-reachable UDP publication. Never quietly
     // launch a Docker viewer with an empty/unhealthy TURN configuration.
     const ice = turn.issue();
@@ -84,7 +80,7 @@ export function registerRemoteDesktopRoutes(options: {
     if (capability.runtimeKind === "docker" && !ice.iceServers.length && !capability.fallback.available) throw failure("REMOTE_DESKTOP_TURN_REQUIRED");
     const viewer = takeover ? String((request.params as any).sessionId) : undefined;
     const data = await access.mutate(principal, instance.id, input.requestId, { type: takeover ? "takeover" : "create", ...input, viewer }, async () => {
-      const created = await access.create(principal, instance.id, instance.nodeId, input.requestId, input.captureTarget, viewer, ice);
+      const created = await access.create(principal, instance.id, instance.nodeId, input.requestId, input.selection, viewer, ice);
       const { ticket, ...publicResult } = created;
       // Relative URL preserves the authenticated reverse-proxy origin; tickets
       // never become route segments or independently returned credential fields.

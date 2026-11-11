@@ -126,7 +126,7 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="stories/[storyId]/automations/[automationId]" options={{ title: t('stories.editAutomation'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="app-sessions/new" options={{ title: '', ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="app-sessions/[instanceId]/[sessionId]" options={{ title: t('nav.terminal') }} />
-                    <Stack.Screen name="remote-desktop/[instanceId]" options={{ headerShown: false }} />
+                    <Stack.Screen name="remote-desktop/[instanceId]" options={{ headerShown: false, gestureEnabled: false }} />
                     <Stack.Screen name="history/[instanceId]/index" options={{ title: t('nav.history'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="history/[instanceId]/[historyId]" options={{ title: t('nav.sessionHistory'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="triggers/index" options={{ title: t('triggers.title'), ...iosTransparentHeaderOptions(dark) }} />

@@ -3,7 +3,7 @@ use crate::{
     contract::*,
     framing,
     host::TestHost,
-    session::{secret, CaptureTarget, Owner},
+    session::{secret, CaptureSelection, Owner},
 };
 use axum::{
     extract::{
@@ -108,8 +108,13 @@ async fn send(socket: &mut WebSocket, value: serde_json::Value) -> anyhow::Resul
 #[derive(serde::Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum BrowserSignal {
-    Offer { sdp: String },
-    SelectWindow { window_ref: String },
+    Offer {
+        sdp: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    SelectSource {
+        source_ref: String,
+    },
     Alive,
     Metrics,
     Stop,
@@ -120,14 +125,14 @@ async fn viewer(bus: Bus, mut socket: WebSocket, window: bool) {
         device_session_id: secret(),
     };
     let mut events = bus.events.subscribe();
-    let target = if window {
-        let windows = match bus
-            .call(Command::ListWindows {
+    let selection = if window {
+        let sources = match bus
+            .call(Command::ListSources {
                 owner: owner.clone(),
             })
             .await
         {
-            Ok(Reply::Windows { windows }) => windows,
+            Ok(Reply::Sources { sources }) => sources,
             Ok(Reply::Error { code }) => {
                 let _ = send(&mut socket, serde_json::json!({"type":"error","code":code})).await;
                 return;
@@ -136,7 +141,7 @@ async fn viewer(bus: Bus, mut socket: WebSocket, window: bool) {
         };
         if send(
             &mut socket,
-            serde_json::json!({"type":"windows","windows":windows}),
+            serde_json::json!({"type":"sources","sources":sources}),
         )
         .await
         .is_err()
@@ -148,17 +153,37 @@ async fn viewer(bus: Bus, mut socket: WebSocket, window: bool) {
         else {
             return;
         };
-        let Ok(BrowserSignal::SelectWindow { window_ref }) = serde_json::from_str(&text) else {
+        let Ok(BrowserSignal::SelectSource { source_ref }) = serde_json::from_str(&text) else {
             return;
         };
-        CaptureTarget::Window { window_ref }
+        CaptureSelection {
+            source_ref,
+            stream_region: None,
+            control_region: None,
+        }
     } else {
-        CaptureTarget::Display
+        let sources = match bus
+            .call(Command::ListSources {
+                owner: owner.clone(),
+            })
+            .await
+        {
+            Ok(Reply::Sources { sources }) => sources,
+            _ => return,
+        };
+        let Some(source) = sources.into_iter().find(|source| source.kind == "display") else {
+            return;
+        };
+        CaptureSelection {
+            source_ref: source.source_ref,
+            stream_region: None,
+            control_region: None,
+        }
     };
     let (snapshot, attach_token) = match bus
         .call(Command::Reserve {
             owner: owner.clone(),
-            capture_target: target.clone(),
+            capture_selection: selection.clone(),
         })
         .await
     {
@@ -182,7 +207,7 @@ async fn viewer(bus: Bus, mut socket: WebSocket, window: bool) {
     };
     let id = snapshot.viewer_session_id.clone();
     let run=async{
-        let reply=bus.call(Command::Attach{owner:owner.clone(),viewer_session_id:id.clone(),capture_target:target,attach_token}).await?;
+        let reply=bus.call(Command::Attach{owner:owner.clone(),viewer_session_id:id.clone(),capture_selection:selection,attach_token}).await?;
         let snapshot=match reply{
             Reply::Snapshot{snapshot}=>snapshot,
             Reply::Error{code}=>{
@@ -201,7 +226,7 @@ async fn viewer(bus: Bus, mut socket: WebSocket, window: bool) {
                             let reply=bus.call(Command::Offer{owner:owner.clone(),viewer_session_id:id.clone(),sdp}).await?;
                             match reply{Reply::Answer{sdp}=>send(&mut socket,serde_json::json!({"type":"answer","sdp":sdp})).await?,Reply::Error{code}=>{send(&mut socket,serde_json::json!({"type":"error","code":code})).await?;break;},_=>anyhow::bail!("unexpected reply")}
                         },
-                        BrowserSignal::SelectWindow { .. } => break,
+                        BrowserSignal::SelectSource { .. } => break,
                         BrowserSignal::Metrics=>{
                             if let Reply::Metrics { metrics } = bus.call(Command::Metrics { owner:owner.clone(), viewer_session_id:id.clone() }).await? {
                                 send(&mut socket, serde_json::json!({"type":"metrics","metrics":metrics})).await?;
@@ -282,4 +307,18 @@ pub async fn serve_mode(binary: &Path, mode: crate::capture::Mode) -> anyhow::Re
         })
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BrowserSignal;
+
+    #[test]
+    fn source_selection_decodes_the_viewer_camel_case_field() {
+        let signal: BrowserSignal =
+            serde_json::from_str(r#"{"type":"selectSource","sourceRef":"opaque"}"#).unwrap();
+        assert!(
+            matches!(signal, BrowserSignal::SelectSource { source_ref } if source_ref == "opaque")
+        );
+    }
 }

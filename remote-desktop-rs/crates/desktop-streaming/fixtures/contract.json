@@ -1,5 +1,5 @@
 {
-  "ipcVersion": "2026-11-07",
+  "ipcVersion": "2026-11-11",
   "channelVersion": "2026-11-05",
   "maxIpcFrame": 1048576,
   "framing": {

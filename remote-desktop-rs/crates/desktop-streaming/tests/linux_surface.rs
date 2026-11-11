@@ -278,11 +278,16 @@ fn children(pid: u32) -> Vec<u32> {
 async fn attach_virtual(host: &mut desktop_streaming::host::TestHost, request: &str) -> String {
     use desktop_streaming::{
         contract::{Command, Reply},
-        session::{CaptureTarget, Owner},
+        session::{CaptureSelection, Owner},
     };
     let owner = Owner {
         actor_id: "surface-fixture".into(),
         device_session_id: "fixture-device".into(),
+    };
+    let selection = CaptureSelection {
+        source_ref: "display".into(),
+        stream_region: None,
+        control_region: None,
     };
     let Reply::Reserved {
         snapshot,
@@ -293,7 +298,7 @@ async fn attach_virtual(host: &mut desktop_streaming::host::TestHost, request: &
             request,
             Command::Reserve {
                 owner: owner.clone(),
-                capture_target: CaptureTarget::Display,
+                capture_selection: selection.clone(),
             },
         )
         .await
@@ -307,7 +312,7 @@ async fn attach_virtual(host: &mut desktop_streaming::host::TestHost, request: &
             Command::Attach {
                 owner,
                 viewer_session_id: snapshot.viewer_session_id.clone(),
-                capture_target: CaptureTarget::Display,
+                capture_selection: selection,
                 attach_token
             }
         )
@@ -753,9 +758,9 @@ async fn window_catalog_consumes_real_window_and_capture_uses_window_drawable() 
         .expect("mapped client window must be catalogued");
     assert!(entry.capturable, "catalogued window must be capturable");
     assert_eq!((entry.width, entry.height), (320, 200));
-    assert_eq!(entry.application_name, "WindowCaptureFixture");
+    assert_eq!(entry.subtitle.as_deref(), Some("WindowCaptureFixture"));
 
-    let target = catalog.consume(&entry.window_ref, &owner).await.unwrap();
+    let target = catalog.consume(&entry.source_ref, &owner).await.unwrap();
     let mut capture = target.open(false).unwrap();
     let frame = capture.frame(true).unwrap().unwrap();
     assert_eq!((frame.geometry.width, frame.geometry.height), (320, 200));
@@ -1177,4 +1182,253 @@ async fn direct_window_capture_tracks_move_resize_focus_and_unmap() {
     drop(capture);
     drop(conn);
     surface.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable Linux test host with Xvfb/Openbox and XComposite"]
+async fn composite_window_capture_ignores_occlusion_and_tracks_children_popups_resize_and_release()
+{
+    use x11rb::protocol::{composite::ConnectionExt as _, xproto::*};
+
+    let config = desktop_streaming::platform::linux::Config::environment(false).unwrap();
+    let (conn, screen) = x11rb::connect(Some(&config.display)).unwrap();
+    let root = conn.setup().roots[screen].root;
+    let pid = std::process::id();
+    let wm_pid = conn
+        .intern_atom(false, b"_NET_WM_PID")
+        .unwrap()
+        .reply()
+        .unwrap()
+        .atom;
+    let wm_window_type = conn
+        .intern_atom(false, b"_NET_WM_WINDOW_TYPE")
+        .unwrap()
+        .reply()
+        .unwrap()
+        .atom;
+    let menu_type = conn
+        .intern_atom(false, b"_NET_WM_WINDOW_TYPE_MENU")
+        .unwrap()
+        .reply()
+        .unwrap()
+        .atom;
+
+    let target = conn.generate_id().unwrap();
+    conn.create_window(
+        x11rb::COPY_FROM_PARENT as u8,
+        target,
+        root,
+        1100,
+        600,
+        260,
+        200,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new()
+            .background_pixel(0x000000ff)
+            .override_redirect(1),
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    conn.change_property32(
+        PropMode::REPLACE,
+        target,
+        wm_pid,
+        AtomEnum::CARDINAL,
+        &[pid],
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+
+    let child = conn.generate_id().unwrap();
+    conn.create_window(
+        x11rb::COPY_FROM_PARENT as u8,
+        child,
+        target,
+        200,
+        140,
+        60,
+        50,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new().background_pixel(0x0000ff00),
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+
+    let cover = conn.generate_id().unwrap();
+    conn.create_window(
+        x11rb::COPY_FROM_PARENT as u8,
+        cover,
+        root,
+        1120,
+        620,
+        120,
+        100,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new()
+            .background_pixel(0x00ff0000)
+            .override_redirect(1),
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+
+    conn.map_window(target).unwrap().check().unwrap();
+    conn.map_window(child).unwrap().check().unwrap();
+    conn.map_window(cover).unwrap().check().unwrap();
+    conn.flush().unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let mut capture = Capture::open_window(&config, target, Some(pid)).unwrap();
+    let frame = capture.frame(true).unwrap().unwrap();
+    assert_eq!((frame.geometry.width, frame.geometry.height), (260, 200));
+    assert_eq!(
+        pixel(&frame, 50, 50),
+        [255, 0, 0],
+        "covered target pixels must remain intact"
+    );
+    assert_eq!(
+        pixel(&frame, 220, 165),
+        [0, 255, 0],
+        "descendant content must remain composed"
+    );
+
+    let gc = conn.generate_id().unwrap();
+    conn.create_gc(gc, target, &CreateGCAux::new().foreground(0x00ffff00))
+        .unwrap()
+        .check()
+        .unwrap();
+    conn.poly_fill_rectangle(
+        target,
+        gc,
+        &[Rectangle {
+            x: 20,
+            y: 110,
+            width: 60,
+            height: 60,
+        }],
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    conn.flush().unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if capture
+                .frame(false)
+                .unwrap()
+                .is_some_and(|frame| pixel(&frame, 50, 140) == [0, 255, 255])
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("covered target redraw must reach the composite pixmap");
+
+    let popup = conn.generate_id().unwrap();
+    conn.create_window(
+        x11rb::COPY_FROM_PARENT as u8,
+        popup,
+        root,
+        1150,
+        630,
+        70,
+        45,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new()
+            .background_pixel(0x00ff00ff)
+            .override_redirect(1),
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    conn.change_property32(PropMode::REPLACE, popup, wm_pid, AtomEnum::CARDINAL, &[pid])
+        .unwrap()
+        .check()
+        .unwrap();
+    conn.change_property32(
+        PropMode::REPLACE,
+        popup,
+        wm_window_type,
+        AtomEnum::ATOM,
+        &[menu_type],
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    conn.map_window(popup).unwrap().check().unwrap();
+    conn.flush().unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if capture
+                .frame(false)
+                .unwrap()
+                .is_some_and(|frame| pixel(&frame, 60, 40) == [255, 0, 255])
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("same-process menu popup must be composed above the target");
+
+    conn.configure_window(target, &ConfigureWindowAux::new().width(320).height(220))
+        .unwrap()
+        .check()
+        .unwrap();
+    conn.flush().unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if capture.frame(false).unwrap().is_some_and(|frame| {
+                frame.geometry.width == 320
+                    && frame.geometry.height == 220
+                    && pixel(&frame, 300, 205) == [255, 0, 0]
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("resized composite window must expose its new background");
+
+    conn.composite_query_version(0, 4).unwrap().reply().unwrap();
+    let redirect_probe = conn.generate_id().unwrap();
+    conn.composite_name_window_pixmap(target, redirect_probe)
+        .unwrap()
+        .check()
+        .unwrap();
+    conn.free_pixmap(redirect_probe).unwrap().check().unwrap();
+    drop(capture);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let release_probe = conn.generate_id().unwrap();
+    assert!(
+        conn.composite_name_window_pixmap(target, release_probe)
+            .unwrap()
+            .check()
+            .is_err(),
+        "dropping capture must release XComposite redirection"
+    );
+}
+
+fn pixel(frame: &desktop_streaming::traits::RawFrame, x: usize, y: usize) -> [u8; 3] {
+    let offset = y * frame.stride + x * 4;
+    [
+        frame.bgra[offset],
+        frame.bgra[offset + 1],
+        frame.bgra[offset + 2],
+    ]
 }

@@ -5,6 +5,11 @@ export {
   configureRemoteDesktopDecoder,
   decodeRemoteDesktopFrame,
   nativeRemoteDesktopDecoderAvailable,
+  nativeRemoteDesktopTextInputAvailable,
   resetRemoteDesktopDecoder,
+  startRemoteDesktopTextInputObservation,
+  stopRemoteDesktopTextInputObservation,
   subscribeRemoteDesktopDecoderErrors,
+  subscribeRemoteDesktopTextInput,
+  type RemoteDesktopTextInputEvent,
 } from './TaskHandoffRemoteDesktopModule';

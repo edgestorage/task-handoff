@@ -31,8 +31,8 @@ async fn main() -> anyhow::Result<()> {
             .iter()
             .find(|entry| entry.title == "G1 owned macOS input fixture" && entry.capturable)
             .ok_or_else(|| anyhow::anyhow!("owned fixture window missing"))?;
-        let capture = catalog.consume(&selected.window_ref, &owner).await?;
-        replay_rejected = catalog.consume(&selected.window_ref, &owner).await.is_err();
+        let capture = catalog.consume(&selected.source_ref, &owner).await?;
+        replay_rejected = catalog.consume(&selected.source_ref, &owner).await.is_err();
         capture
     } else {
         Capture::primary_display().await?

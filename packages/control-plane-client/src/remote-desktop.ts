@@ -9,21 +9,21 @@ import {
   DesktopCreatedSchema,
   DesktopFallbackSessionSchema,
   DesktopSessionSnapshotSchema,
-  DesktopWindowsSchema,
-  type DesktopCaptureTarget,
+  DesktopSourcesSchema,
+  type DesktopCaptureSelection,
   type DesktopCreated,
   type DesktopFallbackSession,
   type DesktopSessionSnapshot,
-  type DesktopWindow,
+  type DesktopSource,
 } from "@task-handoff/protocol/remote-desktop";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
-const RemoteDesktopWindowsResponseSchema = z.object({ windows: DesktopWindowsSchema }).strict();
+const RemoteDesktopSourcesResponseSchema = z.object({ sources: DesktopSourcesSchema }).strict();
 const RemoteDesktopSettingsSchema = z.object({ enabled: z.boolean() }).strip();
 const RemoteDesktopStoppedSchema = z.object({ stopped: z.boolean() }).strip();
 
-export type RemoteDesktopWindow = DesktopWindow;
+export type RemoteDesktopSource = DesktopSource;
 export type RemoteDesktopCreated = DesktopCreated;
 export type RemoteDesktopFallback = DesktopFallbackSession;
 export type RemoteDesktopSnapshot = DesktopSessionSnapshot;
@@ -48,21 +48,21 @@ export function createControlPlaneRemoteDesktopApi(transport: ControlPlaneClient
     (await transport.request(path, DataSchema(schema), init)).data
   );
   return {
-    windows(instanceId: string, signal?: AbortSignal): Promise<{ windows: RemoteDesktopWindow[] }> {
-      return requestData(`${base(instanceId)}/remote-desktop/windows`, RemoteDesktopWindowsResponseSchema, { signal });
+    sources(instanceId: string, signal?: AbortSignal): Promise<{ sources: RemoteDesktopSource[] }> {
+      return requestData(`${base(instanceId)}/remote-desktop/sources`, RemoteDesktopSourcesResponseSchema, { signal });
     },
-    createSession(instanceId: string, captureTarget: DesktopCaptureTarget, requestId = remoteDesktopRequestId()) {
+    createSession(instanceId: string, selection: DesktopCaptureSelection, requestId = remoteDesktopRequestId()) {
       return requestData(
         `${base(instanceId)}/remote-desktop-sessions`,
         DesktopCreatedSchema,
-        jsonPost({ requestId, captureTarget }),
+        jsonPost({ requestId, selection }),
       );
     },
-    takeoverSession(instanceId: string, sessionId: string, captureTarget: DesktopCaptureTarget, requestId = remoteDesktopRequestId()) {
+    takeoverSession(instanceId: string, sessionId: string, selection: DesktopCaptureSelection, requestId = remoteDesktopRequestId()) {
       return requestData(
         `${session(instanceId, sessionId)}/takeover`,
         DesktopCreatedSchema,
-        jsonPost({ requestId, captureTarget }),
+        jsonPost({ requestId, selection }),
       );
     },
     snapshot(instanceId: string, sessionId: string, signal?: AbortSignal) {

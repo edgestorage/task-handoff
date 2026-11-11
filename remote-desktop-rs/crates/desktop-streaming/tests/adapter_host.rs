@@ -60,7 +60,7 @@ async fn production_host_consumes_shared_adapter_contract_and_restart_invalidate
     assert!(host.is_closed());
     let second = ComponentHost::spawn_arguments(binary, &[]).await.unwrap();
     assert_ne!(second.boot_id, boot);
-    let old = json!({"type":"attach","owner":{"actorId":"adapter-actor","deviceSessionId":"adapter-device"},"viewerSessionId":session,"captureTarget":{"kind":"display"},"attachToken":token});
+    let old = json!({"type":"attach","owner":{"actorId":"adapter-actor","deviceSessionId":"adapter-device"},"viewerSessionId":session,"captureSelection":{"sourceRef":"display"},"attachToken":token});
     assert!(matches!(
         second
             .request("stale", serde_json::from_value(old).unwrap())
@@ -200,7 +200,7 @@ async fn real_service_enabled_intent_package_drain_restart_and_capability_are_bo
     let owner = json!({"actorId":"actor","deviceSessionId":"device"});
     let reserve = || {
         serde_json::from_value(
-            json!({"type":"reserve","owner":owner,"captureTarget":{"kind":"display"}}),
+            json!({"type":"reserve","owner":owner,"captureSelection":{"sourceRef":"display"}}),
         )
         .unwrap()
     };

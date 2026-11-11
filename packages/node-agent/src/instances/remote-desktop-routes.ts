@@ -4,7 +4,7 @@ import {
   DESKTOP_FALLBACK_ACTOR_HEADER,
   DESKTOP_FALLBACK_DEVICE_HEADER,
   DESKTOP_FALLBACK_GENERATION_HEADER,
-  DESKTOP_FALLBACK_TARGET_HEADER,
+  DESKTOP_FALLBACK_SELECTION_HEADER,
   DESKTOP_FALLBACK_VIEWER_HEADER,
   DesktopAttachSchema,
   DesktopFallbackAttachSchema,
@@ -116,7 +116,7 @@ export function registerManagedDesktopRoutes(app: FastifyInstance, options: {
     const generation = header(request, DESKTOP_FALLBACK_GENERATION_HEADER);
     const actor = header(request, DESKTOP_FALLBACK_ACTOR_HEADER);
     const device = header(request, DESKTOP_FALLBACK_DEVICE_HEADER);
-    const target = header(request, DESKTOP_FALLBACK_TARGET_HEADER);
+    const selection = header(request, DESKTOP_FALLBACK_SELECTION_HEADER);
     let attach: ReturnType<typeof DesktopFallbackAttachSchema.parse> | undefined;
     if (role.success) {
       try {
@@ -127,7 +127,7 @@ export function registerManagedDesktopRoutes(app: FastifyInstance, options: {
           viewerSessionId: viewer,
           actorId: actor,
           deviceSessionId: device,
-          captureTarget: JSON.parse(target ?? ""),
+          captureSelection: JSON.parse(selection ?? ""),
         });
       } catch {
         attach = undefined;

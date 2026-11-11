@@ -92,6 +92,67 @@ async fn suspend_ack_follows_release_and_pipe_eof_terminates_guard() {
         .unwrap();
     assert!(closed.elapsed() < Duration::from_secs(2));
 }
+
+#[tokio::test]
+async fn rebinding_the_guard_releases_the_old_epoch_before_arming_the_new_source() {
+    let mut guard = Client::spawn(binary(), Backend::Synthetic).await.unwrap();
+    guard.call(&Command::Arm { epoch: 1 }).await.unwrap();
+    guard.call(&key(1, true)).await.unwrap();
+    assert!(matches!(
+        guard
+            .call(&Command::Rebind {
+                backend: Backend::Synthetic,
+            })
+            .await
+            .unwrap(),
+        Event::Released
+    ));
+    assert!(matches!(
+        guard.call(&Command::Probe).await.unwrap(),
+        Event::State {
+            epoch: None,
+            pressed: 0,
+            ..
+        }
+    ));
+    assert!(matches!(
+        guard.call(&key(1, true)).await.unwrap(),
+        Event::Rejected
+    ));
+    assert!(matches!(
+        guard.call(&Command::Arm { epoch: 2 }).await.unwrap(),
+        Event::State { epoch: Some(2), .. }
+    ));
+    guard.close().await.unwrap();
+}
+
+#[test]
+fn backend_binding_matches_the_capture_target_not_a_stale_geometry() {
+    let backend = Backend::Native {
+        geometry: Geometry {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+        },
+        display: Some(":0".into()),
+        authority: None,
+    };
+    let resized = Backend::Native {
+        geometry: Geometry {
+            x: 100,
+            y: 80,
+            width: 800,
+            height: 600,
+            scale: 1.0,
+        },
+        display: Some(":0".into()),
+        authority: None,
+    };
+    assert!(backend.same_binding(&resized));
+    assert!(!backend.same_binding(&Backend::Synthetic));
+}
 #[test]
 fn retina_and_dpi_mapping_use_authoritative_actuator_geometry() {
     for scale in [1.0, 1.25, 1.5, 2.0] {

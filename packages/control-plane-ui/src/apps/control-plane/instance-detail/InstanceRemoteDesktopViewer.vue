@@ -12,13 +12,12 @@
                 variant="ghost"
                 size="sm"
                 class="remote-desktop-scope-trigger"
-                :disabled="switchingScope || scopeSwitchBlocked"
-                :title="scopeSwitchBlocked ? t('instances.remoteDesktop.scopeSwitchBusy') : localScope ? t('instances.remoteDesktop.localScopeHint') : t('instances.remoteDesktop.sharedHint')"
+                :disabled="switchingScope"
+                :title="localScope ? t('instances.remoteDesktop.localScopeHint') : t('instances.remoteDesktop.independentScopeHint')"
                 @click="prepareScopeMenu"
               >
                 <span class="remote-desktop-stage-target-icon" aria-hidden="true">
-                  <AppWindow v-if="target.kind === 'window'" :size="15" />
-                  <Monitor v-else :size="15" />
+                  <component :is="sourceIcon(target.kind)" :size="15" />
                 </span>
                 <span class="remote-desktop-scope-title">
                   <strong>{{ selectedTargetTitle }}</strong>
@@ -30,59 +29,50 @@
               <div class="remote-desktop-scope-head">
                 <div>
                   <strong>{{ session ? t("instances.remoteDesktop.switchScope") : t("instances.remoteDesktop.chooseTarget") }}</strong>
-                  <p>{{ session ? (localScope ? t("instances.remoteDesktop.localScopeHint") : t("instances.remoteDesktop.sharedHint")) : t("instances.remoteDesktop.chooseTargetHint") }}</p>
+                  <p>{{ session ? (localScope ? t("instances.remoteDesktop.localScopeHint") : t("instances.remoteDesktop.independentScopeHint")) : t("instances.remoteDesktop.chooseTargetHint") }}</p>
                 </div>
-                <Button v-if="windowCapture" variant="ghost" size="icon-sm" :disabled="windowsLoading" :aria-label="t('instances.remoteDesktop.refreshWindows')" :title="t('instances.remoteDesktop.refreshWindows')" @click="loadWindows">
-                  <RefreshCw :class="{ 'remote-desktop-spin': windowsLoading }" :size="14" aria-hidden="true" />
+                <Button v-if="hasSourceProvider" variant="ghost" size="icon-sm" :disabled="sourcesLoading" :aria-label="t('instances.remoteDesktop.refreshSources')" :title="t('instances.remoteDesktop.refreshSources')" @click="loadSources">
+                  <RefreshCw :class="{ 'remote-desktop-spin': sourcesLoading }" :size="14" aria-hidden="true" />
                 </Button>
               </div>
               <ScrollArea class="remote-desktop-scope-scroll" :horizontal="false">
                 <div class="remote-desktop-scope-options" role="listbox" :aria-label="t('instances.remoteDesktop.switchScope')">
-                  <Button variant="ghost" class="remote-desktop-scope-option" :class="{ selected: target.kind === 'display' }" role="option" :aria-selected="target.kind === 'display'" @click="selectScopeDisplay">
-                    <span class="remote-desktop-scope-option-icon" aria-hidden="true"><Monitor :size="15" /></span>
-                    <span class="remote-desktop-scope-option-copy">
-                      <strong>{{ t("instances.remoteDesktop.entireDesktop") }}</strong>
-                      <small>{{ t("instances.remoteDesktop.entireDesktopDescription") }}</small>
-                    </span>
-                    <Check v-if="target.kind === 'display'" :size="14" aria-hidden="true" />
-                  </Button>
-                  <template v-if="windowCapture">
+                  <template v-for="group in sourceGroups" :key="group.kind">
                     <div class="remote-desktop-scope-group">
-                      <span>{{ t("instances.remoteDesktop.singleWindow") }}</span>
-                      <span>{{ windowCountLabel }}</span>
+                      <span>{{ sourceKindLabel(group.kind) }}</span>
+                      <span>{{ group.items.length }}</span>
                     </div>
                     <Button
-                      v-for="item in windows"
-                      :key="item.windowRef"
+                      v-for="item in group.items"
+                      :key="item.sourceRef"
                       variant="ghost"
                       class="remote-desktop-scope-option"
-                      :class="{ selected: target.kind === 'window' && target.windowRef === item.windowRef }"
+                      :class="{ selected: target.kind === item.kind && target.sourceRef === item.sourceRef }"
                       role="option"
-                      :aria-selected="target.kind === 'window' && target.windowRef === item.windowRef"
+                      :aria-selected="target.kind === item.kind && target.sourceRef === item.sourceRef"
                       :disabled="!item.capturable"
-                      :title="item.capturable ? item.title : item.reason || t('instances.remoteDesktop.unavailableWindow')"
-                      @click="selectScopeWindow(item)"
+                      :title="item.capturable ? item.title : item.reason || t('instances.remoteDesktop.unavailableSource')"
+                      @click="selectScopeSource(item)"
                     >
-                      <span class="remote-desktop-scope-option-icon" aria-hidden="true"><AppWindow :size="15" /></span>
+                      <span class="remote-desktop-scope-option-icon" aria-hidden="true"><component :is="sourceIcon(item.kind)" :size="15" /></span>
                       <span class="remote-desktop-scope-option-copy">
-                        <strong>{{ item.applicationName || t("instances.remoteDesktop.unnamedApplication") }}</strong>
-                        <small>{{ item.title || t("instances.remoteDesktop.untitledWindow") }} · {{ item.width }} × {{ item.height }}</small>
+                        <strong>{{ sourcePrimaryText(item) }}</strong>
+                        <small>{{ [sourceSecondaryText(item), `${item.width} × ${item.height}`].filter(Boolean).join(" · ") }}</small>
                       </span>
-                      <Check v-if="target.kind === 'window' && target.windowRef === item.windowRef" :size="14" aria-hidden="true" />
+                      <Check v-if="target.kind === item.kind && target.sourceRef === item.sourceRef" :size="14" aria-hidden="true" />
                     </Button>
-                    <div v-if="windowsLoading && !windows.length" class="remote-desktop-scope-state">
-                      <LoaderCircle class="remote-desktop-spin" :size="14" aria-hidden="true" />
-                      <span>{{ t("instances.remoteDesktop.loadingWindows") }}</span>
-                    </div>
-                    <div v-else-if="windowError" class="remote-desktop-scope-state remote-desktop-scope-state-error">
-                      <span>{{ windowError }}</span>
-                      <Button variant="ghost" size="sm" @click="loadWindows">{{ t("instances.remoteDesktop.retry") }}</Button>
-                    </div>
-                    <div v-else-if="!windows.length" class="remote-desktop-scope-state">
-                      <span>{{ t("instances.remoteDesktop.noWindows") }}</span>
-                    </div>
                   </template>
-                  <p v-else class="remote-desktop-scope-unavailable">{{ t("instances.remoteDesktop.windowCaptureUnavailable") }}</p>
+                  <div v-if="sourcesLoading && !sources.length" class="remote-desktop-scope-state">
+                    <LoaderCircle class="remote-desktop-spin" :size="14" aria-hidden="true" />
+                    <span>{{ t("instances.remoteDesktop.loadingSources") }}</span>
+                  </div>
+                  <div v-else-if="sourcesError" class="remote-desktop-scope-state remote-desktop-scope-state-error">
+                    <span>{{ sourcesError }}</span>
+                    <Button variant="ghost" size="sm" @click="loadSources">{{ t("instances.remoteDesktop.retry") }}</Button>
+                  </div>
+                  <div v-else-if="!sources.length && !sourcesLoading" class="remote-desktop-scope-state">
+                    <span>{{ t("instances.remoteDesktop.noSources") }}</span>
+                  </div>
                 </div>
               </ScrollArea>
             </PopoverContent>
@@ -130,7 +120,8 @@
                 </Tooltip>
               </div>
             </TooltipProvider>
-            <span v-if="viewerCount > 1"><Users :size="12" aria-hidden="true" />{{ t("instances.remoteDesktop.viewerCount", { count: viewerCount }) }}</span>
+            <span v-if="session"><Users :size="12" aria-hidden="true" />{{ t("instances.remoteDesktop.viewerCount", { count: viewerCount }) }}</span>
+            <span v-if="session && !fallbackActive && webRTCLatencyDetail"><Gauge :size="12" aria-hidden="true" />{{ webRTCLatencyDetail }}</span>
             <span v-if="resolution"><Maximize2 :size="12" aria-hidden="true" />{{ resolution }}</span>
             <span v-if="sessionDeadline"><Clock3 :size="12" aria-hidden="true" />{{ sessionDeadline }}</span>
             <span v-if="idleDeadline" class="remote-desktop-idle-deadline">{{ idleDeadline }}</span>
@@ -139,7 +130,7 @@
             </span>
           </div>
           <div v-if="session" class="remote-desktop-head-actions">
-            <Button :variant="inputEnabled ? 'secondary' : 'default'" size="sm" :aria-pressed="inputEnabled" :disabled="!signalingReady || fallbackSwitching || inputEnabled || controlRequestPending" :title="inputActionTitle" @click="primaryInputAction">
+            <Button v-if="!isController && hasController" variant="default" size="sm" :disabled="!signalingReady || fallbackSwitching || controlRequestPending" :title="inputActionTitle" @click="primaryInputAction">
               <MousePointer2 :size="14" aria-hidden="true" />
               <span class="remote-desktop-action-label">{{ inputActionLabel }}</span>
             </Button>
@@ -211,10 +202,10 @@
                     </DropdownMenuItem>
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
-                <DropdownMenuItem :disabled="!signalingReady || fallbackSwitching || inputEnabled || controlRequestPending" @select="primaryInputAction">
+                <DropdownMenuItem :disabled="!signalingReady || fallbackSwitching || inputResumePending || controlRequestPending" @select="toggleInputEnabled">
                   <MousePointer2 :size="14" aria-hidden="true" />
-                  <span>{{ inputActionLabel }}</span>
-                  <Check v-if="inputEnabled" :size="14" class="ml-auto" aria-hidden="true" />
+                  <span>{{ inputRequested ? t("instances.remoteDesktop.disableInput") : t("instances.remoteDesktop.enableInput") }}</span>
+                  <Check v-if="inputRequested" :size="14" class="ml-auto" aria-hidden="true" />
                 </DropdownMenuItem>
                 <DropdownMenuSub v-if="clipboardSupported">
                   <DropdownMenuSubTrigger :disabled="!signalingReady || fallbackSwitching">
@@ -297,99 +288,87 @@
       <div class="remote-desktop-setup-main">
         <div class="remote-desktop-section-heading">
           <strong>{{ t("instances.remoteDesktop.chooseTarget") }}</strong>
-          <span>{{ target.kind === "display" ? t("instances.remoteDesktop.entireDesktop") : t("instances.remoteDesktop.singleWindow") }}</span>
+          <span>{{ sourceKindLabel(target.kind) }}</span>
         </div>
         <div class="remote-desktop-targets" role="radiogroup" :aria-label="t('instances.remoteDesktop.chooseTarget')">
           <Button
+            v-for="provider in sourceProviderOptions"
+            :key="provider.kind"
             variant="outline"
             class="remote-desktop-target"
-            :class="{ selected: target.kind === 'display' }"
+            :class="{ selected: target.kind === provider.kind }"
             role="radio"
-            :aria-checked="target.kind === 'display'"
-            @click="selectDisplayTarget"
+            :aria-checked="target.kind === provider.kind"
+            :disabled="!provider.available"
+            :title="provider.available ? undefined : provider.reason || t('instances.remoteDesktop.sourceCaptureUnavailable')"
+            @click="chooseSourceKind(provider.kind)"
           >
-            <span class="remote-desktop-target-icon" aria-hidden="true"><Monitor :size="17" /></span>
+            <span class="remote-desktop-target-icon" aria-hidden="true"><component :is="sourceIcon(provider.kind)" :size="17" /></span>
             <span class="remote-desktop-target-copy">
-              <strong>{{ t("instances.remoteDesktop.entireDesktop") }}</strong>
-              <small>{{ t("instances.remoteDesktop.entireDesktopDescription") }}</small>
-            </span>
-          </Button>
-          <Button
-            variant="outline"
-            class="remote-desktop-target"
-            :class="{ selected: target.kind === 'window' }"
-            role="radio"
-            :aria-checked="target.kind === 'window'"
-            :disabled="!windowCapture"
-            :title="windowCapture ? undefined : remote.windowCapture.reason || t('instances.remoteDesktop.windowCaptureUnavailable')"
-            @click="chooseWindow"
-          >
-            <span class="remote-desktop-target-icon" aria-hidden="true"><AppWindow :size="17" /></span>
-            <span class="remote-desktop-target-copy">
-              <strong>{{ t("instances.remoteDesktop.singleWindow") }}</strong>
-              <small>{{ windowCapture ? t("instances.remoteDesktop.singleWindowDescription") : t("instances.remoteDesktop.windowCaptureUnavailable") }}</small>
+              <strong>{{ sourceKindLabel(provider.kind) }}</strong>
+              <small>{{ provider.available ? sourceKindDescription(provider.kind) : provider.reason || t("instances.remoteDesktop.sourceCaptureUnavailable") }}</small>
             </span>
           </Button>
         </div>
 
-        <section v-if="target.kind === 'window'" class="remote-desktop-windows" :aria-label="t('instances.remoteDesktop.windowsTitle')">
-          <div class="remote-desktop-windows-head">
+        <section v-if="target.kind" class="remote-desktop-sources" :aria-label="t('instances.remoteDesktop.sourcesTitle')">
+          <div class="remote-desktop-sources-head">
             <div>
-              <strong>{{ t("instances.remoteDesktop.windowsTitle") }}</strong>
-              <span>{{ windowCountLabel }}</span>
+              <strong>{{ t("instances.remoteDesktop.sourcesTitle") }}</strong>
+              <span>{{ sourceCountLabel }}</span>
             </div>
-            <Button variant="ghost" size="icon-sm" :aria-label="t('instances.remoteDesktop.refreshWindows')" :title="t('instances.remoteDesktop.refreshWindows')" :disabled="windowsLoading" @click="loadWindows">
-              <RefreshCw :class="{ 'remote-desktop-spin': windowsLoading }" :size="14" />
+            <Button variant="ghost" size="icon-sm" :aria-label="t('instances.remoteDesktop.refreshSources')" :title="t('instances.remoteDesktop.refreshSources')" :disabled="sourcesLoading" @click="loadSources">
+              <RefreshCw :class="{ 'remote-desktop-spin': sourcesLoading }" :size="14" />
             </Button>
           </div>
-          <label class="remote-desktop-window-search">
+          <label class="remote-desktop-source-search">
             <Search :size="14" aria-hidden="true" />
-            <Input v-model="windowQuery" type="search" :aria-label="t('instances.remoteDesktop.searchWindows')" :placeholder="t('instances.remoteDesktop.searchWindows')" />
+            <Input v-model="sourceQuery" type="search" :aria-label="t('instances.remoteDesktop.searchSources')" :placeholder="t('instances.remoteDesktop.searchSources')" />
           </label>
-          <div v-if="windowsLoading && !windows.length" class="remote-desktop-window-state" role="status">
+          <div v-if="sourcesLoading && !sources.length" class="remote-desktop-source-state" role="status">
             <LoaderCircle class="remote-desktop-spin" :size="16" aria-hidden="true" />
-            <span>{{ t("instances.remoteDesktop.loadingWindows") }}</span>
+            <span>{{ t("instances.remoteDesktop.loadingSources") }}</span>
           </div>
-          <div v-else-if="windowError" class="remote-desktop-window-state remote-desktop-window-state-error" role="alert">
+          <div v-else-if="sourcesError" class="remote-desktop-source-state remote-desktop-source-state-error" role="alert">
             <CircleAlert :size="15" aria-hidden="true" />
-            <span>{{ windowError }}</span>
-            <Button variant="outline" size="sm" @click="loadWindows">{{ t("instances.remoteDesktop.retry") }}</Button>
+            <span>{{ sourcesError }}</span>
+            <Button variant="outline" size="sm" @click="loadSources">{{ t("instances.remoteDesktop.retry") }}</Button>
           </div>
-          <div v-else-if="!windows.length" class="remote-desktop-window-state">
-            <AppWindow :size="17" aria-hidden="true" />
-            <span>{{ t("instances.remoteDesktop.noWindows") }}</span>
+          <div v-else-if="!sources.length" class="remote-desktop-source-state">
+            <MonitorOff :size="17" aria-hidden="true" />
+            <span>{{ t("instances.remoteDesktop.noSources") }}</span>
           </div>
-          <div v-else-if="!filteredWindows.length" class="remote-desktop-window-state">
+          <div v-else-if="!targetSources.length" class="remote-desktop-source-state">
             <Search :size="16" aria-hidden="true" />
-            <span>{{ t("instances.remoteDesktop.noWindowMatches") }}</span>
+            <span>{{ t("instances.remoteDesktop.noSourceMatches") }}</span>
           </div>
-          <ScrollArea v-else class="remote-desktop-window-scroll" :horizontal="false">
-            <div class="remote-desktop-window-list" role="listbox" :aria-label="t('instances.remoteDesktop.windowsTitle')">
+          <ScrollArea v-else class="remote-desktop-source-scroll" :horizontal="false">
+            <div class="remote-desktop-source-list" role="listbox" :aria-label="t('instances.remoteDesktop.sourcesTitle')">
               <Button
-                v-for="item in filteredWindows"
-                :key="item.windowRef"
+                v-for="item in targetSources"
+                :key="item.sourceRef"
                 variant="ghost"
-                class="remote-desktop-window-row"
-                :class="{ selected: target.windowRef === item.windowRef }"
+                class="remote-desktop-source-row"
+                :class="{ selected: target.kind === item.kind && target.sourceRef === item.sourceRef }"
                 role="option"
-                :aria-selected="target.windowRef === item.windowRef"
+                :aria-selected="target.kind === item.kind && target.sourceRef === item.sourceRef"
                 :disabled="!item.capturable"
-                :title="item.capturable ? item.title : item.reason || t('instances.remoteDesktop.unavailableWindow')"
-                @click="selectWindow(item)"
+                :title="item.capturable ? item.title : item.reason || t('instances.remoteDesktop.unavailableSource')"
+                @click="selectSource(item)"
               >
-                <span class="remote-desktop-window-icon" aria-hidden="true"><AppWindow :size="15" /></span>
-                <span class="remote-desktop-window-copy">
-                  <strong>{{ item.applicationName || t("instances.remoteDesktop.unnamedApplication") }}</strong>
-                  <small>{{ item.title || t("instances.remoteDesktop.untitledWindow") }}</small>
+                <span class="remote-desktop-source-icon" aria-hidden="true"><component :is="sourceIcon(item.kind)" :size="15" /></span>
+                <span class="remote-desktop-source-copy">
+                  <strong>{{ sourcePrimaryText(item) }}</strong>
+                  <small>{{ sourceSecondaryText(item) }}</small>
                 </span>
-                <span class="remote-desktop-window-meta">
+                <span class="remote-desktop-source-meta">
                   <span>{{ item.width }} × {{ item.height }}</span>
-                  <small v-if="!item.capturable">{{ item.reason || t("instances.remoteDesktop.unavailableWindow") }}</small>
+                  <small v-if="!item.capturable">{{ item.reason || t("instances.remoteDesktop.unavailableSource") }}</small>
                 </span>
               </Button>
             </div>
           </ScrollArea>
-          <p class="remote-desktop-window-hint">{{ t("instances.remoteDesktop.selectWindow") }}</p>
+          <p class="remote-desktop-source-hint">{{ t("instances.remoteDesktop.selectSource") }}</p>
         </section>
       </div>
 
@@ -435,7 +414,7 @@
           </DropdownMenuContent>
         </DropdownMenu>
         <div class="remote-desktop-connect-footer">
-          <p v-if="target.kind === 'window' && !target.windowRef" class="remote-desktop-connect-hint">{{ t("instances.remoteDesktop.selectWindow") }}</p>
+          <p v-if="!target.sourceRef" class="remote-desktop-connect-hint">{{ t("instances.remoteDesktop.selectSource") }}</p>
           <Button
             class="remote-desktop-connect-button"
             :disabled="connecting || !canConnect || !signalTransportReady"
@@ -481,6 +460,13 @@
           <Play :size="22" aria-hidden="true" />
           <strong>{{ t("instances.remoteDesktop.paused") }}</strong>
         </div>
+        <div v-if="controlHintVisible" class="remote-desktop-interaction-hint" role="status" aria-live="polite">
+          <MousePointer2 :size="14" aria-hidden="true" />
+          <span>{{ hasController ? t("instances.remoteDesktop.viewingByOther", { count: viewerCount }) : t("instances.remoteDesktop.controlAvailable") }}</span>
+          <Button variant="secondary" size="sm" :disabled="controlRequestPending || !signalingReady" @pointerdown.stop @click.stop="requestControl">
+            {{ controlRequestPending ? t("instances.remoteDesktop.requestingControl") : t("instances.remoteDesktop.requestControl") }}
+          </Button>
+        </div>
         <span v-if="streamReady && !inputEnabled" class="remote-desktop-view-only">
           <MousePointer2 :size="13" aria-hidden="true" />
           {{ isController ? t("instances.remoteDesktop.viewOnly") : hasController ? t("instances.remoteDesktop.viewingByOther", { count: viewerCount }) : t("instances.remoteDesktop.controlAvailable") }}
@@ -496,6 +482,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import {
+  isRecoverableRemoteDesktopInputResumeError,
+  parseRemoteDesktopWebRTCStats,
+  remoteDesktopInputResumeRetryDelayMs,
+  RemoteDesktopWheelPump,
+  REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS,
+  type RemoteDesktopWebRTCStats,
+} from "@task-handoff/control-plane-client";
 import {
   AppWindow,
   Cable,
@@ -536,14 +530,16 @@ import {
   DesktopFallbackFrameAssembler,
   decodeDesktopFallbackFrame,
   isRemoteDesktopLocalNetworkAddress,
-  type DesktopCaptureTarget,
+  type DesktopCaptureSelection,
   type DesktopFallbackSession,
   type DesktopSessionSnapshot,
 } from "@task-handoff/protocol/remote-desktop";
-import { createRemoteDesktopSession, forceStopRemoteDesktopSession, listRemoteDesktopWindows, requestRemoteDesktopFallback, stopRemoteDesktopSession, type RemoteDesktopCreated, type RemoteDesktopWindow } from "../../../api/remoteDesktop";
+import { createRemoteDesktopSession, forceStopRemoteDesktopSession, listRemoteDesktopSources, requestRemoteDesktopFallback, stopRemoteDesktopSession, type RemoteDesktopCreated, type RemoteDesktopSource } from "../../../api/remoteDesktop";
+import { useControlPlaneSettingsQuery } from "../../../api/queries";
 import { translateApiError } from "../../../i18n/apiError";
 import { parseInputSuspension, shouldResumeAfterInputSuspension } from "./remoteDesktopInputSuspension";
-import { parseSelectedWindowInfo, resolveRefreshedWindow, selectedWindowInfo as toSelectedWindowInfo, type SelectedWindowInfo } from "./remoteDesktopWindowSelection";
+import { createRemoteDesktopDiagnostics, remoteDesktopErrorFields } from "./remoteDesktopDiagnostics";
+import { parseSelectedSourceIdentity, resolveRefreshedSource, selectedSourceIdentity as toSelectedSourceIdentity, type SelectedSourceIdentity } from "./remoteDesktopSourceSelection";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -556,22 +552,30 @@ import { createBrowserUuid } from "../../../lib/random-id";
 import { remoteDesktopCapabilities } from "../remoteDesktopCapability";
 
 const { t } = useI18n();
-const props = defineProps<{ instanceId: string; capabilities?: Record<string, unknown>; canManage?: boolean; embedded?: boolean; active?: boolean }>();
+const controlPlaneSettings = useControlPlaneSettingsQuery();
+const props = defineProps<{
+  instanceId: string;
+  capabilities?: Record<string, unknown>;
+  canManage?: boolean;
+  embedded?: boolean;
+  active?: boolean;
+}>();
 
 const remote = computed(() => remoteDesktopCapabilities({ capabilities: props.capabilities ?? {} } as any));
 const available = computed(() => remote.value?.available === true);
 const canManage = computed(() => props.canManage === true);
-const windowCapture = computed(() => remote.value?.windowCapture?.available === true);
+const sourceProviderOptions = computed(() => remote.value?.sourceProviders ?? []);
+const hasSourceProvider = computed(() => sourceProviderOptions.value.some(provider => provider.available));
 const clipboardSupported = computed(() => remote.value?.features.clipboard === true);
 const localScope = computed(() => remote.value?.runtimeKind === "local");
 const signalTransportReady = typeof window !== "undefined"
   && (window.isSecureContext || isRemoteDesktopLocalNetworkAddress(window.location.hostname));
 
-const windows = ref<RemoteDesktopWindow[]>([]);
-const windowQuery = ref("");
-const windowsLoading = ref(false);
-const windowError = ref("");
-type TargetSelection = { kind: "display" } | { kind: "window"; windowRef?: string };
+const sources = ref<RemoteDesktopSource[]>([]);
+const sourceQuery = ref("");
+const sourcesLoading = ref(false);
+const sourcesError = ref("");
+type TargetSelection = { kind: string; sourceRef?: string };
 type TransportResolutionValue = "auto" | "1080p" | "720p" | "540p" | "360p";
 type TransportFrameRateValue = "auto" | "60" | "30" | "24" | "15";
 type ConnectionMethodKey = "p2p" | "websocket" | "turn";
@@ -586,7 +590,7 @@ const TRANSPORT_RESOLUTION_PRESETS = [
 const TRANSPORT_FRAME_RATE_PRESETS = [60, 30, 24, 15] as const;
 type RemoteDesktopViewerPreferences = {
   target: TargetSelection;
-  selectedWindow?: SelectedWindowInfo;
+  selectedSource?: SelectedSourceIdentity;
   transportResolution: TransportResolutionValue;
   transportFrameRate: TransportFrameRateValue;
   transportAvailability: ConnectionMethodAvailability;
@@ -595,16 +599,25 @@ const VIEWER_PREFERENCES_PREFIX = "task-handoff.control-plane.remote-desktop-vie
 const TRANSPORT_RESOLUTION_VALUES: TransportResolutionValue[] = ["auto", "1080p", "720p", "540p", "360p"];
 const TRANSPORT_FRAME_RATE_VALUES: TransportFrameRateValue[] = ["auto", "60", "30", "24", "15"];
 
+function viewerPreferencesKey(instanceId: string) {
+  return `${VIEWER_PREFERENCES_PREFIX}${instanceId}`;
+}
+
 function loadViewerPreferences(instanceId: string): RemoteDesktopViewerPreferences | undefined {
   if (typeof window === "undefined") return undefined;
   try {
-    const value = JSON.parse(window.localStorage?.getItem(`${VIEWER_PREFERENCES_PREFIX}${instanceId}`) || "null") as Record<string, any> | null;
+    const value = JSON.parse(
+      window.localStorage?.getItem(viewerPreferencesKey(instanceId))
+        || window.localStorage?.getItem(`${viewerPreferencesKey(instanceId)}:main`)
+        || "null",
+    ) as Record<string, any> | null;
     const rawTarget = value?.target;
-    const target: TargetSelection | undefined = rawTarget?.kind === "display"
-      ? { kind: "display" }
-      : rawTarget?.kind === "window" && typeof rawTarget.windowRef === "string" && rawTarget.windowRef.trim()
-        ? { kind: "window", windowRef: rawTarget.windowRef.trim() }
-        : undefined;
+    const target: TargetSelection | undefined = typeof rawTarget?.kind === "string" && rawTarget.kind.trim() && rawTarget.kind.length <= 64
+      ? {
+          kind: rawTarget.kind.trim(),
+          ...(typeof rawTarget.sourceRef === "string" && rawTarget.sourceRef.trim() ? { sourceRef: rawTarget.sourceRef.trim() } : {}),
+        }
+      : undefined;
     const transportResolution = TRANSPORT_RESOLUTION_VALUES.includes(value?.transportResolution)
       ? value.transportResolution as TransportResolutionValue
       : "auto";
@@ -615,8 +628,8 @@ function loadViewerPreferences(instanceId: string): RemoteDesktopViewerPreferenc
     const transportAvailability = rawAvailability && CONNECTION_METHOD_KEYS.some((key) => rawAvailability[key] === true)
       ? Object.fromEntries(CONNECTION_METHOD_KEYS.map((key) => [key, rawAvailability[key] === true])) as ConnectionMethodAvailability
       : { p2p: true, websocket: true, turn: true };
-    const selectedWindow = parseSelectedWindowInfo(value?.selectedWindow);
-    return { target: target ?? { kind: "display" }, selectedWindow, transportResolution, transportFrameRate, transportAvailability };
+    const selectedSource = parseSelectedSourceIdentity(value?.selectedSource);
+    return { target: target ?? { kind: "display" }, selectedSource, transportResolution, transportFrameRate, transportAvailability };
   } catch {
     return undefined;
   }
@@ -624,7 +637,7 @@ function loadViewerPreferences(instanceId: string): RemoteDesktopViewerPreferenc
 
 const viewerPreferences = loadViewerPreferences(props.instanceId);
 const target = ref<TargetSelection>(viewerPreferences?.target ?? { kind: "display" });
-const selectedWindowInfo = ref<SelectedWindowInfo | undefined>(viewerPreferences?.selectedWindow);
+const selectedSourceInfo = ref<SelectedSourceIdentity | undefined>(viewerPreferences?.selectedSource);
 const session = ref<RemoteDesktopCreated>();
 const snapshot = ref<DesktopSessionSnapshot>();
 const error = ref("");
@@ -634,6 +647,7 @@ const clipboardBusy = ref(false);
 const clipboardStatus = ref("");
 const inputEnabled = ref(false);
 const controlRequestPending = ref(false);
+const controlHintVisible = ref(false);
 const streamReady = ref(false);
 const signalingReady = ref(false);
 const switchingScope = ref(false);
@@ -650,13 +664,11 @@ const isFullscreen = ref(false);
 type FallbackState = "idle" | "switching" | "active" | "reconnecting" | "failed";
 type WebRTCRoute = "unknown" | "p2p" | "relay";
 type TransportPathState = "active" | "pending" | "idle" | "failed";
-type IceCandidatePairReport = RTCIceCandidatePairStats & { protocol?: string };
-type IceCandidateReport = RTCStats & { candidateType?: string; protocol?: string };
 const fallbackState = ref<FallbackState>("idle");
 const transportUpgrading = ref(false);
 const fallbackReason = ref<"ice-failed" | "recovery-timeout" | undefined>();
 const webRTCRoute = ref<WebRTCRoute>("unknown");
-const webRTCCandidatePair = ref<{ protocol: string; localType: string; remoteType: string }>();
+const webRTCCandidatePair = ref<RemoteDesktopWebRTCStats>();
 const webrtcPeerConnected = ref(false);
 const webrtcPeerFailed = ref(false);
 const webCodecsSupported = ref<boolean | null>(null);
@@ -666,9 +678,9 @@ const documentVisible = ref(typeof document === "undefined" ? true : document.vi
 function persistViewerPreferences() {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage?.setItem(`${VIEWER_PREFERENCES_PREFIX}${props.instanceId}`, JSON.stringify({
+    window.localStorage?.setItem(viewerPreferencesKey(props.instanceId), JSON.stringify({
       target: target.value,
-      selectedWindow: target.value.kind === "window" ? selectedWindowInfo.value : undefined,
+      selectedSource: selectedSourceInfo.value,
       transportResolution: transportResolution.value,
       transportFrameRate: transportFrameRate.value,
       transportAvailability: transportAvailability.value,
@@ -678,7 +690,7 @@ function persistViewerPreferences() {
   }
 }
 
-watch([target, selectedWindowInfo, transportResolution, transportFrameRate, transportAvailability], persistViewerPreferences, { deep: true });
+watch([target, selectedSourceInfo, transportResolution, transportFrameRate, transportAvailability], persistViewerPreferences, { deep: true });
 
 const video = ref<HTMLVideoElement>();
 const fallbackCanvas = ref<HTMLCanvasElement>();
@@ -695,13 +707,24 @@ let epoch = 0;
 let inputAliveTimer: ReturnType<typeof setInterval> | undefined;
 let signalAliveTimer: ReturnType<typeof setInterval> | undefined;
 let pointerFrame: number | undefined;
+let wheelFrame: number | undefined;
+let controlHintTimer: ReturnType<typeof setTimeout> | undefined;
 let pendingPointer: { x: number; y: number } | undefined;
+let wheelAnchor: { x: number; y: number } | undefined;
 let lastPointer = { x: 0, y: 0 };
+const wheelPump = new RemoteDesktopWheelPump();
 const pressedButtons = new Set<number>();
 let clipboardRequested = false;
+let clipboardAutoEnableAttempted = false;
+let clipboardRequestAutomatic = false;
 let negotiationPending = false;
-let inputRequested = false;
+const inputRequested = ref(true);
 let inputResumePending = false;
+let inputResumeAckTimer: ReturnType<typeof setTimeout> | undefined;
+let inputResumeRetryTimer: ReturnType<typeof setTimeout> | undefined;
+let inputResumeRetryCount = 0;
+let visibilityResumePending = false;
+let visibilityResumeRevision: number | undefined;
 let inputResumeGeneration = 0;
 let closingSession = false;
 let transportResolutionRequested = false;
@@ -731,6 +754,70 @@ let webrtcUpgradeBaseline: number | undefined;
 let webRTCTransportTimer: ReturnType<typeof setTimeout> | undefined;
 let webRTCTransportPeer: RTCPeerConnection | undefined;
 const fallbackAssembler = new DesktopFallbackFrameAssembler();
+
+type RecentRemoteDesktopFrame = {
+  direction: "send" | "receive";
+  channel: string;
+  type: string;
+  sequence?: number;
+  bytes: number;
+};
+const recentRemoteDesktopFrames: RecentRemoteDesktopFrame[] = [];
+const RECENT_REMOTE_DESKTOP_FRAME_LIMIT = 20;
+
+function rememberRemoteDesktopFrame(frame: RecentRemoteDesktopFrame) {
+  recentRemoteDesktopFrames.push(frame);
+  if (recentRemoteDesktopFrames.length > RECENT_REMOTE_DESKTOP_FRAME_LIMIT) {
+    recentRemoteDesktopFrames.splice(0, recentRemoteDesktopFrames.length - RECENT_REMOTE_DESKTOP_FRAME_LIMIT);
+  }
+}
+
+function recentRemoteDesktopFrameSummary() {
+  return recentRemoteDesktopFrames.map((frame) => {
+    const sequence = frame.sequence === undefined ? "" : `#${frame.sequence}`;
+    return `${frame.direction}:${frame.channel}:${frame.type}${sequence}:${frame.bytes}B`;
+  }).join(" | ");
+}
+
+const remoteDesktopDiagnostics = createRemoteDesktopDiagnostics({
+  enabled: () => controlPlaneSettings.data.value?.diagnosticLogs === true,
+  context: () => ({
+    instanceId: props.instanceId,
+    viewerSessionId: session.value?.snapshot.viewerSessionId,
+    sessionRevision: snapshot.value?.sessionRevision,
+    controlRevision: snapshot.value?.controlRevision,
+    phase: snapshot.value?.phase,
+    surfaceTransport: snapshot.value?.transport,
+    fallback: fallbackState.value,
+    fallbackReason: fallbackReason.value,
+    transportUpgrading: transportUpgrading.value,
+    signalingReady: signalingReady.value,
+    iceState: connectionState.value,
+    inputEnabled: inputEnabled.value,
+    inputRequested: inputRequested.value,
+    controller: isController.value,
+    hasController: hasController.value,
+    viewerCount: viewerCount.value,
+    inputEpoch: epoch,
+    sentSequence: seq,
+  }),
+});
+
+function recordRemoteDesktopDiagnostic(event: string, fields: Record<string, string | number | boolean | null | undefined> = {}, error?: unknown) {
+  remoteDesktopDiagnostics.record(event, {
+    ...fields,
+    ...(error === undefined ? {} : remoteDesktopErrorFields(error)),
+    recentFrames: recentRemoteDesktopFrameSummary() || undefined,
+  });
+}
+
+function remoteDesktopParseErrorFields(error: unknown) {
+  const fields = remoteDesktopErrorFields(error);
+  return {
+    parserErrorName: fields.name,
+    parserErrorStack: fields.stack,
+  };
+}
 
 const FALLBACK_HEAD_START_MS = 500;
 const FALLBACK_UPGRADE_RETRY_MS = 500;
@@ -791,11 +878,15 @@ const webRTCCandidateDetail = computed(() => {
   const pair = webRTCCandidatePair.value;
   if (!pair) return "";
   return t("instances.remoteDesktop.transportCandidateDetail", {
-    protocol: pair.protocol.toUpperCase(),
-    local: candidateTypeLabel(pair.localType),
-    remote: candidateTypeLabel(pair.remoteType),
+    protocol: (pair.protocol || "unknown").toUpperCase(),
+    local: candidateTypeLabel(pair.localCandidateType || "unknown"),
+    remote: candidateTypeLabel(pair.remoteCandidateType || "unknown"),
   });
 });
+const webRTCLatencyDetail = computed(() => webRTCCandidatePair.value?.latencyMs === undefined
+  ? ""
+  : t("instances.remoteDesktop.transportLatency", { value: webRTCCandidatePair.value.latencyMs }));
+const activeWebRTCDetail = computed(() => [webRTCCandidateDetail.value, webRTCLatencyDetail.value].filter(Boolean).join(" · "));
 const transportIndicators = computed(() => {
   const fallbackConnecting = fallbackState.value === "switching" || fallbackState.value === "reconnecting";
   const fallbackSelected = fallbackActive.value || fallbackConnecting || transportUpgrading.value;
@@ -846,7 +937,7 @@ const transportIndicators = computed(() => {
       detail: p2pState === "failed"
         ? t("instances.remoteDesktop.transportP2pFailed")
         : p2pState === "active"
-          ? webRTCCandidateDetail.value || t("instances.remoteDesktop.transportP2pActive")
+          ? activeWebRTCDetail.value || t("instances.remoteDesktop.transportP2pActive")
           : p2pState === "pending"
             ? peerConnected
               ? t("instances.remoteDesktop.transportP2pSwitching")
@@ -874,7 +965,7 @@ const transportIndicators = computed(() => {
       detail: relayState === "failed"
         ? t("instances.remoteDesktop.transportRelayFailed")
         : relayState === "active"
-          ? webRTCCandidateDetail.value || t("instances.remoteDesktop.transportRelayActive")
+          ? activeWebRTCDetail.value || t("instances.remoteDesktop.transportRelayActive")
           : relayState === "pending"
             ? t("instances.remoteDesktop.transportRelaySwitching")
             : t("instances.remoteDesktop.transportRelayIdle"),
@@ -902,30 +993,61 @@ const establishingHint = computed(() => fallbackSwitching.value
   ? t("instances.remoteDesktop.fallbackSwitchingHint")
   : t("instances.remoteDesktop.establishingHint"));
 
-const selectedWindow = computed<SelectedWindowInfo | undefined>(() => {
-  const selection = target.value;
-  if (selection.kind !== "window" || !selection.windowRef) return undefined;
-  return windows.value.find((item) => item.windowRef === selection.windowRef)
-    ?? (selectedWindowInfo.value?.windowRef === selection.windowRef ? selectedWindowInfo.value : undefined);
+const selectedSource = computed(() => {
+  if (!target.value.sourceRef) return undefined;
+  return sources.value.find(source => source.kind === target.value.kind && source.sourceRef === target.value.sourceRef);
 });
 
-const filteredWindows = computed(() => {
-  const query = windowQuery.value.trim().toLocaleLowerCase();
-  if (!query) return windows.value;
-  return windows.value.filter((item) => `${item.applicationName} ${item.title}`.toLocaleLowerCase().includes(query));
+const filteredSources = computed(() => {
+  const query = sourceQuery.value.trim().toLocaleLowerCase();
+  if (!query) return sources.value;
+  return sources.value.filter((item) => `${item.subtitle ?? ""} ${item.title} ${item.kind}`.toLocaleLowerCase().includes(query));
 });
-
-const windowCountLabel = computed(() => t("instances.remoteDesktop.windowCount", { count: filteredWindows.value.length }));
+const targetSources = computed(() => filteredSources.value.filter(source => source.kind === target.value.kind));
+const sourceGroups = computed(() => {
+  const groups = new Map<string, RemoteDesktopSource[]>();
+  for (const source of sources.value) {
+    const group = groups.get(source.kind) ?? [];
+    group.push(source);
+    groups.set(source.kind, group);
+  }
+  return [...groups.entries()].map(([kind, items]) => ({ kind, items }));
+});
+const sourceCountLabel = computed(() => t("instances.remoteDesktop.sourceCount", { count: filteredSources.value.length }));
 const systemCursor = computed(() => remote.value?.capture.cursor === false);
+function sourceKindLabel(kind: string) {
+  if (kind === "display") return t("instances.remoteDesktop.entireDesktop");
+  if (kind === "window") return t("instances.remoteDesktop.singleWindow");
+  if (kind === "application") return t("instances.remoteDesktop.applicationSource");
+  if (kind === "region") return t("instances.remoteDesktop.regionSource");
+  return kind;
+}
+function sourceKindDescription(kind: string) {
+  if (kind === "display") return t("instances.remoteDesktop.entireDesktopDescription");
+  if (kind === "window") return t("instances.remoteDesktop.singleWindowDescription");
+  if (kind === "application") return t("instances.remoteDesktop.applicationSourceDescription");
+  if (kind === "region") return t("instances.remoteDesktop.regionSourceDescription");
+  return t("instances.remoteDesktop.sourceDescription");
+}
+function sourcePrimaryText(source: RemoteDesktopSource) {
+  return source.title || sourceKindLabel(source.kind);
+}
+function sourceSecondaryText(source: RemoteDesktopSource) {
+  return source.subtitle ?? "";
+}
+function sourceIcon(kind: string) {
+  if (kind === "display") return Monitor;
+  if (kind === "window") return AppWindow;
+  return ScreenShare;
+}
 const selectedTargetTitle = computed(() => {
-  if (target.value.kind === "display") return t("instances.remoteDesktop.entireDesktop");
-  return selectedWindow.value?.applicationName || t("instances.remoteDesktop.singleWindow");
+  if (selectedSource.value) return sourcePrimaryText(selectedSource.value);
+  return sourceKindLabel(target.value.kind);
 });
 const selectedTargetDetail = computed(() => {
-  if (target.value.kind === "display") return t("instances.remoteDesktop.entireDesktopDescription");
-  const item = selectedWindow.value;
-  if (!item) return t("instances.remoteDesktop.selectWindow");
-  return [item.title || t("instances.remoteDesktop.untitledWindow"), `${item.width} × ${item.height}`].join(" · ");
+  const item = selectedSource.value;
+  if (!item) return t("instances.remoteDesktop.selectSource");
+  return [sourceSecondaryText(item), `${item.width} × ${item.height}`].filter(Boolean).join(" · ");
 });
 const capabilityChips = computed(() => {
   const values: string[] = [];
@@ -970,11 +1092,10 @@ const transportFrameRateLabel = computed(() => {
     ?? t("instances.remoteDesktop.autoFrameRate");
 });
 const transportQualityLabel = computed(() => `${transportResolutionLabel.value} · ${transportFrameRateLabel.value}`);
-const selectedCaptureTarget = computed<DesktopCaptureTarget | undefined>(() => {
-  if (target.value.kind === "display") return { kind: "display" };
-  return target.value.windowRef ? { kind: "window", windowRef: target.value.windowRef } : undefined;
+const selectedCaptureSelection = computed<DesktopCaptureSelection | undefined>(() => {
+  return target.value.sourceRef ? { sourceRef: target.value.sourceRef } : undefined;
 });
-const canConnect = computed(() => Boolean(selectedCaptureTarget.value));
+const canConnect = computed(() => Boolean(selectedCaptureSelection.value));
 const connectionTone = computed(() => {
   if (!session.value) return "neutral";
   if (fallbackState.value === "active") return "active";
@@ -999,7 +1120,6 @@ const connectionLabel = computed(() => {
 const isController = computed(() => snapshot.value?.isController !== false);
 const hasController = computed(() => snapshot.value?.hasController !== false);
 const viewerCount = computed(() => snapshot.value?.viewerCount ?? 1);
-const scopeSwitchBlocked = computed(() => Boolean(session.value) && viewerCount.value > 1);
 const inputActionLabel = computed(() => {
   if (inputEnabled.value) return t("instances.remoteDesktop.inputActive");
   if (!isController.value) {
@@ -1045,13 +1165,51 @@ function outputChannel(name: string): WireChannel | undefined {
   return wireOpen(channel) ? channel : undefined;
 }
 
+function wireChannelName(channel: WireChannel) {
+  if (channel === ws) return "signal";
+  if (channel === fallbackControl) return "fallback-control";
+  if (channel === fallbackMedia) return "fallback-media";
+  for (const [name, candidate] of channels) if (candidate === channel) return name;
+  return typeof (channel as RTCDataChannel).label === "string" ? (channel as RTCDataChannel).label : "unknown";
+}
+
+function tracedWireChannel(channel: WireChannel) {
+  return ["control", "fallback-control", "clipboard", "signal"].includes(wireChannelName(channel));
+}
+
 function wire(channel: WireChannel, type: string, payload: unknown = {}, maxBytes = REMOTE_DESKTOP_MAX_MESSAGE_BYTES) {
-  if (!wireOpen(channel)) return false;
+  const channelName = wireChannelName(channel);
+  const traced = tracedWireChannel(channel);
+  if (!wireOpen(channel)) {
+    if (traced) recordRemoteDesktopDiagnostic("wire.reject", { channel: channelName, wireType: type, reason: "closed", nextSequence: seq + 1 });
+    return false;
+  }
   const nextSeq = seq + 1;
-  const encoded = JSON.stringify({ v: REMOTE_DESKTOP_CHANNEL_VERSION, seq: nextSeq, type, payload });
-  if (new TextEncoder().encode(encoded).byteLength > maxBytes) return false;
-  channel.send(encoded);
+  let encoded: string;
+  try {
+    encoded = JSON.stringify({ v: REMOTE_DESKTOP_CHANNEL_VERSION, seq: nextSeq, type, payload });
+  } catch (reason) {
+    if (traced) recordRemoteDesktopDiagnostic("wire.reject", { channel: channelName, wireType: type, reason: "encode", nextSequence: nextSeq }, reason);
+    return false;
+  }
+  const bytes = new TextEncoder().encode(encoded).byteLength;
+  if (bytes > maxBytes) {
+    if (traced) recordRemoteDesktopDiagnostic("wire.reject", { channel: channelName, wireType: type, reason: "size", nextSequence: nextSeq, bytes, maxBytes });
+    return false;
+  }
+  try {
+    channel.send(encoded);
+  } catch (reason) {
+    if (traced) recordRemoteDesktopDiagnostic("wire.reject", { channel: channelName, wireType: type, reason: "send", nextSequence: nextSeq, bytes }, reason);
+    return false;
+  }
   seq = nextSeq;
+  if (traced) {
+    rememberRemoteDesktopFrame({ direction: "send", channel: channelName, type, sequence: nextSeq, bytes });
+    if (type !== "input.alive") {
+      recordRemoteDesktopDiagnostic("wire.send", { channel: channelName, wireType: type, wireSequence: nextSeq, bytes });
+    }
+  }
   return true;
 }
 
@@ -1060,96 +1218,89 @@ function send(type: string, payload: unknown, channelName = "input") {
   return channel ? wire(channel, type, payload) : false;
 }
 
-async function loadWindows() {
-  if (!windowCapture.value || windowsLoading.value) return;
-  windowsLoading.value = true;
-  windowError.value = "";
+async function loadSources() {
+  if (!hasSourceProvider.value || sourcesLoading.value) return;
+  sourcesLoading.value = true;
+  sourcesError.value = "";
   try {
-    const previousRef = target.value.kind === "window" ? target.value.windowRef : undefined;
-    const previousSelection = selectedWindow.value;
-    windows.value = (await listRemoteDesktopWindows(props.instanceId)).windows;
-    if (target.value.kind === "window" && previousRef) {
-      const resolved = resolveRefreshedWindow(windows.value, previousRef, previousSelection);
-      if (resolved) {
-        target.value = { kind: "window", windowRef: resolved.windowRef };
-        selectedWindowInfo.value = toSelectedWindowInfo(resolved);
-      } else if (!session.value) {
-        target.value = { kind: "window" };
-        selectedWindowInfo.value = undefined;
+    const previousRef = target.value.sourceRef;
+    const previousSelection = selectedSourceInfo.value;
+    sources.value = (await listRemoteDesktopSources(props.instanceId)).sources;
+    const resolved = resolveRefreshedSource(sources.value, previousRef, previousSelection);
+    if (resolved) {
+      target.value = { kind: resolved.kind, sourceRef: resolved.sourceRef };
+      selectedSourceInfo.value = toSelectedSourceIdentity(resolved);
+      return;
+    }
+    if (!previousRef && !previousSelection) {
+      const first = sources.value.find(source => source.kind === target.value.kind && source.capturable)
+        ?? sources.value.find(source => source.capturable);
+      if (first) {
+        target.value = { kind: first.kind, sourceRef: first.sourceRef };
+        selectedSourceInfo.value = toSelectedSourceIdentity(first);
       }
+      return;
+    }
+    if (!session.value) {
+      target.value = { kind: target.value.kind };
+      selectedSourceInfo.value = undefined;
     }
   } catch (reason) {
-    windowError.value = translateApiError(reason, t, t("instances.remoteDesktop.openFailed"));
+    sourcesError.value = translateApiError(reason, t, t("instances.remoteDesktop.openFailed"));
   } finally {
-    windowsLoading.value = false;
+    sourcesLoading.value = false;
   }
 }
 
-function selectDisplayTarget() {
-  target.value = { kind: "display" };
-  selectedWindowInfo.value = undefined;
+function chooseSourceKind(kind: string) {
+  const first = sources.value.find(source => source.kind === kind && source.capturable);
+  target.value = { kind, ...(first ? { sourceRef: first.sourceRef } : {}) };
+  selectedSourceInfo.value = first ? toSelectedSourceIdentity(first) : undefined;
+  if (!sources.value.length) void loadSources();
 }
 
-function chooseWindow() {
-  if (target.value.kind !== "window") {
-    target.value = { kind: "window" };
-    selectedWindowInfo.value = undefined;
-  }
-  // Opening the picker is an explicit refresh point; it never polls.
-  void loadWindows();
-}
-
-function selectWindow(item: RemoteDesktopWindow) {
+function selectSource(item: RemoteDesktopSource) {
   if (!item.capturable) return;
-  target.value = { kind: "window", windowRef: item.windowRef };
-  selectedWindowInfo.value = toSelectedWindowInfo(item);
+  target.value = { kind: item.kind, sourceRef: item.sourceRef };
+  selectedSourceInfo.value = toSelectedSourceIdentity(item);
 }
 
 function sameTarget(left: TargetSelection, right: TargetSelection) {
-  if (left.kind === "display") return right.kind === "display";
-  return right.kind === "window" && left.windowRef === right.windowRef;
+  return left.kind === right.kind && left.sourceRef === right.sourceRef;
 }
 
 function prepareScopeMenu() {
-  if (!scopeSwitchBlocked.value && windowCapture.value) void loadWindows();
+  if (hasSourceProvider.value) void loadSources();
 }
 
-async function switchScope(next: TargetSelection, nextWindow?: RemoteDesktopWindow) {
+async function switchScope(next: TargetSelection, nextSource?: RemoteDesktopSource) {
   scopeMenuOpen.value = false;
-  if (switchingScope.value || scopeSwitchBlocked.value || sameTarget(next, target.value)) {
-    if (next.kind === "window" && nextWindow) {
-      target.value = { kind: "window", windowRef: nextWindow.windowRef };
-      selectedWindowInfo.value = toSelectedWindowInfo(nextWindow);
+  if (switchingScope.value || sameTarget(next, target.value)) {
+    if (nextSource) {
+      target.value = { kind: nextSource.kind, sourceRef: nextSource.sourceRef };
+      selectedSourceInfo.value = toSelectedSourceIdentity(nextSource);
     }
     return;
   }
   if (!session.value) {
     target.value = next;
-    selectedWindowInfo.value = next.kind === "window"
-      ? (nextWindow ? toSelectedWindowInfo(nextWindow) : selectedWindowInfo.value)
-      : undefined;
+    selectedSourceInfo.value = nextSource ? toSelectedSourceIdentity(nextSource) : selectedSourceInfo.value;
     return;
   }
   switchingScope.value = true;
   try {
     if (!(await closeCurrentSession())) return;
     target.value = next;
-    selectedWindowInfo.value = next.kind === "window"
-      ? (nextWindow ? toSelectedWindowInfo(nextWindow) : selectedWindowInfo.value)
-      : undefined;
+    selectedSourceInfo.value = nextSource ? toSelectedSourceIdentity(nextSource) : selectedSourceInfo.value;
     await connect();
   } finally {
     switchingScope.value = false;
   }
 }
 
-function selectScopeDisplay() {
-  void switchScope({ kind: "display" });
-}
-
-function selectScopeWindow(item: RemoteDesktopWindow) {
+function selectScopeSource(item: RemoteDesktopSource) {
   if (!item.capturable) return;
-  void switchScope({ kind: "window", windowRef: item.windowRef }, item);
+  void switchScope({ kind: item.kind, sourceRef: item.sourceRef }, item);
 }
 
 async function connect() {
@@ -1161,33 +1312,47 @@ async function connect() {
   activeTransportAvailability.value = { ...transportAvailability.value };
   connecting.value = true;
   error.value = "";
-  windowQuery.value = "";
+  sourceQuery.value = "";
   clipboard.value = false;
   clipboardRequested = false;
+  clipboardAutoEnableAttempted = false;
+  clipboardRequestAutomatic = false;
   clipboardBusy.value = false;
   clipboardStatus.value = "";
   streamReady.value = false;
   signalingReady.value = false;
-  inputRequested = false;
+  inputRequested.value = true;
+  inputResumeGeneration += 1;
   inputResumePending = false;
+  clearInputResumeTimers();
+  inputResumeRetryCount = 0;
   controlRequestPending.value = false;
   usedTransportKeys.value = new Set();
   resetFallbackRuntime();
   scopeMenuOpen.value = false;
   try {
-    if (target.value.kind === "window" && !windows.value.length) await loadWindows();
-    const captureTarget = selectedCaptureTarget.value;
-    if (!captureTarget) return;
-    const created = await createRemoteDesktopSession(props.instanceId, captureTarget);
+    if (!sources.value.length) await loadSources();
+    const captureSelection = selectedCaptureSelection.value;
+    if (!captureSelection) return;
+    const created = await createRemoteDesktopSession(props.instanceId, captureSelection);
     session.value = created;
     const socket = new WebSocket(new URL(created.signalUrl, window.location.href), REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL);
     ws = socket;
     socket.binaryType = "arraybuffer";
     socket.onmessage = event => { if (ws === socket) void message(event); };
-    socket.onopen = () => { if (ws === socket) signalingReady.value = false; };
-    socket.onerror = () => { if (ws === socket) error.value = t("instances.remoteDesktop.signalingFailed"); };
-    socket.onclose = () => {
+    socket.onopen = () => {
       if (ws !== socket) return;
+      signalingReady.value = false;
+      recordRemoteDesktopDiagnostic("signal.open");
+    };
+    socket.onerror = () => {
+      if (ws !== socket) return;
+      recordRemoteDesktopDiagnostic("signal.error", { reason: "websocket-error" });
+      error.value = t("instances.remoteDesktop.signalingFailed");
+    };
+    socket.onclose = (event) => {
+      if (ws !== socket) return;
+      recordRemoteDesktopDiagnostic("signal.close", { closeCode: event.code, closeReason: event.reason.slice(0, 200), clean: event.wasClean, closingSession });
       const closedSession = session.value;
       if (!closedSession) return;
       if (closingSession) {
@@ -1206,6 +1371,7 @@ async function connect() {
       error.value = message;
     };
   } catch (reason) {
+    recordRemoteDesktopDiagnostic("session.open.failed", {}, reason);
     error.value = translateApiError(reason, t, t("instances.remoteDesktop.openFailed"));
     session.value = undefined;
   } finally {
@@ -1230,9 +1396,21 @@ async function applyConnectionMethods() {
   }
 }
 
+function messageByteLength(event: MessageEvent) {
+  if (typeof event.data === "string") return new TextEncoder().encode(event.data).byteLength;
+  if (event.data instanceof ArrayBuffer) return event.data.byteLength;
+  if (typeof Blob !== "undefined" && event.data instanceof Blob) return event.data.size;
+  return undefined;
+}
+
 async function message(event: MessageEvent) {
+  const dataKind = typeof event.data === "string" ? "text" : event.data instanceof ArrayBuffer ? "arraybuffer" : typeof event.data;
+  const bytes = messageByteLength(event);
+  let signalType = "unparsed";
   try {
     const value = JSON.parse(typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data));
+    signalType = typeof value?.type === "string" ? value.type : "unknown";
+    rememberRemoteDesktopFrame({ direction: "receive", channel: "signal", type: signalType, sequence: typeof value?.seq === "number" ? value.seq : undefined, bytes: bytes ?? 0 });
     if (value.type === "snapshot") {
       const next = DesktopSessionSnapshotSchema.parse(value.snapshot);
       const previousTransport = snapshot.value?.transport;
@@ -1243,15 +1421,28 @@ async function message(event: MessageEvent) {
         return;
       }
       if (!next.isController) {
+        visibilityResumePending = false;
+        visibilityResumeRevision = undefined;
         releaseInputState();
-        inputRequested = false;
         controlRequestPending.value = false;
       }
       if (next.isController && controlRequestPending.value) {
         controlRequestPending.value = false;
-        inputRequested = true;
+        inputRequested.value = true;
         resumeWanted();
       }
+      if (
+        visibilityResumePending
+        && next.phase === "active"
+        && !next.mediaPaused
+        && (visibilityResumeRevision === undefined || next.sessionRevision > visibilityResumeRevision)
+      ) {
+        visibilityResumePending = false;
+        visibilityResumeRevision = undefined;
+        resumeWanted();
+      }
+      resumeWanted();
+      enableClipboardByDefault();
       if (
         next.transport === "webrtc"
         && fallbackState.value !== "idle"
@@ -1267,6 +1458,7 @@ async function message(event: MessageEvent) {
       signalingReady.value = true;
       startSignalAlive();
       applyTransportResolution();
+      enableClipboardByDefault();
       if (!pc && fallbackState.value === "idle") {
         if (!webRTCTransportEnabled.value) {
           void beginFallback("ice-failed", "REMOTE_DESKTOP_ALL_WEBRTC_TRANSPORTS_DISABLED");
@@ -1283,6 +1475,7 @@ async function message(event: MessageEvent) {
       await pc.setConfiguration(iceConfiguration(value.iceServers));
     } else if (value.type === "error") {
       const code = typeof value.code === "string" ? value.code : "REMOTE_DESKTOP_SIGNAL_INVALID";
+      recordRemoteDesktopDiagnostic("signal.error", { signalCode: code, fallbackState: fallbackState.value, iceState: pc?.iceConnectionState });
       if (fallbackState.value !== "idle" && [
         "REMOTE_DESKTOP_NEGOTIATION_FAILED",
         "REMOTE_DESKTOP_ICE_CONFIG_INVALID",
@@ -1293,8 +1486,11 @@ async function message(event: MessageEvent) {
       if (fallbackState.value === "idle" && session.value && !closingSession && iceState !== "connected" && iceState !== "completed") {
         void beginFallback("recovery-timeout", code);
       }
+    } else {
+      recordRemoteDesktopDiagnostic("signal.message.unknown", { signalType, bytes });
     }
   } catch (reason) {
+    recordRemoteDesktopDiagnostic("signal.message.failed", { dataKind, bytes, signalType, ...remoteDesktopParseErrorFields(reason) });
     error.value = translateApiError(reason, t, t("instances.remoteDesktop.messageInvalid"));
   }
 }
@@ -1342,9 +1538,23 @@ async function setupPeer() {
     if (label === "pointer") options.maxRetransmits = 0;
     const channel = peer.createDataChannel(label, options);
     channels.set(label, channel);
+    channel.onclose = () => recordRemoteDesktopDiagnostic("channel.close", { channel: label, readyState: channel.readyState });
+    channel.onerror = (event) => recordRemoteDesktopDiagnostic(
+      "channel.error",
+      { channel: label, readyState: channel.readyState },
+      (event as Event & { error?: unknown }).error,
+    );
     if (label === "control") {
       channel.onmessage = controlMessage;
-      channel.onopen = () => { sendVisibility(); applyTransportResolution(); resumeWanted(); };
+      channel.onopen = () => {
+        recordRemoteDesktopDiagnostic("channel.open", { channel: label, readyState: channel.readyState });
+        sendVisibility();
+        applyTransportResolution();
+        resumeWanted();
+        enableClipboardByDefault();
+      };
+    } else {
+      channel.onopen = () => recordRemoteDesktopDiagnostic("channel.open", { channel: label, readyState: channel.readyState });
     }
     if (label === "clipboard") channel.onmessage = clipboardMessage;
   }
@@ -1359,6 +1569,7 @@ async function setupPeer() {
     connectionState.value = peer.iceConnectionState;
     webrtcPeerConnected.value = peer.iceConnectionState === "connected" || peer.iceConnectionState === "completed";
     webrtcPeerFailed.value = peer.iceConnectionState === "failed";
+    recordRemoteDesktopDiagnostic("peer.ice.state", { iceState: peer.iceConnectionState, connectionState: peer.connectionState, fallbackState: fallbackState.value });
     if (awaitingRestart && (peer.iceConnectionState === "connected" || peer.iceConnectionState === "completed")) {
       awaitingRestart = false;
       ws?.send(JSON.stringify({ type: "iceRestarted", requestId: createBrowserUuid() }));
@@ -1380,6 +1591,7 @@ async function setupPeer() {
     connectionState.value = peer.connectionState;
     webrtcPeerConnected.value = peer.connectionState === "connected";
     webrtcPeerFailed.value = peer.connectionState === "failed";
+    recordRemoteDesktopDiagnostic("peer.connection.state", { connectionState: peer.connectionState, iceState: peer.iceConnectionState, fallbackState: fallbackState.value });
     if (peer.connectionState === "connected") {
       clearFallbackHeadStart();
       clearRecoveryTimer();
@@ -1470,58 +1682,15 @@ function candidateTypeLabel(type: string) {
 async function refreshWebRTCTransport(peer: RTCPeerConnection) {
   try {
     const stats = await peer.getStats();
-    let selected: IceCandidatePairReport | undefined;
-    for (const report of stats.values()) {
-      if (report.type !== "transport") continue;
-      const pairId = (report as RTCTransportStats).selectedCandidatePairId;
-      if (!pairId) continue;
-      const pair = stats.get(pairId) as IceCandidatePairReport | undefined;
-      if (pair?.type === "candidate-pair") {
-        selected = pair;
-        break;
-      }
-    }
-    if (!selected) {
-      for (const report of stats.values()) {
-        if (report.type !== "candidate-pair") continue;
-        const pair = report as IceCandidatePairReport;
-        if (pair.state === "succeeded" && pair.nominated) {
-          selected = pair;
-          break;
-        }
-      }
-    }
+    const diagnostics = parseRemoteDesktopWebRTCStats(stats);
     if (pc !== peer) return;
-    if (!selected) {
+    if (!diagnostics?.path) {
       webRTCRoute.value = "unknown";
       webRTCCandidatePair.value = undefined;
       return;
     }
-    const local = typeof selected.localCandidateId === "string"
-      ? stats.get(selected.localCandidateId) as IceCandidateReport | undefined
-      : undefined;
-    const remote = typeof selected.remoteCandidateId === "string"
-      ? stats.get(selected.remoteCandidateId) as IceCandidateReport | undefined
-      : undefined;
-    const localType = typeof local?.candidateType === "string" ? local.candidateType : "unknown";
-    const remoteType = typeof remote?.candidateType === "string" ? remote.candidateType : "unknown";
-    const knownPath = localType !== "unknown" || remoteType !== "unknown";
-    webRTCRoute.value = knownPath
-      ? localType === "relay" || remoteType === "relay" ? "relay" : "p2p"
-      : "unknown";
-    webRTCCandidatePair.value = knownPath
-      ? {
-          protocol: typeof selected.protocol === "string"
-            ? selected.protocol
-            : typeof local?.protocol === "string"
-              ? local.protocol
-              : typeof remote?.protocol === "string"
-                ? remote.protocol
-                : "unknown",
-          localType,
-          remoteType,
-        }
-      : undefined;
+    webRTCRoute.value = diagnostics.path === "turn" ? "relay" : "p2p";
+    webRTCCandidatePair.value = diagnostics;
   } catch {
     if (pc !== peer) return;
     webRTCRoute.value = "unknown";
@@ -1732,15 +1901,26 @@ function openFallbackSockets(info: DesktopFallbackSession, attempt: number) {
     if (attempt !== fallbackAttempt || fallbackControl !== control || typeof event.data !== "string") return;
     try {
       handleFallbackControlValue(JSON.parse(event.data), attempt);
-    } catch {
+    } catch (reason) {
+      recordRemoteDesktopDiagnostic("fallback.control.failed", { channel: "fallback-control", attempt, bytes: new TextEncoder().encode(event.data).byteLength, ...remoteDesktopParseErrorFields(reason) });
       handleFallbackTransportFailure(attempt, "REMOTE_DESKTOP_FALLBACK_CONTROL_FAILED");
     }
   };
-  const failed = () => handleFallbackTransportFailure(attempt, "REMOTE_DESKTOP_FALLBACK_SOCKET_ERROR");
-  media.onclose = failed;
-  control.onclose = failed;
-  media.onerror = failed;
-  control.onerror = failed;
+  const failed = (role: "media" | "control", event: Event) => {
+    const socketEvent = event as Event & { code?: number; reason?: string; wasClean?: boolean };
+    recordRemoteDesktopDiagnostic("fallback.socket.failed", {
+      channel: `fallback-${role}`,
+      attempt,
+      closeCode: socketEvent.code,
+      closeReason: typeof socketEvent.reason === "string" ? socketEvent.reason.slice(0, 200) : undefined,
+      clean: socketEvent.wasClean,
+    });
+    handleFallbackTransportFailure(attempt, "REMOTE_DESKTOP_FALLBACK_SOCKET_ERROR");
+  };
+  media.onclose = event => failed("media", event);
+  control.onclose = event => failed("control", event);
+  media.onerror = event => failed("media", event);
+  control.onerror = event => failed("control", event);
   fallbackPairTimer = setTimeout(() => {
     fallbackPairTimer = undefined;
     if (attempt === fallbackAttempt && fallbackState.value === "switching") {
@@ -1767,6 +1947,7 @@ function markFallbackReady(info: DesktopFallbackSession, attempt: number) {
   error.value = "";
   applyTransportResolution();
   syncVisibility();
+  enableClipboardByDefault();
   if (pc) void startWebRTCUpgradeWatch(pc);
   if (document.hasFocus()) resumeWanted();
 }
@@ -2082,33 +2263,55 @@ function handleFallbackControlValue(value: any, attempt: number) {
     commitTransportUpgrade();
     return;
   }
-  handleControlValue(value);
+  handleControlValue(value, "fallback-control");
   if (value?.type === "clipboard.written" || value?.type === "clipboard.text") handleClipboardValue(value);
 }
 
 function controlMessage(event: MessageEvent) {
+  const bytes = messageByteLength(event);
+  let value: any;
   try {
-    handleControlValue(JSON.parse(event.data));
-  } catch {
+    value = JSON.parse(event.data);
+  } catch (reason) {
+    recordRemoteDesktopDiagnostic("control.message.failed", { stage: "parse", channel: "control", bytes, ...remoteDesktopParseErrorFields(reason) });
+    return;
+  }
+  try {
+    handleControlValue(value, "control");
+  } catch (reason) {
+    recordRemoteDesktopDiagnostic("control.message.failed", { stage: "handle", channel: "control", bytes }, reason);
     // Malformed control messages are handled by the connection-level handler.
   }
 }
 
-function handleControlValue(value: any) {
+function handleControlValue(value: any, channel = "control") {
+  const type = typeof value?.type === "string" ? value.type : "unknown";
+  const inboundSequence = typeof value?.seq === "number" ? value.seq : undefined;
+  rememberRemoteDesktopFrame({ direction: "receive", channel, type, sequence: inboundSequence, bytes: new TextEncoder().encode(JSON.stringify(value)).byteLength });
+  recordRemoteDesktopDiagnostic("control.message", { channel, controlType: type, inboundSequence });
   if (value.type === "input.resumed") {
     epoch = value.payload.inputEpoch;
+    const attempt = inputResumeRetryCount + 1;
     inputEnabled.value = true;
     inputResumePending = false;
+    clearInputResumeTimers();
+    inputResumeRetryCount = 0;
     startInputAlive();
+    recordRemoteDesktopDiagnostic("input.resumed", { inputEpoch: epoch, attempt });
   } else if (value.type === "input.suspended") {
     const notice = parseInputSuspension(value);
     const shouldResume = shouldResumeAfterInputSuspension(notice, {
-      inputRequested,
+      inputRequested: inputRequested.value,
       isController: isController.value,
       surfacePaused: surfacePaused(),
       documentFocused: document.hasFocus(),
     });
     releaseInputState();
+    recordRemoteDesktopDiagnostic("input.suspended", {
+      cause: notice.cause || undefined,
+      recoverable: notice.recoverable,
+      sessionRevision: notice.sessionRevision,
+    });
     if (notice.sessionRevision !== undefined && snapshot.value) {
       snapshot.value = {
         ...snapshot.value,
@@ -2117,17 +2320,45 @@ function handleControlValue(value: any) {
     }
     if (shouldResume) resumeWanted();
   } else if (value.type === "clipboard.enabled") {
+    const automatic = clipboardRequestAutomatic;
+    clipboardRequestAutomatic = false;
     clipboard.value = value.payload.enabled === true;
     clipboardBusy.value = false;
-    if (clipboardRequested && !clipboard.value) error.value = t("instances.remoteDesktop.clipboardUnavailable");
+    if (clipboardRequested && !clipboard.value && !automatic) error.value = t("instances.remoteDesktop.clipboardUnavailable");
     clipboardRequested = false;
   } else if (value.type === "error") {
     clipboardBusy.value = false;
-    inputResumePending = false;
     controlRequestPending.value = false;
     const code = value.payload?.code || value.code;
+    recordRemoteDesktopDiagnostic("control.error", { channel, controlType: type, controlCode: code, inboundSequence });
     if (transportUpgrading.value && code === "REMOTE_DESKTOP_WEBRTC_NOT_READY") return;
+    if (code === "REMOTE_DESKTOP_INVALID_STATE" && inputEnabled.value) {
+      recordRemoteDesktopDiagnostic("input.late-error.ignored", { controlCode: code, inputEpoch: epoch });
+      return;
+    }
+    const retryingInput = (
+      inputResumePending
+      || inputResumeRetryTimer !== undefined
+      || inputResumeRetryCount > 0
+    ) && isRecoverableRemoteDesktopInputResumeError(code);
+    if (retryingInput) {
+      releaseInputState(false);
+      recordRemoteDesktopDiagnostic("input.resume.error", {
+        controlCode: code,
+        sessionRevision: snapshot.value?.sessionRevision,
+      });
+      scheduleInputResumeRetry(code);
+      return;
+    }
+    inputResumePending = false;
+    clearInputResumeTimers();
+    inputResumeRetryCount = 0;
     error.value = translateApiError({ code }, t, t("instances.remoteDesktop.messageInvalid"));
+  } else if (value.type === "clipboard.written" || value.type === "clipboard.text") {
+    // Fallback control combines clipboard responses with control frames; the
+    // fallback caller handles these values after this function returns.
+  } else {
+    recordRemoteDesktopDiagnostic("control.message.unknown", { channel, controlType: type, inboundSequence });
   }
 }
 
@@ -2149,9 +2380,22 @@ function handleClipboardValue(value: any) {
 }
 
 function clipboardMessage(event: MessageEvent) {
+  const bytes = messageByteLength(event);
+  let value: any;
   try {
-    handleClipboardValue(JSON.parse(event.data));
-  } catch {
+    value = JSON.parse(event.data);
+  } catch (reason) {
+    recordRemoteDesktopDiagnostic("clipboard.message.failed", { stage: "parse", channel: "clipboard", bytes, ...remoteDesktopParseErrorFields(reason) });
+    clipboardStatus.value = t("instances.remoteDesktop.messageInvalid");
+    return;
+  }
+  try {
+    const type = typeof value?.type === "string" ? value.type : "unknown";
+    rememberRemoteDesktopFrame({ direction: "receive", channel: "clipboard", type, sequence: typeof value?.seq === "number" ? value.seq : undefined, bytes: bytes ?? 0 });
+    recordRemoteDesktopDiagnostic("clipboard.message", { channel: "clipboard", clipboardType: type, bytes });
+    handleClipboardValue(value);
+  } catch (reason) {
+    recordRemoteDesktopDiagnostic("clipboard.message.failed", { stage: "handle", channel: "clipboard", bytes }, reason);
     clipboardStatus.value = t("instances.remoteDesktop.messageInvalid");
   }
 }
@@ -2212,7 +2456,10 @@ function pointerMove(event: PointerEvent) {
 }
 
 function pointerButton(event: PointerEvent, down: boolean) {
-  if (!inputEnabled.value) return;
+  if (!inputEnabled.value) {
+    if (down) showControlHint();
+    return;
+  }
   const position = normalizedPointer(event);
   lastPointer = position;
   if (down) {
@@ -2225,6 +2472,16 @@ function pointerButton(event: PointerEvent, down: boolean) {
   send("button", { ...position, button: event.button, down, inputEpoch: epoch });
 }
 
+function showControlHint() {
+  if (inputEnabled.value || isController.value) return;
+  controlHintVisible.value = true;
+  if (controlHintTimer !== undefined) clearTimeout(controlHintTimer);
+  controlHintTimer = setTimeout(() => {
+    controlHintTimer = undefined;
+    controlHintVisible.value = false;
+  }, 2_600);
+}
+
 function pointerCancel() {
   if (inputEnabled.value) {
     for (const button of pressedButtons) send("button", { ...lastPointer, button, down: false, inputEpoch: epoch });
@@ -2235,7 +2492,28 @@ function pointerCancel() {
 function wheel(event: WheelEvent) {
   if (!inputEnabled.value) return;
   event.preventDefault();
-  send("wheel", { ...normalizedPointer(event as unknown as PointerEvent), deltaX: event.deltaX, deltaY: event.deltaY, inputEpoch: epoch });
+  wheelAnchor = normalizedPointer(event as unknown as PointerEvent);
+  wheelPump.add(event.deltaX, event.deltaY);
+  if (wheelFrame !== undefined || wheelPump.idle) return;
+  wheelFrame = requestAnimationFrame(flushWheelFrame);
+}
+
+function flushWheelFrame() {
+  wheelFrame = undefined;
+  if (!inputEnabled.value) {
+    stopWheelPump();
+    return;
+  }
+  const delta = wheelPump.take();
+  if (delta && wheelAnchor) send("wheel", { ...wheelAnchor, deltaX: delta.x, deltaY: delta.y, inputEpoch: epoch });
+  if (!wheelPump.idle) wheelFrame = requestAnimationFrame(flushWheelFrame);
+}
+
+function stopWheelPump() {
+  wheelPump.clear();
+  wheelAnchor = undefined;
+  if (wheelFrame !== undefined) cancelAnimationFrame(wheelFrame);
+  wheelFrame = undefined;
 }
 
 async function resume() {
@@ -2243,7 +2521,7 @@ async function resume() {
     requestControl();
     return;
   }
-  inputRequested = true;
+  inputRequested.value = true;
   if (!signalingReady.value || fallbackSwitching.value || inputEnabled.value || inputResumePending || surfacePaused()) return;
   const control = controlChannel();
   if (!control) return;
@@ -2256,7 +2534,7 @@ async function resume() {
   }
   if (
     generation !== inputResumeGeneration
-    || !inputRequested
+    || !inputRequested.value
     || surfacePaused()
     || !document.hasFocus()
   ) {
@@ -2267,8 +2545,72 @@ async function resume() {
     inputResumePending = false;
     return;
   }
+  clearInputResumeRetryTimer();
+  recordRemoteDesktopDiagnostic("input.resume.sent", {
+    attempt: inputResumeRetryCount + 1,
+    sessionRevision: snapshot.value?.sessionRevision,
+  });
+  armInputResumeAckTimeout();
   clipboardStatus.value = "";
   surface.value?.focus();
+}
+
+function armInputResumeAckTimeout() {
+  clearInputResumeAckTimer();
+  inputResumeAckTimer = setTimeout(() => {
+    inputResumeAckTimer = undefined;
+    if (
+      !inputResumePending
+      || !inputRequested.value
+      || surfacePaused()
+      || !isController.value
+      || inputEnabled.value
+    ) return;
+    recordRemoteDesktopDiagnostic("input.resume.timeout", {
+      attempt: inputResumeRetryCount + 1,
+      sessionRevision: snapshot.value?.sessionRevision,
+    });
+    inputResumePending = false;
+    scheduleInputResumeRetry("ack-timeout");
+  }, REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS);
+}
+
+function scheduleInputResumeRetry(reason: string) {
+  if (
+    inputResumeRetryTimer !== undefined
+    || !inputRequested.value
+    || surfacePaused()
+    || !isController.value
+    || inputEnabled.value
+  ) return;
+  const attempt = inputResumeRetryCount;
+  inputResumeRetryCount += 1;
+  const delayMs = remoteDesktopInputResumeRetryDelayMs(attempt);
+  recordRemoteDesktopDiagnostic("input.resume.retry", {
+    attempt: attempt + 1,
+    delayMs,
+    reason,
+    sessionRevision: snapshot.value?.sessionRevision,
+  });
+  inputResumeRetryTimer = setTimeout(() => {
+    inputResumeRetryTimer = undefined;
+    resumeWanted();
+  }, delayMs);
+}
+
+function clearInputResumeAckTimer() {
+  if (inputResumeAckTimer !== undefined) clearTimeout(inputResumeAckTimer);
+  inputResumeAckTimer = undefined;
+}
+
+function clearInputResumeRetryTimer() {
+  if (inputResumeRetryTimer !== undefined) clearTimeout(inputResumeRetryTimer);
+  inputResumeRetryTimer = undefined;
+}
+
+function clearInputResumeTimers() {
+  clearInputResumeAckTimer();
+  clearInputResumeRetryTimer();
 }
 
 function primaryInputAction() {
@@ -2277,19 +2619,30 @@ function primaryInputAction() {
   else if (!isController.value) requestControl();
 }
 
+function toggleInputEnabled() {
+  if (inputRequested.value) {
+    inputRequested.value = false;
+    inputResumeGeneration += 1;
+    suspend();
+    return;
+  }
+  inputRequested.value = true;
+  if (isController.value) resumeWanted();
+  else requestControl();
+}
+
 function requestControl() {
-  inputRequested = true;
+  inputRequested.value = true;
   if (!signalingReady.value || fallbackSwitching.value || controlRequestPending.value || isController.value) return;
   const control = controlChannel();
   if (!control) return;
   controlRequestPending.value = true;
   if (!wire(control, "control.request")) {
     controlRequestPending.value = false;
-    inputRequested = false;
   }
 }
 
-function releaseInputState() {
+function releaseInputState(resetRetry = true) {
   try {
     (navigator as Navigator & { keyboard?: { unlock?: () => Promise<void> } }).keyboard?.unlock?.();
   } catch {
@@ -2297,11 +2650,14 @@ function releaseInputState() {
   }
   stopInputAlive();
   stopPointerMove();
+  stopWheelPump();
   pressedButtons.clear();
   epoch = 0;
   inputEnabled.value = false;
   inputResumeGeneration += 1;
   inputResumePending = false;
+  clearInputResumeTimers();
+  if (resetRetry) inputResumeRetryCount = 0;
 }
 
 function suspend() {
@@ -2356,7 +2712,11 @@ function surfaceBlur(event: FocusEvent) {
 }
 
 function resumeWanted() {
-  if (!inputRequested || surfacePaused()) return;
+  if (!inputRequested.value || surfacePaused() || visibilityResumePending || snapshot.value?.phase !== "active") return;
+  if (!isController.value) {
+    if (!hasController.value) requestControl();
+    return;
+  }
   signalAliveNow();
   void resume();
 }
@@ -2407,7 +2767,17 @@ function surfacePaused() {
 
 function sendVisibility() {
   const control = controlChannel();
-  if (control) wire(control, "visibility", { hidden: surfacePaused() });
+  if (!control) return false;
+  const hidden = surfacePaused();
+  if (!wire(control, "visibility", { hidden })) return false;
+  if (hidden) {
+    visibilityResumePending = false;
+    visibilityResumeRevision = undefined;
+  } else {
+    visibilityResumeRevision = snapshot.value?.sessionRevision;
+    visibilityResumePending = true;
+  }
+  return true;
 }
 
 function syncVisibility() {
@@ -2432,20 +2802,36 @@ function syncVisibility() {
   }
 }
 
-function setClipboard(enabled: boolean) {
+function requestClipboardEnabled(enabled: boolean, automatic = false) {
   const control = controlChannel();
   if (!control || !signalingReady.value) {
-    error.value = t("instances.remoteDesktop.connectionRequired");
-    return;
+    if (!automatic) error.value = t("instances.remoteDesktop.connectionRequired");
+    return false;
   }
+  clipboardRequestAutomatic = automatic;
   clipboardRequested = enabled;
   clipboardBusy.value = true;
   clipboardStatus.value = "";
   if (!wire(control, "clipboard.enable", { enabled })) {
     clipboardBusy.value = false;
     clipboardRequested = false;
-    error.value = t("instances.remoteDesktop.clipboardUnavailable");
+    clipboardRequestAutomatic = false;
+    if (!automatic) error.value = t("instances.remoteDesktop.clipboardUnavailable");
+    return false;
   }
+  return true;
+}
+
+function enableClipboardByDefault() {
+  if (clipboardAutoEnableAttempted || !clipboardSupported.value) return;
+  if (!signalingReady.value || clipboard.value || clipboardBusy.value) return;
+  if (!controlChannel()) return;
+  clipboardAutoEnableAttempted = true;
+  if (!requestClipboardEnabled(true, true)) clipboardAutoEnableAttempted = false;
+}
+
+function setClipboard(enabled: boolean) {
+  requestClipboardEnabled(enabled);
 }
 
 function transportResolutionPayload() {
@@ -2462,10 +2848,12 @@ function applyTransportResolution(showError = false) {
   if (transportResolution.value === "auto" && !transportResolutionRequested) return true;
   const control = controlChannel();
   if (!control) {
+    recordRemoteDesktopDiagnostic("transport.resolution.failed", { reason: "control-channel-unavailable", showError, fallbackState: fallbackState.value, resolution: transportResolution.value });
     if (showError) error.value = t("instances.remoteDesktop.messageInvalid");
     return false;
   }
   if (!wire(control, "stream.resolution", transportResolutionPayload())) {
+    recordRemoteDesktopDiagnostic("transport.resolution.failed", { reason: "wire-rejected", showError, fallbackState: fallbackState.value, resolution: transportResolution.value });
     if (showError) error.value = t("instances.remoteDesktop.messageInvalid");
     return false;
   }
@@ -2560,6 +2948,7 @@ function cleanup() {
   stopInputAlive();
   stopSignalAlive();
   stopPointerMove();
+  stopWheelPump();
   pressedButtons.clear();
   session.value = undefined;
   snapshot.value = undefined;
@@ -2575,9 +2964,17 @@ function cleanup() {
   clipboardBusy.value = false;
   clipboardStatus.value = "";
   clipboardRequested = false;
+  clipboardAutoEnableAttempted = false;
+  clipboardRequestAutomatic = false;
   inputEnabled.value = false;
-  inputRequested = false;
+  controlHintVisible.value = false;
+  if (controlHintTimer !== undefined) clearTimeout(controlHintTimer);
+  controlHintTimer = undefined;
+  inputRequested.value = false;
+  inputResumeGeneration += 1;
   inputResumePending = false;
+  clearInputResumeTimers();
+  inputResumeRetryCount = 0;
   scopeMenuOpen.value = false;
   streamReady.value = false;
   signalingReady.value = false;
@@ -2586,11 +2983,28 @@ function cleanup() {
   isFullscreen.value = false;
 }
 
+watch([inputEnabled, isController], ([enabled, controller]) => {
+  if (enabled || controller) controlHintVisible.value = false;
+});
+watch(clipboardSupported, supported => {
+  if (supported) enableClipboardByDefault();
+});
+
+function syncSourceProviders() {
+  const providers = remote.value?.sourceProviders ?? [];
+  if (!providers.some(provider => provider.kind === target.value.kind && provider.available)) {
+    const first = providers.find(provider => provider.available);
+    if (first) target.value = { kind: first.kind };
+  }
+  if (providers.some(provider => provider.available)) void loadSources();
+}
+
 watch(() => props.active, () => syncVisibility());
+watch(() => hasSourceProvider.value, available => {
+  if (available) syncSourceProviders();
+}, { immediate: true });
 
 onMounted(() => {
-  if (!windowCapture.value && target.value.kind === "window") target.value = { kind: "display" };
-  else if (windowCapture.value && target.value.kind === "window") void loadWindows();
   documentVisible.value = document.visibilityState !== "hidden";
   void detectWebCodecs();
   document.addEventListener("visibilitychange", visibility);
@@ -2599,6 +3013,8 @@ onMounted(() => {
   window.addEventListener("blur", windowBlur);
 });
 onBeforeUnmount(() => {
+  const current = session.value;
+  if (current) void stopRemoteDesktopSession(props.instanceId, current.snapshot.viewerSessionId).catch(() => undefined);
   suspend();
   document.removeEventListener("visibilitychange", visibility);
   document.removeEventListener("fullscreenchange", syncFullscreen);
@@ -2757,7 +3173,7 @@ onBeforeUnmount(() => {
 .remote-desktop-transport-indicator {
   display: inline-flex;
   width: 20px;
-  height: 18px;
+  height: 20px;
   align-items: center;
   justify-content: center;
   border-radius: 5px;
@@ -3051,7 +3467,7 @@ onBeforeUnmount(() => {
 }
 
 .remote-desktop-section-heading,
-.remote-desktop-windows-head {
+.remote-desktop-sources-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3065,14 +3481,14 @@ onBeforeUnmount(() => {
 }
 
 .remote-desktop-section-heading strong,
-.remote-desktop-windows-head strong {
+.remote-desktop-sources-head strong {
   color: var(--text-strong);
   font-size: 12px;
   font-weight: 500;
 }
 
 .remote-desktop-section-heading span,
-.remote-desktop-windows-head span {
+.remote-desktop-sources-head span {
   color: var(--text-subtle);
   font-size: 12px;
   font-weight: 400;
@@ -3138,28 +3554,28 @@ onBeforeUnmount(() => {
   line-height: 16px;
 }
 
-.remote-desktop-windows {
+.remote-desktop-sources {
   margin-top: 12px;
   padding-top: 11px;
   border-top: 1px solid var(--line-subtle);
 }
 
-.remote-desktop-windows-head {
+.remote-desktop-sources-head {
   margin-bottom: 8px;
 }
 
-.remote-desktop-windows-head > div {
+.remote-desktop-sources-head > div {
   display: flex;
   align-items: baseline;
   gap: 7px;
 }
 
-.remote-desktop-window-search {
+.remote-desktop-source-search {
   position: relative;
   display: block;
 }
 
-.remote-desktop-window-search > svg {
+.remote-desktop-source-search > svg {
   position: absolute;
   top: 50%;
   left: 10px;
@@ -3168,7 +3584,7 @@ onBeforeUnmount(() => {
   transform: translateY(-50%);
 }
 
-.remote-desktop-window-search :deep(input) {
+.remote-desktop-source-search :deep(input) {
   height: 32px;
   padding-left: 30px;
   border-color: var(--line-subtle);
@@ -3176,18 +3592,18 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.remote-desktop-window-scroll {
+.remote-desktop-source-scroll {
   height: clamp(116px, 21vh, 214px);
   margin-top: 7px;
   padding-right: 4px;
 }
 
-.remote-desktop-window-list {
+.remote-desktop-source-list {
   display: grid;
   gap: 2px;
 }
 
-.remote-desktop-window-row {
+.remote-desktop-source-row {
   display: flex;
   width: 100%;
   height: auto;
@@ -3201,17 +3617,17 @@ onBeforeUnmount(() => {
   white-space: normal;
 }
 
-.remote-desktop-window-row:hover:not(:disabled),
-.remote-desktop-window-row:focus-visible {
+.remote-desktop-source-row:hover:not(:disabled),
+.remote-desktop-source-row:focus-visible {
   background: var(--surface-hover);
 }
 
-.remote-desktop-window-row.selected {
+.remote-desktop-source-row.selected {
   background: var(--brand-accent-soft);
   color: var(--text-strong);
 }
 
-.remote-desktop-window-icon {
+.remote-desktop-source-icon {
   display: inline-flex;
   flex: 0 0 auto;
   width: 26px;
@@ -3224,38 +3640,38 @@ onBeforeUnmount(() => {
   background: var(--surface-raised);
 }
 
-.remote-desktop-window-copy {
+.remote-desktop-source-copy {
   display: grid;
   flex: 1 1 auto;
   min-width: 0;
   gap: 1px;
 }
 
-.remote-desktop-window-copy strong,
-.remote-desktop-window-copy small,
-.remote-desktop-window-meta,
-.remote-desktop-window-meta small {
+.remote-desktop-source-copy strong,
+.remote-desktop-source-copy small,
+.remote-desktop-source-meta,
+.remote-desktop-source-meta small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.remote-desktop-window-copy strong {
+.remote-desktop-source-copy strong {
   color: var(--text-strong);
   font-size: 12px;
   font-weight: 500;
   line-height: 16px;
 }
 
-.remote-desktop-window-copy small,
-.remote-desktop-window-meta {
+.remote-desktop-source-copy small,
+.remote-desktop-source-meta {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 400;
   line-height: 15px;
 }
 
-.remote-desktop-window-meta {
+.remote-desktop-source-meta {
   display: grid;
   flex: 0 0 auto;
   justify-items: end;
@@ -3264,11 +3680,11 @@ onBeforeUnmount(() => {
   text-align: right;
 }
 
-.remote-desktop-window-meta small {
+.remote-desktop-source-meta small {
   color: var(--status-warning);
 }
 
-.remote-desktop-window-state {
+.remote-desktop-source-state {
   display: flex;
   min-height: 82px;
   align-items: center;
@@ -3279,12 +3695,12 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-.remote-desktop-window-state-error {
+.remote-desktop-source-state-error {
   flex-wrap: wrap;
   color: var(--status-danger);
 }
 
-.remote-desktop-window-hint {
+.remote-desktop-source-hint {
   margin: 6px 0 0;
   color: var(--text-subtle);
   font-size: 12px;
@@ -3728,6 +4144,38 @@ onBeforeUnmount(() => {
   font-size: 12px;
   line-height: 16px;
   backdrop-filter: blur(8px);
+}
+
+.remote-desktop-interaction-hint {
+  position: absolute;
+  bottom: 42px;
+  left: 50%;
+  display: inline-flex;
+  max-width: min(420px, calc(100% - 24px));
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 11px;
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 10px;
+  color: rgb(255 255 255 / 88%);
+  background: rgb(16 17 20 / 92%);
+  font-size: 12px;
+  line-height: 16px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 32%);
+  transform: translateX(-50%);
+  animation: remote-desktop-hint-in 120ms ease-out;
+  backdrop-filter: blur(10px);
+}
+
+.remote-desktop-interaction-hint span {
+  min-width: 0;
+}
+
+@keyframes remote-desktop-hint-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
 }
 
 .remote-desktop-switching {

@@ -6,12 +6,13 @@ import { MenuView, type MenuAction } from '../components/MenuView';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { canDisableTransport, type RemoteDesktopFrameRate, type RemoteDesktopResolution, type RemoteDesktopTransportKey } from './preferences';
+import { transportLabel, transportStateLabel } from './transport-presentation';
 import type { RemoteDesktopSnapshot } from './types';
 
 type Props = {
   children?: ReactNode;
-  onChooseTarget(): void;
   onDisconnect(): void;
+  onSetInputEnabled(enabled: boolean): void;
   onSetFrameRate(value: RemoteDesktopFrameRate): void;
   onSetResolution(value: RemoteDesktopResolution): void;
   onToggleTransport(key: RemoteDesktopTransportKey): void;
@@ -38,9 +39,10 @@ export function RemoteDesktopSettingsMenu(props: Props) {
   });
   const actions: MenuAction[] = [
     {
-      id: 'choose-target',
-      title: snapshot.target.kind === 'window' ? t('remoteDesktop.singleWindow') : t('remoteDesktop.entireDesktop'),
-      image: 'macwindow',
+      id: 'input',
+      title: snapshot.inputRequested ? t('remoteDesktop.disableInput') : t('remoteDesktop.enableInput'),
+      image: snapshot.inputRequested ? 'hand.raised.slash' : 'hand.raised',
+      attributes: { disabled: snapshot.inputPending || snapshot.controlRequestPending || snapshot.phase === 'stopped' || snapshot.phase === 'error' },
     },
     {
       id: 'resolution',
@@ -76,7 +78,7 @@ export function RemoteDesktopSettingsMenu(props: Props) {
     },
   ];
   const select = (event: string) => {
-    if (event === 'choose-target') props.onChooseTarget();
+    if (event === 'input') props.onSetInputEnabled(!snapshot.inputRequested);
     else if (event === 'disconnect') props.onDisconnect();
     else if (event.startsWith('resolution:')) props.onSetResolution(event.slice('resolution:'.length) as RemoteDesktopResolution);
     else if (event.startsWith('frame-rate:')) props.onSetFrameRate(event.slice('frame-rate:'.length) as RemoteDesktopFrameRate);
@@ -89,24 +91,8 @@ export function RemoteDesktopSettingsMenu(props: Props) {
   </MenuView>;
 }
 
-export function transportLabel(key: RemoteDesktopTransportKey, t: ReturnType<typeof useI18n>['t']) {
-  return key === 'p2p' ? t('remoteDesktop.transportP2P') : key === 'turn' ? t('remoteDesktop.transportTurn') : t('remoteDesktop.transportWebSocket');
-}
-
-export function transportIcon(key: RemoteDesktopTransportKey) {
-  return key === 'p2p' ? 'flash-outline' as const : key === 'turn' ? 'swap-horizontal-outline' as const : 'cloud-outline' as const;
-}
-
 function transportSFSymbol(key: RemoteDesktopTransportKey): MenuAction['image'] {
   return key === 'p2p' ? 'bolt.fill' : key === 'turn' ? 'arrow.left.arrow.right' : 'cloud.fill';
-}
-
-function transportStateLabel(key: RemoteDesktopTransportKey, snapshot: RemoteDesktopSnapshot, t: ReturnType<typeof useI18n>['t']) {
-  if (!snapshot.transportAvailability[key]) return t('remoteDesktop.transportUnavailable');
-  const state = snapshot.transportStates[key];
-  if (state === 'active' || snapshot.path === key) return t('remoteDesktop.transportActive');
-  if (state === 'failed') return t('remoteDesktop.transportFailed');
-  return t('remoteDesktop.transportStandby');
 }
 
 function resolutionLabel(value: RemoteDesktopResolution, t: ReturnType<typeof useI18n>['t']) {

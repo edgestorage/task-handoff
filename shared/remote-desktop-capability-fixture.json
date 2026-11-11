@@ -2,15 +2,11 @@
   "available": false,
   "status": "unavailable",
   "reason": "REMOTE_DESKTOP_UNSUPPORTED",
-  "protocolVersion": "2026-11-05",
+  "protocolVersion": "2026-11-11",
   "runtimeKind": "unknown",
   "platform": "unknown",
   "desktopSource": "none",
-  "captureTargets": [],
-  "windowCapture": {
-    "available": false,
-    "reason": "REMOTE_DESKTOP_UNSUPPORTED"
-  },
+  "sourceProviders": [],
   "capture": {
     "backends": [],
     "cursor": false

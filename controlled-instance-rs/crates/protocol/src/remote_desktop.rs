@@ -1,7 +1,7 @@
 //! The public instance capability boundary, with no attach credentials or private
 //! component/session records. Extensible diagnostics are strings, not enums.
 use serde::{Deserialize, Serialize};
-pub const REMOTE_DESKTOP_PROTOCOL_VERSION: &str = "2026-11-05";
+pub const REMOTE_DESKTOP_PROTOCOL_VERSION: &str = "2026-11-11";
 pub const REMOTE_DESKTOP_FALLBACK_PROTOCOL_VERSION: &str = "2026-11-09";
 pub const REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL: &str =
     "taskhandoff.remote-desktop.fallback.media.v1";
@@ -18,8 +18,7 @@ pub struct RemoteDesktopCapabilities {
     pub runtime_kind: String,
     pub platform: String,
     pub desktop_source: String,
-    pub capture_targets: Vec<String>,
-    pub window_capture: RemoteDesktopWindowCapture,
+    pub source_providers: Vec<RemoteDesktopSourceProvider>,
     pub capture: RemoteDesktopCapture,
     pub encoders: Vec<String>,
     pub input: RemoteDesktopInput,
@@ -34,7 +33,8 @@ pub struct RemoteDesktopCapabilities {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct RemoteDesktopWindowCapture {
+pub struct RemoteDesktopSourceProvider {
+    pub kind: String,
     pub available: bool,
     #[serde(deserialize_with = "required_reason")]
     pub reason: Option<String>,
@@ -129,11 +129,7 @@ impl RemoteDesktopCapabilities {
             runtime_kind: "unknown".into(),
             platform: "unknown".into(),
             desktop_source: "none".into(),
-            capture_targets: vec![],
-            window_capture: RemoteDesktopWindowCapture {
-                available: false,
-                reason: Some(reason.into()),
-            },
+            source_providers: vec![],
             capture: RemoteDesktopCapture::default(),
             encoders: vec![],
             input: RemoteDesktopInput::default(),
@@ -171,8 +167,10 @@ pub fn deserialize_remote_desktop<'de, D: serde::Deserializer<'de>>(
             ]
             .iter()
             .all(|s| !s.is_empty())
+                && c.source_providers
+                    .iter()
+                    .all(|provider| !provider.kind.is_empty())
                 && [
-                    &c.capture_targets,
                     &c.capture.backends,
                     &c.encoders,
                     &c.input.backends,
@@ -210,7 +208,7 @@ mod tests {
             .is_none());
         for value in [json!({}), json!({"available":"yes"}), {
             let mut v = fixture.clone();
-            v.as_object_mut().unwrap().remove("captureTargets");
+            v.as_object_mut().unwrap().remove("sourceProviders");
             v
         }] {
             let read = serde_json::from_value::<Reader>(json!({"desktop":value})).unwrap();
@@ -220,7 +218,8 @@ mod tests {
         future["available"] = json!(true);
         future["protocolVersion"] = json!("2030-01-01");
         future["platform"] = json!("future-os");
-        future["captureTargets"] = json!(["future-target"]);
+        future["sourceProviders"] =
+            json!([{"kind":"future-source","available":true,"reason":null}]);
         future["future"] = json!(true);
         let read = serde_json::from_value::<Reader>(json!({"desktop":future}))
             .unwrap()
@@ -228,7 +227,7 @@ mod tests {
             .unwrap();
         assert!(read.available);
         assert_eq!(read.protocol_version, "2030-01-01");
-        assert_eq!(read.capture_targets, ["future-target"]);
+        assert_eq!(read.source_providers[0].kind, "future-source");
     }
 }
 

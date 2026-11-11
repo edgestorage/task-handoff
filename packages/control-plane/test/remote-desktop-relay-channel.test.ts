@@ -74,7 +74,7 @@ test("relay signal channels consume the exact ticket and bridge both directions"
   const received: unknown[] = [];
   const channel = await openRemoteDesktopRelayChannel(h.dependencies, actor, {
     path: "/api/controlled-instances/inst_a/remote-desktop-sessions/rdv_a/signal?ticket=ticket_a",
-    protocols: ["taskhandoff.remote-desktop.2026-11-05"],
+    protocols: ["taskhandoff.remote-desktop.2026-11-11"],
   }, {
     async onMessage(message) { received.push(message); },
     onClose() {},
@@ -112,7 +112,7 @@ test("relay desktop bridge rejects arbitrary paths, protocols and scopes", async
   const h = dependencies();
   await assert.rejects(openRemoteDesktopRelayChannel(h.dependencies, actor, {
     path: "/api/health?ticket=ticket_a",
-    protocols: ["taskhandoff.remote-desktop.2026-11-05"],
+    protocols: ["taskhandoff.remote-desktop.2026-11-11"],
   }, { async onMessage() {}, onClose() {} }), { code: "REMOTE_DESKTOP_CHANNEL_PATH_INVALID" });
   await assert.rejects(openRemoteDesktopRelayChannel(h.dependencies, actor, {
     path: "/api/controlled-instances/inst_a/remote-desktop-sessions/rdv_a/signal?ticket=ticket_a",
@@ -124,7 +124,7 @@ test("relay desktop bridge rejects arbitrary paths, protocols and scopes", async
     instanceScope: { kind: "inherit-node-scope" },
   }, {
     path: "/api/controlled-instances/inst_a/remote-desktop-sessions/rdv_a/signal?ticket=ticket_a",
-    protocols: ["taskhandoff.remote-desktop.2026-11-05"],
+    protocols: ["taskhandoff.remote-desktop.2026-11-11"],
   }, { async onMessage() {}, onClose() {} }), { code: "CONTROL_PLANE_RESOURCE_NOT_VISIBLE" });
   assert.equal(h.calls.length, 0);
 });

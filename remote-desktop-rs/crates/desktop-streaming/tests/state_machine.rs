@@ -6,29 +6,33 @@ fn owner() -> Owner {
         device_session_id: "device".into(),
     }
 }
+fn display() -> CaptureSelection {
+    CaptureSelection {
+        source_ref: "display".into(),
+        stream_region: None,
+        control_region: None,
+    }
+}
+fn window(source_ref: &str) -> CaptureSelection {
+    CaptureSelection {
+        source_ref: source_ref.into(),
+        stream_region: None,
+        control_region: None,
+    }
+}
 fn active(r: &mut Registry, now: Instant) -> Snapshot {
-    let (s, t) = r
-        .reserve("create", owner(), CaptureTarget::Display, now)
+    let (s, t) = r.reserve("create", owner(), display(), now).unwrap();
+    r.attach(&s.viewer_session_id, &owner(), &display(), &t, now)
         .unwrap();
-    r.attach(
-        &s.viewer_session_id,
-        &owner(),
-        &CaptureTarget::Display,
-        &t,
-        now,
-    )
-    .unwrap();
     r.connected(&s.viewer_session_id, now).unwrap();
     r.snapshot(&s.viewer_session_id, &owner()).unwrap()
 }
 fn active_viewer(r: &mut Registry, request: &str, now: Instant) -> Snapshot {
-    let (snapshot, token) = r
-        .reserve(request, owner(), CaptureTarget::Display, now)
-        .unwrap();
+    let (snapshot, token) = r.reserve(request, owner(), display(), now).unwrap();
     r.attach(
         &snapshot.viewer_session_id,
         &owner(),
-        &CaptureTarget::Display,
+        &display(),
         &token,
         now,
     )
@@ -40,75 +44,38 @@ fn active_viewer(r: &mut Registry, request: &str, now: Instant) -> Snapshot {
 fn reserve_is_idempotent_allows_four_viewers_and_rejects_the_fifth() {
     let mut r = Registry::new();
     let now = Instant::now();
-    let (s, t) = r
-        .reserve("one", owner(), CaptureTarget::Display, now)
-        .unwrap();
-    let (retry, t2) = r
-        .reserve("one", owner(), CaptureTarget::Display, now)
-        .unwrap();
+    let (s, t) = r.reserve("one", owner(), display(), now).unwrap();
+    let (retry, t2) = r.reserve("one", owner(), display(), now).unwrap();
     assert_eq!(s.viewer_session_id, retry.viewer_session_id);
     assert_eq!(t, t2);
     for index in 2..=MAX_VIEWERS {
         assert!(r
-            .reserve(
-                &format!("viewer-{index}"),
-                owner(),
-                CaptureTarget::Display,
-                now,
-            )
+            .reserve(&format!("viewer-{index}"), owner(), display(), now,)
             .is_ok());
     }
     assert_eq!(
-        r.reserve("viewer-5", owner(), CaptureTarget::Display, now)
-            .unwrap_err(),
+        r.reserve("viewer-5", owner(), display(), now).unwrap_err(),
         Error::Busy
     );
     assert_eq!(
-        r.attach(
-            &s.viewer_session_id,
-            &owner(),
-            &CaptureTarget::Display,
-            "bad",
-            now
-        )
-        .unwrap_err(),
-        Error::InvalidAttach
-    );
-    assert_eq!(
-        r.attach(
-            &s.viewer_session_id,
-            &owner(),
-            &CaptureTarget::Window {
-                window_ref: "other".into()
-            },
-            &t,
-            now
-        )
-        .unwrap_err(),
-        Error::InvalidAttach
-    );
-    r.attach(
-        &s.viewer_session_id,
-        &owner(),
-        &CaptureTarget::Display,
-        &t,
-        now,
-    )
-    .unwrap();
-    assert_eq!(
-        r.attach(
-            &s.viewer_session_id,
-            &owner(),
-            &CaptureTarget::Display,
-            &t,
-            now
-        )
-        .unwrap_err(),
-        Error::InvalidAttach
-    );
-    assert_eq!(
-        r.reserve("one", owner(), CaptureTarget::Display, now)
+        r.attach(&s.viewer_session_id, &owner(), &display(), "bad", now)
             .unwrap_err(),
+        Error::InvalidAttach
+    );
+    assert_eq!(
+        r.attach(&s.viewer_session_id, &owner(), &window("other"), &t, now)
+            .unwrap_err(),
+        Error::InvalidAttach
+    );
+    r.attach(&s.viewer_session_id, &owner(), &display(), &t, now)
+        .unwrap();
+    assert_eq!(
+        r.attach(&s.viewer_session_id, &owner(), &display(), &t, now)
+            .unwrap_err(),
+        Error::InvalidAttach
+    );
+    assert_eq!(
+        r.reserve("one", owner(), display(), now).unwrap_err(),
         Error::RequestConflict
     );
 }
@@ -135,9 +102,7 @@ fn owner_device_isolation_and_late_callbacks_cannot_stop_new_session() {
             .close_peer
     );
     r.drained(&s.viewer_session_id).unwrap();
-    let (new, _) = r
-        .reserve("new", owner(), CaptureTarget::Display, now)
-        .unwrap();
+    let (new, _) = r.reserve("new", owner(), display(), now).unwrap();
     assert_eq!(
         r.drained(&s.viewer_session_id).unwrap_err(),
         Error::NotFound
@@ -152,27 +117,14 @@ fn lost_reservation_and_unfinished_negotiation_release_slot_after_bounded_drain(
     for attach in [false, true] {
         let now = Instant::now();
         let mut r = Registry::new();
-        let (s, t) = r
-            .reserve("one", owner(), CaptureTarget::Display, now)
-            .unwrap();
+        let (s, t) = r.reserve("one", owner(), display(), now).unwrap();
         if attach {
-            r.attach(
-                &s.viewer_session_id,
-                &owner(),
-                &CaptureTarget::Display,
-                &t,
-                now,
-            )
-            .unwrap();
+            r.attach(&s.viewer_session_id, &owner(), &display(), &t, now)
+                .unwrap();
         }
         for index in 2..=MAX_VIEWERS {
-            r.reserve(
-                &format!("viewer-{index}"),
-                owner(),
-                CaptureTarget::Display,
-                now,
-            )
-            .unwrap();
+            r.reserve(&format!("viewer-{index}"), owner(), display(), now)
+                .unwrap();
         }
         let deadline = now + if attach { SIGNAL_LIVENESS } else { STARTING };
         assert!(r
@@ -184,7 +136,7 @@ fn lost_reservation_and_unfinished_negotiation_release_slot_after_bounded_drain(
             Phase::Draining
         );
         assert_eq!(
-            r.reserve("blocked", owner(), CaptureTarget::Display, deadline)
+            r.reserve("blocked", owner(), display(), deadline)
                 .unwrap_err(),
             Error::Busy
         );
@@ -194,12 +146,7 @@ fn lost_reservation_and_unfinished_negotiation_release_slot_after_bounded_drain(
             Phase::Failed
         );
         assert!(r
-            .reserve(
-                "replacement",
-                owner(),
-                CaptureTarget::Display,
-                deadline + DRAINING
-            )
+            .reserve("replacement", owner(), display(), deadline + DRAINING)
             .is_ok());
     }
 }
@@ -207,17 +154,9 @@ fn lost_reservation_and_unfinished_negotiation_release_slot_after_bounded_drain(
 fn negotiating_deadline_is_not_extended_by_healthy_signaling() {
     let now = Instant::now();
     let mut r = Registry::new();
-    let (s, t) = r
-        .reserve("one", owner(), CaptureTarget::Display, now)
+    let (s, t) = r.reserve("one", owner(), display(), now).unwrap();
+    r.attach(&s.viewer_session_id, &owner(), &display(), &t, now)
         .unwrap();
-    r.attach(
-        &s.viewer_session_id,
-        &owner(),
-        &CaptureTarget::Display,
-        &t,
-        now,
-    )
-    .unwrap();
     for second in [2, 4, 6, 8, 10, 12, 14, 16, 18] {
         r.signal_alive(&s.viewer_session_id, now + Duration::from_secs(second))
             .unwrap();
@@ -266,6 +205,18 @@ fn input_heartbeat_freeze_and_cross_channel_old_epoch_never_rebuild_pressed_stat
         Err(Error::StaleEpoch)
     );
 }
+
+#[test]
+fn repeated_resume_returns_the_live_epoch_and_starts_a_new_lease_after_expiry() {
+    let now = Instant::now();
+    let mut r = Registry::new();
+    let snapshot = active(&mut r, now);
+    let id = &snapshot.viewer_session_id;
+    let epoch = r.resume_input(id, now).unwrap();
+    assert_eq!(r.live_input_epoch(id, now), Some(epoch));
+    assert_eq!(r.live_input_epoch(id, now + INPUT_LIVENESS), None);
+}
+
 #[test]
 fn hidden_pauses_media_visible_requests_idr_but_does_not_resume_input() {
     let now = Instant::now();
@@ -357,20 +308,12 @@ fn transport_generation_advances_only_for_a_verified_restart_recovery() {
 fn restarting_component_invalidates_all_previous_identifiers() {
     let now = Instant::now();
     let mut old = Registry::new();
-    let (s, t) = old
-        .reserve("one", owner(), CaptureTarget::Display, now)
-        .unwrap();
+    let (s, t) = old.reserve("one", owner(), display(), now).unwrap();
     let mut new = Registry::new();
     assert_ne!(old.boot_id(), new.boot_id());
     assert_eq!(
-        new.attach(
-            &s.viewer_session_id,
-            &owner(),
-            &CaptureTarget::Display,
-            &t,
-            now
-        )
-        .unwrap_err(),
+        new.attach(&s.viewer_session_id, &owner(), &display(), &t, now)
+            .unwrap_err(),
         Error::NotFound
     );
 }
@@ -382,14 +325,11 @@ fn consumed_create_request_cannot_be_replayed_after_another_session() {
     let first = active(&mut r, now);
     r.stop(&first.viewer_session_id, &owner(), now).unwrap();
     r.drained(&first.viewer_session_id).unwrap();
-    let (second, _) = r
-        .reserve("second", owner(), CaptureTarget::Display, now)
-        .unwrap();
+    let (second, _) = r.reserve("second", owner(), display(), now).unwrap();
     r.stop(&second.viewer_session_id, &owner(), now).unwrap();
     r.drained(&second.viewer_session_id).unwrap();
     assert_eq!(
-        r.reserve("create", owner(), CaptureTarget::Display, now)
-            .unwrap_err(),
+        r.reserve("create", owner(), display(), now).unwrap_err(),
         Error::RequestConflict
     );
 }
@@ -524,9 +464,7 @@ fn move_only_native_geometry_change_advances_revision_and_invalidates_held_epoch
 fn takeover_preserves_fixed_target_and_rejects_other_actor_without_draining() {
     let mut registry = Registry::new();
     let now = Instant::now();
-    let target = CaptureTarget::Window {
-        window_ref: "opaque-window-selection".into(),
-    };
+    let target = window("opaque-window-selection");
     let (original, _) = registry
         .reserve("original", owner(), target.clone(), now)
         .unwrap();
@@ -540,7 +478,7 @@ fn takeover_preserves_fixed_target_and_rejects_other_actor_without_draining() {
                 "wrong-target",
                 &original.viewer_session_id,
                 &next,
-                &CaptureTarget::Display,
+                &display(),
                 now
             )
             .unwrap_err(),
@@ -583,7 +521,7 @@ fn takeover_preserves_fixed_target_and_rejects_other_actor_without_draining() {
             now,
         )
         .unwrap();
-    assert_eq!(replacement.capture_target, target);
+    assert_eq!(replacement.capture_selection, target);
     assert_ne!(replacement.viewer_session_id, original.viewer_session_id);
 }
 
@@ -637,6 +575,54 @@ fn viewers_share_one_transferable_control_lease() {
     );
     let reclaimed_epoch = r.resume_input(&first.viewer_session_id, now).unwrap();
     assert!(reclaimed_epoch > second_epoch);
+}
+
+#[test]
+fn different_sources_stream_concurrently_with_one_control_lease() {
+    let mut r = Registry::new();
+    let now = Instant::now();
+    let display = active_viewer(&mut r, "display", now);
+    let window_target = window("window-channel");
+    let (window, token) = r
+        .reserve("window", owner(), window_target.clone(), now)
+        .unwrap();
+    r.attach(
+        &window.viewer_session_id,
+        &owner(),
+        &window_target,
+        &token,
+        now,
+    )
+    .unwrap();
+    r.connected(&window.viewer_session_id, now).unwrap();
+
+    let display_snapshot = r.snapshot(&display.viewer_session_id, &owner()).unwrap();
+    let window_snapshot = r.snapshot(&window.viewer_session_id, &owner()).unwrap();
+    assert_eq!(display_snapshot.phase, Phase::Active);
+    assert_eq!(window_snapshot.phase, Phase::Active);
+    assert_eq!(display_snapshot.viewer_count, 1);
+    assert_eq!(window_snapshot.viewer_count, 1);
+    assert!(display_snapshot.is_controller);
+    assert!(!window_snapshot.is_controller);
+
+    let display_epoch = r.resume_input(&display.viewer_session_id, now).unwrap();
+    let previous = r.request_control(&window.viewer_session_id, now).unwrap();
+    assert_eq!(
+        previous.as_deref(),
+        Some(display.viewer_session_id.as_str())
+    );
+    assert_eq!(
+        r.check_epoch(&display.viewer_session_id, display_epoch, now),
+        Err(Error::StaleEpoch)
+    );
+    assert!(
+        r.snapshot(&window.viewer_session_id, &owner())
+            .unwrap()
+            .is_controller
+    );
+    assert!(r
+        .resume_input(&window.viewer_session_id, now)
+        .is_ok_and(|epoch| epoch > display_epoch));
 }
 
 #[test]

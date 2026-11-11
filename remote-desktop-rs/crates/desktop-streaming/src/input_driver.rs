@@ -18,6 +18,8 @@ pub struct NativeInput {
     window: Option<crate::platform::linux::WindowLease>,
     keys: HashSet<u16>,
     buttons: HashSet<u8>,
+    wheel_x: f64,
+    wheel_y: f64,
 }
 impl NativeInput {
     pub fn new(geometry: Geometry, display: Option<String>) -> anyhow::Result<Self> {
@@ -103,6 +105,8 @@ impl NativeInput {
             window,
             keys: HashSet::new(),
             buttons: HashSet::new(),
+            wheel_x: 0.0,
+            wheel_y: 0.0,
         })
     }
     pub fn validate(&self, point: Option<(i32, i32)>) -> anyhow::Result<()> {
@@ -246,18 +250,31 @@ impl NativeInput {
             }
             Input::Wheel(w) => {
                 self.pointer(w.x, w.y)?;
+                let steps_x = take_wheel_steps(&mut self.wheel_x, w.delta_x);
+                let steps_y = take_wheel_steps(&mut self.wheel_y, w.delta_y);
                 #[cfg(target_os = "macos")]
                 {
-                    self.mouse
-                        .wheel(map_point(self.geometry, w.x, w.y)?, w.delta_x, w.delta_y)
-                        .map_err(|_| enigo::InputError::Simulate("native wheel event failed"))
+                    if steps_x == 0 && steps_y == 0 {
+                        Ok(())
+                    } else {
+                        self.mouse
+                            .wheel(
+                                map_point(self.geometry, w.x, w.y)?,
+                                steps_x as f64 * WHEEL_STEP_DELTA,
+                                steps_y as f64 * WHEEL_STEP_DELTA,
+                            )
+                            .map_err(|_| enigo::InputError::Simulate("native wheel event failed"))
+                    }
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    self.enigo
-                        .scroll((w.delta_x / 40.0).round() as i32, Axis::Horizontal)?;
-                    self.enigo
-                        .scroll((w.delta_y / 40.0).round() as i32, Axis::Vertical)
+                    if steps_x != 0 {
+                        self.enigo.scroll(steps_x, Axis::Horizontal)?;
+                    }
+                    if steps_y != 0 {
+                        self.enigo.scroll(steps_y, Axis::Vertical)?;
+                    }
+                    Ok(())
                 }
             }
             Input::Text(_) => anyhow::bail!("REMOTE_DESKTOP_TEXT_REQUIRES_LEASE"),
@@ -316,6 +333,17 @@ impl Drop for NativeInput {
         let _ = self.release_all();
     }
 }
+const WHEEL_STEP_DELTA: f64 = 40.0;
+
+/// Preserve movement smaller than one native wheel notch across events. Touch
+/// scrolling arrives as a stream of fractional deltas; rounding every event in
+/// isolation drops most of them and makes the remote view advance in bursts.
+fn take_wheel_steps(remainder: &mut f64, delta: f64) -> i32 {
+    let total = *remainder + delta;
+    let steps = (total / WHEEL_STEP_DELTA).round() as i32;
+    *remainder = total - steps as f64 * WHEEL_STEP_DELTA;
+    steps
+}
 #[cfg(not(target_os = "macos"))]
 fn button(code: u8) -> anyhow::Result<Button> {
     Ok(match code {
@@ -344,4 +372,32 @@ pub fn map_point(g: Geometry, x: f64, y: f64) -> anyhow::Result<(i32, i32)> {
         "REMOTE_DESKTOP_INVALID_GEOMETRY"
     );
     Ok((px.round() as i32, py.round() as i32))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_wheel_steps;
+
+    #[test]
+    fn wheel_remainder_accumulates_sub_notches() {
+        let mut remainder = 0.0;
+        assert_eq!(take_wheel_steps(&mut remainder, 10.0), 0);
+        assert_eq!(take_wheel_steps(&mut remainder, 10.0), 1);
+        assert_eq!(remainder, -20.0);
+        assert_eq!(take_wheel_steps(&mut remainder, 10.0), 0);
+        assert_eq!(take_wheel_steps(&mut remainder, 10.0), 0);
+        assert_eq!(remainder, 0.0);
+    }
+
+    #[test]
+    fn wheel_remainder_preserves_overshoot_and_direction_changes() {
+        let mut remainder = 0.0;
+        assert_eq!(take_wheel_steps(&mut remainder, 25.0), 1);
+        assert_eq!(remainder, -15.0);
+        assert_eq!(take_wheel_steps(&mut remainder, -25.0), -1);
+        assert_eq!(remainder, 0.0);
+        assert_eq!(take_wheel_steps(&mut remainder, -10.0), 0);
+        assert_eq!(take_wheel_steps(&mut remainder, -30.0), -1);
+        assert_eq!(remainder, 0.0);
+    }
 }

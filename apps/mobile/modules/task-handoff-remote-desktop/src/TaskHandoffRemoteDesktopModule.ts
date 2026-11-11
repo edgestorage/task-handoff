@@ -11,12 +11,18 @@ type NativeRemoteDesktopModule = {
   decode(data: Uint8Array, keyframe: boolean, timestampUs: number): Promise<void>;
   reset(): Promise<void>;
   close(): Promise<void>;
+  startTextInputObservation(nativeID: string): boolean;
+  stopTextInputObservation(): void;
   addListener?(name: 'onRemoteDesktopDecoderError', listener: (event: RemoteDesktopDecoderError) => void): { remove(): void };
+  addListener?(name: 'onRemoteDesktopTextInput', listener: (event: RemoteDesktopTextInputEvent) => void): { remove(): void };
 };
+
+export type RemoteDesktopTextInputEvent = { text: string; composing: boolean };
 
 const native = requireOptionalNativeModule<NativeRemoteDesktopModule>('TaskHandoffRemoteDesktop');
 
 export const nativeRemoteDesktopDecoderAvailable = native?.isAvailable?.() === true;
+export const nativeRemoteDesktopTextInputAvailable = typeof native?.startTextInputObservation === 'function';
 
 export function subscribeRemoteDesktopDecoderErrors(listener: (event: RemoteDesktopDecoderError) => void) {
   try { return native?.addListener?.('onRemoteDesktopDecoderError', listener); }
@@ -39,4 +45,19 @@ export async function resetRemoteDesktopDecoder() {
 
 export async function closeRemoteDesktopDecoder() {
   await native?.close();
+}
+
+export function startRemoteDesktopTextInputObservation(nativeID: string) {
+  try { return native?.startTextInputObservation?.(nativeID) === true; }
+  catch { return false; }
+}
+
+export function stopRemoteDesktopTextInputObservation() {
+  try { native?.stopTextInputObservation?.(); }
+  catch { /* the screen may be tearing down with the native module */ }
+}
+
+export function subscribeRemoteDesktopTextInput(listener: (event: RemoteDesktopTextInputEvent) => void) {
+  try { return native?.addListener?.('onRemoteDesktopTextInput', listener); }
+  catch { return undefined; }
 }

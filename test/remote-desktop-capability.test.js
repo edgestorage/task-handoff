@@ -13,7 +13,7 @@ const {controlledInstanceRemoteDesktopCapabilities,normalizeControlledInstanceCa
 const fixture=require('../shared/remote-desktop-capability-fixture.json');
 test('desktop uses shared disabled capability and malformed data cannot disable base features',()=>{
   assert.deepEqual(unsupportedRemoteDesktopCapabilities(),fixture);
-  for(const remoteDesktop of [undefined,null,{}, {...fixture,captureTargets:undefined},{...fixture,capture:{cursor:'true'}}]){
+  for(const remoteDesktop of [undefined,null,{}, {...fixture,sourceProviders:undefined},{...fixture,capture:{cursor:'true'}}]){
     const document={features:{tty:true,browserTunnel:true,remoteDesktop}};
     const normalized=normalizeControlledInstanceCapabilities(document);
     assert.equal(normalized.features.tty,true);assert.equal(normalized.features.browserTunnel,true);
@@ -22,10 +22,10 @@ test('desktop uses shared disabled capability and malformed data cannot disable 
   }
 });
 test('future dates, diagnostics, backends and valid limits remain readable',()=>{
-  const remoteDesktop={...fixture,available:true,status:'future-status',reason:null,protocolVersion:'2030-01-01',platform:'future-os',captureTargets:['display','future-target'],capture:{backends:['future-capture'],cursor:true},video:{codecs:['future-codec'],maxWidth:16384,maxHeight:16384,maxFrameRate:240},future:{extra:true}};
+  const remoteDesktop={...fixture,available:true,status:'future-status',reason:null,protocolVersion:'2030-01-01',platform:'future-os',sourceProviders:[{kind:'display',available:true,reason:null},{kind:'future-source',available:false,reason:'REMOTE_DESKTOP_FUTURE_PROVIDER'}],capture:{backends:['future-capture'],cursor:true},video:{codecs:['future-codec'],maxWidth:16384,maxHeight:16384,maxFrameRate:240},future:{extra:true}};
   const result=controlledInstanceRemoteDesktopCapabilities({features:{remoteDesktop}});
   assert.equal(result.available,true);assert.equal(result.protocolVersion,'2030-01-01');
-  assert.deepEqual(result.captureTargets,['display','future-target']);assert.equal(result.video.maxFrameRate,240);
+  assert.deepEqual(result.sourceProviders.map(provider=>provider.kind),['display','future-source']);assert.equal(result.video.maxFrameRate,240);
   assert.equal(result.future,undefined);
 });
 test('older components without fallback keep WebRTC available and close only fallback',()=>{

@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { DesktopCaptureTarget, DesktopIceConfig } from "@task-handoff/protocol/remote-desktop";
+import type { DesktopCaptureSelection, DesktopIceConfig } from "@task-handoff/protocol/remote-desktop";
 import { DesktopSessionSnapshotSchema, DesktopSignalSchema, desktopSdpAllowed } from "@task-handoff/protocol/remote-desktop";
 import type { ControlPlaneActor } from "../auth/authorization.ts";
 import type { DesktopManagedOperation } from "@task-handoff/runtime-shared/remote-desktop-managed";
+import { DESKTOP_FALLBACK_SELECTION_HEADER } from "@task-handoff/runtime-shared/remote-desktop-managed";
 import type { NodeAgentWebSocket } from "../nodes/client.ts";
 
 export type DesktopPrincipal = { actor: ControlPlaneActor; deviceSessionId: string; expiresAt?: number };
@@ -24,7 +25,7 @@ function isRemoteDesktopNotFound(error: unknown) {
 }
 type Entry = {
   principal: DesktopPrincipal; key: string; instanceId: string; nodeId: string; viewerSessionId: string;
-  captureTarget: DesktopCaptureTarget; attachToken?: string; ticket?: string; ticketExpiresAt: number;
+  captureSelection: DesktopCaptureSelection; attachToken?: string; ticket?: string; ticketExpiresAt: number;
   ice: DesktopIceConfig; socket?: NodeAgentWebSocket; release?: () => void;
   timers: Set<ReturnType<typeof setTimeout>>; closed: boolean;
   transportLossTimer?: ReturnType<typeof setTimeout>;
@@ -108,9 +109,9 @@ export class DesktopAccess {
     for (const rate of rateKeys) this.rates.set(rate, [...(this.rates.get(rate) ?? []), this.now()]);
     const promise = run(); this.retries.set(key, { until: this.now() + 30_000, input: encoded, promise, principalKey: desktopPrincipalKey(principal) }); return promise;
   }
-  async create(principal: DesktopPrincipal, instanceId: string, nodeId: string, requestId: string, captureTarget: DesktopCaptureTarget, takeoverId?: string, ice = this.options.issueIce()) {
+  async create(principal: DesktopPrincipal, instanceId: string, nodeId: string, requestId: string, captureSelection: DesktopCaptureSelection, takeoverId?: string, ice = this.options.issueIce()) {
     const result = await this.options.request(instanceId, takeoverId ? "takeover" : "reserve", {
-      requestId, owner: desktopOwner(principal), captureTarget, ...(takeoverId ? { viewerSessionId: takeoverId } : {}),
+      requestId, owner: desktopOwner(principal), captureSelection, ...(takeoverId ? { viewerSessionId: takeoverId } : {}),
     }) as Record<string, unknown>;
     const snapshot = DesktopSessionSnapshotSchema.parse(result.snapshot);
     if (result.type !== "reserved" || typeof result.attachToken !== "string") throw failure("REMOTE_DESKTOP_RESERVATION_INVALID", 502);
@@ -123,7 +124,7 @@ export class DesktopAccess {
     // roundtrip in the caller; authority may additionally expose a shorter one.
     const authorityDeadline = typeof result.attachExpiresAt === "number" ? result.attachExpiresAt : this.now();
     const expires = Math.min(this.now() + 30_000, authorityDeadline, principal.expiresAt ?? Infinity);
-    const entry: Entry = { principal, key: desktopPrincipalKey(principal), instanceId, nodeId, viewerSessionId: snapshot.viewerSessionId, captureTarget, attachToken: result.attachToken, ticketExpiresAt: expires, ice, timers: new Set(), closed: false };
+    const entry: Entry = { principal, key: desktopPrincipalKey(principal), instanceId, nodeId, viewerSessionId: snapshot.viewerSessionId, captureSelection, attachToken: result.attachToken, ticketExpiresAt: expires, ice, timers: new Set(), closed: false };
     const ticket = randomBytes(32).toString("base64url"); entry.ticket = ticket;
     entry.release = this.options.watch?.(principal, () => void this.close(entry));
     this.entries.set(entry.viewerSessionId, entry); this.tickets.set(ticket, entry);
@@ -235,7 +236,7 @@ export class DesktopAccess {
       "x-task-handoff-desktop-generation": generation,
       "x-task-handoff-desktop-actor": desktopOwner(entry.principal).actorId,
       "x-task-handoff-desktop-device": entry.principal.deviceSessionId,
-      "x-task-handoff-desktop-target": JSON.stringify(entry.captureTarget),
+      [DESKTOP_FALLBACK_SELECTION_HEADER]: JSON.stringify(entry.captureSelection),
     };
     try {
       if (!this.options.fallback) throw new Error("fallback transport unavailable");
@@ -395,7 +396,7 @@ export class DesktopAccess {
     try {
       await this.options.attach(entry.instanceId, relay);
       if (entry.closed || closed) return;
-      forward({ requestId: randomBytes(16).toString("hex"), owner: desktopOwner(entry.principal), viewerSessionId: entry.viewerSessionId, captureTarget: entry.captureTarget, attachToken: entry.attachToken });
+      forward({ requestId: randomBytes(16).toString("hex"), owner: desktopOwner(entry.principal), viewerSessionId: entry.viewerSessionId, captureSelection: entry.captureSelection, attachToken: entry.attachToken });
       entry.attachToken = undefined;
       const heartbeat = () => forwardUpstream({ type: "signalAlive", requestId: randomBytes(16).toString("hex") });
       heartbeat();

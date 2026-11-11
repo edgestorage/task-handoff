@@ -27,24 +27,35 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
     if let Err(error) = result {
         let reason = BackendError::from_error(&error).to_string();
         capability.reason = Some(reason.clone());
-        capability.window_capture.reason = Some(reason);
         return capability;
     }
     capability.available = true;
     capability.status = "ready".into();
     capability.reason = None;
-    capability.capture_targets = vec!["display".into()];
+    capability.source_providers = vec![controlled_instance_protocol::RemoteDesktopSourceProvider {
+        kind: "display".into(),
+        available: true,
+        reason: None,
+    }];
     #[cfg(target_os = "macos")]
     {
-        capability.capture_targets.push("window".into());
-        capability.window_capture.available = true;
-        capability.window_capture.reason = None;
+        capability.source_providers.push(
+            controlled_instance_protocol::RemoteDesktopSourceProvider {
+                kind: "window".into(),
+                available: true,
+                reason: None,
+            },
+        );
     }
     #[cfg(target_os = "linux")]
     {
-        capability.capture_targets.push("window".into());
-        capability.window_capture.available = true;
-        capability.window_capture.reason = None;
+        capability.source_providers.push(
+            controlled_instance_protocol::RemoteDesktopSourceProvider {
+                kind: "window".into(),
+                available: true,
+                reason: None,
+            },
+        );
     }
     capability.capture.backends = vec![if cfg!(target_os = "macos") {
         "screencapturekit"
@@ -145,6 +156,6 @@ mod tests {
         let capability = probe(Mode::Control, true);
         assert!(!capability.available);
         assert!(!capability.capture.cursor);
-        assert!(capability.capture_targets.is_empty());
+        assert!(capability.source_providers.is_empty());
     }
 }

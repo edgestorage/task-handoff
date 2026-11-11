@@ -19,7 +19,7 @@ use std::{
 const INPUT_TTL: Duration = Duration::from_millis(1500);
 const QUEUE_TTL: Duration = Duration::from_millis(100);
 const LIMIT: usize = 64 * 1024;
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Backend {
     Synthetic,
@@ -41,6 +41,65 @@ pub enum Backend {
         authority: Option<std::path::PathBuf>,
     },
 }
+impl Backend {
+    pub fn set_geometry(&mut self, geometry: Geometry) {
+        match self {
+            Self::Synthetic => {}
+            #[cfg(target_os = "macos")]
+            Self::MacWindow {
+                geometry: current, ..
+            } => *current = geometry,
+            #[cfg(target_os = "linux")]
+            Self::LinuxWindow {
+                geometry: current, ..
+            } => *current = geometry,
+            Self::Native {
+                geometry: current, ..
+            } => *current = geometry,
+        }
+    }
+
+    /// Geometry changes during resize, but the backend kind and native identity
+    /// must still match before a geometry update is applied to the guard.
+    pub fn same_binding(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Synthetic, Self::Synthetic) => true,
+            #[cfg(target_os = "macos")]
+            (
+                Self::MacWindow { identity, .. },
+                Self::MacWindow {
+                    identity: other, ..
+                },
+            ) => identity == other,
+            #[cfg(target_os = "linux")]
+            (
+                Self::LinuxWindow {
+                    window,
+                    display,
+                    authority,
+                    ..
+                },
+                Self::LinuxWindow {
+                    window: other_window,
+                    display: other_display,
+                    authority: other_authority,
+                    ..
+                },
+            ) => window == other_window && display == other_display && authority == other_authority,
+            (
+                Self::Native {
+                    display, authority, ..
+                },
+                Self::Native {
+                    display: other_display,
+                    authority: other_authority,
+                    ..
+                },
+            ) => display == other_display && authority == other_authority,
+            _ => false,
+        }
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub struct Bootstrap {
     pub nonce: String,
@@ -50,6 +109,7 @@ pub struct Bootstrap {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Command {
     Arm { epoch: u64 },
+    Rebind { backend: Backend },
     Geometry { geometry: Geometry },
     Alive { epoch: u64 },
     Input { event: Input },
@@ -107,6 +167,26 @@ pub(crate) fn write<W: Write, T: Serialize>(w: &mut W, value: &T) -> anyhow::Res
 enum Actuator {
     Synthetic(SyntheticInput),
     Native(Box<NativeInput>),
+}
+fn bind_backend(backend: Backend) -> anyhow::Result<Actuator> {
+    match backend {
+        Backend::Synthetic => Ok(Actuator::Synthetic(SyntheticInput::default())),
+        Backend::Native {
+            geometry, display, ..
+        } => NativeInput::new(geometry, display).map(|n| Actuator::Native(Box::new(n))),
+        #[cfg(target_os = "macos")]
+        Backend::MacWindow { identity, geometry } => {
+            NativeInput::new_window(identity, geometry).map(|n| Actuator::Native(Box::new(n)))
+        }
+        #[cfg(target_os = "linux")]
+        Backend::LinuxWindow {
+            window,
+            geometry,
+            display,
+            ..
+        } => NativeInput::new_window(window, geometry, display)
+            .map(|n| Actuator::Native(Box::new(n))),
+    }
 }
 impl Actuator {
     fn prepare(&mut self) -> anyhow::Result<()> {
@@ -222,24 +302,7 @@ pub fn run() -> anyhow::Result<()> {
         bootstrap.nonce.len() == 64,
         "REMOTE_DESKTOP_GUARD_HANDSHAKE_FAILED"
     );
-    let input = match bootstrap.backend {
-        Backend::Synthetic => Ok(Actuator::Synthetic(SyntheticInput::default())),
-        Backend::Native {
-            geometry, display, ..
-        } => NativeInput::new(geometry, display).map(|n| Actuator::Native(Box::new(n))),
-        #[cfg(target_os = "macos")]
-        Backend::MacWindow { identity, geometry } => {
-            NativeInput::new_window(identity, geometry).map(|n| Actuator::Native(Box::new(n)))
-        }
-        #[cfg(target_os = "linux")]
-        Backend::LinuxWindow {
-            window,
-            geometry,
-            display,
-            ..
-        } => NativeInput::new_window(window, geometry, display)
-            .map(|n| Actuator::Native(Box::new(n))),
-    };
+    let input = bind_backend(bootstrap.backend);
     let mut actuator = match input {
         Ok(a) => a,
         Err(error) => {
@@ -304,6 +367,23 @@ pub fn run() -> anyhow::Result<()> {
                         epoch = Some(next);
                         deadline = Some(at + INPUT_TTL);
                         actuator.state(epoch)
+                    }
+                    Command::Rebind { backend } => {
+                        actuator.release()?;
+                        epoch = None;
+                        deadline = None;
+                        match bind_backend(backend) {
+                            Ok(next) => {
+                                actuator = next;
+                                Event::Released
+                            }
+                            Err(error) => Event::Suspended {
+                                cause: error
+                                    .downcast_ref::<crate::error::BackendError>()
+                                    .copied()
+                                    .unwrap_or(crate::error::BackendError::InputGuardFailed),
+                            },
+                        }
                     }
                     Command::Alive { epoch: current } if epoch == Some(current) => {
                         actuator.validate()?;

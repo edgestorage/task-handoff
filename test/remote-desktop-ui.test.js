@@ -46,7 +46,7 @@ test('remote desktop keeps its session mounted across tabs and instances', () =>
   assert.match(viewer, /props\.active === false/);
   assert.match(viewer, /watch\(\(\) => props\.active, \(\) => syncVisibility\(\)\)/);
   assert.match(viewer, /function sendVisibility\(\)/);
-  assert.match(viewer, /wire\(control, "visibility", \{ hidden: surfacePaused\(\) \}\)/);
+  assert.match(viewer, /wire\(control, "visibility", \{ hidden \}\)/);
 });
 
 test('remote desktop viewer preferences survive local reloads', () => {
@@ -57,6 +57,22 @@ test('remote desktop viewer preferences survive local reloads', () => {
   assert.match(viewer, /transportResolution: transportResolution\.value/);
   assert.match(viewer, /transportFrameRate: transportFrameRate\.value/);
   assert.match(viewer, /transportAvailability: transportAvailability\.value/);
+});
+
+test('remote desktop web wheel events are frame-batched and preserve the remainder', () => {
+  assert.match(viewer, /RemoteDesktopWheelPump/);
+  assert.match(viewer, /wheelPump\.add\(event\.deltaX, event\.deltaY\)/);
+  assert.match(viewer, /wheelFrame = requestAnimationFrame\(flushWheelFrame\)/);
+  assert.match(viewer, /const delta = wheelPump\.take\(\);[\s\S]*?send\("wheel"/);
+  assert.match(viewer, /function stopWheelPump\(\)[\s\S]*?wheelPump\.clear\(\)/);
+  assert.doesNotMatch(viewer, /send\("wheel", \{ \.\.\.normalizedPointer\(event as unknown as PointerEvent\), deltaX: event\.deltaX, deltaY: event\.deltaY/);
+});
+
+test('remote desktop source directory loads when capabilities arrive after mount', () => {
+  assert.match(viewer, /function syncSourceProviders\(\)/);
+  assert.match(viewer, /watch\(\(\) => hasSourceProvider\.value, available => \{[\s\S]*?if \(available\) syncSourceProviders\(\);[\s\S]*?\}, \{ immediate: true \}\);/);
+  const mounted = viewer.slice(viewer.indexOf('onMounted(() => {'), viewer.indexOf('onBeforeUnmount(() => {'));
+  assert.doesNotMatch(mounted, /loadSources\(\)/);
 });
 
 test('websocket fallback uses the same resolution ceiling as WebRTC', () => {
@@ -125,9 +141,8 @@ test('remote desktop header keeps active and used paths while failures stay in t
   assert.match(viewer, /remote-desktop-transport-tooltip-body/);
   assert.match(viewer, /remote-desktop-transport-tooltip-heading/);
   assert.match(viewer, /TooltipContent[\s\S]*transport\.detail/);
-  assert.match(viewer, /selectedCandidatePairId/);
-  assert.match(viewer, /report\.type !== "candidate-pair"/);
-  assert.match(viewer, /localType === "relay" \|\| remoteType === "relay"/);
+  assert.match(viewer, /parseRemoteDesktopWebRTCStats\(stats\)/);
+  assert.doesNotMatch(viewer, /selectedCandidatePairId/);
   assert.match(viewer, /transportCandidateHost/);
   assert.doesNotMatch(viewer, /remote-desktop-transport-mode/);
 });
@@ -183,16 +198,27 @@ test('remote desktop blocks insecure contexts before reserving a session', () =>
   assert.match(viewer, /void stopRemoteDesktopSession\(props\.instanceId, closedSession\.snapshot\.viewerSessionId\)/);
 });
 
-test('remote desktop target selection is explicit and has no fallback to VNC or whole desktop', () => {
-  assert.match(viewer, /chooseWindow/);
-  assert.match(viewer, /windowRef/);
+test('remote desktop target selection is explicit and provider driven', () => {
+  assert.match(viewer, /sourceProviders/);
+  assert.match(viewer, /sourceRef/);
+  assert.match(viewer, /sourceProviderOptions/);
   assert.match(viewer, /!item\.capturable/);
-  assert.match(viewer, /target\.kind === ["']window["']/);
-  assert.match(viewer, /windowQuery/);
-  assert.match(viewer, /remote-desktop-window-list/);
+  assert.match(viewer, /target\.kind === provider\.kind/);
+  assert.match(viewer, /sourceQuery/);
+  assert.match(viewer, /remote-desktop-source-list/);
   assert.match(viewer, /role="option"/);
-  assert.doesNotMatch(viewer, /find\(item=>item\.capturable\)/);
+  assert.doesNotMatch(viewer, /windowRef|selectWindow/);
   assert.doesNotMatch(viewer, /sessionFrameUrl|vnc|AppSession/);
+});
+
+test('remote desktop exposes one viewer per client link without channel controls', () => {
+  assert.doesNotMatch(surfaceLayer, /RemoteDesktopWorkspace/);
+  assert.doesNotMatch(surfaceLayer, /v-for="channel/);
+  assert.doesNotMatch(viewer, /name="toolbar-start"/);
+  assert.doesNotMatch(viewer, /channelId|channelRemovable|removeChannel/);
+  assert.doesNotMatch(viewer, /remoteDesktop\.channel|remoteDesktop\.addChannel|remoteDesktop\.removeChannel/);
+  assert.match(viewer, /function viewerPreferencesKey\(instanceId: string\)/);
+  assert.match(viewer, /viewerPreferencesKey\(instanceId\)/);
 });
 
 test('remote desktop viewer separates setup, connection and live-session states', () => {
@@ -260,11 +286,12 @@ test('remote desktop uses the local system cursor when the capture omits a remot
   assert.match(viewer, /cursor: default/);
 });
 
-test('remote desktop preserves the explicit input intent across focus loss', () => {
-  assert.match(viewer, /let inputRequested = false/);
+test('remote desktop preserves the reactive input intent across focus loss', () => {
+  assert.match(viewer, /const inputRequested = ref\(true\)/);
   assert.match(viewer, /let inputResumeGeneration = 0/);
   assert.match(viewer, /function resumeWanted\(\)/);
-  assert.match(viewer, /if \(!inputRequested \|\| surfacePaused\(\)\) return/);
+  assert.match(viewer, /if \(!inputRequested\.value \|\| surfacePaused\(\) \|\| visibilityResumePending[\s\S]*?return/);
+  assert.match(viewer, /inputRequested\.value = false/);
   assert.match(viewer, /@focus="surfaceFocus"/);
   assert.match(viewer, /window\.addEventListener\("focus", windowFocus\)/);
   assert.match(viewer, /window\.addEventListener\("blur", windowBlur\)/);
@@ -272,35 +299,73 @@ test('remote desktop preserves the explicit input intent across focus loss', () 
   assert.match(viewer, /signalAliveNow\(\)/);
 });
 
+test('remote desktop retries input resume after a lost acknowledgement or stale revision', () => {
+  assert.match(viewer, /REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS/);
+  assert.match(viewer, /isRecoverableRemoteDesktopInputResumeError\(code\)/);
+  assert.match(viewer, /inputResumeRetryTimer !== undefined/);
+  assert.match(viewer, /scheduleInputResumeRetry\("ack-timeout"\)/);
+  assert.match(viewer, /remoteDesktopInputResumeRetryDelayMs\(attempt\)/);
+  assert.match(viewer, /inputResumeRetryTimer = setTimeout\(\(\) => \{[\s\S]*?resumeWanted\(\)/);
+  assert.match(viewer, /inputResumeAckTimer = setTimeout\(\(\) => \{[\s\S]*?inputResumePending = false;[\s\S]*?scheduleInputResumeRetry\("ack-timeout"\)/);
+});
+
+test('remote desktop enables clipboard once per session without overriding a manual disable', () => {
+  assert.match(viewer, /let clipboardAutoEnableAttempted = false/);
+  assert.match(viewer, /function enableClipboardByDefault\(\)/);
+  assert.match(viewer, /if \(clipboardAutoEnableAttempted \|\| !clipboardSupported\.value\) return/);
+  assert.match(viewer, /clipboardAutoEnableAttempted = true;[\s\S]*?requestClipboardEnabled\(true, true\)/);
+  assert.match(viewer, /resumeWanted\(\);\n\s+enableClipboardByDefault\(\);/);
+  assert.match(viewer, /channel\.onopen = \(\) => \{[\s\S]*?enableClipboardByDefault\(\);/);
+  assert.match(viewer, /watch\(clipboardSupported, supported => \{[\s\S]*?enableClipboardByDefault\(\)/);
+  assert.match(viewer, /const automatic = clipboardRequestAutomatic/);
+  assert.match(viewer, /!clipboard\.value && !automatic/);
+});
+
+test('remote desktop waits for the foreground visibility snapshot before resuming window input', () => {
+  assert.match(viewer, /let visibilityResumePending = false/);
+  assert.match(viewer, /let visibilityResumeRevision: number \| undefined/);
+  assert.match(viewer, /visibilityResumeRevision = snapshot\.value\?\.sessionRevision/);
+  assert.match(viewer, /visibilityResumePending = true/);
+  assert.match(viewer, /visibilityResumePending\n\s*&& next\.phase === "active"\n\s*&& !next\.mediaPaused\n\s*&& \(visibilityResumeRevision === undefined \|\| next\.sessionRevision > visibilityResumeRevision\)[\s\S]*?resumeWanted\(\)/);
+  assert.match(viewer, /if \(!inputRequested\.value \|\| surfacePaused\(\) \|\| visibilityResumePending[\s\S]*?return/);
+});
+
 test('remote desktop viewers share one transferable control lease', () => {
   assert.match(viewer, /control\.request/);
   assert.match(viewer, /function requestControl\(\)/);
-  assert.match(viewer, /function releaseInputState\(\)/);
+  assert.match(viewer, /function releaseInputState\(resetRetry = true\)/);
   assert.match(viewer, /const isController = computed/);
   assert.match(viewer, /const hasController = computed/);
   assert.match(viewer, /const viewerCount = computed/);
-  assert.match(viewer, /const scopeSwitchBlocked = computed/);
   assert.match(viewer, /!next\.isController/);
-  assert.match(viewer, /inputRequested = false/);
+  assert.match(viewer, /inputRequested\.value = false/);
   assert.match(viewer, /viewingByOther/);
   assert.match(viewer, /controlAvailable/);
   assert.match(viewer, /requestingControl/);
-  assert.match(viewer, /scopeSwitchBusy/);
-  assert.match(viewer, /:disabled="switchingScope \|\| scopeSwitchBlocked"/);
+});
+
+test('remote desktop prompts surface taps when another viewer owns control', () => {
+  assert.match(viewer, /function showControlHint\(\)/);
+  assert.match(viewer, /if \(inputEnabled\.value \|\| isController\.value\) return/);
+  assert.match(viewer, /if \(!inputEnabled\.value\) \{\n\s+if \(down\) showControlHint\(\);/);
+  assert.match(viewer, /class="remote-desktop-interaction-hint"/);
+  assert.match(viewer, /@pointerdown\.stop @click\.stop="requestControl"/);
 });
 
 test('remote desktop live scope is switchable through a fresh session', () => {
   assert.match(viewer, /remote-desktop-scope-trigger/);
   assert.match(viewer, /remote-desktop-scope-popover/);
-  assert.match(viewer, /resolveRefreshedWindow/);
-  assert.match(viewer, /selectedWindowInfo\.value\?\.windowRef === selection\.windowRef/);
-  assert.match(viewer, /selectedWindow: target\.value\.kind === ["']window["'] \? selectedWindowInfo\.value : undefined/);
-  assert.match(viewer, /function selectScopeDisplay\(\)/);
-  assert.match(viewer, /function selectScopeWindow\(/);
-  const switchBlock = viewer.slice(viewer.indexOf('async function switchScope'), viewer.indexOf('function selectScopeDisplay'));
+  assert.match(viewer, /resolveRefreshedSource/);
+  assert.match(viewer, /selectedSourceInfo\.value/);
+  assert.match(viewer, /function selectScopeSource\(/);
+  const switchBlock = viewer.slice(viewer.indexOf('async function switchScope'), viewer.indexOf('function selectScopeSource'));
   assert.ok(switchBlock.indexOf('await closeCurrentSession()') >= 0);
   assert.ok(switchBlock.indexOf('await connect()') > switchBlock.indexOf('await closeCurrentSession()'));
-  assert.match(viewer, /else if \(!session\.value\)/);
+  assert.match(viewer, /if \(!session\.value\)/);
+  assert.doesNotMatch(viewer, /scopeSwitchBlocked/);
+  assert.doesNotMatch(viewer, /scopeSwitchBusy/);
+  assert.match(viewer, /:disabled="switchingScope"/);
+  assert.match(viewer, /independentScopeHint/);
   assert.doesNotMatch(viewer, /remote-desktop-control-meta/);
   assert.doesNotMatch(viewer, /remote-desktop-scope-note-stage/);
 });

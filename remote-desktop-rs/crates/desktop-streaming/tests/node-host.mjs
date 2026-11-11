@@ -69,12 +69,12 @@ try {
       assert.equal(packet.kind,'response');assert.equal(packet.payload.requestId,requestId);return packet.payload;
     }
   }
-  const reserved=await request('create',{type:'reserve',owner,captureTarget:{kind:'display'}});
+  const reserved=await request('create',{type:'reserve',owner,captureSelection:{sourceRef:'display'}});
   assert.equal(reserved.type,'reserved'); assert.equal(event.snapshot.phase,'starting');
-  const retry=await request('create',{type:'reserve',owner,captureTarget:{kind:'display'}});
+  const retry=await request('create',{type:'reserve',owner,captureSelection:{sourceRef:'display'}});
   assert.equal(retry.attachToken,reserved.attachToken);
-  assert.equal((await request('busy',{type:'reserve',owner,captureTarget:{kind:'display'}})).code,'REMOTE_DESKTOP_BUSY');
-  const attach={type:'attach',owner,captureTarget:{kind:'display'},viewerSessionId:reserved.snapshot.viewerSessionId,attachToken:reserved.attachToken};
+  assert.equal((await request('busy',{type:'reserve',owner,captureSelection:{sourceRef:'display'}})).code,'REMOTE_DESKTOP_BUSY');
+  const attach={type:'attach',owner,captureSelection:{sourceRef:'display'},viewerSessionId:reserved.snapshot.viewerSessionId,attachToken:reserved.attachToken};
   assert.equal((await request('attach',attach)).snapshot.phase,'negotiating');
   assert.equal((await request('replay',attach)).code,'REMOTE_DESKTOP_ATTACH_INVALID');
   assert.equal((await request('stop',{type:'stop',owner,viewerSessionId:reserved.snapshot.viewerSessionId})).type,'stopped');

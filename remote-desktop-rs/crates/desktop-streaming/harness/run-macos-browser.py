@@ -26,7 +26,9 @@ def command(action):
  fixture.stdin.write(json.dumps({'action':action})+'\n');fixture.stdin.flush()
  return until(lambda d:d['kind']=={'focus':'ready','clear':'cleared','snapshot':'snapshot','move':'moved','resize':'resized','occlude':'occluded','uncover':'uncovered','steal':'stolen','minimize':'minimized','close':'closed','cursorHide':'cursorHidden','cursorShow':'cursorShown'}[action])
 def js(script):
- r=subprocess.run(['node',a.bcap,'exec','--session',a.session,'--url',a.url,'--script',script],capture_output=True,text=True,check=True,timeout=15)
+ r=subprocess.run(['node',a.bcap,'exec','--session',a.session,'--url',a.url,'--script',script],capture_output=True,text=True,timeout=15)
+ if r.returncode:
+  raise RuntimeError('browser action failed: '+(r.stdout+r.stderr).strip())
  d=json.loads(r.stdout)
  browser_trace.append(d)
  if isinstance(d,dict) and d.get('ok') is False:raise RuntimeError('browser action failed: '+r.stdout)
@@ -38,8 +40,8 @@ def focused():
  return d
 try:
  until(lambda d:d['kind']=='ready' and d['active'])
- selection = "await wait(()=>Array.isArray(window.diagnostic.windows));const owned=window.diagnostic.windows.filter(w=>w.title==='G1 owned macOS input fixture'&&w.capturable);if(owned.length!==1)throw Error('owned window unavailable');window.harness.selectWindow(owned[0].windowRef);" if a.window else ""
- initial=js(poll+"const old=window.diagnostic.snapshot?.viewerSessionId;window.diagnostic.windows=null;document.querySelector('#connect').click();"+selection+"await wait(()=>window.diagnostic.snapshot?.viewerSessionId!==old&&window.diagnostic.snapshot?.phase==='active'&&window.diagnostic.channels.length===4&&window.diagnostic.decodedFrames>0);return {diagnostic:window.diagnostic,stats:await window.harness.stats(),size:[video.videoWidth,video.videoHeight]};")
+ selection = "await wait(()=>Array.isArray(window.diagnostic.sources));const owned=window.diagnostic.sources.filter(w=>w.kind==='window'&&w.title==='G1 owned macOS input fixture'&&w.capturable);if(owned.length!==1)throw Error('owned window unavailable');window.harness.selectSource(owned[0].sourceRef);" if a.window else ""
+ initial=js(poll+"const old=window.diagnostic.snapshot?.viewerSessionId;window.diagnostic.sources=null;document.querySelector('#connect').click();"+selection+"await wait(()=>window.diagnostic.snapshot?.viewerSessionId!==old&&window.diagnostic.snapshot?.phase==='active'&&window.diagnostic.channels.length===4&&window.diagnostic.decodedFrames>0);return {diagnostic:window.diagnostic,stats:await window.harness.stats(),size:[video.videoWidth,video.videoHeight]};")
  focused();js(poll+"document.querySelector('#resume').click();await wait(()=>window.diagnostic.inputEpoch!==null);return {epoch:window.diagnostic.inputEpoch};")
  click_points=[]
  for offset in [500,100,500]:
@@ -145,7 +147,7 @@ finally:
    except subprocess.TimeoutExpired:fixture.terminate();fixture.wait(timeout=2)
   def redact(value):
    if isinstance(value,list):return [redact(item) for item in value]
-   if isinstance(value,dict):return {key:({'count':len(item),'capturable':sum(bool(w.get('capturable')) for w in item)} if key=='windows' and isinstance(item,list) else redact(item)) for key,item in value.items()}
+   if isinstance(value,dict):return {key:({'count':len(item),'capturable':sum(bool(w.get('capturable')) for w in item)} if key=='sources' and isinstance(item,list) else redact(item)) for key,item in value.items()}
    return value
   Path(a.output).write_text(json.dumps(redact({'result':result,'trace':trace,'browserTrace':browser_trace}),indent=2)+'\n')
   print(json.dumps({'ok':result['ok'],'nativeClick':result.get('nativeClick'),'nativePhysicalKey':result.get('nativePhysicalKey'),'unicodeMatches':result.get('unicodeMatches'),'pause':result.get('pause'),'resume':result.get('resume'),'strongKill':result.get('strongKill')}))

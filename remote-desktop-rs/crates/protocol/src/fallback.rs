@@ -48,7 +48,7 @@ pub struct Attach {
     pub viewer_session_id: String,
     pub actor_id: String,
     pub device_session_id: String,
-    pub capture_target: crate::model::CaptureTarget,
+    pub capture_selection: crate::model::CaptureSelection,
 }
 
 #[derive(Clone)]

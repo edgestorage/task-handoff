@@ -84,8 +84,11 @@ impl ComponentHost {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_IPC_CLOSED"))?;
             anyhow::ensure!(
-                received.protocol_version == IPC_VERSION
-                    && bool::from(received.nonce.as_bytes().ct_eq(hello.nonce.as_bytes())),
+                received.protocol_version == IPC_VERSION,
+                "REMOTE_DESKTOP_PROTOCOL_MISMATCH"
+            );
+            anyhow::ensure!(
+                bool::from(received.nonce.as_bytes().ct_eq(hello.nonce.as_bytes())),
                 "REMOTE_DESKTOP_IPC_AUTH_FAILED"
             );
             framing::write(&mut stream, &hello).await?;
@@ -93,14 +96,26 @@ impl ComponentHost {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_IPC_CLOSED"))?;
             anyhow::ensure!(
-                welcome.protocol_version == IPC_VERSION && !welcome.boot_id.is_empty(),
-                "REMOTE_DESKTOP_IPC_INVALID"
+                welcome.protocol_version == IPC_VERSION,
+                "REMOTE_DESKTOP_PROTOCOL_MISMATCH"
             );
+            anyhow::ensure!(!welcome.boot_id.is_empty(), "REMOTE_DESKTOP_IPC_INVALID");
             anyhow::Ok((stream, welcome))
         })
         .await;
         let (stream, welcome) = match connection {
             Ok(Ok(connection)) => connection,
+            Ok(Err(error))
+                if matches!(
+                    error.to_string().as_str(),
+                    "REMOTE_DESKTOP_PROTOCOL_MISMATCH" | "REMOTE_DESKTOP_IPC_AUTH_FAILED"
+                ) =>
+            {
+                drop(lifetime);
+                let _ = child.kill().await;
+                let _ = endpoint.cleanup();
+                return Err(error);
+            }
             _ => {
                 drop(lifetime);
                 let _ = child.kill().await;

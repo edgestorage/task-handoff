@@ -8,6 +8,7 @@ import { z } from "zod";
 import WebSocket from "ws";
 import {
   DesktopIceConfigSchema,
+  DesktopCaptureSelectionSchema,
   DesktopSignalSchema,
   REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL,
   REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL,
@@ -15,11 +16,10 @@ import {
 import type { DesktopService } from "./service";
 import type { ComponentEvent } from "./component-host";
 const Owner=z.object({actorId:z.string().min(1).max(4096),deviceSessionId:z.string().min(1).max(4096)}).strict();
-const Target=z.discriminatedUnion("kind",[z.object({kind:z.literal("display")}).strict(),z.object({kind:z.literal("window"),windowRef:z.string().min(1).max(4096)}).strict()]);
 const Base=z.object({requestId:z.string().min(1).refine(value=>Buffer.byteLength(value,"utf8")<=128),owner:Owner}).strict();
 const Session=Base.extend({viewerSessionId:z.string().min(1).max(4096)});
-const Attach=Session.extend({captureTarget:Target,attachToken:z.string().min(1).max(4096)});
-const Body=Base.extend({captureTarget:Target});
+const Attach=Session.extend({captureSelection:DesktopCaptureSelectionSchema,attachToken:z.string().min(1).max(4096)});
+const Body=Base.extend({captureSelection:DesktopCaptureSelectionSchema});
 const SignedSignal=z.union([
   DesktopSignalSchema,
   z.object({type:z.literal("configureIce"),requestId:z.string().min(1).refine(value=>Buffer.byteLength(value,"utf8")<=128),...DesktopIceConfigSchema.shape}).strict(),
@@ -42,8 +42,8 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
     try{return {data:await service.setEnabled(z.object({enabled:z.boolean()}).strict().parse(request.body).enabled)};}catch(error){return respondError(reply,error);}
   });
   for(const [route,type,schema]of [
-    ["windows","listWindows",Base],["reserve","reserve",Body],
-    ["takeover","takeover",Session.extend({captureTarget:Target})],
+    ["sources","listSources",Base],["reserve","reserve",Body],
+    ["takeover","takeover",Session.extend({captureSelection:DesktopCaptureSelectionSchema})],
     ["force-stop","forceStop",z.object({requestId:z.string().min(1).refine(value=>Buffer.byteLength(value,"utf8")<=128),viewerSessionId:z.string().min(1).max(4096)}).strict()],["snapshot","snapshot",Session],["stop","stop",Session],
   ]as const){
     app.post(`/api/internal/remote-desktop/${route}`,{...boundary,bodyLimit:16*1024},async(request,reply)=>{

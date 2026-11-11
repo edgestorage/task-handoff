@@ -7,8 +7,8 @@
         "actorId": "adapter-actor",
         "deviceSessionId": "adapter-device"
       },
-      "captureTarget": {
-        "kind": "display"
+      "captureSelection": {
+        "sourceRef": "display"
       }
     },
     "expectType": "reserved"
@@ -21,8 +21,8 @@
         "actorId": "adapter-actor",
         "deviceSessionId": "adapter-device"
       },
-      "captureTarget": {
-        "kind": "display"
+      "captureSelection": {
+        "sourceRef": "display"
       }
     },
     "expectType": "reserved"
@@ -49,8 +49,8 @@
         "deviceSessionId": "adapter-device"
       },
       "viewerSessionId": "$session",
-      "captureTarget": {
-        "kind": "display"
+      "captureSelection": {
+        "sourceRef": "display"
       },
       "attachToken": "$token"
     },
@@ -65,8 +65,8 @@
         "deviceSessionId": "adapter-device"
       },
       "viewerSessionId": "$session",
-      "captureTarget": {
-        "kind": "display"
+      "captureSelection": {
+        "sourceRef": "display"
       },
       "attachToken": "$token"
     },

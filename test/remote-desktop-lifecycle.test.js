@@ -16,6 +16,17 @@ const {controlledInstancePackageVersionResolver}=require('../packages/core/src/c
 const version=controlledInstancePackageVersionResolver({})();
 const owner={actorId:'actor',deviceSessionId:'device'};
 const quote=value=>`'${value.replaceAll("'","'\\''")}'`;
+test('package metadata version never gates a protocol-compatible component',{timeout:20000},async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-version-compat-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const binary=path.resolve('remote-desktop-rs/target/debug/task-handoff-desktop-streaming');
+ const service=new DesktopService({dataDir:dir,version:'runtime-next',mode:'local',canStart:()=>true,installedPackage:()=>({binary,version:'component-previous'})});
+ t.after(()=>service.close());
+ service.settings.set(true);
+ assert.equal(service.status().reason,'REMOTE_DESKTOP_NOT_PROBED');
+ await service.refresh();
+ assert.equal(service.componentRunning(),true);
+ assert.notEqual(service.status().reason,'REMOTE_DESKTOP_VERSION_MISMATCH');
+});
 test('provider archive, App queue and real component preserve optional lifecycle and isolate package changes',{timeout:20000},async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-lifecycle-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const installBaseDir=path.join(dir,'apps'),stateDir=path.join(dir,'state'),root=path.join(installBaseDir,'remote-desktop');
@@ -43,18 +54,18 @@ test('provider archive, App queue and real component preserve optional lifecycle
  await manager.refreshSnapshot();await service.reconcile();assert.equal(updates,0);assert.equal(service.componentRunning(),false);
  await run('install','install');assert.equal(service.settings.get().enabled,false);assert.equal(service.componentRunning(),false);
  await service.setEnabled(true);assert.equal(service.componentRunning(),true);
- const first=await service.request('first',{type:'reserve',owner,captureTarget:{kind:'display'}});
+ const first=await service.request('first',{type:'reserve',owner,captureSelection:{sourceRef:'display'}});
  assert.equal(first.type,'reserved');const oldBoot=first.bootId;
- await service.request('attach',{type:'attach',owner,viewerSessionId:first.snapshot.viewerSessionId,captureTarget:{kind:'display'},attachToken:first.attachToken});
+ await service.request('attach',{type:'attach',owner,viewerSessionId:first.snapshot.viewerSessionId,captureSelection:{sourceRef:'display'},attachToken:first.attachToken});
  let unlock;releaseDownload=new Promise(resolve=>{unlock=resolve;});
  fs.writeFileSync(path.join(root,'desktop-component.json'),JSON.stringify({version:'older-installed'}));
  await service.reconcile();assert.equal(updates,1);
- await assert.rejects(service.request('during-update',{type:'reserve',owner,captureTarget:{kind:'display'}}),/UPDATING/);
+ await assert.rejects(service.request('during-update',{type:'reserve',owner,captureSelection:{sourceRef:'display'}}),/UPDATING/);
  const update=manager.snapshot().activeJobs.find(job=>job.operation==='update');assert.ok(update);
  unlock();releaseDownload=undefined;assert.equal((await wait(update)).state,'succeeded');
  assert.equal(readManagedDesktopPackage(installBaseDir,stateDir).version,version);assert.equal(service.settings.get().enabled,true);
  await assert.rejects(service.request('old-close',{type:'signalClosed',owner,viewerSessionId:first.snapshot.viewerSessionId},oldBoot),/COMPONENT_UNAVAILABLE/);
- const next=await service.request('next',{type:'reserve',owner,captureTarget:{kind:'display'}});assert.equal(next.type,'reserved');assert.notEqual(next.bootId,oldBoot);
+ const next=await service.request('next',{type:'reserve',owner,captureSelection:{sourceRef:'display'}});assert.equal(next.type,'reserved');assert.notEqual(next.bootId,oldBoot);
  // A removed/unpublished download recipe must not orphan an owned install.
  definition.distribution.recipes=definition.distribution.recipes.filter(recipe=>recipe.type==='archive-ownership');
  await manager.refreshSnapshot();assert.equal(manager.snapshot().apps[0].canUninstall,true);assert.equal(manager.snapshot().apps[0].canUpdate,false);
@@ -75,6 +86,7 @@ test('disabled installed versions reconcile without spawning; missing packages n
  installed={binary:'/must-not-execute',version:'old'};
  await service.reconcile();assert.equal(requests,1);assert.equal(service.status().reason,'REMOTE_DESKTOP_DISABLED');
  await service.refresh();assert.equal(requests,1);await service.reconcile();assert.equal(requests,2);
+ service.settings.set(true);assert.equal(service.status().reason,'REMOTE_DESKTOP_NOT_PROBED');
  assert.equal(service.componentRunning(),false);
 });
 
