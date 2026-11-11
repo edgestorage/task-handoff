@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import nacl from "tweetnacl";
-import { encodeRelayFrame } from "@task-handoff/cloud-contracts";
+import { randomBytes } from "node:crypto";
+import { inflateRawSync } from "node:zlib";
+import { decodeRelayFrame, encodeRelayFrame, unpackRelayPayload } from "@task-handoff/cloud-contracts";
 import { EncryptedControlPlaneRelaySession } from "../src/control-plane/cloud-connectivity/relay-connector.ts";
 
 function clientNonce(counter: number) {
@@ -27,7 +29,8 @@ function harness(bridge: unknown) {
       listeners.get("close")?.(code, reason);
     },
   };
-  const session = new EncryptedControlPlaneRelaySession(socket as never, "channel_close", key, { type: "cloud-account" } as never, bridge as never);
+  const diagnostics: unknown[] = [];
+  const session = new EncryptedControlPlaneRelaySession(socket as never, "channel_close", key, { type: "cloud-account" } as never, bridge as never, undefined, undefined, { onProtocolError: (details) => diagnostics.push(details), onResponseSent: (details) => diagnostics.push(details) });
   session.start();
   let sequence = 0;
   let counter = 0;
@@ -35,7 +38,7 @@ function harness(bridge: unknown) {
     const sealed = nacl.secretbox(new TextEncoder().encode(JSON.stringify(envelope)), clientNonce(counter++), key);
     listeners.get("message")?.(encodeRelayFrame({ kind: "data", sequence: ++sequence, payload: sealed }), true);
   };
-  return { deliver, sent, socket, listeners };
+  return { deliver, sent, socket, listeners, diagnostics, session, key };
 }
 
 const waitFor = async (predicate: () => boolean) => {
@@ -83,4 +86,53 @@ test("a bridge event under backpressure closes the session instead of throwing i
   assert.doesNotThrow(() => emit?.({ type: "instance.checked", payload: {} }));
   assert.equal(socket.readyState, 3);
   assert.equal(sent.length, 0);
+});
+
+test("invalid receive sequence logs the original expectation and preserves receive counters", async () => {
+  const { listeners, socket, diagnostics, session } = harness({});
+  listeners.get("message")?.(encodeRelayFrame({ kind: "data", sequence: 9, payload: Buffer.from("secret") }), true);
+  await waitFor(() => socket.readyState === 3);
+  assert.deepEqual(diagnostics, [{
+    errorCode: "RELAY_FRAME_SEQUENCE_INVALID", channelId: "channel_close", role: "client",
+    expectedSequence: 1, actualSequence: 9, receiveCounter: 0, frameKind: "data", frameBytes: 14,
+  }]);
+  assert.equal((session as any).receiveSequence, 1);
+  assert.equal((session as any).receiveCounter, 0);
+});
+
+test("large JSON response diagnostics report sizes and sequence without response contents", async () => {
+  const { deliver, sent, diagnostics } = harness({ async request() { return { status: 200, body: { output: "private-timeline-text".repeat(5000) } }; } });
+  deliver({ type: "request", id: "timeline_request", body: { path: "/api/timeline" } });
+  await waitFor(() => sent.length === 1);
+  assert.equal(diagnostics.length, 1);
+  const entry = diagnostics[0] as Record<string, unknown>;
+  assert.equal(entry.requestId, "timeline_request");
+  assert.equal(entry.sequence, 1);
+  assert.equal(entry.minimumChunks, 1);
+  assert.ok(Number(entry.plaintextBytes) > 64 * 1024);
+  assert.ok(Number(entry.wireBytes) < Number(entry.plaintextBytes));
+  assert.ok(!JSON.stringify(entry).includes("private-timeline-text"));
+});
+
+// Compatibility for v0.0.51: legacy JSON callers cannot consume chunk metadata,
+// but an oversized response must leave their channel sequence and nonce usable.
+test("an oversized legacy JSON response fails only its request without skipping sequence or nonce", async () => {
+  const output = randomBytes(2 * 1024 * 1024).toString("base64");
+  const { deliver, sent, socket, key } = harness({ async request() { return { status: 200, body: { output } }; } });
+  deliver({ type: "request", id: "large", body: { path: "/api/timeline" } });
+  await waitFor(() => sent.length === 1);
+  assert.equal(sent.length, 1);
+  const frame = decodeRelayFrame(sent[0]);
+  assert.equal(frame.sequence, 1);
+  const serverNonce = clientNonce(0); serverNonce[0] = 2;
+  const opened = nacl.secretbox.open(frame.payload, serverNonce, key);
+  assert.ok(opened, "a rejected frame must not consume an encryption nonce");
+  const response = JSON.parse(Buffer.from(unpackRelayPayload(opened, frame.flags ?? 0, inflateRawSync)).toString());
+  assert.equal(response.id, "large");
+  assert.equal(response.body.error.code, "RELAY_FRAME_TOO_LARGE");
+  deliver({ type: "ping", sentAt: new Date().toISOString() });
+  await waitFor(() => sent.length === 2);
+  assert.equal(decodeRelayFrame(sent[1]).sequence, 2);
+  assert.equal(socket.readyState, 1);
+  socket.close();
 });

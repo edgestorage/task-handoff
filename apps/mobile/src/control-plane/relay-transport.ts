@@ -268,7 +268,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     }
     const channel = await this.ensureChannel();
     const id = `request_${++this.nextId}`;
-    const details = { method: init.method ?? 'GET', path: relayRequestPath(path), bodyBytes: body.bytes, bodyEncoding: body.encoding, binary: body.binary, responseBinary: options.responseBinary, startedAt: Date.now() };
+    const details = { requestId: id, method: init.method ?? 'GET', path: relayRequestPath(path), bodyBytes: body.bytes, bodyEncoding: body.encoding, binary: body.binary, responseBinary: options.responseBinary, startedAt: Date.now() };
     return new Promise((resolve, reject) => {
       const abort = () => {
         const pending = this.pending.get(id);
@@ -283,7 +283,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       };
       if (init.signal?.aborted) return abort();
       init.signal?.addEventListener('abort', abort, { once: true });
-      const pending: PendingRelayRequest = { requestId: id, resolve, reject, schema: options.schema, abort: () => init.signal?.removeEventListener('abort', abort), ...details };
+      const pending: PendingRelayRequest = { resolve, reject, schema: options.schema, abort: () => init.signal?.removeEventListener('abort', abort), ...details };
       this.pending.set(id, pending);
       try {
         if (body.binary) {
@@ -299,7 +299,9 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
               method: details.method,
               headers: Object.fromEntries(headers),
               body: body.value,
-              ...(options.responseBinary ? { responseBinary: true } : {}),
+              // v0.0.51 already supports byte responses. JSON uses the same
+              // bounded, acknowledged chunks instead of a size-limited envelope.
+              responseBinary: true,
             },
           });
         }
@@ -329,7 +331,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
         method: pending.method,
         headers,
         binaryBody: { bodyId: upload.bodyId, size: upload.size },
-        ...(pending.responseBinary ? { responseBinary: true } : {}),
+        responseBinary: true,
       },
     });
     this.pumpPendingUploads(channel);
@@ -459,7 +461,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   }
 
   private handleBinaryResponse(pending: PendingRelayRequest, value: RelayEnvelope) {
-    if (!pending.responseBinary) return this.failPending(pending, transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
+    if (!pending.responseBinary && !pending.schema) return this.failPending(pending, transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
     if (pending.download) return this.failDownload(pending, transportError('RELAY_RESPONSE_PROTOCOL_INVALID'));
     if ((value.status ?? 500) >= 400) return this.failPending(pending, relayResponseError(value.status ?? 500, value.body));
     // Once a response envelope exists, the upload side (if any) has completed.
@@ -532,7 +534,19 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
     this.stopDownload(pending);
     this.pending.delete(pending.requestId);
     pending.abort?.();
-    pending.resolve(result);
+    if (pending.responseBinary) {
+      pending.resolve(result);
+      return;
+    }
+    // The existing byte-response protocol carries HTTP JSON too. Decode only
+    // after all chunks arrive, then apply the same schema as an inline response.
+    try {
+      const parsed = pending.schema?.safeParse(JSON.parse(new TextDecoder().decode(result.body)));
+      if (!parsed?.success) throw transportError('RELAY_RESPONSE_SCHEMA_INVALID');
+      pending.resolve(parsed.data);
+    } catch {
+      pending.reject(transportError('RELAY_RESPONSE_SCHEMA_INVALID'));
+    }
   }
 
   private failDownload(pending: PendingRelayRequest, error: unknown) {
@@ -1808,11 +1822,12 @@ function relayRequestPath(path: string) {
 }
 
 function requestLogDetails(
-  request: Pick<PendingRelayRequest, 'method' | 'path' | 'bodyBytes' | 'bodyEncoding' | 'binary' | 'responseBinary' | 'startedAt'>,
+  request: Pick<PendingRelayRequest, 'requestId' | 'method' | 'path' | 'bodyBytes' | 'bodyEncoding' | 'binary' | 'responseBinary' | 'startedAt'>,
   phase?: 'cancelled' | 'send' | 'response' | 'response-schema' | 'connection-reset' | 'complete',
   status?: number,
 ) {
   return {
+    requestId: request.requestId,
     method: request.method,
     path: request.path,
     bodyBytes: request.bodyBytes,

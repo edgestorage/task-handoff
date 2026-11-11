@@ -589,6 +589,7 @@ describe('createMobileRelayChannelFactory', () => {
   });
 
   test('closes the channel on a stale frame sequence and notifies subscribers once', async () => {
+    const warning = jest.spyOn(diagnosticLog, 'warn');
     const { controlPlane, channel, socket } = await connected();
 
     const closed: unknown[] = [];
@@ -596,6 +597,11 @@ describe('createMobileRelayChannelFactory', () => {
     socket.emit('message', { data: frame(9, nacl.secretbox(new TextEncoder().encode('{}'), nonce(2, 0), controlPlane.sessionKey)) });
 
     expect(closed).toEqual([expect.objectContaining({ code: 'RELAY_FRAME_SEQUENCE_INVALID' })]);
+    expect(warning).toHaveBeenCalledWith('relay.frame.sequence-invalid', expect.objectContaining({
+      allocationId: grant.allocationId, role: 'control-plane', expectedSequence: 1, actualSequence: 9,
+      receiveCounter: 0, frameKind: 'data', frameBytes: 26,
+    }));
+    warning.mockRestore();
     expect(socket.closed).toEqual({ code: 4400, reason: 'protocol-error' });
     expect(socket.listenerCount('message')).toBe(0);
   });

@@ -145,6 +145,12 @@ export class CloudConnectivityBackgroundRuntime {
           webSocket: options.webSocket,
           trace: this.relayTrace,
           resolveCloudOwner: options.resolveCloudOwner,
+          onResponseSent: (details) => {
+            this.options.logger?.info?.(details, "cloud_relay_response_sent");
+          },
+          onProtocolError: (details) => {
+            this.options.logger?.warn?.({ code: "CLOUD_RELAY_RECEIVE_FAILED", ...details }, "cloud_relay_receive_failed");
+          },
           onHandshakeError: (error, context) => {
             const code = errorCode(error);
             this.options.logger?.warn?.({

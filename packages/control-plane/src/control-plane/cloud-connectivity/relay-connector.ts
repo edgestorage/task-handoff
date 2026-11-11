@@ -194,6 +194,21 @@ export function verifyCoordinatorNodeRelayAllocation(raw: unknown, state: { snap
   };
 }
 
+type RelayReceiveDiagnostic = {
+  errorCode: string; channelId: string; role: "client"; expectedSequence: number; receiveCounter: number;
+  actualSequence?: number; frameKind?: string; frameBytes?: number;
+};
+
+type RelayResponseDiagnostic = {
+  channelId: string; requestId?: string; responseId?: number; status?: number;
+  sequence: number; plaintextBytes: number; wireBytes: number; bufferedAmount: number;
+  responseBytes?: number; minimumChunks?: number; offset?: number; chunkBytes?: number; final?: boolean;
+};
+type RelaySessionDiagnostics = {
+  onProtocolError?: (details: RelayReceiveDiagnostic) => void;
+  onResponseSent?: (details: RelayResponseDiagnostic) => void;
+};
+
 type CloudRelayConnectorOptions = {
   identity: ControlPlaneIdentityService;
   bridge: RelaySessionBridge;
@@ -207,6 +222,8 @@ type CloudRelayConnectorOptions = {
   handshakeTimeoutMs?: number;
   trustOutcomeCloseTimeoutMs?: number;
   resolveCloudOwner?: (input: { accountId: string; ownerAccountId: string; accessMode: "owner" | "shared" }) => Promise<{ userId: string; authorizationRevision: number } | undefined> | { userId: string; authorizationRevision: number } | undefined;
+  onProtocolError?: (details: RelayReceiveDiagnostic & { allocationId: string; sessionId: string; relayId: string; generation: number }) => void;
+  onResponseSent?: (details: RelayResponseDiagnostic & { allocationId: string; sessionId: string; relayId: string }) => void;
   onHandshakeError?: (error: unknown, context: { allocationId: string; controlPlaneId: string; bindingId: string; deviceSessionId: string }) => void;
 };
 
@@ -415,7 +432,14 @@ async function establishEncryptedSession(
       shareRevision: auth.ticket.shareRevision,
     } : {}),
   };
-  const session = new EncryptedControlPlaneRelaySession(socket, channelId, accepted.sessionKey, actor, options.bridge, options.trace, onPeerDetached);
+  const session = new EncryptedControlPlaneRelaySession(socket, channelId, accepted.sessionKey, actor, options.bridge, options.trace, onPeerDetached, {
+    onProtocolError: (details) => options.onProtocolError?.({
+      ...details, allocationId: grant.allocationId, sessionId: grant.sessionId, relayId: grant.relayId, generation: grant.generation,
+    }),
+    onResponseSent: (details) => options.onResponseSent?.({
+      ...details, allocationId: grant.allocationId, sessionId: grant.sessionId, relayId: grant.relayId,
+    }),
+  });
   let registered = true;
   const unregister = options.trustedSessions.register(observation.pin.id, observation.pin.authorizationRevision, sessionClaim, {
     close(reason: string) {
@@ -548,7 +572,16 @@ export class EncryptedControlPlaneRelaySession {
   private readonly bridge: RelaySessionBridge;
   private readonly trace?: RelayTraceRecorder;
   private readonly onPeerDetached?: () => void;
-  constructor(socket: WebSocket, channelId: string, key: Uint8Array, actor: ControlPlaneActor, bridge: RelaySessionBridge, trace?: RelayTraceRecorder, onPeerDetached?: () => void) { this.socket = socket; this.channelId = channelId; this.key = key; this.actor = actor; this.bridge = bridge; this.trace = trace; this.onPeerDetached = onPeerDetached;
+  private readonly diagnostics?: RelaySessionDiagnostics;
+  constructor(socket: WebSocket, channelId: string, key: Uint8Array, actor: ControlPlaneActor, bridge: RelaySessionBridge, trace?: RelayTraceRecorder, onPeerDetached?: () => void, diagnostics?: RelaySessionDiagnostics) {
+    this.socket = socket;
+    this.channelId = channelId;
+    this.key = key;
+    this.actor = actor;
+    this.bridge = bridge;
+    this.trace = trace;
+    this.onPeerDetached = onPeerDetached;
+    this.diagnostics = diagnostics;
     this.browser = new RelayBrowserMultiplexer({
       control: (value) => this.send(value),
       data: (value) => this.sendBrowserData(value),
@@ -559,7 +592,15 @@ export class EncryptedControlPlaneRelaySession {
     });
   }
   start() {
-    this.socket.on("message", (raw, isBinary) => { void this.receive(raw, isBinary).catch(() => this.socket.close(4400, "encrypted-protocol-error")); });
+    this.socket.on("message", (raw, isBinary) => {
+      void this.receive(raw, isBinary).catch((error) => {
+        if (error?.code !== "RELAY_FRAME_SEQUENCE_INVALID") this.diagnostics?.onProtocolError?.({
+          errorCode: typeof error?.code === "string" ? error.code.slice(0, 80) : "RELAY_FRAME_INVALID",
+          channelId: this.channelId, role: "client", expectedSequence: this.receiveSequence, receiveCounter: this.receiveCounter,
+        });
+        this.socket.close(4400, "encrypted-protocol-error");
+      });
+    });
     this.socket.once("close", (code, reason) => {
       this.closing = true;
       this.trace?.record({
@@ -603,7 +644,15 @@ export class EncryptedControlPlaneRelaySession {
       throw relayError("RELAY_FRAME_ENCODING_INVALID");
     }
     const frame = decodeRelayFrame(rawBytes(raw));
-    if (frame.sequence !== this.receiveSequence++) throw relayError("RELAY_FRAME_SEQUENCE_INVALID");
+    if (frame.sequence !== this.receiveSequence) {
+      this.diagnostics?.onProtocolError?.({
+        errorCode: "RELAY_FRAME_SEQUENCE_INVALID", channelId: this.channelId, role: "client",
+        expectedSequence: this.receiveSequence, actualSequence: frame.sequence, receiveCounter: this.receiveCounter,
+        frameKind: frame.kind, frameBytes: RELAY_FRAME_HEADER_BYTES + frame.payload.byteLength,
+      });
+      throw relayError("RELAY_FRAME_SEQUENCE_INVALID");
+    }
+    this.receiveSequence += 1;
     const opened = nacl.secretbox.open(frame.payload, nonce(1, this.receiveCounter++), this.key);
     if (!opened) throw relayError("RELAY_E2E_DECRYPT_FAILED");
     const plaintext = unpackRelayPayload(opened, frame.flags ?? 0, (input) => inflateRawSync(input));
@@ -741,17 +790,40 @@ export class EncryptedControlPlaneRelaySession {
     if (this.socket.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 2 * 1024 * 1024) throw relayError("RELAY_BACKPRESSURE_LIMIT");
     const plaintext = Buffer.from(JSON.stringify(value));
     const packed = packRelayPayload(plaintext, (input) => deflateRawSync(input));
-    const sealed = nacl.secretbox(packed.payload, nonce(2, this.sendCounter++), this.key);
-    const wire = encodeRelayFrame({ kind: value.type === "cancel" ? "cancel" : "data", sequence: this.sendSequence++, payload: sealed, flags: packed.flags });
+    const wire = this.sendEncryptedFrame(packed.payload, packed.flags, value.type === "cancel" ? "cancel" : "data");
     // plaintextBytes against wireBytes is the point of the trace: every relayed byte
     // pays the secretbox MAC and the fixed frame header before it reaches the Relay.
-    this.trace?.record({ channelId: this.channelId, direction: "out", kind: value.type, plaintext, sealedBytes: sealed.byteLength, wireBytes: wire.byteLength, detail: envelopeDetail(value) });
-    this.socket.send(wire);
+    this.trace?.record({ channelId: this.channelId, direction: "out", kind: value.type, plaintext, sealedBytes: wire.byteLength - RELAY_FRAME_HEADER_BYTES, wireBytes: wire.byteLength, detail: envelopeDetail(value) });
+    // Size-only summaries remain available without enabling plaintext relay trace.
+    if (value.type === "response" && (plaintext.byteLength >= 64 * 1024 || value.binaryResponse)) {
+      const binary = value.binaryResponse as { responseId: number; size: number } | undefined;
+      this.diagnostics?.onResponseSent?.({
+        channelId: this.channelId, requestId: value.id, status: value.status,
+        sequence: this.sendSequence - 1, plaintextBytes: plaintext.byteLength, wireBytes: wire.byteLength,
+        bufferedAmount: this.socket.bufferedAmount,
+        ...(binary ? { responseId: binary.responseId, responseBytes: binary.size, minimumChunks: Math.ceil(binary.size / RELAY_BODY_CHUNK_BYTES) } : { responseBytes: plaintext.byteLength, minimumChunks: 1 }),
+      });
+    }
   }
   private sendBrowserData(value: RelayBrowserData) {
     if (this.closing || this.socket.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 1024 * 1024) throw relayError("BROWSER_CHANNEL_BACKPRESSURE");
-    const sealed = nacl.secretbox(encodeRelayBrowserData(value), nonce(2, this.sendCounter++), this.key);
-    this.socket.send(encodeRelayFrame({ kind: "data", sequence: this.sendSequence++, payload: sealed }));
+    this.sendEncryptedFrame(encodeRelayBrowserData(value));
+  }
+  private sendEncryptedFrame(payload: Uint8Array, flags = 0, kind: "data" | "cancel" = "data") {
+    // Encoding can reject an oversized frame. Commit both cursors only after
+    // the socket accepts it, so a request error cannot poison the next frame.
+    const sealed = nacl.secretbox(payload, nonce(2, this.sendCounter), this.key);
+    const wire = encodeRelayFrame({ kind, sequence: this.sendSequence, payload: sealed, flags });
+    try {
+      this.socket.send(wire);
+    } catch (error) {
+      // A socket write has uncertain delivery; never reuse its nonce on this channel.
+      void this.close("relay-send-failed").catch(() => undefined);
+      throw error;
+    }
+    this.sendCounter += 1;
+    this.sendSequence += 1;
+    return wire;
   }
   private unsubscribeSafely() {
     const unsubscribe = this.unsubscribe;
@@ -838,18 +910,22 @@ export class EncryptedControlPlaneRelaySession {
   private sendResponseFrame(frame: RelayResponseFrame) {
     if (this.socket.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 2 * 1024 * 1024) throw relayError("RELAY_BACKPRESSURE_LIMIT");
     const plaintext = encodeRelayResponseFrame(frame);
-    const sealed = nacl.secretbox(plaintext, nonce(2, this.sendCounter++), this.key);
-    const wire = encodeRelayFrame({ kind: "data", sequence: this.sendSequence++, payload: sealed, flags: 0 });
+    const packed = packRelayPayload(plaintext, (input) => deflateRawSync(input));
+    const wire = this.sendEncryptedFrame(packed.payload, packed.flags);
     this.trace?.record({
       channelId: this.channelId,
       direction: "out",
       kind: "response-body",
       plaintext: Buffer.alloc(0),
-      sealedBytes: sealed.byteLength,
+      sealedBytes: wire.byteLength - RELAY_FRAME_HEADER_BYTES,
       wireBytes: wire.byteLength,
       detail: { responseId: frame.responseId, offset: frame.offset, bytes: frame.bytes.byteLength, final: frame.final },
     });
-    this.socket.send(wire);
+    if (frame.offset === 0 || frame.final) this.diagnostics?.onResponseSent?.({
+      channelId: this.channelId, responseId: frame.responseId, sequence: this.sendSequence - 1,
+      plaintextBytes: plaintext.byteLength, wireBytes: wire.byteLength, bufferedAmount: this.socket.bufferedAmount,
+      offset: frame.offset, chunkBytes: frame.bytes.byteLength, final: frame.final,
+    });
   }
   private armResponseStallTimer(transfer: PendingRelayResponse, refresh = false) {
     if (transfer.nextOffset <= transfer.acked) {

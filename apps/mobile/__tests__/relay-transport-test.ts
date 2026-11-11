@@ -430,6 +430,45 @@ test('an upload acknowledgement cannot cover bytes that were never sent', async 
   expect(frames()).toHaveLength(4);
 });
 
+test('JSON responses use existing byte chunks beyond the single-frame limit and validate the reassembled JSON', async () => {
+  const created = channelHarness({ send: jest.fn() });
+  const { channels, open, transport } = harness();
+  channels.push(created);
+  open.mockResolvedValueOnce(created.channel);
+  const output = '大 Timeline activity '.repeat(90_000);
+  const schema = z.object({ data: z.object({ output: z.string() }) });
+  const pending = transport.request('/api/timeline/sync', schema, { method: 'POST', body: '{}' });
+  await waitForCondition(() => (created.channel.send as jest.Mock).mock.calls.some(([value]: [any]) => value.type === 'request'));
+  const request = (created.channel.send as jest.Mock).mock.calls.map(([value]: [any]) => value).find((value) => value.type === 'request');
+  expect(request.body.responseBinary).toBe(true);
+  expect(request.body.headers.accept).not.toBe('application/octet-stream, */*');
+  const bytes = new TextEncoder().encode(JSON.stringify({ data: { output } }));
+  expect(bytes.byteLength).toBeGreaterThan(1024 * 1024);
+  created.emit({ type: 'response', id: request.id, status: 200, binaryResponse: { responseId: 42, size: bytes.byteLength, contentType: 'application/json' } });
+  for (let offset = 0; offset < bytes.byteLength; offset += RELAY_BODY_CHUNK_BYTES) {
+    const end = Math.min(offset + RELAY_BODY_CHUNK_BYTES, bytes.byteLength);
+    created.emit({ type: 'response-chunk', responseId: 42, offset, bytes: bytes.subarray(offset, end), final: end === bytes.byteLength });
+  }
+  await expect(pending).resolves.toEqual({ data: { output } });
+  const acks = (created.channel.send as jest.Mock).mock.calls.map(([value]: [any]) => value).filter((value) => value.type === 'response-ack');
+  expect(acks.at(-1)).toEqual({ type: 'response-ack', responseId: 42, offset: bytes.byteLength });
+});
+
+test.each(['not JSON', JSON.stringify({ unexpected: true })])('chunked JSON rejects malformed or schema-invalid content: %s', async (body) => {
+  const created = channelHarness({ send: jest.fn() });
+  const { channels, open, transport } = harness();
+  channels.push(created);
+  open.mockResolvedValueOnce(created.channel);
+  const pending = transport.request('/api/timeline', z.object({ data: z.string() }));
+  const rejected = expect(pending).rejects.toMatchObject({ code: 'RELAY_RESPONSE_SCHEMA_INVALID' });
+  await waitForCondition(() => (created.channel.send as jest.Mock).mock.calls.some(([value]: [any]) => value.type === 'request'));
+  const request = (created.channel.send as jest.Mock).mock.calls.map(([value]: [any]) => value).find((value) => value.type === 'request');
+  const bytes = new TextEncoder().encode(body);
+  created.emit({ type: 'response', id: request.id, status: 200, binaryResponse: { responseId: 43, size: bytes.byteLength } });
+  created.emit({ type: 'response-chunk', responseId: 43, offset: 0, bytes, final: true });
+  await rejected;
+});
+
 test('binary downloads request framed responses, acknowledge every chunk, and reassemble byte-exact', async () => {
   const created = channelHarness({ send: jest.fn() });
   const { channels, open, transport } = harness();

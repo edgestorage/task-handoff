@@ -382,10 +382,21 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
       const bytes = frameBytes(raw);
       if (!bytes) throw relayError('RELAY_FRAME_INVALID');
       const frame = decodeRelayFrame(bytes);
-      if (frame.sequence !== this.receiveSequence++) throw relayError('RELAY_FRAME_SEQUENCE_INVALID');
+      if (frame.sequence !== this.receiveSequence) {
+        diagnosticLog.warn('relay.frame.sequence-invalid', this.logDetails({
+          role: 'control-plane', expectedSequence: this.receiveSequence, actualSequence: frame.sequence,
+          receiveCounter: this.receiveCounter, frameKind: frame.kind, frameBytes: bytes.byteLength,
+        }));
+        throw relayError('RELAY_FRAME_SEQUENCE_INVALID');
+      }
+      this.receiveSequence += 1;
       const opened = nacl.secretbox.open(frame.payload, nonce(2, this.receiveCounter++), this.key);
       if (!opened) throw relayError('RELAY_E2E_DECRYPT_FAILED');
       const plaintext = unpackRelayPayload(opened, frame.flags ?? 0, (input) => inflateSync(input));
+      if (plaintext.byteLength >= 64 * 1024) diagnosticLog.info('relay.frame.large-received', this.logDetails({
+        role: 'control-plane', sequence: frame.sequence, receiveCounter: this.receiveCounter - 1,
+        frameKind: frame.kind, frameBytes: bytes.byteLength, plaintextBytes: plaintext.byteLength,
+      }));
       if (isRelayBrowserData(plaintext)) {
         const browserData = decodeRelayBrowserData(plaintext);
         for (const listener of this.listeners) listener({ type: 'browser-channel-data', browserData });
@@ -393,6 +404,10 @@ class WebSocketEncryptedRelayChannel implements EncryptedRelayChannel {
       }
       if (isRelayResponseFrame(plaintext)) {
         const chunk = decodeRelayResponseFrame(plaintext);
+        if (chunk.offset === 0 || chunk.final) diagnosticLog.info('relay.response.chunk-received', this.logDetails({
+          responseId: chunk.responseId, sequence: frame.sequence, offset: chunk.offset,
+          chunkBytes: chunk.bytes.byteLength, final: chunk.final, frameBytes: bytes.byteLength,
+        }));
         const envelope = { type: 'response-chunk', responseId: chunk.responseId, offset: chunk.offset, bytes: chunk.bytes, final: chunk.final };
         for (const listener of this.listeners) listener(envelope);
         return;
