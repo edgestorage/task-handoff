@@ -70,8 +70,8 @@ test("queued messages use one browser-local placement across detail and board co
   assert.match(preference, /localStorage\?\.setItem\(STORAGE_KEY, value\)/);
   assert.match(appearance, /settings\.appearance\.queuePlacement/);
   assert.match(appearance, /<ToggleGroup[\s\S]*value="detail"[\s\S]*value="composer"/);
-  assert.match(appearance, /\.queue-placement-choice \{[^}]*height: 32px;[^}]*border: 1px solid var\(--line\);[^}]*background: var\(--surface-active\);[^}]*padding: 2px;/s);
-  assert.match(appearance, /\.queue-placement-choice :deep\(button\[data-state="on"\]\) \{[^}]*background: var\(--surface-raised\);[^}]*box-shadow:/s);
+  assert.match(appearance, /\.queue-placement-choice, \.remote-desktop-preview-choice \{[^}]*height: 32px;[^}]*border: 1px solid var\(--line\);[^}]*background: var\(--surface-active\);[^}]*padding: 2px;/s);
+  assert.match(appearance, /\.queue-placement-choice :deep\(button\[data-state="on"\]\), \.remote-desktop-preview-choice :deep\(button\[data-state="on"\]\) \{[^}]*background: var\(--surface-raised\);[^}]*box-shadow:/s);
   assert.match(result, /<AiSessionQueue[\s\S]*v-if="showQueue && isLatest/);
   assert.match(result, /showQueue: false/);
   assert.match(conversation, /:show-queue="queuePlacement === 'detail'"/);

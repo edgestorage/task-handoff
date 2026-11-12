@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import type { DesktopSource, RemoteDesktopCapabilities } from '@task-handoff/protocol/remote-desktop';
 
 import { Icon } from '../components/Icon';
@@ -7,6 +7,8 @@ import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { persistedCaptureTarget, type PersistedCaptureTarget } from './preferences';
 import { sourceKindLabel } from './source-label';
+
+type SourceSection = { kind: string; title: string; data: DesktopSource[] };
 
 type Props = {
   capability?: RemoteDesktopCapabilities;
@@ -25,6 +27,15 @@ export function RemoteDesktopSourcePicker({ capability, loadSources, onClose, on
   const [error, setError] = useState(false);
   const requestRef = useRef<AbortController | undefined>(undefined);
   const available = capability?.sourceProviders.some((provider) => provider.available) === true;
+  const sections = useMemo<SourceSection[]>(() => {
+    const groups = new Map<string, DesktopSource[]>();
+    for (const source of sources) {
+      const group = groups.get(source.kind) ?? [];
+      group.push(source);
+      groups.set(source.kind, group);
+    }
+    return [...groups].map(([kind, data]) => ({ kind, title: sourceKindLabel(kind, t), data }));
+  }, [sources, t]);
 
   const refresh = useCallback(async (signal: AbortSignal) => {
     if (signal.aborted) return;
@@ -77,19 +88,29 @@ export function RemoteDesktopSourcePicker({ capability, loadSources, onClose, on
         : loading && !sources.length ? <View style={styles.state}><ActivityIndicator color={colors.primary} /><Text style={[styles.stateText, { color: colors.textMuted }]}>{t('remoteDesktop.loadingSources')}</Text></View>
           : error ? <View style={styles.state}><Text style={[styles.stateText, { color: colors.error }]}>{t('remoteDesktop.errorGeneric')}</Text></View>
             : !sources.length ? <View style={styles.state}><Text style={[styles.stateText, { color: colors.textMuted }]}>{t('remoteDesktop.noSources')}</Text></View>
-              : <FlatList data={sources} keyExtractor={(item) => `${item.kind}:${item.sourceRef}`} contentContainerStyle={styles.list} renderItem={({ item }) => {
-                const selected = target.kind === item.kind && target.sourceRef === item.sourceRef;
-                const title = item.title || sourceKindLabel(item.kind, t);
-                const detail = item.subtitle || sourceKindLabel(item.kind, t);
-                return <Pressable accessibilityRole="button" accessibilityState={{ disabled: !item.capturable, selected }} disabled={!item.capturable} onPress={() => selectSource(item)} style={({ pressed }) => [styles.row, { backgroundColor: colors.surface, borderColor: selected ? colors.primary : colors.border }, !item.capturable && styles.disabled, pressed && styles.pressed]}>
-                  <View style={[styles.icon, { backgroundColor: selected ? colors.primarySoft : colors.surfaceInset }]}><Icon color={selected ? colors.primary : colors.textMuted} name={sourceIcon(item.kind)} size={20} /></View>
-                  <View style={styles.copy}>
-                    <Text numberOfLines={1} style={[styles.rowTitle, { color: colors.text }]}>{title}</Text>
-                    <Text numberOfLines={1} style={[styles.rowMeta, { color: colors.textMuted }]}>{detail || '—'} · {item.width} × {item.height}{item.capturable ? '' : ` · ${item.reason || t('remoteDesktop.sourceUnavailable')}`}</Text>
-                  </View>
-                  {selected ? <Icon color={colors.primary} name="checkmark-circle" size={22} /> : null}
-                </Pressable>;
-              }} />}
+              : <SectionList<DesktopSource, SourceSection>
+                contentContainerStyle={styles.list}
+                keyExtractor={(item) => `${item.kind}:${item.sourceRef}`}
+                renderItem={({ item }) => {
+                  const selected = target.kind === item.kind && target.sourceRef === item.sourceRef;
+                  const title = item.title || sourceKindLabel(item.kind, t);
+                  const detail = item.subtitle || sourceKindLabel(item.kind, t);
+                  return <Pressable accessibilityRole="button" accessibilityState={{ disabled: !item.capturable, selected }} disabled={!item.capturable} onPress={() => selectSource(item)} style={({ pressed }) => [styles.row, { backgroundColor: colors.surface, borderColor: selected ? colors.primary : colors.border }, !item.capturable && styles.disabled, pressed && styles.pressed]}>
+                    <View style={[styles.icon, { backgroundColor: selected ? colors.primarySoft : colors.surfaceInset }]}><Icon color={selected ? colors.primary : colors.textMuted} name={sourceIcon(item.kind)} size={20} /></View>
+                    <View style={styles.copy}>
+                      <Text numberOfLines={1} style={[styles.rowTitle, { color: colors.text }]}>{title}</Text>
+                      <Text numberOfLines={1} style={[styles.rowMeta, { color: colors.textMuted }]}>{detail || '—'} · {item.width} × {item.height}{item.capturable ? '' : ` · ${item.reason || t('remoteDesktop.sourceUnavailable')}`}</Text>
+                    </View>
+                    {selected ? <Icon color={colors.primary} name="checkmark-circle" size={22} /> : null}
+                  </Pressable>;
+                }}
+                renderSectionHeader={({ section }) => <View accessibilityRole="header" style={styles.groupHeader} testID={`remote-desktop-source-group-${section.kind}`}>
+                  <Text style={[styles.groupTitle, { color: colors.textMuted }]}>{section.title}</Text>
+                  <Text style={[styles.groupCount, { color: colors.textMuted }]}>{section.data.length}</Text>
+                </View>}
+                sections={sections}
+                stickySectionHeadersEnabled={false}
+              />}
     </View>
   </Modal>;
 }
@@ -107,14 +128,17 @@ const styles = StyleSheet.create({
   headerAction: { fontSize: 16 },
   title: { flex: 1, fontSize: 16, fontWeight: '600', textAlign: 'center' },
   hint: { fontSize: 13, lineHeight: 18, paddingHorizontal: 16, paddingVertical: 12 },
-  row: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, minHeight: 58, paddingHorizontal: 12, paddingVertical: 9 },
+  groupHeader: { alignItems: 'baseline', flexDirection: 'row', gap: 8, justifyContent: 'space-between', paddingBottom: 4, paddingHorizontal: 4, paddingTop: 8 },
+  groupTitle: { fontSize: 12, lineHeight: 16 },
+  groupCount: { fontSize: 12, lineHeight: 16 },
+  row: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 11, marginBottom: 8, minHeight: 58, paddingHorizontal: 12, paddingVertical: 9 },
   icon: { alignItems: 'center', borderRadius: 9, height: 36, justifyContent: 'center', width: 36 },
   copy: { flex: 1, gap: 2, minWidth: 0 },
   rowTitle: { fontSize: 15, fontWeight: '500', lineHeight: 20 },
   rowMeta: { fontSize: 12, lineHeight: 17 },
   state: { alignItems: 'center', gap: 8, justifyContent: 'center', minHeight: 120, padding: 20 },
   stateText: { fontSize: 13, lineHeight: 19, textAlign: 'center' },
-  list: { gap: 8, paddingBottom: 40, paddingHorizontal: 16 },
+  list: { paddingBottom: 40, paddingHorizontal: 16 },
   disabled: { opacity: 0.45 },
   pressed: { opacity: 0.62 },
 });

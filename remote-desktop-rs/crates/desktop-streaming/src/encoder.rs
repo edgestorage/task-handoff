@@ -1,6 +1,10 @@
 //! Stream-local codec selection. Failed hardware stays disabled for this stream;
 //! fallback always starts a self-contained IDR before any dependent frames.
-use crate::{codec::Limits, synthetic::SoftwareEncoder, traits::EncodedFrame};
+use crate::{
+    codec::{Limits, VideoCodec},
+    synthetic::SoftwareEncoder,
+    traits::EncodedFrame,
+};
 use openh264::formats::YUVBuffer;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use openh264::formats::YUVSource;
@@ -12,6 +16,8 @@ pub enum Policy {
 }
 pub struct Encoder {
     software: SoftwareEncoder,
+    codec: VideoCodec,
+    policy: Policy,
     #[cfg(target_os = "linux")]
     hardware: Option<crate::platform::linux_encoder::Encoder>,
     #[cfg(target_os = "macos")]
@@ -24,11 +30,30 @@ pub struct Encoder {
     limits: Limits,
 }
 impl Encoder {
-    pub fn new(bitrate: u32, limits: Limits, min_qp: u8, policy: Policy) -> anyhow::Result<Self> {
+    pub fn new(
+        bitrate: u32,
+        limits: Limits,
+        min_qp: u8,
+        policy: Policy,
+        codec: VideoCodec,
+    ) -> anyhow::Result<Self> {
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let _ = policy;
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        anyhow::ensure!(codec == VideoCodec::H264, "native HEVC unavailable");
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        anyhow::ensure!(
+            codec == VideoCodec::H264 || cfg!(target_os = "macos"),
+            "native HEVC unavailable"
+        );
+        anyhow::ensure!(
+            codec == VideoCodec::H264 || matches!(policy, Policy::Automatic),
+            "HEVC has no software encoder"
+        );
         Ok(Self {
             software: SoftwareEncoder::with_quality(bitrate, limits, min_qp)?,
+            codec,
+            policy,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             hardware: None,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -66,7 +91,21 @@ impl Encoder {
         }
         "openh264"
     }
-    pub fn reconfigure(&mut self, bitrate: u32, limits: Limits, min_qp: u8) -> anyhow::Result<()> {
+    pub fn codec(&self) -> VideoCodec {
+        self.codec
+    }
+    pub fn reconfigure(
+        &mut self,
+        bitrate: u32,
+        limits: Limits,
+        min_qp: u8,
+        codec: VideoCodec,
+    ) -> anyhow::Result<()> {
+        if codec != self.codec {
+            let policy = self.policy;
+            *self = Self::new(bitrate, limits, min_qp, policy, codec)?;
+            return Ok(());
+        }
         self.software = SoftwareEncoder::with_quality(bitrate, limits, min_qp)?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
@@ -88,15 +127,24 @@ impl Encoder {
                 {
                     self.hardware = None;
                     #[cfg(target_os = "macos")]
-                    type NativeEncoder = crate::platform::macos_encoder::Encoder;
+                    {
+                        self.hardware = Some(crate::platform::macos_encoder::Encoder::new(
+                            yuv.dimensions().0,
+                            yuv.dimensions().1,
+                            self.bitrate(),
+                            self.limits,
+                            self.codec,
+                        )?);
+                    }
                     #[cfg(target_os = "linux")]
-                    type NativeEncoder = crate::platform::linux_encoder::Encoder;
-                    self.hardware = Some(NativeEncoder::new(
-                        yuv.dimensions().0,
-                        yuv.dimensions().1,
-                        self.bitrate(),
-                        self.limits,
-                    )?);
+                    {
+                        self.hardware = Some(crate::platform::linux_encoder::Encoder::new(
+                            yuv.dimensions().0,
+                            yuv.dimensions().1,
+                            self.bitrate(),
+                            self.limits,
+                        )?);
+                    }
                     idr = true;
                 }
                 self.hardware.as_mut().unwrap().encode(yuv, idr)
@@ -104,6 +152,13 @@ impl Encoder {
             match result {
                 Ok(frame) => return Ok(Some(frame)),
                 Err(_) => {
+                    if self.codec == VideoCodec::H265 {
+                        // A selected HEVC payload cannot be repaired by emitting
+                        // H.264 bytes: the receiver would configure the wrong
+                        // decoder. Fail the stream visibly and let negotiation
+                        // choose H.264 on the next connection.
+                        anyhow::bail!("HEVC encoder unavailable");
+                    }
                     // Do not expose native encoder descriptions. Never retry a
                     // failed device every frame or carry its GOP into fallback.
                     eprintln!("desktop encoder: hardware unavailable; stream uses OpenH264");

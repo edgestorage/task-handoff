@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { CircleHelp, CornerDownRight, GripVertical, Pause, Pencil, Play, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
@@ -86,8 +86,11 @@ export function SessionWorkspace({
   onOpenBuiltinBrowser,
   onOpenFile,
   onOpenRemoteDesktopPreview,
+  onOpenRemoteDesktopDetail,
+  onRemoveRemoteDesktop,
   onOpenSession,
   remoteDesktopTarget,
+  renderRemoteDesktopInlinePreview,
   detailMode: controlledDetailMode,
   onDetailModeChange,
   syncPhase = 'ready',
@@ -115,8 +118,11 @@ export function SessionWorkspace({
   onOpenBuiltinBrowser?(url: string): void | Promise<void>;
   onOpenFile?(href: string): void | Promise<void>;
   onOpenRemoteDesktopPreview?(): void;
+  onOpenRemoteDesktopDetail?(): void;
+  onRemoveRemoteDesktop?(): void;
   onOpenSession?(sessionId: string): void;
   remoteDesktopTarget?: import('../remote-desktop/preferences').PersistedCaptureTarget;
+  renderRemoteDesktopInlinePreview?(input: { instanceId: string; onOpenDetail(): void; sessionId: string }): ReactNode;
   detailMode?: SessionDetailMode;
   onDetailModeChange?(mode: SessionDetailMode): void;
   syncPhase?: 'idle' | 'loading' | 'ready' | 'stale' | 'offline' | 'error';
@@ -947,6 +953,8 @@ export function SessionWorkspace({
           onOpenBuiltinBrowser={onOpenBuiltinBrowser}
           onOpenFile={onOpenFile}
           onOpenRemoteDesktopPreview={onOpenRemoteDesktopPreview}
+          onOpenRemoteDesktopDetail={onOpenRemoteDesktopDetail}
+          onRemoveRemoteDesktop={onRemoveRemoteDesktop}
           onRetryTimeline={(turn) => {
             if (selectedTurnBodyFailure) {
               setTurnBodyFailure(undefined);
@@ -960,6 +968,7 @@ export function SessionWorkspace({
           onTurnIndexChange={requestTurnSelection}
           pendingTurnIndex={pendingTurnIndex}
           remoteDesktopTarget={remoteDesktopTarget}
+          renderRemoteDesktopInlinePreview={renderRemoteDesktopInlinePreview}
           session={session}
           showModePicker={controlledDetailMode === undefined}
           timelineEnabled={supportsTurnTimeline || supportsSessionTimeline || supportsLiveTimeline}
@@ -1309,7 +1318,7 @@ const styles = StyleSheet.create({
   queueError: { marginTop: 1 },
   queueActions: { alignItems: 'center', flexDirection: 'row', gap: 2 },
   queueAction: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 4, height: 34, justifyContent: 'center', minWidth: 34, paddingHorizontal: 6 },
-  queueActionText: { fontSize: mobileWebType.small, fontWeight: '700', lineHeight: mobileWebType.smallLine },
+  queueActionText: { fontSize: mobileWebType.small, fontWeight: '400', lineHeight: mobileWebType.smallLine },
   decisionsFrame: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   decisionsHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 7, minHeight: 38, paddingHorizontal: 12 },
   decisionsList: { maxHeight: 260 },

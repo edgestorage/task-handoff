@@ -173,7 +173,6 @@ async fn real_service_enabled_intent_package_drain_restart_and_capability_are_bo
         let allowed = admission.clone();
         DesktopService::new(
             dir.path(),
-            "1".into(),
             CaptureMode::Local,
             move || {
                 Ok(installed.load(Ordering::SeqCst).then(|| DesktopPackage {

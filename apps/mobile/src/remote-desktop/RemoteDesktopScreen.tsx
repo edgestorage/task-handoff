@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { remoteDesktopSupportsCapturePrecision } from '@task-handoff/protocol/remote-desktop';
 import {
   startRemoteDesktopTextInputObservation,
   stopRemoteDesktopTextInputObservation,
@@ -240,7 +241,9 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
         </Pressable>;
       })() : null}
       <RemoteDesktopSettingsMenu
+        capturePrecisionSupported={remoteDesktopSupportsCapturePrecision(capability)}
         onDisconnect={disconnect}
+        onSetCapturePrecision={remote.setCapturePrecision}
         onSetInputEnabled={remote.setInputEnabled}
         onSetFrameRate={remote.setFrameRate}
         onSetResolution={remote.setResolution}

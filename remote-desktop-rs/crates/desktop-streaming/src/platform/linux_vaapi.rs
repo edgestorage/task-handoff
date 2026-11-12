@@ -176,8 +176,8 @@ pub fn run() -> anyhow::Result<()> {
     anyhow::ensure!(
         w > 0
             && h > 0
-            && w <= 1920
-            && h <= 1080
+            && w <= 3840
+            && h <= 2160
             && w.is_multiple_of(2)
             && h.is_multiple_of(2)
             && config.bitrate > 0,

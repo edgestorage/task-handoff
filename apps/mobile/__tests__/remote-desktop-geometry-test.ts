@@ -1,13 +1,20 @@
 import {
   IDENTITY_REMOTE_DESKTOP_TRANSFORM,
   REMOTE_DESKTOP_MIN_VISIBLE_EDGE,
+  REMOTE_DESKTOP_TRACKPAD_EDGE_INSET,
   constrainRemoteDesktopTransform,
+  keepRemoteDesktopCursorVisible,
   remoteDesktopContainRect,
   remoteDesktopMultiTouchIntent,
+  remoteDesktopMultiTouchInTapDeadZone,
   remoteDesktopPinchTransform,
   remoteDesktopPointForTouch,
   remoteDesktopScrollAnchor,
   remoteDesktopTouchOrientation,
+  remoteDesktopTrackpadMove,
+  type RemoteDesktopPoint,
+  type RemoteDesktopSize,
+  type RemoteDesktopTransform,
 } from '../src/remote-desktop/geometry';
 
 const viewport = { width: 1_000, height: 1_000 };
@@ -54,6 +61,19 @@ function frameBounds(viewport: { width: number; height: number }, rect: { x: num
     left: viewport.width / 2 + transform.translateX - rect.width * transform.scale / 2,
     right: viewport.width / 2 + transform.translateX + rect.width * transform.scale / 2,
     top: viewport.height / 2 + transform.translateY - rect.height * transform.scale / 2,
+  };
+}
+
+function cursorViewPoint(
+  cursor: RemoteDesktopPoint,
+  transform: RemoteDesktopTransform,
+  viewportSize: RemoteDesktopSize,
+  contentSize: RemoteDesktopSize,
+) {
+  const rect = remoteDesktopContainRect(viewportSize, contentSize);
+  return {
+    x: viewportSize.width / 2 + transform.translateX + (cursor.x - 0.5) * rect.width * transform.scale,
+    y: viewportSize.height / 2 + transform.translateY + (cursor.y - 0.5) * rect.height * transform.scale,
   };
 }
 
@@ -106,10 +126,95 @@ test('only classifies a horizontally aligned two-finger gesture as scroll', () =
   expect(remoteDesktopMultiTouchIntent({ x: 102, y: 150 }, { x: 102, y: 120 }, 100, 104, 'vertical')).toBe('pending');
 });
 
+test('vertical movement leaves the multitouch tap dead zone without becoming scroll', () => {
+  const start = { x: 100, y: 100 };
+  const moved = { x: 100, y: 130 };
+  expect(remoteDesktopMultiTouchInTapDeadZone(start, moved, 80, 80)).toBe(false);
+  expect(remoteDesktopMultiTouchIntent(start, moved, 80, 80, 'vertical')).toBe('pending');
+});
+
+test('small two-finger drift remains eligible for a tap', () => {
+  const start = { x: 100, y: 100 };
+  const moved = { x: 104, y: 103 };
+  expect(remoteDesktopMultiTouchInTapDeadZone(start, moved, 80, 86)).toBe(true);
+  expect(remoteDesktopMultiTouchInTapDeadZone(start, moved, 80, 90)).toBe(false);
+});
+
 test('keeps the wheel anchor fixed at the virtual cursor or last direct pointer', () => {
   const cursor = { x: 0.25, y: 0.75 };
   const pointer = { x: 0.8, y: 0.2 };
   expect(remoteDesktopScrollAnchor('trackpad', cursor, pointer)).toEqual(cursor);
   expect(remoteDesktopScrollAnchor('direct', cursor, pointer)).toEqual(pointer);
   expect(remoteDesktopScrollAnchor('direct', cursor)).toEqual(cursor);
+});
+
+test('trackpad movement only moves the cursor before zooming', () => {
+  const moved = remoteDesktopTrackpadMove(
+    { x: 0.5, y: 0.5 },
+    { x: 0.1, y: -0.2 },
+    IDENTITY_REMOTE_DESKTOP_TRANSFORM,
+    viewport,
+    content,
+  );
+  expect(moved.cursor.x).toBeCloseTo(0.6, 8);
+  expect(moved.cursor.y).toBeCloseTo(0.3, 8);
+  expect(moved.transform).toEqual(IDENTITY_REMOTE_DESKTOP_TRANSFORM);
+});
+
+test('trackpad movement pans zoomed content while pinning the cursor at the edge', () => {
+  const start = remoteDesktopTrackpadMove(
+    { x: 0.7, y: 0.5 },
+    { x: 0.1, y: 0 },
+    { scale: 2, translateX: 0, translateY: 0 },
+    viewport,
+    content,
+  );
+  expect(start.cursor.x).toBeCloseTo(0.8, 8);
+  expect(start.transform.translateX).toBeCloseTo(-120, 8);
+  expect(cursorViewPoint(start.cursor, start.transform, viewport, content).x)
+    .toBeCloseTo(viewport.width - REMOTE_DESKTOP_TRACKPAD_EDGE_INSET, 8);
+
+  const continued = remoteDesktopTrackpadMove(
+    start.cursor,
+    { x: 0.1, y: 0 },
+    start.transform,
+    viewport,
+    content,
+  );
+  expect(continued.cursor.x).toBeCloseTo(0.9, 8);
+  expect(continued.transform.translateX).toBeCloseTo(-320, 8);
+  expect(cursorViewPoint(continued.cursor, continued.transform, viewport, content).x)
+    .toBeCloseTo(viewport.width - REMOTE_DESKTOP_TRACKPAD_EDGE_INSET, 8);
+});
+
+test('pinch panning keeps the virtual cursor inside the viewport', () => {
+  const nextTransform = remoteDesktopPinchTransform(
+    IDENTITY_REMOTE_DESKTOP_TRANSFORM,
+    { x: 250, y: 250 },
+    { x: 750, y: 250 },
+    200,
+    400,
+    viewport,
+    content,
+  );
+  const nextCursor = keepRemoteDesktopCursorVisible({ x: 0.5, y: 0.5 }, nextTransform, viewport, content);
+  const cursorView = cursorViewPoint(nextCursor, nextTransform, viewport, content);
+  expect(cursorView.x).toBeCloseTo(viewport.width - REMOTE_DESKTOP_TRACKPAD_EDGE_INSET, 8);
+  expect(cursorView.y).toBeGreaterThanOrEqual(REMOTE_DESKTOP_TRACKPAD_EDGE_INSET);
+  expect(cursorView.y).toBeLessThanOrEqual(viewport.height - REMOTE_DESKTOP_TRACKPAD_EDGE_INSET);
+});
+
+test('cursor stays visible after panning the content to a transform boundary', () => {
+  const rect = remoteDesktopContainRect(viewport, content);
+  const transform = constrainRemoteDesktopTransform(
+    { scale: 2, translateX: 10_000, translateY: -10_000 },
+    viewport,
+    rect,
+  );
+  const cursor = keepRemoteDesktopCursorVisible({ x: 0.5, y: 0.5 }, transform, viewport, content);
+  const cursorView = cursorViewPoint(cursor, transform, viewport, content);
+  expect(cursorView.x).toBeGreaterThanOrEqual(REMOTE_DESKTOP_TRACKPAD_EDGE_INSET);
+  expect(cursorView.x).toBeLessThanOrEqual(viewport.width - REMOTE_DESKTOP_TRACKPAD_EDGE_INSET);
+  expect(cursorView.y).toBeGreaterThanOrEqual(REMOTE_DESKTOP_TRACKPAD_EDGE_INSET);
+  expect(cursorView.y).toBeLessThanOrEqual(viewport.height - REMOTE_DESKTOP_TRACKPAD_EDGE_INSET);
 });

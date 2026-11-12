@@ -114,15 +114,15 @@ export function registerRemoteDesktopRoutes(options: {
     if (!fallbackSecureContext(request)) throw failure("REMOTE_DESKTOP_FALLBACK_SECURE_CONTEXT_REQUIRED", 400);
     const id = (request.params as any).sessionId as string;
     // Fallback is a transport choice, not a second quality tier. Keep the
-    // WebSocket path within the same product resolution as WebRTC while the
-    // component and proxy capacity still bound frame rate and bitrate.
+    // WebSocket path within the same product resolution and bitrate budget as
+    // WebRTC; the component capability is the sole owner of those limits.
     const videoMaxWidth = capability.video.maxWidth || capability.fallback.maxWidth;
     const videoMaxHeight = capability.video.maxHeight || capability.fallback.maxHeight;
     const limits = {
       maxWidth: Math.min(capability.fallback.maxWidth, videoMaxWidth),
       maxHeight: Math.min(capability.fallback.maxHeight, videoMaxHeight),
       maxFps: Math.min(capability.fallback.maxFrameRate || 30, capability.video.maxFrameRate || 30),
-      maxBitrate: Math.min(capability.fallback.maxBitrate || 4_000_000, 4_000_000),
+      maxBitrate: capability.fallback.maxBitrate,
     };
     const data = await access.mutate(principal, instance.id, input.requestId, { type: "fallback", sessionId: id, ...input }, async () => {
       const issued = access.issueFallback(principal, instance.id, id, limits.maxBitrate);

@@ -1,7 +1,7 @@
 import { INSTANCE_CAPABILITIES_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/remote-desktop";
 import { DesktopService } from "../remote-desktop/service";
 import { registerDesktopRoutes } from "../remote-desktop/routes";
-import { DESKTOP_COMPONENT_APP_ID, readManagedDesktopPackage } from "@task-handoff/app-runtime";
+import { DESKTOP_COMPONENT_APP_ID, readManagedDesktopPackage, removeLegacyManagedDesktopPackage } from "@task-handoff/app-runtime";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -754,11 +754,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const desktopService = options.desktopService || new DesktopService({
-    dataDir:storagePaths.dataDir, version:packageVersion(),
+    dataDir:storagePaths.dataDir,
     mode:process.env.TASK_HANDOFF_RUNTIME_KIND === "docker" ? "virtual" : "local",
     installedPackage:()=>readManagedDesktopPackage(managedAppRoot,appManagementStateDir),
     canStart:()=>!appRuntime.isDraining() && !appManagement.hasActiveOperation(DESKTOP_COMPONENT_APP_ID),
-    requestUpdate:()=>{appManagement.request(DESKTOP_COMPONENT_APP_ID,"update");},
+    requestUpdate:async()=>{await appManagement.request(DESKTOP_COMPONENT_APP_ID,"update");},
   });
   let lastDesktopCapability="";
   const desktopChanged=()=>{
@@ -770,7 +770,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.addHook("onClose",async()=>{desktopService.off("changed",desktopChanged);});
   const packageLifecycles = new Map([[DESKTOP_COMPONENT_APP_ID,{
     beforeChange:()=>desktopService.beforePackageChange(),
-    changed:(operation:string,succeeded:boolean)=>desktopService.packageChanged(operation,succeeded),
+    changed:(operation:string,succeeded:boolean)=>{
+      if(operation!=="uninstall"&&succeeded)removeLegacyManagedDesktopPackage(managedAppRoot,appManagementStateDir);
+      return desktopService.packageChanged(operation,succeeded);
+    },
   }]]);
   app.addHook("onClose",()=>desktopService.close());
   const appManagement = options.appManagement || new AppManagementManager({

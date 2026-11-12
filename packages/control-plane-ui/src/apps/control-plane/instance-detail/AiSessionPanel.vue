@@ -911,6 +911,14 @@
                   <span>{{ t("sessions.actions.openApp") }}</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
+                  v-if="remoteDesktopAvailableForInstance"
+                  class="session-ai-detail-actions-menu-item"
+                  @select="openSelectedSessionRemoteDesktop"
+                >
+                  <Monitor :size="14" />
+                  <span>{{ t("instances.remoteDesktop.open") }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
                   v-if="terminalLaunchAppId"
                   class="session-ai-detail-actions-menu-item"
                   :disabled="launchingApp"
@@ -1063,6 +1071,23 @@
             @transitioning-change="setDetailConversationTransitioning"
             @continue-from-turn="forkSession(selectedSession, 'current', $event)"
             @save-as-preset="saveTurnAsPresetAction"
+          />
+          <SessionRemoteDesktopCard
+            v-if="selectedSessionRemoteDesktopLink && remoteDesktopAvailableForInstance"
+            :expanded="remoteDesktopInlineExpanded"
+            :presentation="sessionRemoteDesktopPreviewPresentation"
+            :target="selectedSessionRemoteDesktopLink.target"
+            @details="openSelectedSessionRemoteDesktopDetails"
+            @preview="openSelectedSessionRemoteDesktopPreview"
+            @remove="removeSelectedSessionRemoteDesktop"
+          />
+          <SessionRemoteDesktopInlinePreview
+            v-if="remoteDesktopInlineExpanded && sessionRemoteDesktopPreviewPresentation === 'expanded' && selectedSessionRemoteDesktopLink && remoteDesktopAvailableForInstance"
+            :capabilities="instance.capabilities"
+            :instance-id="instance.id"
+            :target="selectedSessionRemoteDesktopLink.target"
+            @open-details="openSelectedSessionRemoteDesktopDetails"
+            @selection-change="updateSelectedSessionRemoteDesktopTarget"
           />
           <span ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor" aria-hidden="true" />
           </section>
@@ -1335,6 +1360,17 @@
       @update:open="presetSaveOpen = $event"
       @saved="handlePresetSaved"
     />
+    <SessionRemoteDesktopFloatingPreview
+      v-if="selectedSession && selectedSessionRemoteDesktopLink && remoteDesktopAvailableForInstance"
+      :capabilities="instance.capabilities"
+      :instance-id="instance.id"
+      :session-id="selectedSession.id"
+      :target="selectedSessionRemoteDesktopLink.target"
+      :visible="remoteDesktopPreviewOpen"
+      @close="remoteDesktopPreviewOpen = false"
+      @open-details="openSelectedSessionRemoteDesktopDetails"
+      @selection-change="updateSelectedSessionRemoteDesktopTarget"
+    />
   </div>
 </template>
 
@@ -1347,7 +1383,7 @@ import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
 import { waitForAiSessionProjection } from "../ai-session-projection";
-import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftOpen, Pencil, Plus, SearchX, Server, SlidersHorizontal, Sparkles, Split, Square, SquareTerminal, X } from "@lucide/vue";
+import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MessageSquarePlus, Monitor, MoreHorizontal, PanelLeftOpen, Pencil, Plus, SearchX, Server, SlidersHorizontal, Sparkles, Split, Square, SquareTerminal, X } from "@lucide/vue";
 import { instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ApiError } from "../../../api/client";
@@ -1428,6 +1464,20 @@ import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPick
 import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
 import { nextDetailHeadActionsOverflow, type DetailHeadActionsOverflow } from "./sessionDetailHeadActions";
+import SessionRemoteDesktopCard from "../../../components/remote-desktop/SessionRemoteDesktopCard.vue";
+import SessionRemoteDesktopFloatingPreview from "../../../components/remote-desktop/SessionRemoteDesktopFloatingPreview.vue";
+import SessionRemoteDesktopInlinePreview from "../../../components/remote-desktop/SessionRemoteDesktopInlinePreview.vue";
+import { requestCloseSessionRemoteDesktop, requestOpenSessionRemoteDesktop } from "./sessionRemoteDesktopEvents";
+import {
+  removeSessionRemoteDesktopLink,
+  rememberSessionRemoteDesktopLink,
+  sanitizeSessionRemoteDesktopTarget,
+  sessionRemoteDesktopLinkFor,
+  touchSessionRemoteDesktopLink,
+  type SessionRemoteDesktopTarget,
+} from "./sessionRemoteDesktopLinks";
+import { remoteDesktopAvailable } from "../remoteDesktopCapability";
+import { useSessionRemoteDesktopPreviewPresentation } from "./sessionRemoteDesktopPreviewPresentation.ts";
 import { loadAiSessionCreationPreferences, persistAiSessionCreationAgent, persistAiSessionCreationPreferences, preferredAiSessionCreationAgent } from "./aiSessionCreationPreferences";
 import { aiSessionCreationDraftKey, aiSessionMessageText, aiSessionStoryCreationDraftKey, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import { useAiSessionAttachmentDraft } from "../useAiSessionAttachmentDraft";
@@ -1551,6 +1601,7 @@ const props = defineProps<{
   activeActionLabel?: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   activeSession: SessionTab;
   canExportConfig?: (instance: InstanceBoardItem) => boolean;
+  canInteractRemoteDesktop?: boolean;
   chooseProjectFolder?: NativeNodeFolderPicker;
   creationInitialAgent?: string;
   creationInitialCwd?: string;
@@ -1599,6 +1650,7 @@ const markdownCodeTools = computed(() => ({
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 
 const visibleAiSessions = computed(() => props.instance.aiSessions?.sessions || []);
+const remoteDesktopAvailableForInstance = computed(() => props.canInteractRemoteDesktop === true && remoteDesktopAvailable(props.instance));
 const sessionListOverlayOpen = ref(false);
 const panelEl = ref<HTMLElement | null>(null);
 const panelBounds = useElementBounding(panelEl);
@@ -1752,6 +1804,18 @@ const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSession
 // transition (for example running -> idle) must not make the selected session
 // disappear merely because the sidebar filter changed its membership.
 const selectedSession = computed(() => props.selectedAiSession(props.instance, visibleAiSessions.value));
+const selectedSessionRemoteDesktopLink = computed(() => {
+  const session = selectedSession.value;
+  return session ? sessionRemoteDesktopLinkFor(props.instance.id, session.id) : undefined;
+});
+const { presentation: sessionRemoteDesktopPreviewPresentation } = useSessionRemoteDesktopPreviewPresentation();
+const remoteDesktopPreviewRequested = ref(false);
+const remoteDesktopPreviewOpen = computed(() => remoteDesktopPreviewRequested.value && sessionRemoteDesktopPreviewPresentation.value === "floating");
+const remoteDesktopInlineExpanded = ref(false);
+watch([() => props.instance.id, () => selectedSession.value?.id, sessionRemoteDesktopPreviewPresentation], () => {
+  remoteDesktopPreviewRequested.value = false;
+  remoteDesktopInlineExpanded.value = false;
+});
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: [props.instance.id] })));
 useAiSessionTimelineDemand(computed(() => selectedSession.value ? {
@@ -4084,12 +4148,74 @@ function openSessionTerminal(session: AiSessionSummary) {
   emit("launchApp", props.instance, appId, undefined, { cwd: session.cwd });
 }
 
+function openSelectedSessionRemoteDesktop() {
+  const session = selectedSession.value;
+  if (!session || !remoteDesktopAvailableForInstance.value) return;
+  let link = selectedSessionRemoteDesktopLink.value;
+  if (!link) {
+    rememberSessionRemoteDesktopLink({
+      instanceId: props.instance.id,
+      sessionId: session.id,
+      target: sanitizeSessionRemoteDesktopTarget({ kind: "display", title: t("instances.remoteDesktop.entireDesktop") }),
+    });
+    link = selectedSessionRemoteDesktopLink.value;
+  } else {
+    touchSessionRemoteDesktopLink(props.instance.id, session.id);
+  }
+  closeSessionRemoteDesktopPreview();
+  requestOpenSessionRemoteDesktop({
+    instanceId: props.instance.id,
+    sessionId: session.id,
+    ...(link ? { target: link.target } : {}),
+  });
+}
+
+function openSelectedSessionRemoteDesktopPreview() {
+  const session = selectedSession.value;
+  if (!session || !selectedSessionRemoteDesktopLink.value || !remoteDesktopAvailableForInstance.value) return;
+  touchSessionRemoteDesktopLink(props.instance.id, session.id);
+  if (sessionRemoteDesktopPreviewPresentation.value === "expanded") {
+    remoteDesktopInlineExpanded.value = !remoteDesktopInlineExpanded.value;
+    return;
+  }
+  remoteDesktopPreviewRequested.value = true;
+}
+
+function openSelectedSessionRemoteDesktopDetails() {
+  const session = selectedSession.value;
+  const link = selectedSessionRemoteDesktopLink.value;
+  if (!session || !link || !remoteDesktopAvailableForInstance.value) return;
+  closeSessionRemoteDesktopPreview();
+  requestOpenSessionRemoteDesktop({ instanceId: props.instance.id, sessionId: session.id, target: link.target });
+}
+
+function updateSelectedSessionRemoteDesktopTarget(target: SessionRemoteDesktopTarget) {
+  const session = selectedSession.value;
+  if (!session) return;
+  rememberSessionRemoteDesktopLink({ instanceId: props.instance.id, sessionId: session.id, target });
+}
+
+function removeSelectedSessionRemoteDesktop() {
+  const session = selectedSession.value;
+  if (!session) return;
+  closeSessionRemoteDesktopPreview();
+  removeSessionRemoteDesktopLink(props.instance.id, session.id);
+  requestCloseSessionRemoteDesktop({ instanceId: props.instance.id, sessionId: session.id });
+}
+
+function closeSessionRemoteDesktopPreview() {
+  remoteDesktopPreviewRequested.value = false;
+  remoteDesktopInlineExpanded.value = false;
+}
+
 async function closeSession(session: AiSessionSummary) {
   if (stoppingAppSessionId.value) return;
   stoppingAppSessionId.value = session.id;
   const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.closingSession"));
   try {
     await closeAiSession(props.instance.id, session.id, createBrowserUuid());
+    removeSessionRemoteDesktopLink(props.instance.id, session.id);
+    requestCloseSessionRemoteDesktop({ instanceId: props.instance.id, sessionId: session.id });
   } catch (error) {
     loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")), "error");

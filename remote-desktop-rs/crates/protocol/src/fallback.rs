@@ -1,6 +1,7 @@
 //! Component private fallback media framing. This is not a public protocol
 //! module and is never persisted; the browser mirror lives in the inspected
-//! Control Plane protocol package.
+//! Control Plane protocol package. The configure message declares H.264 or
+//! H.265, and the binary payload is Annex B for that codec.
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u8 = 1;

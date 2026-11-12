@@ -1,40 +1,82 @@
 //! Maintained VideoToolbox bindings own callbacks/session lifetime. NV12 input,
 //! no B frames, hardware REQUIRED (failure is handled by the encoder selector).
-use crate::{codec::Limits, traits::EncodedFrame};
+use crate::{
+    codec::{Limits, VideoCodec},
+    traits::EncodedFrame,
+};
 use apple_cf::{cm::CMTime, cv::CVPixelBuffer};
 use openh264::formats::{YUVBuffer, YUVSource};
 use std::time::{Duration, Instant};
 use videotoolbox::compression::{
     CompressionSession, FrameProperties, HardwareAcceleration, ProfileLevel,
 };
-use videotoolbox::Codec;
+use videotoolbox::Codec as VtCodec;
+
+/// HEVC is registered as a sender capability only when VideoToolbox can create a
+/// hardware encoder. The result is process-stable; actual session allocation can
+/// still fail during a stream, in which case the stream fails rather than sending
+/// an H.264 fallback under an H.265 payload type.
+pub fn hevc_supported() -> bool {
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        CompressionSession::builder(64, 64, VtCodec::HEVC)
+            .with_real_time(true)
+            .with_allow_frame_reordering(false)
+            .with_hardware_acceleration(HardwareAcceleration::Required)
+            .with_low_latency_rate_control(true)
+            .with_profile_level(ProfileLevel::HEVCMainAutoLevel)
+            .build()
+            .is_ok()
+    })
+}
 
 pub struct Encoder {
     session: CompressionSession,
     size: (usize, usize),
     started: Instant,
+    codec: VideoCodec,
 }
 impl Encoder {
-    pub fn new(width: usize, height: usize, bitrate: u32, limits: Limits) -> anyhow::Result<Self> {
-        // VT exposes fixed baseline levels13/30/31/32/40. Never silently choose
-        // a profile/level above the receiver when a lower level is negotiated.
-        let profile = match limits.level {
-            13 => ProfileLevel::H264Baseline1_3,
-            30 => ProfileLevel::H264Baseline3_0,
-            31 => ProfileLevel::H264Baseline3_1,
-            40 => ProfileLevel::H264Baseline4_0,
-            _ => anyhow::bail!("VT baseline level unsupported"),
+    pub fn new(
+        width: usize,
+        height: usize,
+        bitrate: u32,
+        limits: Limits,
+        codec: VideoCodec,
+    ) -> anyhow::Result<Self> {
+        // VT exposes fixed H.264 baseline levels. Never silently choose a profile
+        // above the receiver. HEVC uses Main profile with VT selecting the level
+        // from the validated dimension/rate budget.
+        let profile = match codec {
+            VideoCodec::H264 => match limits.level {
+                13 => ProfileLevel::H264Baseline1_3,
+                30 => ProfileLevel::H264Baseline3_0,
+                31 => ProfileLevel::H264Baseline3_1,
+                32 => ProfileLevel::H264Baseline3_2,
+                40 => ProfileLevel::H264Baseline4_0,
+                41 => ProfileLevel::H264Baseline4_1,
+                42 => ProfileLevel::H264Baseline4_2,
+                50 => ProfileLevel::H264Baseline5_0,
+                51 => ProfileLevel::H264Baseline5_1,
+                52 => ProfileLevel::H264Baseline5_2,
+                _ => anyhow::bail!("VT baseline level unsupported"),
+            },
+            VideoCodec::H265 => ProfileLevel::HEVCMainAutoLevel,
         };
         anyhow::ensure!(
             width > 0
                 && height > 0
-                && width <= 1920
-                && height <= 1080
+                && width <= 3840
+                && height <= 2160
                 && width.is_multiple_of(2)
                 && height.is_multiple_of(2),
             "invalid VT dimensions"
         );
-        let session = CompressionSession::builder(width as i32, height as i32, Codec::H264)
+        let native_codec = match codec {
+            VideoCodec::H264 => VtCodec::H264,
+            VideoCodec::H265 => VtCodec::HEVC,
+        };
+        let session = CompressionSession::builder(width as i32, height as i32, native_codec)
             .with_real_time(true)
             .with_allow_frame_reordering(false)
             .with_hardware_acceleration(HardwareAcceleration::Required)
@@ -42,7 +84,6 @@ impl Encoder {
             .with_profile_level(profile)
             .with_average_bit_rate(bitrate.min(limits.max_bitrate) as i32)
             .with_expected_frame_rate(30.0)
-            .with_max_keyframe_interval(60)
             .build()?;
         // SDK documented compression property names and ITU-R709 value. Keep
         // the encoded VUI consistent with the shared BGRA conversion matrix.
@@ -60,6 +101,7 @@ impl Encoder {
             session,
             size: (width, height),
             started: Instant::now(),
+            codec,
         })
     }
     pub fn size(&self) -> (usize, usize) {
@@ -142,10 +184,11 @@ impl Encoder {
         let data = block
             .copy_data_bytes(0, block.data_length())
             .ok_or_else(|| anyhow::anyhow!("VT data copy failed"))?;
-        let (annex_b, keyframe) = crate::annexb::from_avcc(
+        let (annex_b, keyframe) = crate::annexb::from_avcc_for(
             &data,
             parameters.nal_unit_header_length as usize,
             &parameters.parameter_sets,
+            self.codec,
         )?;
         anyhow::ensure!(!idr || keyframe, "VT ignored IDR request");
         Ok(EncodedFrame {

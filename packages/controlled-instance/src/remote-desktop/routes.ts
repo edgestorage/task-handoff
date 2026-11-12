@@ -15,6 +15,8 @@ import {
 } from "@task-handoff/protocol/remote-desktop";
 import type { DesktopService } from "./service";
 import type { ComponentEvent } from "./component-host";
+const SIGNAL_MESSAGES_PER_SECOND=64;
+const SIGNAL_MAX_QUEUED=SIGNAL_MESSAGES_PER_SECOND;
 const Owner=z.object({actorId:z.string().min(1).max(4096),deviceSessionId:z.string().min(1).max(4096)}).strict();
 const Base=z.object({requestId:z.string().min(1).refine(value=>Buffer.byteLength(value,"utf8")<=128),owner:Owner}).strict();
 const Session=Base.extend({viewerSessionId:z.string().min(1).max(4096)});
@@ -85,7 +87,10 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
     socket.on("message",(data,isBinary)=>{
       if(closed)return;
       const now=performance.now();if(now-rateStart>=1000){rateStart=now;messages=0;}
-      if(isBinary||(Array.isArray(data)?data.reduce((bytes,chunk)=>bytes+chunk.byteLength,0):data.byteLength)>1024*1024||++messages>64||++queued>8){socket.close(1008,"Invalid signaling message or limit exceeded.");return;}
+      // Chromium emits a normal trickle-ICE burst of roughly 10 candidates in
+      // one task. Keep one full rate-limit window queued for the component;
+      // the old single-digit backlog limit treated that valid burst as abuse.
+      if(isBinary||(Array.isArray(data)?data.reduce((bytes,chunk)=>bytes+chunk.byteLength,0):data.byteLength)>1024*1024||++messages>SIGNAL_MESSAGES_PER_SECOND||++queued>SIGNAL_MAX_QUEUED){socket.close(1008,"Invalid signaling message or limit exceeded.");return;}
       chain=chain.then(async()=>{
         if(closed)return;
         const raw:unknown=JSON.parse(data.toString());

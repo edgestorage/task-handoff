@@ -1,4 +1,4 @@
-import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from 'react';
+import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback, type ReactNode } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
@@ -28,6 +28,7 @@ import { translate, useI18n, type Translate } from '../i18n';
 import { TimelineActivityGroup } from './TimelineActivityGroup';
 import type { MobileToolActivityWindow } from './use-tool-activity-window';
 import { formatSessionTurnTime } from '../session-time';
+import { useSessionPreviewPresentation } from '../remote-desktop/session-preview-presentation';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
 import { AnimatedDisclosure, DisclosureChevron } from './AnimatedDisclosure';
 
@@ -99,7 +100,10 @@ export function SessionDetail({
   keyboardViewportRevision = 0,
   instanceName,
   onOpenRemoteDesktopPreview,
+  onOpenRemoteDesktopDetail,
+  onRemoveRemoteDesktop,
   remoteDesktopTarget,
+  renderRemoteDesktopInlinePreview,
   workspaceName,
 }: {
   client?: ControlPlaneClient;
@@ -135,11 +139,21 @@ export function SessionDetail({
   keyboardViewportRevision?: number;
   instanceName?: string;
   onOpenRemoteDesktopPreview?(): void;
+  onOpenRemoteDesktopDetail?(): void;
+  onRemoveRemoteDesktop?(): void;
   remoteDesktopTarget?: PersistedCaptureTarget;
+  renderRemoteDesktopInlinePreview?(input: { instanceId: string; onOpenDetail(): void; sessionId: string }): ReactNode;
   workspaceName?: string;
 }) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const previewPresentation = useSessionPreviewPresentation();
+  const canExpandRemoteDesktopInline = previewPresentation === 'expanded' && Boolean(renderRemoteDesktopInlinePreview);
+  const remoteDesktopExpansionKey = `${previewPresentation}:${session?.id || ''}:${remoteDesktopTarget?.kind || ''}:${remoteDesktopTarget?.sourceRef || ''}`;
+  const [remoteDesktopExpansion, setRemoteDesktopExpansion] = useState({ expanded: false, key: remoteDesktopExpansionKey });
+  const remoteDesktopExpanded = canExpandRemoteDesktopInline
+    && remoteDesktopExpansion.key === remoteDesktopExpansionKey
+    && remoteDesktopExpansion.expanded;
   const adaptive = useAdaptiveContentLayout(ADAPTIVE_READING_MAX_WIDTH);
   const turns = useMemo(() => aiSessionDisplayTurns(session), [session]);
   const latestIndex = Math.max(0, turns.length - 1);
@@ -314,10 +328,28 @@ export function SessionDetail({
       </View> : null}
     </View>
   </View>;
-  const listFooter = (!timelineVisible && showsLatest && activityText) || session.subAgents.length || (remoteDesktopTarget && onOpenRemoteDesktopPreview) ? <View style={styles.footer}>
+  const hasRemoteDesktopEntry = Boolean(remoteDesktopTarget && onOpenRemoteDesktopPreview);
+  const listFooter = (!timelineVisible && showsLatest && activityText) || session.subAgents.length || hasRemoteDesktopEntry ? <View style={styles.footer}>
     {!timelineVisible && showsLatest && activityText ? <View style={styles.tool}><ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={session.status === 'running'} textStyle={styles.currentActivityText}>{activityText}</ToolActivityText></View> : null}
     <SubAgents agents={session.subAgents} locale={locale} />
-    {remoteDesktopTarget && onOpenRemoteDesktopPreview ? <SessionRemoteDesktopEntry target={remoteDesktopTarget} onPress={onOpenRemoteDesktopPreview} /> : null}
+    {remoteDesktopTarget && onOpenRemoteDesktopPreview ? <SessionRemoteDesktopEntry
+      expanded={remoteDesktopExpanded}
+      onOpenDetail={onOpenRemoteDesktopDetail}
+      onPress={() => {
+        if (canExpandRemoteDesktopInline) setRemoteDesktopExpansion({ expanded: !remoteDesktopExpanded, key: remoteDesktopExpansionKey });
+        else onOpenRemoteDesktopPreview();
+      }}
+      onRemove={onRemoveRemoteDesktop}
+      presentation={canExpandRemoteDesktopInline ? 'expanded' : 'floating'}
+      preview={remoteDesktopExpanded && instanceId && session
+        ? renderRemoteDesktopInlinePreview?.({
+          instanceId,
+          onOpenDetail: onOpenRemoteDesktopDetail ?? (() => undefined),
+          sessionId: session.id,
+        })
+        : null}
+      target={remoteDesktopTarget}
+    /> : null}
   </View> : null;
   const listContentStyle = adaptiveContentContainerStyle([styles.list, {
     backgroundColor: colors.background,
@@ -662,8 +694,9 @@ function DetailItemContent({
     </View> : null}
     <MessageActions item={item} onContinueFromTurn={onContinueFromTurn} />
   </View>;
-  if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</MarkdownContent></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
-  if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</MarkdownContent></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
+  const messageActionsVisible = Boolean(item.actions && item.text);
+  if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd || messageActionsVisible}>{item.text ?? ''}</MarkdownContent></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
+  if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd || messageActionsVisible}>{item.text ?? ''}</MarkdownContent></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (item.role === 'warning') return <RetryWarning text={item.text ?? ''} />;
   return <View style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><Icon color={colors.error} name="alert-circle" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>{t('sessions.error')}</Text><MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile}>{item.text ?? ''}</MarkdownContent></View></View>;
 }
@@ -897,33 +930,72 @@ function SubAgents({ agents, locale }: { agents: ControlPlaneAiSessionSummary['s
   );
 }
 
-function SessionRemoteDesktopEntry({ onPress, target }: { onPress(): void; target: PersistedCaptureTarget }) {
+function SessionRemoteDesktopEntry({ expanded, onOpenDetail, onPress, onRemove, presentation, preview, target }: {
+  expanded: boolean;
+  onOpenDetail?(): void;
+  onPress(): void;
+  onRemove?(): void;
+  presentation: 'floating' | 'expanded';
+  preview?: ReactNode;
+  target: PersistedCaptureTarget;
+}) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const title = sourceTargetLabel(target, t);
   const detail = target.subtitle?.trim() || sourceKindLabel(target.kind, t);
-  return <Pressable
-    accessibilityHint={t('remoteDesktop.previewHint')}
-    accessibilityLabel={`${t('remoteDesktop.open')}: ${title}`}
-    accessibilityRole="button"
-    onPress={onPress}
-    style={({ pressed }) => [styles.remoteDesktopEntry, {
+  return <View
+    style={[styles.remoteDesktopEntry, {
       backgroundColor: colors.surface,
       borderColor: colors.border,
-    }, pressed && styles.remoteDesktopEntryPressed]}
-    testID="session-remote-desktop-entry"
+    }]}
+    testID="session-remote-desktop-card"
   >
-    <View style={[styles.remoteDesktopIcon, { backgroundColor: colors.primarySoft }]}>
-      <Icon color={colors.primary} name="desktop-outline" size={20} />
+    <View style={styles.remoteDesktopRow}>
+    <Pressable
+      accessibilityHint={presentation === 'expanded'
+        ? t(expanded ? 'remoteDesktop.collapseInSessionHint' : 'remoteDesktop.expandInSessionHint')
+        : t('remoteDesktop.previewHint')}
+      accessibilityLabel={`${t('remoteDesktop.open')}: ${title}`}
+      accessibilityRole="button"
+      accessibilityState={presentation === 'expanded' ? { expanded } : undefined}
+      onPress={onPress}
+      style={({ pressed }) => [styles.remoteDesktopPreview, pressed && styles.remoteDesktopEntryPressed]}
+      testID="session-remote-desktop-entry"
+    >
+      <View style={[styles.remoteDesktopIcon, { backgroundColor: colors.primarySoft }]}>
+        <Icon color={colors.primary} name="desktop-outline" size={20} />
+      </View>
+      <View style={styles.remoteDesktopCopy}>
+        <Text numberOfLines={1} style={[styles.remoteDesktopTitle, { color: colors.text }]}>{title}</Text>
+        <Text numberOfLines={1} style={[styles.remoteDesktopDetail, { color: colors.textMuted }]}>
+          {t('remoteDesktop.lastOpened')} · {detail}
+        </Text>
+      </View>
+    </Pressable>
+    {onOpenDetail ? <Pressable
+      accessibilityLabel={`${t('remoteDesktop.openDetails')}: ${title}`}
+      accessibilityRole="button"
+      hitSlop={4}
+      onPress={onOpenDetail}
+      style={({ pressed }) => [styles.remoteDesktopAction, pressed && { backgroundColor: colors.primarySoft }]}
+      testID="session-remote-desktop-open-detail"
+    >
+      <Icon color={colors.primary} name="open-outline" size={18} />
+    </Pressable> : null}
+    {onRemove ? <Pressable
+      accessibilityHint={t('remoteDesktop.removeFromSessionHint')}
+      accessibilityLabel={`${t('remoteDesktop.removeFromSession')}: ${title}`}
+      accessibilityRole="button"
+      hitSlop={4}
+      onPress={onRemove}
+      style={({ pressed }) => [styles.remoteDesktopAction, pressed && { backgroundColor: colors.surfaceHover }]}
+      testID="session-remote-desktop-remove"
+    >
+      <Icon color={colors.textMuted} name="close-outline" size={19} />
+    </Pressable> : null}
     </View>
-    <View style={styles.remoteDesktopCopy}>
-      <Text numberOfLines={1} style={[styles.remoteDesktopTitle, { color: colors.text }]}>{title}</Text>
-      <Text numberOfLines={1} style={[styles.remoteDesktopDetail, { color: colors.textMuted }]}>
-        {t('remoteDesktop.lastOpened')} · {detail}
-      </Text>
-    </View>
-    <Icon color={colors.textMuted} name="open-outline" size={18} />
-  </Pressable>;
+    {expanded ? preview : null}
+  </View>;
 }
 
 const styles = StyleSheet.create({
@@ -950,12 +1022,15 @@ const styles = StyleSheet.create({
   emptyText: { maxWidth: 260, textAlign: 'center' },
   footer: { gap: 18, marginTop: 6 },
   tool: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 24, paddingHorizontal: 2 },
-  remoteDesktopEntry: { alignItems: 'center', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 64, paddingHorizontal: 14, paddingVertical: 10 },
+  remoteDesktopEntry: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, marginTop: mobileWebMetric(12), overflow: 'hidden' },
+  remoteDesktopRow: { alignItems: 'center', flexDirection: 'row', minHeight: 64, paddingRight: 8 },
+  remoteDesktopPreview: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 12, minHeight: 64, minWidth: 0, paddingLeft: 14, paddingRight: 4 },
   remoteDesktopEntryPressed: { opacity: 0.72 },
   remoteDesktopIcon: { alignItems: 'center', borderRadius: 10, height: 38, justifyContent: 'center', width: 38 },
   remoteDesktopCopy: { flex: 1, gap: 3, minWidth: 0 },
   remoteDesktopTitle: { fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
   remoteDesktopDetail: { fontSize: mobileWebType.tiny, lineHeight: mobileWebType.timeLine },
+  remoteDesktopAction: { alignItems: 'center', borderRadius: 9, height: 36, justifyContent: 'center', width: 36 },
   header: { gap: 12, marginBottom: 20 },
   itemSeparator: { height: mobileWebMetric(16) },
   modePicker: { alignSelf: 'center', maxWidth: '100%', width: 210 },
@@ -982,7 +1057,7 @@ const styles = StyleSheet.create({
   conversationEmpty: { paddingVertical: 32 },
   userMessage: { alignSelf: 'flex-end', maxWidth: '90%', minWidth: 0 },
   assistantMessage: { alignSelf: 'stretch', minWidth: 0 },
-  messageActions: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(6), marginTop: mobileWebMetric(8), minHeight: mobileWebMetric(26) },
+  messageActions: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(6), marginTop: mobileWebMetric(4), minHeight: mobileWebMetric(26) },
   messageActionsUser: { justifyContent: 'flex-end' },
   messageActionsAssistant: { justifyContent: 'flex-start' },
   messageTime: { fontSize: mobileWebType.meta, lineHeight: mobileWebType.timeLine, paddingHorizontal: mobileWebMetric(6) },

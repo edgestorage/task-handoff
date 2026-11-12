@@ -19,6 +19,7 @@ import {
   remoteDesktopPreferencesFor,
   updateRemoteDesktopPreferences,
   type PersistedCaptureTarget,
+  type RemoteDesktopCapturePrecision,
   type RemoteDesktopFrameRate,
   type RemoteDesktopMouseMode,
   type RemoteDesktopResolution,
@@ -39,10 +40,11 @@ const noSubscribe = () => () => undefined;
 export type UseRemoteDesktopOptions = {
   sessionId?: string;
   interactive?: boolean;
+  resolutionOverride?: RemoteDesktopResolution;
 };
 
 export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOptions = {}) {
-  const { interactive = true, sessionId } = options;
+  const { interactive = true, resolutionOverride, sessionId } = options;
   const runtime = useMobileControlPlaneRuntime();
   const { controlPlaneId, state } = useActiveDirectories();
   const focused = useIsFocused();
@@ -50,6 +52,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
   const active = focused && appPhase === 'active';
   const activeRef = useLatestRef(active);
   const interactiveRef = useLatestRef(interactive);
+  const resolutionOverrideRef = useLatestRef(resolutionOverride);
   const [acquired, setAcquired] = useState<{ key: string; controller: RemoteDesktopController }>();
   const runtimeKey = runtime.api && runtime.transport && controlPlaneId
     ? JSON.stringify([controlPlaneId, instanceId, sessionId || 'direct'])
@@ -57,6 +60,11 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
   const controller = acquired && acquired.key === runtimeKey ? acquired.controller : undefined;
   const instance = state.instances.find((candidate) => candidate.id === instanceId);
   const capability = directoryRemoteDesktopCapabilities(instance?.capabilities);
+  const videoCodecKey = capability?.video.codecs.join(',') ?? '';
+  const videoCodecs = useMemo(
+    () => videoCodecKey ? videoCodecKey.split(',') : [],
+    [videoCodecKey],
+  );
   const sessionLink = useSessionRemoteDesktopLink(controlPlaneId, instanceId, sessionId || '__direct__');
 
   const storedPreferences = useSyncExternalStore(
@@ -73,7 +81,8 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
       ?? (controllerSnapshot?.phase === 'stopped' ? controllerSnapshot.target : undefined)
       ?? storedPreferences.target
     : storedPreferences.target;
-  const preferences = useMemo(() => ({ ...storedPreferences, target }), [storedPreferences, target]);
+  const resolution = resolutionOverride ?? storedPreferences.resolution;
+  const preferences = useMemo(() => ({ ...storedPreferences, resolution, target }), [resolution, storedPreferences, target]);
 
   useEffect(() => subscribeToAppLifecycle(setAppPhase), []);
 
@@ -95,14 +104,16 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
         active: activeRef.current,
         interactive: interactiveRef.current,
         target: nextTarget,
-        resolution: current.resolution,
+        resolution: resolutionOverrideRef.current ?? current.resolution,
         frameRate: current.frameRate,
+        capturePrecision: current.capturePrecision,
         transportAvailability: current.transportAvailability,
+        videoCodecs,
       });
       setAcquired({ key: runtimeKey, controller: next });
     });
     return () => { live = false; };
-  }, [activeRef, controlPlaneId, instanceId, interactiveRef, runtime.api, runtime.transport, runtimeKey, sessionId]);
+  }, [activeRef, controlPlaneId, instanceId, interactiveRef, resolutionOverrideRef, runtime.api, runtime.transport, runtimeKey, sessionId, videoCodecs]);
 
   useEffect(() => {
     if (!controller) return;
@@ -122,12 +133,20 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
   }, [controller, target]);
 
   useEffect(() => {
-    controller?.setResolution(storedPreferences.resolution);
-  }, [controller, storedPreferences.resolution]);
+    controller?.setResolution(resolution);
+  }, [controller, resolution]);
 
   useEffect(() => {
     controller?.setFrameRate(storedPreferences.frameRate);
   }, [controller, storedPreferences.frameRate]);
+
+  useEffect(() => {
+    controller?.setCapturePrecision(storedPreferences.capturePrecision);
+  }, [controller, storedPreferences.capturePrecision]);
+
+  useEffect(() => {
+    controller?.setVideoCodecs?.(videoCodecs);
+  }, [controller, videoCodecs]);
 
   useEffect(() => {
     controller?.setTransportAvailability(storedPreferences.transportAvailability);
@@ -145,8 +164,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
     } else {
       updateRemoteDesktopPreferences(controlPlaneId, instanceId, { target: nextTarget });
     }
-    void controller?.switchTarget(nextTarget);
-  }, [controlPlaneId, controller, instanceId, sessionId]);
+  }, [controlPlaneId, instanceId, sessionId]);
 
   const setResolution = useCallback((resolution: RemoteDesktopResolution) => {
     updateRemoteDesktopPreferences(controlPlaneId, instanceId, { resolution });
@@ -156,6 +174,11 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
   const setFrameRate = useCallback((frameRate: RemoteDesktopFrameRate) => {
     updateRemoteDesktopPreferences(controlPlaneId, instanceId, { frameRate });
     controller?.setFrameRate(frameRate);
+  }, [controlPlaneId, controller, instanceId]);
+
+  const setCapturePrecision = useCallback((capturePrecision: RemoteDesktopCapturePrecision) => {
+    updateRemoteDesktopPreferences(controlPlaneId, instanceId, { capturePrecision });
+    controller?.setCapturePrecision(capturePrecision);
   }, [controlPlaneId, controller, instanceId]);
 
   const setMouseMode = useCallback((mouseMode: RemoteDesktopMouseMode) => {
@@ -205,6 +228,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
     ready: Boolean(runtime.api && runtime.transport && controller),
     reconnect,
     disconnect,
+    setCapturePrecision,
     setFrameRate,
     setInputEnabled,
     setMouseMode,

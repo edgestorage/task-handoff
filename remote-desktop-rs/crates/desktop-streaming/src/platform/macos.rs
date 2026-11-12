@@ -4,8 +4,9 @@
 //! bridging; this adapter owns only bounded frames and redacted backend errors.
 use super::frame_mailbox::FrameMailbox;
 use crate::{
+    capture::resolve_capture_size,
     error::BackendError,
-    traits::{Geometry, RawFrame},
+    traits::{CapturePrecision, Geometry, RawFrame},
 };
 use core_graphics::access::ScreenCaptureAccess;
 use screencapturekit::{cm::SCFrameStatus, cv::CVPixelBufferLockFlags, prelude::*};
@@ -78,6 +79,8 @@ pub struct Capture {
     filter: SCContentFilter,
     config: SCStreamConfiguration,
     geometry: Geometry,
+    capture_size: (u32, u32),
+    precision: CapturePrecision,
     display_geometry: Option<super::display_geometry::DisplayGeometry>,
     pixel_size: (usize, usize),
     window: Option<super::macos_window::Identity>,
@@ -112,11 +115,11 @@ impl Capture {
         let retained_target = target.clone();
         let display_target = matches!(&target, Target::Display(_));
         let mut window_identity = None;
-        let (rect, width, height, filter) = match target {
+        let (rect, width, height, filter) = match &target {
             Target::Display(display) => {
                 let rect = display.frame();
                 let filter = SCContentFilter::create()
-                    .with_display(&display)
+                    .with_display(display)
                     .with_excluding_windows(&[])
                     .build()
                     .map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))?;
@@ -137,7 +140,7 @@ impl Capture {
                 };
                 window_identity = Some(identity);
                 let filter = SCContentFilter::create()
-                    .with_window(&window)
+                    .with_window(window)
                     .build()
                     .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))?;
                 (
@@ -161,9 +164,11 @@ impl Capture {
             width > 0 && height > 0 && width <= 8192 && height <= 8192,
             BackendError::InvalidGeometry
         );
+        let precision = CapturePrecision::Auto;
+        let capture_size = capture_size_for(&retained_target, width, height, precision)?;
         let config = SCStreamConfiguration::new()
-            .with_width(width)
-            .with_height(height)
+            .with_width(capture_size.0)
+            .with_height(capture_size.1)
             .with_pixel_format(PixelFormat::BGRA)
             .with_shows_cursor(show_cursor)
             .with_captures_audio(false)
@@ -177,8 +182,10 @@ impl Capture {
             filter,
             config,
             geometry,
+            capture_size,
+            precision,
             display_geometry,
-            pixel_size: (width as usize, height as usize),
+            pixel_size: (capture_size.0 as usize, capture_size.1 as usize),
             window: window_identity,
             stream: None,
             latest: FrameMailbox::default(),
@@ -190,6 +197,33 @@ impl Capture {
     pub fn window_input(&self) -> Option<(super::macos_window::Identity, Geometry)> {
         self.window.map(|identity| (identity, self.geometry))
     }
+    pub fn set_capture_precision(&mut self, precision: CapturePrecision) -> anyhow::Result<bool> {
+        if precision == self.precision {
+            return Ok(false);
+        }
+        self.precision = precision;
+        self.reconfigure_capture_size()?;
+        Ok(true)
+    }
+    pub fn capture_dimensions(&self) -> (u32, u32) {
+        self.capture_size
+    }
+    fn reconfigure_capture_size(&mut self) -> anyhow::Result<()> {
+        let next = capture_size_for(
+            &self.target,
+            self.geometry.width,
+            self.geometry.height,
+            self.precision,
+        )?;
+        if next == self.capture_size {
+            return Ok(());
+        }
+        self.pause()?;
+        self.capture_size = next;
+        self.pixel_size = (next.0 as usize, next.1 as usize);
+        self.config = self.config.clone().with_width(next.0).with_height(next.1);
+        Ok(())
+    }
     pub fn refresh_geometry(&mut self) -> anyhow::Result<Geometry> {
         if let Some(identity) = self.window {
             let current = super::macos_window::geometry(identity)?;
@@ -197,18 +231,24 @@ impl Capture {
                 current.width <= 8192 && current.height <= 8192,
                 BackendError::InvalidGeometry
             );
-            if current != self.geometry {
+            let next_capture_size =
+                capture_size_for(&self.target, current.width, current.height, self.precision)?;
+            if current != self.geometry || next_capture_size != self.capture_size {
                 self.pause()?;
                 self.geometry = current;
-                self.pixel_size = (current.width as usize, current.height as usize);
+                self.capture_size = next_capture_size;
+                self.pixel_size = (next_capture_size.0 as usize, next_capture_size.1 as usize);
                 self.config = self
                     .config
                     .clone()
-                    .with_width(current.width)
-                    .with_height(current.height);
+                    .with_width(next_capture_size.0)
+                    .with_height(next_capture_size.1);
             }
         } else if let Some(display) = &self.display_geometry {
             display.validate()?;
+        }
+        if self.window.is_none() && self.display_geometry.is_some() {
+            self.reconfigure_capture_size()?;
         }
         Ok(self.geometry)
     }
@@ -291,6 +331,75 @@ impl Capture {
         }))
     }
 }
+
+fn backing_scale_for_display(display: core_graphics::display::CGDisplay) -> (f64, f64) {
+    let Some(mode) = display.display_mode() else {
+        return (1.0, 1.0);
+    };
+    let width = mode.width() as f64;
+    let height = mode.height() as f64;
+    let pixel_width = mode.pixel_width() as f64;
+    let pixel_height = mode.pixel_height() as f64;
+    if width <= 0.0 || height <= 0.0 || pixel_width <= 0.0 || pixel_height <= 0.0 {
+        return (1.0, 1.0);
+    }
+    (pixel_width / width, pixel_height / height)
+}
+
+fn backing_scale_for_window(origin_x: f64, origin_y: f64, width: f64, height: f64) -> (f64, f64) {
+    use core_graphics::display::CGDisplay;
+    let center_x = origin_x + width / 2.0;
+    let center_y = origin_y + height / 2.0;
+    let mut displays = CGDisplay::active_displays()
+        .unwrap_or_default()
+        .into_iter()
+        .map(CGDisplay::new)
+        .filter(|display| {
+            let bounds = display.bounds();
+            center_x >= bounds.origin.x
+                && center_x < bounds.origin.x + bounds.size.width
+                && center_y >= bounds.origin.y
+                && center_y < bounds.origin.y + bounds.size.height
+        });
+    let display = displays.next().unwrap_or_else(CGDisplay::main);
+    backing_scale_for_display(display)
+}
+
+fn capture_size_for(
+    target: &Target,
+    logical_width: u32,
+    logical_height: u32,
+    precision: CapturePrecision,
+) -> anyhow::Result<(u32, u32)> {
+    let (scale_x, scale_y) = match target {
+        Target::Display(display) => {
+            backing_scale_for_display(core_graphics::display::CGDisplay::new(display.display_id()))
+        }
+        Target::Window(window) => {
+            let rect = window.frame();
+            backing_scale_for_window(
+                rect.origin.x,
+                rect.origin.y,
+                rect.size.width,
+                rect.size.height,
+            )
+        }
+    };
+    let native_width = (logical_width as f64 * scale_x).round().max(1.0);
+    let native_height = (logical_height as f64 * scale_y).round().max(1.0);
+    anyhow::ensure!(
+        native_width <= u32::MAX as f64 && native_height <= u32::MAX as f64,
+        crate::error::BackendError::InvalidGeometry
+    );
+    resolve_capture_size(
+        native_width as u32,
+        native_height as u32,
+        precision,
+        scale_x,
+        scale_y,
+    )
+}
+
 impl Drop for Capture {
     fn drop(&mut self) {
         let _ = self.pause();

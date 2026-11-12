@@ -4,6 +4,7 @@ import type { MobileControlPlaneTransport } from '../control-plane/transport';
 import { RemoteDesktopController } from './controller';
 import type {
   PersistedCaptureTarget,
+  RemoteDesktopCapturePrecision,
   RemoteDesktopFrameRate,
   RemoteDesktopResolution,
   RemoteDesktopTransportAvailability,
@@ -52,7 +53,9 @@ export function acquireRemoteDesktopController(input: {
   target: PersistedCaptureTarget;
   resolution: RemoteDesktopResolution;
   frameRate: RemoteDesktopFrameRate;
+  capturePrecision: RemoteDesktopCapturePrecision;
   transportAvailability: RemoteDesktopTransportAvailability;
+  videoCodecs?: readonly string[];
 }) {
   const key = remoteDesktopControllerKey(input.controlPlaneId, input.instanceId, input.sessionId);
   const existing = entries.get(key);
@@ -74,7 +77,9 @@ export function acquireRemoteDesktopController(input: {
     target: input.target,
     resolution: input.resolution,
     frameRate: input.frameRate,
+    capturePrecision: input.capturePrecision,
     transportAvailability: input.transportAvailability,
+    videoCodecs: input.videoCodecs,
   });
   entries.set(key, {
     api: input.api,

@@ -6,8 +6,6 @@ import { unsupportedRemoteDesktopCapabilities, normalizeRemoteDesktopCapabilitie
 export type DesktopPackage = { binary: string; version: string };
 export type DesktopServiceOptions = {
   dataDir: string;
-  /** Managed-app release metadata used only for update reconciliation. */
-  version: string;
   mode: "local" | "virtual";
   // Derived from App ownership/detection. Never search PATH or adopt a process.
   installedPackage(): DesktopPackage | undefined;
@@ -22,6 +20,7 @@ export class DesktopService extends EventEmitter {
   private disposed=false;
   private projected?: RemoteDesktopCapabilities;
   private failure?: string;
+  private protocolUpdateRequested = false;
   private queue: Promise<unknown> = Promise.resolve();
   constructor(private readonly options: DesktopServiceOptions) {
     super(); this.settings = new DesktopSettings(options.dataDir);
@@ -41,24 +40,24 @@ export class DesktopService extends EventEmitter {
     if (this.disposed || !this.options.canStart()) return closed("REMOTE_DESKTOP_UPDATING");
     return this.projected ?? closed(this.failure ?? "REMOTE_DESKTOP_NOT_PROBED");
   }
-  /** Reconcile only an already owned package through the existing App queue.
-   * Called at startup or an explicit retry, never from job-terminal refresh. */
-  reconcile() { return this.serial(async()=>{await this.reconcileInside();return this.refreshInside();}); }
-  private async reconcileInside(){
-    if(this.disposed||!this.options.canStart())return;
-    let installed:DesktopPackage|undefined;
-    try{installed=this.options.installedPackage();}catch{return;}
-    if(!installed||installed.version===this.options.version)return;
-    try{await this.options.requestUpdate?.();}catch{/* App job/availability owns update diagnostics; core remains running. */}
-  }
+  /** Compatibility is owned by the IPC handshake. A semver difference never
+   * blocks or replaces a protocol-compatible component. */
+  reconcile() { return this.refresh(); }
   /** Startup, explicit preflight and package terminal events only; never polling. */
-  refresh() { return this.serial(()=>this.refreshInside()); }
+  refresh() { return this.serial(async()=>{const status=await this.refreshInside();this.maybeRequestProtocolUpdate(status);return status;}); }
+  private maybeRequestProtocolUpdate(status: RemoteDesktopCapabilities) {
+    if (status.reason !== "REMOTE_DESKTOP_PROTOCOL_MISMATCH" || this.protocolUpdateRequested || !this.options.requestUpdate) return;
+    this.protocolUpdateRequested = true;
+    // The App queue stops this service before changing files, so never await
+    // the request from inside the service's serialized section.
+    queueMicrotask(()=>{void Promise.resolve(this.options.requestUpdate?.()).catch(()=>undefined);});
+  }
   private async refreshInside() {
     if (this.status().reason && ["REMOTE_DESKTOP_NOT_INSTALLED","REMOTE_DESKTOP_PACKAGE_INVALID","REMOTE_DESKTOP_DISABLED","REMOTE_DESKTOP_UPDATING"].includes(this.status().reason!)) { this.emit("changed"); return this.status(); }
     try {
       const reply=await (await this.ensure()).request("preflight",{type:"probe"});
       if(reply.type!=="capability")throw new Error("REMOTE_DESKTOP_COMPONENT_UNAVAILABLE");
-      this.projected=normalizeRemoteDesktopCapabilities(reply.capability);this.failure=undefined;
+      this.projected=normalizeRemoteDesktopCapabilities(reply.capability);this.failure=undefined;this.protocolUpdateRequested=false;
     } catch(error) {
       this.projected=undefined;this.failure=error instanceof Error && /^REMOTE_DESKTOP_[A-Z_]+$/.test(error.message) ? error.message : "REMOTE_DESKTOP_COMPONENT_UNAVAILABLE";
     }
@@ -69,7 +68,7 @@ export class DesktopService extends EventEmitter {
       if (this.disposed || !this.options.canStart()) throw new Error("REMOTE_DESKTOP_UPDATING");
       const settings = this.settings.set(enabled);
       if (!enabled) await this.stop();
-      else {await this.reconcileInside();await this.refreshInside();}
+      else {const status=await this.refreshInside();this.maybeRequestProtocolUpdate(status);}
       this.emit("changed"); return settings;
     });
   }
@@ -106,6 +105,7 @@ export class DesktopService extends EventEmitter {
   packageChanged(operation: string, succeeded: boolean) {
     return this.serial(async () => {
       if (operation === "uninstall" && succeeded) this.settings.clear();
+      this.protocolUpdateRequested=false;
       this.emit("changed");
     });
   }

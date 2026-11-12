@@ -44,6 +44,10 @@ pub struct RemoteDesktopSourceProvider {
 pub struct RemoteDesktopCapture {
     pub backends: Vec<String>,
     pub cursor: bool,
+    /// Additive capability domain. Components that predate capture precision
+    /// omit it; readers treat that as no selectable precision modes.
+    #[serde(default)]
+    pub precision_modes: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -110,7 +114,7 @@ impl RemoteDesktopFallbackCapabilities {
             max_width: 1920,
             max_height: 1080,
             max_frame_rate: 30,
-            max_bitrate: 4_000_000,
+            max_bitrate: 8_000_000,
         }
     }
 }
@@ -172,6 +176,7 @@ pub fn deserialize_remote_desktop<'de, D: serde::Deserializer<'de>>(
                     .all(|provider| !provider.kind.is_empty())
                 && [
                     &c.capture.backends,
+                    &c.capture.precision_modes,
                     &c.encoders,
                     &c.input.backends,
                     &c.transport,

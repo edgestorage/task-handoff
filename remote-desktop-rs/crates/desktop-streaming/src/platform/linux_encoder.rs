@@ -52,8 +52,8 @@ impl Encoder {
         anyhow::ensure!(
             width > 0
                 && height > 0
-                && width <= 1920
-                && height <= 1080
+                && width <= 3840
+                && height <= 2160
                 && width.is_multiple_of(2)
                 && height.is_multiple_of(2),
             "invalid VA dimensions"

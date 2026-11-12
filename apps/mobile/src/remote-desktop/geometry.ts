@@ -7,6 +7,9 @@ export const IDENTITY_REMOTE_DESKTOP_TRANSFORM: RemoteDesktopTransform = { scale
 export const MIN_REMOTE_DESKTOP_ZOOM = 1;
 export const MAX_REMOTE_DESKTOP_ZOOM = 4;
 export const REMOTE_DESKTOP_MIN_VISIBLE_EDGE = 24;
+export const REMOTE_DESKTOP_TRACKPAD_EDGE_INSET = 20;
+const MULTITOUCH_TAP_TRAVEL_PX = 8;
+const MULTITOUCH_TAP_SPREAD_PX = 10;
 
 /** The visible video rectangle produced by `objectFit: contain`. */
 export function remoteDesktopContainRect(viewport: RemoteDesktopSize, content: RemoteDesktopSize): RemoteDesktopRect {
@@ -118,6 +121,16 @@ export function remoteDesktopTouchOrientation(a: RemoteDesktopPoint, b: RemoteDe
   return Math.abs(a.x - b.x) >= Math.abs(a.y - b.y) ? 'horizontal' : 'vertical';
 }
 
+export function remoteDesktopMultiTouchInTapDeadZone(
+  startMidpoint: RemoteDesktopPoint,
+  currentMidpoint: RemoteDesktopPoint,
+  startDistance: number,
+  currentDistance: number,
+) {
+  return remoteDesktopTouchDistance(startMidpoint, currentMidpoint) < MULTITOUCH_TAP_TRAVEL_PX
+    && Math.abs(currentDistance - startDistance) < MULTITOUCH_TAP_SPREAD_PX;
+}
+
 /**
  * A wheel event must scroll at the stationary pointer. In trackpad mode that is
  * the virtual cursor; in direct mode it is the last real pointer position.
@@ -128,6 +141,82 @@ export function remoteDesktopScrollAnchor(
   pointer?: RemoteDesktopPoint,
 ): RemoteDesktopPoint {
   return mouseMode === 'trackpad' ? cursor : pointer ?? cursor;
+}
+
+/**
+ * Moves the trackpad cursor in normalized content coordinates. Once the cursor
+ * reaches the visible edge while zoomed, the remaining movement pans the
+ * content so the cursor stays pinned inside the viewport.
+ */
+export function remoteDesktopTrackpadMove(
+  cursor: RemoteDesktopPoint,
+  delta: RemoteDesktopPoint,
+  transform: RemoteDesktopTransform,
+  viewport: RemoteDesktopSize,
+  content: RemoteDesktopSize,
+  edgeInset = REMOTE_DESKTOP_TRACKPAD_EDGE_INSET,
+): { cursor: RemoteDesktopPoint; transform: RemoteDesktopTransform } {
+  const nextCursor = {
+    x: clamp(cursor.x + delta.x, 0, 1),
+    y: clamp(cursor.y + delta.y, 0, 1),
+  };
+  const rect = remoteDesktopContainRect(viewport, content);
+  const constrained = constrainRemoteDesktopTransform(transform, viewport, rect);
+  if (constrained.scale <= MIN_REMOTE_DESKTOP_ZOOM + 0.001 || rect.width <= 0 || rect.height <= 0) {
+    return { cursor: nextCursor, transform: constrained };
+  }
+  const insetX = Math.min(edgeInset, viewport.width / 2);
+  const insetY = Math.min(edgeInset, viewport.height / 2);
+  const cursorView = remoteDesktopCursorViewPoint(nextCursor, constrained, viewport, rect);
+  let translateX = constrained.translateX;
+  let translateY = constrained.translateY;
+  if (cursorView.x < insetX) translateX += insetX - cursorView.x;
+  else if (cursorView.x > viewport.width - insetX) translateX -= cursorView.x - (viewport.width - insetX);
+  if (cursorView.y < insetY) translateY += insetY - cursorView.y;
+  else if (cursorView.y > viewport.height - insetY) translateY -= cursorView.y - (viewport.height - insetY);
+  return {
+    cursor: nextCursor,
+    transform: constrainRemoteDesktopTransform({ ...constrained, translateX, translateY }, viewport, rect),
+  };
+}
+
+/** Keeps the virtual cursor inside the visible frame after a two-finger pan. */
+export function keepRemoteDesktopCursorVisible(
+  cursor: RemoteDesktopPoint,
+  transform: RemoteDesktopTransform,
+  viewport: RemoteDesktopSize,
+  content: RemoteDesktopSize,
+  edgeInset = REMOTE_DESKTOP_TRACKPAD_EDGE_INSET,
+): RemoteDesktopPoint {
+  const rect = remoteDesktopContainRect(viewport, content);
+  if (rect.width <= 0 || rect.height <= 0) return cursor;
+  const constrained = constrainRemoteDesktopTransform(transform, viewport, rect);
+  const cursorView = remoteDesktopCursorViewPoint(cursor, constrained, viewport, rect);
+  const insetX = Math.min(edgeInset, viewport.width / 2);
+  const insetY = Math.min(edgeInset, viewport.height / 2);
+  const visibleX = clamp(cursorView.x, insetX, viewport.width - insetX);
+  const visibleY = clamp(cursorView.y, insetY, viewport.height - insetY);
+  if (visibleX === cursorView.x && visibleY === cursorView.y) return cursor;
+  const centerX = viewport.width / 2;
+  const centerY = viewport.height / 2;
+  const unscaledX = centerX + (visibleX - centerX - constrained.translateX) / constrained.scale;
+  const unscaledY = centerY + (visibleY - centerY - constrained.translateY) / constrained.scale;
+  return {
+    x: clamp((unscaledX - rect.x) / rect.width, 0, 1),
+    y: clamp((unscaledY - rect.y) / rect.height, 0, 1),
+  };
+}
+
+function remoteDesktopCursorViewPoint(
+  cursor: RemoteDesktopPoint,
+  transform: RemoteDesktopTransform,
+  viewport: RemoteDesktopSize,
+  rect: RemoteDesktopRect,
+): RemoteDesktopPoint {
+  return {
+    x: viewport.width / 2 + transform.translateX + (cursor.x - 0.5) * rect.width * transform.scale,
+    y: viewport.height / 2 + transform.translateY + (cursor.y - 0.5) * rect.height * transform.scale,
+  };
 }
 
 /**
@@ -144,7 +233,7 @@ export function remoteDesktopMultiTouchIntent(
 ): 'pending' | 'scroll' | 'pinch' {
   const travel = remoteDesktopTouchDistance(startMidpoint, currentMidpoint);
   const spread = Math.abs(currentDistance - startDistance);
-  if (travel < 8 && spread < 10) return 'pending';
+  if (remoteDesktopMultiTouchInTapDeadZone(startMidpoint, currentMidpoint, startDistance, currentDistance)) return 'pending';
   if (spread >= Math.max(12, travel)) return 'pinch';
   return startOrientation === 'horizontal' ? 'scroll' : 'pending';
 }

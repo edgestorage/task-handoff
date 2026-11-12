@@ -529,7 +529,6 @@ impl AppState {
             let runtime = app_runtime.clone();
             desktop_component_host::service::DesktopService::new(
                 &config.storage_paths.data_dir,
-                config.package_version.clone(),
                 if config.runtime_kind == crate::config::RuntimeKind::Docker {
                     desktop_component_host::host::CaptureMode::Virtual
                 } else {
@@ -577,8 +576,10 @@ impl AppState {
             })
         };
         let desktop_terminal = desktop_service.clone();
-        let desktop_lifecycle = Arc::new(crate::remote_desktop::DesktopLifecycle(
+        let desktop_lifecycle = Arc::new(crate::remote_desktop::DesktopLifecycle::new(
             desktop_service.clone(),
+            managed_app_root.clone(),
+            app_management_state_dir.clone(),
         ));
         let desktop_hooks: BTreeMap<
             &str,

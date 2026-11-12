@@ -157,13 +157,16 @@ cross-check additionally needs MinGW g++). Only this crate links the media stack
 existing instance runtime dependency graphs remain separate.
 
 OpenH264 emits Annex-B baseline with BT.709 metadata and the negotiated send
-level (local ceiling4.0). Default Chrome level3.1 remains capped at720p; a
-receiver explicitly offering level4 can receive1080p. Every requested IDR
-is tested with fresh decoder state, including SPS/PPS. Media uses the sender's
-negotiated H.264 payload type, GCC/TWCC feedback, PLI/FIR observation and one encode
-in flight. Pause stops pattern generation, encode and send; resume requests IDR
-without opening input. Owned tasks are cancelled on peer close. Raw SDP, input and
-clipboard content never enter diagnostics.
+level. Explicit `max-fs`/`max-mbps` receiver capacity promotes the answer as
+needed. When those limits are absent, an offer with
+`level-asymmetry-allowed=1` may use the local level5.1 ceiling, supporting
+transport targets through 4K; without level asymmetry the sender stays at the
+offered level. Every requested IDR is tested with fresh decoder state, including
+SPS/PPS. Media uses the sender's negotiated H.264 payload type, GCC/TWCC feedback,
+PLI/FIR observation and one encode in flight. Pause stops pattern generation,
+encode and send; resume requests IDR without opening input. Owned tasks are
+cancelled on peer close. Raw SDP, input and clipboard content never enter
+diagnostics.
 
 macOS VideoToolbox and Linux VA-API helper selection/fallback are implemented;
 macOS native display/window correctness is verified. Actual Linux GPU encoding
@@ -209,6 +212,17 @@ old-retransmission rejection. Feedback reduces bitrate, fps and even-dimension
 resolution within the negotiated H.264 level and max-fs/max-mbps limits. One blocking capture/convert/encode worker, one latest native sample and bounded
 driver buffers limit raw work (SCK requires three OS buffers; WGC uses two). Sparse frames advance RTP time by actual
 monotonic gaps rather than compressing idle seconds into one nominal frame.
+
+Capture precision is independent from the encoded resolution preset. `auto`
+keeps each platform's native/backing pixels; `performance` captures at logical
+dimensions before encoding. macOS derives backing scale from the active display
+mode (including the display owning a window); Windows preserves physical WGC
+rectangles for `auto` and divides by the per-monitor effective-DPI scale for
+`performance`; X11 already exposes native root pixels, so both modes resolve to
+the same size. Input mapping always uses the actuator rectangle, never the
+capture buffer size. Native dimensions are capped at 8192px only when the source
+itself is larger, and fitting preserves aspect ratio. An explicit 4K preset on a
+5120x2160 source therefore encodes 3840x1620 rather than stretching to 3840x2160.
 
 The browser harness serializes repeated offers and ICE restarts. Gather completion
 uses a revision, and unchanged ICE credentials do not wait for a nonexistent new

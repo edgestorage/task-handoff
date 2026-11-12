@@ -13,6 +13,11 @@ HOST=${TASK_HANDOFF_TEST_HOST:-huadream@192.168.139.109}
 SSH_PORT=${TASK_HANDOFF_TEST_SSH_PORT:-}
 REUSE_ARTIFACTS=${TASK_HANDOFF_TEST_REUSE_ARTIFACTS:-0}
 BASE_VERSION=${TASK_HANDOFF_TEST_BASE_VERSION:-0.0.25}
+# Test/staging deployments install the desktop component from a locally packed
+# tarball because the npm native packages only exist for published runtime
+# releases. Set either variable to 0 when intentionally testing without it.
+INSTALL_REMOTE_DESKTOP=${TASK_HANDOFF_TEST_REMOTE_DESKTOP:-1}
+ENABLE_REMOTE_DESKTOP=${TASK_HANDOFF_TEST_REMOTE_DESKTOP_ENABLE:-1}
 # 成功部署后保留的 `.server-*-backup-*` 数量；旧备份自动删除，超过 7 天的
 # `-failed-` / `-stage` 残留目录一并清理。0 表示不保留备份。
 BACKUP_KEEP=${TASK_HANDOFF_TEST_BACKUP_KEEP:-3}
@@ -45,6 +50,8 @@ for name in "${CLOUD_ENV_VARIABLES[@]}"; do
   fi
 done
 ARTIFACT_DIR=release/npm/artifacts
+REMOTE_DESKTOP_PACKAGE_DIR=release/remote-desktop-packages
+REMOTE_DESKTOP_RELEASE_METADATA=shared/remote-desktop-packages.json
 BUILD_DATE=$(date +%Y%m%d)
 VERSION=${1:-}
 AUTO_VERSION=0
@@ -58,6 +65,107 @@ require_command() {
     printf 'Required command is unavailable: %s\n' "$1" >&2
     exit 1
   }
+}
+
+build_remote_desktop_package() {
+  [ "$INSTALL_REMOTE_DESKTOP" = 1 ] || return 0
+  local toolchain docker_arch build_dir package_name tarball metadata
+  case "$REMOTE_DESKTOP_ARCH" in
+    x64) toolchain=x86_64-unknown-linux-gnu; docker_arch=amd64 ;;
+    arm64) toolchain=aarch64-unknown-linux-gnu; docker_arch=arm64 ;;
+    *) printf 'Unsupported desktop component architecture: %s\n' "$REMOTE_DESKTOP_ARCH" >&2; exit 1 ;;
+  esac
+  tarball="$REMOTE_DESKTOP_PACKAGE_DIR/$REMOTE_DESKTOP_PACKAGE_BASENAME"
+  metadata="$REMOTE_DESKTOP_PACKAGE_DIR/$REMOTE_DESKTOP_METADATA_BASENAME"
+  package_name="@task-handoff/remote-desktop-linux-$REMOTE_DESKTOP_ARCH"
+  if [ -f "$tarball" ] && [ -f "$metadata" ] && node -e '
+    const crypto = require("node:crypto");
+    const fs = require("node:fs");
+    const [metadataFile, packageFile, version, packageName, arch] = process.argv.slice(1);
+    const metadata = JSON.parse(fs.readFileSync(metadataFile, "utf8"));
+    const integrity = `sha512-${crypto.createHash("sha512").update(fs.readFileSync(packageFile)).digest("base64")}`;
+    if (metadata.version !== version || metadata.package !== packageName || metadata.platform !== "linux" || metadata.arch !== arch || metadata.integrity !== integrity) {
+      throw new Error(`Stale local desktop package metadata: ${JSON.stringify(metadata)}`);
+    }
+  ' "$metadata" "$tarball" "$VERSION" "$package_name" "$REMOTE_DESKTOP_ARCH" 2>/dev/null; then
+    log "Reuse local remote desktop package $VERSION for linux-$REMOTE_DESKTOP_ARCH"
+    return 0
+  fi
+
+  build_dir="$REMOTE_DESKTOP_PACKAGE_DIR/.build-linux-$REMOTE_DESKTOP_ARCH"
+  require_command docker
+  rm -rf "$build_dir"
+  docker run --rm \
+    --platform "linux/$docker_arch" \
+    --user "$(id -u):$(id -g)" \
+    -v "$ROOT:/workspace" \
+    -w /workspace/remote-desktop-rs \
+    -e HOME=/tmp/task-handoff-rust-home \
+    -e CARGO_HOME=/tmp/task-handoff-rust-home/cargo \
+    -e CARGO_TARGET_DIR="target/local-package-$REMOTE_DESKTOP_ARCH" \
+    -e REMOTE_DESKTOP_ARCH="$REMOTE_DESKTOP_ARCH" \
+    -e RUST_TOOLCHAIN="$toolchain" \
+    rust:1.95-bookworm \
+    bash -c '
+      set -euo pipefail
+      mkdir -p "$HOME" "$CARGO_HOME"
+      export PATH="/usr/local/rustup/toolchains/1.95.0-${RUST_TOOLCHAIN}/bin:${PATH}"
+      cargo build --locked --release -p desktop-streaming --bin task-handoff-desktop-streaming
+      install -d -m 0755 "/workspace/release/remote-desktop-packages/.build-linux-${REMOTE_DESKTOP_ARCH}/bin"
+      install -m 0755 "$CARGO_TARGET_DIR/release/task-handoff-desktop-streaming" \
+        "/workspace/release/remote-desktop-packages/.build-linux-${REMOTE_DESKTOP_ARCH}/bin/task-handoff-desktop-streaming"
+    '
+  node scripts/remote-desktop-packages.mjs pack \
+    --version "$VERSION" \
+    --platform linux \
+    --arch "$REMOTE_DESKTOP_ARCH" \
+    --binary "$build_dir/bin/task-handoff-desktop-streaming" \
+    --output "$REMOTE_DESKTOP_PACKAGE_DIR"
+  node -e '
+    const fs = require("node:fs");
+    const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const [version, packageName, arch] = process.argv.slice(2);
+    if (metadata.version !== version || metadata.package !== packageName || metadata.platform !== "linux" || metadata.arch !== arch) {
+      throw new Error(`Local desktop package metadata mismatch: ${JSON.stringify(metadata)}`);
+    }
+  ' "$metadata" "$VERSION" "$package_name" "$REMOTE_DESKTOP_ARCH"
+  rm -rf "$build_dir"
+}
+
+restore_remote_desktop_release_metadata() {
+  [ -n "${REMOTE_DESKTOP_RELEASE_METADATA_BACKUP:-}" ] || return 0
+  if [ "${REMOTE_DESKTOP_RELEASE_METADATA_EXISTED:-0}" = 1 ]; then
+    cp "$REMOTE_DESKTOP_RELEASE_METADATA_BACKUP" "$REMOTE_DESKTOP_RELEASE_METADATA"
+  else
+    rm -f "$REMOTE_DESKTOP_RELEASE_METADATA"
+  fi
+  rm -f "$REMOTE_DESKTOP_RELEASE_METADATA_BACKUP"
+  REMOTE_DESKTOP_RELEASE_METADATA_BACKUP=
+  if [ -n "${REMOTE_DESKTOP_RELEASE_METADATA_TEMP:-}" ]; then
+    rm -rf "$REMOTE_DESKTOP_RELEASE_METADATA_TEMP"
+    REMOTE_DESKTOP_RELEASE_METADATA_TEMP=
+  fi
+}
+
+prepare_remote_desktop_release_metadata() {
+  [ "$INSTALL_REMOTE_DESKTOP" = 1 ] || return 0
+  [ "$REUSE_ARTIFACTS" != 1 ] || return 0
+  local metadata="$REMOTE_DESKTOP_PACKAGE_DIR/$REMOTE_DESKTOP_METADATA_BASENAME"
+  test -f "$metadata"
+  REMOTE_DESKTOP_RELEASE_METADATA_BACKUP=$(mktemp -t task-handoff-remote-desktop-metadata)
+  REMOTE_DESKTOP_RELEASE_METADATA_EXISTED=0
+  if [ -f "$REMOTE_DESKTOP_RELEASE_METADATA" ]; then
+    cp "$REMOTE_DESKTOP_RELEASE_METADATA" "$REMOTE_DESKTOP_RELEASE_METADATA_BACKUP"
+    REMOTE_DESKTOP_RELEASE_METADATA_EXISTED=1
+  fi
+  REMOTE_DESKTOP_RELEASE_METADATA_TEMP=$(mktemp -d -t task-handoff-remote-desktop-release)
+  trap restore_remote_desktop_release_metadata EXIT
+  cp "$metadata" "$REMOTE_DESKTOP_RELEASE_METADATA_TEMP/"
+  node scripts/remote-desktop-packages.mjs metadata \
+    --input "$REMOTE_DESKTOP_RELEASE_METADATA_TEMP" \
+    --output "$REMOTE_DESKTOP_RELEASE_METADATA"
+  rm -rf "$REMOTE_DESKTOP_RELEASE_METADATA_TEMP"
+  REMOTE_DESKTOP_RELEASE_METADATA_TEMP=
 }
 
 for command in node pnpm git ssh scp shasum; do
@@ -95,6 +203,20 @@ REMOTE_PREFLIGHT=$(ssh "${SSH_ARGS[@]}" "$HOST" 'set -eu
 printf '%s\n' "$REMOTE_PREFLIGHT"
 printf '%s\n' "$REMOTE_PREFLIGHT" | grep -Fq '/usr/local/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/node-agent/'
 printf '%s\n' "$REMOTE_PREFLIGHT" | grep -Fq '/usr/local/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/control-plane/'
+
+case "$INSTALL_REMOTE_DESKTOP:$ENABLE_REMOTE_DESKTOP" in
+  [01]:[01]) ;;
+  *) printf 'TASK_HANDOFF_TEST_REMOTE_DESKTOP and TASK_HANDOFF_TEST_REMOTE_DESKTOP_ENABLE must be 0 or 1.\n' >&2; exit 1 ;;
+esac
+REMOTE_DESKTOP_ARCH=
+if [ "$INSTALL_REMOTE_DESKTOP" = 1 ]; then
+  REMOTE_MACHINE_ARCH=$(ssh "${SSH_ARGS[@]}" "$HOST" 'uname -m')
+  case "$REMOTE_MACHINE_ARCH" in
+    x86_64|amd64) REMOTE_DESKTOP_ARCH=x64 ;;
+    aarch64|arm64) REMOTE_DESKTOP_ARCH=arm64 ;;
+    *) printf 'Unsupported test host architecture for the desktop component: %s\n' "$REMOTE_MACHINE_ARCH" >&2; exit 1 ;;
+  esac
+fi
 
 if [ -z "$VERSION" ]; then
   AUTO_VERSION=1
@@ -135,6 +257,12 @@ while ! ssh "${SSH_ARGS[@]}" "$HOST" "mkdir '$REMOTE_STAGE'" 2>/dev/null; do
   CHECKSUMS="/private/tmp/task-handoff-$VERSION.sha256"
   printf 'Version is already reserved; trying %s\n' "$VERSION"
 done
+REMOTE_DESKTOP_PACKAGE_BASENAME=
+REMOTE_DESKTOP_METADATA_BASENAME=
+if [ "$INSTALL_REMOTE_DESKTOP" = 1 ]; then
+  REMOTE_DESKTOP_PACKAGE_BASENAME="task-handoff-remote-desktop-linux-$REMOTE_DESKTOP_ARCH-$VERSION.tgz"
+  REMOTE_DESKTOP_METADATA_BASENAME="task-handoff-remote-desktop-linux-$REMOTE_DESKTOP_ARCH-$VERSION.metadata.json"
+fi
 if [ "$REUSE_ARTIFACTS" != 1 ]; then
   for name in server control-plane node-agent controlled-instance; do
     test ! -e "$ARTIFACT_DIR/task-handoff-$name-$VERSION.tgz" || {
@@ -142,9 +270,23 @@ if [ "$REUSE_ARTIFACTS" != 1 ]; then
       exit 1
     }
   done
+  if [ "$INSTALL_REMOTE_DESKTOP" = 1 ]; then
+    for name in "$REMOTE_DESKTOP_PACKAGE_BASENAME" "$REMOTE_DESKTOP_METADATA_BASENAME"; do
+      test ! -e "$REMOTE_DESKTOP_PACKAGE_DIR/$name" || {
+        printf 'Version already has a local desktop package artifact and cannot be reused: %s\n' "$REMOTE_DESKTOP_PACKAGE_DIR/$name" >&2
+        exit 1
+      }
+    done
+  fi
 fi
 
 log "Build and verify $VERSION (agentRuns=$TASK_HANDOFF_AGENT_RUNS_ENABLED, cloud=$TASK_HANDOFF_CLOUD_ENV, relaySuffixes=$TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES)"
+if [ "$INSTALL_REMOTE_DESKTOP" = 1 ]; then
+  log "Prepare local remote desktop package for linux-$REMOTE_DESKTOP_ARCH"
+  build_remote_desktop_package
+  prepare_remote_desktop_release_metadata
+fi
+
 if [ "$REUSE_ARTIFACTS" = 1 ]; then
   log "Reuse existing verified artifacts for $VERSION"
 else
@@ -164,6 +306,19 @@ fi
 for name in server control-plane node-agent controlled-instance; do
   test -f "$ARTIFACT_DIR/task-handoff-$name-$VERSION.tgz"
 done
+REMOTE_DESKTOP_TARBALL=
+REMOTE_DESKTOP_METADATA=
+if [ "$INSTALL_REMOTE_DESKTOP" = 1 ]; then
+  REMOTE_DESKTOP_TARBALL="$REMOTE_DESKTOP_PACKAGE_DIR/$REMOTE_DESKTOP_PACKAGE_BASENAME"
+  REMOTE_DESKTOP_METADATA="$REMOTE_DESKTOP_PACKAGE_DIR/$REMOTE_DESKTOP_METADATA_BASENAME"
+  test -f "$REMOTE_DESKTOP_TARBALL"
+  test -f "$REMOTE_DESKTOP_METADATA"
+  node -e '
+    const fs = require("node:fs");
+    const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (metadata.version !== process.argv[2]) throw new Error(`Desktop package version ${metadata.version} does not match ${process.argv[2]}`);
+  ' "$REMOTE_DESKTOP_METADATA" "$VERSION"
+fi
 test -f "release/runtime-artifacts/controlled-instance-runtime-$VERSION-linux-universal.tar.gz"
 test -f "release/npm/node-agent/runtime-artifacts/controlled-instance-runtime-$VERSION-linux-universal.tar.gz"
 
@@ -244,12 +399,16 @@ else
   ' "$VERSION"
 fi
 
-shasum -a 256 \
-  "$ARTIFACT_DIR/task-handoff-server-$VERSION.tgz" \
-  "$ARTIFACT_DIR/task-handoff-control-plane-$VERSION.tgz" \
-  "$ARTIFACT_DIR/task-handoff-node-agent-$VERSION.tgz" \
-  "$ARTIFACT_DIR/task-handoff-controlled-instance-$VERSION.tgz" \
-  | sed "s#  $ARTIFACT_DIR/#  #" > "$CHECKSUMS"
+CHECKSUM_INPUTS=(
+  "$ARTIFACT_DIR/task-handoff-server-$VERSION.tgz"
+  "$ARTIFACT_DIR/task-handoff-control-plane-$VERSION.tgz"
+  "$ARTIFACT_DIR/task-handoff-node-agent-$VERSION.tgz"
+  "$ARTIFACT_DIR/task-handoff-controlled-instance-$VERSION.tgz"
+)
+if [ "$INSTALL_REMOTE_DESKTOP" = 1 ]; then
+  CHECKSUM_INPUTS+=("$REMOTE_DESKTOP_TARBALL" "$REMOTE_DESKTOP_METADATA")
+fi
+shasum -a 256 "${CHECKSUM_INPUTS[@]}" | sed -E 's#  .*/([^/]+)$#  \1#' > "$CHECKSUMS"
 cat "$CHECKSUMS"
 
 log "Upload and assemble new runtime"
@@ -258,6 +417,8 @@ scp "${SCP_ARGS[@]}" \
   "$ARTIFACT_DIR/task-handoff-control-plane-$VERSION.tgz" \
   "$ARTIFACT_DIR/task-handoff-node-agent-$VERSION.tgz" \
   "$ARTIFACT_DIR/task-handoff-controlled-instance-$VERSION.tgz" \
+  ${REMOTE_DESKTOP_TARBALL:+"$REMOTE_DESKTOP_TARBALL"} \
+  ${REMOTE_DESKTOP_METADATA:+"$REMOTE_DESKTOP_METADATA"} \
   "$CHECKSUMS" \
   "$HOST:$REMOTE_STAGE/"
 
@@ -427,6 +588,163 @@ printf 'ui_assets='
 curl -fsS http://127.0.0.1:8081/ | grep -oE 'assets/[^" ]+\.(js|css)' | sort -u | tr '\n' ','
 printf '\n'
 REMOTE
+
+if [ "$INSTALL_REMOTE_DESKTOP" = 1 ]; then
+  log "Install local remote desktop package $VERSION"
+  ssh "${SSH_ARGS[@]}" "$HOST" \
+    "sudo -n env VERSION='$VERSION' REMOTE_STAGE='$REMOTE_STAGE' REMOTE_DESKTOP_PACKAGE='$REMOTE_DESKTOP_PACKAGE_BASENAME' REMOTE_DESKTOP_METADATA='$REMOTE_DESKTOP_METADATA_BASENAME' ENABLE_REMOTE_DESKTOP='$ENABLE_REMOTE_DESKTOP' bash -s" <<'REMOTE'
+set -eu
+PACKAGE_FILE="$REMOTE_STAGE/$REMOTE_DESKTOP_PACKAGE"
+METADATA_FILE="$REMOTE_STAGE/$REMOTE_DESKTOP_METADATA"
+test -f "$PACKAGE_FILE"
+test -f "$METADATA_FILE"
+
+PACKAGE_NAME=$(node -e 'process.stdout.write(require(process.argv[1]).package)' "$METADATA_FILE")
+PACKAGE_VERSION=$(node -e 'process.stdout.write(require(process.argv[1]).version)' "$METADATA_FILE")
+PACKAGE_INTEGRITY=$(node -e '
+  const crypto = require("node:crypto");
+  const fs = require("node:fs");
+  process.stdout.write(`sha512-${crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64")}`);
+' "$PACKAGE_FILE")
+test "$PACKAGE_VERSION" = "$VERSION"
+
+NODE_AGENT_PID=$(systemctl show task-handoff-node-agent.service -p MainPID --value)
+test "$NODE_AGENT_PID" -gt 0
+NODE_AGENT_DATA_DIR=$(tr '\0' '\n' < "/proc/$NODE_AGENT_PID/environ" | sed -n 's/^TASK_HANDOFF_NODE_AGENT_DATA_DIR=//p' | tail -n 1)
+NODE_AGENT_DATA_DIR=${NODE_AGENT_DATA_DIR:-/var/lib/task-handoff/node-agent}
+test -d "$NODE_AGENT_DATA_DIR"
+
+INSTANCES_FILE=$(mktemp)
+RUNTIMES_FILE=$(mktemp)
+LOCAL_INSTANCES_FILE=$(mktemp)
+trap 'rm -f "$INSTANCES_FILE" "$RUNTIMES_FILE" "$LOCAL_INSTANCES_FILE"' EXIT
+curl -fsS --unix-socket /run/task-handoff/node-agent.sock http://localhost/api/node-agent/instances > "$INSTANCES_FILE"
+curl -fsS --unix-socket /run/task-handoff/node-agent.sock http://localhost/api/node-agent/runtimes > "$RUNTIMES_FILE"
+node -e '
+  const fs = require("node:fs");
+  const instances = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).data || [];
+  const runtimes = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).data || [];
+  const localRuntimes = new Set(runtimes.filter((runtime) => runtime.type === "local").map((runtime) => runtime.id));
+  for (const instance of instances) {
+    if (localRuntimes.has(instance.runtimeId) && instance.status !== "deleted") {
+      process.stdout.write(`${instance.id}\t${instance.status}\n`);
+    }
+  }
+' "$INSTANCES_FILE" "$RUNTIMES_FILE" > "$LOCAL_INSTANCES_FILE"
+
+if [ ! -s "$LOCAL_INSTANCES_FILE" ]; then
+  printf 'No local controlled instances; desktop package remains staged at %s\n' "$PACKAGE_FILE"
+  exit 0
+fi
+
+install -d -m 0755 /var/lib/task-handoff/remote-desktop-artifacts
+install -m 0644 "$PACKAGE_FILE" "/var/lib/task-handoff/remote-desktop-artifacts/$REMOTE_DESKTOP_PACKAGE"
+install -m 0644 "$METADATA_FILE" "/var/lib/task-handoff/remote-desktop-artifacts/$REMOTE_DESKTOP_METADATA"
+
+while IFS=$'\t' read -r INSTANCE_ID INSTANCE_STATUS; do
+  [ -n "$INSTANCE_ID" ] || continue
+  INSTANCE_DIR="$NODE_AGENT_DATA_DIR/local-instances/$INSTANCE_ID"
+  test -d "$INSTANCE_DIR"
+  NATIVE_ROOT="$INSTANCE_DIR/managed-apps/native"
+  TARGET="$NATIVE_ROOT/remote-desktop"
+  STAGE="$NATIVE_ROOT/.remote-desktop-stage-$VERSION-$$"
+  BACKUP="$TARGET.installed-before-$VERSION-$(date +%Y%m%d%H%M%S)"
+  OWNER=$(stat -c '%u:%g' "$INSTANCE_DIR")
+  OWNER_USER=$(stat -c '%U' "$INSTANCE_DIR")
+
+  rm -rf "$STAGE"
+  install -d -m 0755 "$STAGE"
+  tar -xzf "$PACKAGE_FILE" -C "$STAGE" --strip-components=1
+  test -x "$STAGE/bin/task-handoff-desktop-streaming"
+  node -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const [staging, installRoot, version, packageName, integrity] = process.argv.slice(1);
+    const files = [];
+    const walk = (directory, prefix = "") => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) walk(path.join(directory, entry.name), relative);
+        else if (entry.isFile()) files.push(relative);
+        else throw new Error(`Unsupported desktop package entry: ${relative}`);
+      }
+    };
+    walk(staging);
+    files.push("managed-app.json");
+    const manifest = {
+      schemaVersion: 1,
+      appId: "remote-desktop",
+      version,
+      package: packageName,
+      packageVersion: version,
+      integrity,
+      installRoot,
+      launchPath: "bin/task-handoff-desktop-streaming",
+      files: files.sort(),
+    };
+    fs.writeFileSync(path.join(staging, "managed-app.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  ' "$STAGE" "$TARGET" "$VERSION" "$PACKAGE_NAME" "$PACKAGE_INTEGRITY"
+  chown -R "$OWNER" "$STAGE"
+  runuser -u "$OWNER_USER" -- "$STAGE/bin/task-handoff-desktop-streaming" --version >/dev/null
+
+  if [ -e "$TARGET" ]; then mv "$TARGET" "$BACKUP"; fi
+  if ! mv "$STAGE" "$TARGET"; then
+    if [ -d "$BACKUP" ]; then mv "$BACKUP" "$TARGET"; fi
+    printf 'Desktop package replacement failed for %s\n' "$INSTANCE_ID" >&2
+    exit 1
+  fi
+
+  if [ "$ENABLE_REMOTE_DESKTOP" = 1 ]; then
+    case "$INSTANCE_STATUS" in
+      stopped|created|deleting|deleted)
+        printf 'remote_desktop_instance=%s package=%s state=installed-until-start\n' "$INSTANCE_ID" "$VERSION"
+        continue
+        ;;
+    esac
+    desktop_control() {
+      curl -fsS --unix-socket /run/task-handoff/node-agent.sock \
+        -X POST -H 'content-type: application/json' -d "$2" \
+        "http://localhost/api/node-agent/instances/$INSTANCE_ID/remote-desktop/$1"
+    }
+    desktop_control settings-set '{"enabled":false}' >/dev/null
+    desktop_control settings-set '{"enabled":true}' >/dev/null
+    running_binary_matches() {
+      EXPECTED=$(readlink -f "$TARGET/bin/task-handoff-desktop-streaming" 2>/dev/null || true)
+      [ -n "$EXPECTED" ] || return 1
+      for link in /proc/[0-9]*/exe; do
+        [ "$(readlink -f "$link" 2>/dev/null || true)" = "$EXPECTED" ] && return 0
+      done
+      return 1
+    }
+    READY=0
+    for attempt in $(seq 1 30); do
+      CAPABILITY=$(desktop_control preflight '{}' 2>/dev/null || true)
+      if printf '%s' "$CAPABILITY" | node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => input += chunk).on("end", () => {
+          try { process.exit(JSON.parse(input)?.data?.available === true ? 0 : 1); } catch { process.exit(1); }
+        });
+      ' && running_binary_matches; then
+        READY=1
+        break
+      fi
+      sleep 1
+    done
+    if [ "$READY" -ne 1 ]; then
+      desktop_control settings-set '{"enabled":false}' >/dev/null || true
+      rm -rf "$TARGET"
+      if [ -d "$BACKUP" ]; then mv "$BACKUP" "$TARGET"; fi
+      desktop_control settings-set '{"enabled":true}' >/dev/null || true
+      printf 'Desktop component did not become ready from the installed package for %s; previous package restored.\n' "$INSTANCE_ID" >&2
+      exit 1
+    fi
+    printf 'remote_desktop_instance=%s package=%s capability=%s\n' "$INSTANCE_ID" "$VERSION" "$CAPABILITY"
+  else
+    printf 'remote_desktop_instance=%s package=%s state=installed\n' "$INSTANCE_ID" "$VERSION"
+  fi
+done < "$LOCAL_INSTANCES_FILE"
+REMOTE
+fi
 
 log "Prune old deployment backups (keep newest $BACKUP_KEEP)"
 ssh "${SSH_ARGS[@]}" "$HOST" "sudo -n env BACKUP_KEEP='$BACKUP_KEEP' bash -s" <<'REMOTE'

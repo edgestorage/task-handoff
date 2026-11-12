@@ -16,10 +16,14 @@
         <InstanceRemoteDesktopViewer
           v-if="canInteract"
           :active="isActiveTab(instanceId, tab.key)"
+          :auto-connect="Boolean(remoteDesktopSessionId(tab))"
           :can-manage="canManage"
           :capabilities="instanceCapabilities[instanceId]"
           embedded
+          :initial-target="remoteDesktopSessionId(tab) ? sessionRemoteDesktopLinkFor(instanceId, remoteDesktopSessionId(tab)!)?.target : undefined"
           :instance-id="instanceId"
+          @selection-change="rememberSelection(instanceId, tab, $event)"
+          @stopped="handleStopped(instanceId, tab)"
         />
       </div>
     </div>
@@ -31,6 +35,13 @@ import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch, type CSSP
 import type { SessionTab } from "../useInstanceSessions";
 import InstanceRemoteDesktopViewer from "./InstanceRemoteDesktopViewer.vue";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
+import { requestCloseSessionRemoteDesktop } from "./sessionRemoteDesktopEvents";
+import {
+  rememberSessionRemoteDesktopLink,
+  removeSessionRemoteDesktopLink,
+  sessionRemoteDesktopLinkFor,
+  type SessionRemoteDesktopTarget,
+} from "./sessionRemoteDesktopLinks";
 
 type SurfaceState = {
   leftSessionKey: string;
@@ -97,6 +108,24 @@ function activePane(instanceId: string, sessionKey: string): SessionPaneId | und
 function isActiveTab(instanceId: string, sessionKey: string) {
   const pane = activePane(instanceId, sessionKey);
   return Boolean(pane && layoutRects.value.has(`${instanceId}:${pane}`));
+}
+
+function remoteDesktopSessionId(tab: SessionTab) {
+  const value = tab.source?.aiSessionId;
+  return typeof value === "string" && value ? value : "";
+}
+
+function rememberSelection(instanceId: string, tab: SessionTab, target: SessionRemoteDesktopTarget) {
+  const sessionId = remoteDesktopSessionId(tab);
+  if (!sessionId) return;
+  rememberSessionRemoteDesktopLink({ instanceId, sessionId, target });
+}
+
+function handleStopped(instanceId: string, tab: SessionTab) {
+  const sessionId = remoteDesktopSessionId(tab);
+  if (!sessionId) return;
+  removeSessionRemoteDesktopLink(instanceId, sessionId);
+  requestCloseSessionRemoteDesktop({ instanceId, sessionId });
 }
 
 function itemStyle(instanceId: string, sessionKey: string): CSSProperties {

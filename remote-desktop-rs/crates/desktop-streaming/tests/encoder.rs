@@ -1,5 +1,5 @@
 use desktop_streaming::{
-    codec::Limits,
+    codec::{Limits, VideoCodec},
     encoder::{Encoder, Policy},
     synthetic::{pattern, SyntheticInput},
     video::{scale_yuv, Budget},
@@ -24,7 +24,7 @@ fn explicit_software_and_unsupported_hardware_level_both_emit_fresh_decodable_id
     // Linux automatic fallback is exercised by the actual sibling-helper
     // diagnostic, not a Cargo test image whose sibling path differs.
     for policy in policies {
-        let mut encoder = Encoder::new(100_000, limits, 0, policy).unwrap();
+        let mut encoder = Encoder::new(100_000, limits, 0, policy, VideoCodec::H264).unwrap();
         // VT has no level1.0 profile option; the real adapter must fail closed
         // to OpenH264, rather than encode above the negotiated receiver level.
         let frame = encoder.encode(&yuv, false).unwrap().unwrap();
@@ -40,7 +40,9 @@ fn explicit_software_and_unsupported_hardware_level_both_emit_fresh_decodable_id
                 .dimensions(),
             (128, 96)
         );
-        encoder.reconfigure(120_000, limits, 24).unwrap();
+        encoder
+            .reconfigure(120_000, limits, 24, VideoCodec::H264)
+            .unwrap();
         let frame = encoder.encode(&yuv, true).unwrap().unwrap();
         assert!(frame.keyframe);
         assert_eq!(encoder.name(), "openh264");

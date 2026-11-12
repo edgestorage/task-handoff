@@ -3,6 +3,7 @@ import type { RemoteDesktopWebRTCStats } from '@task-handoff/control-plane-clien
 
 import type {
   PersistedCaptureTarget,
+  RemoteDesktopCapturePrecision,
   RemoteDesktopFrameRate,
   RemoteDesktopResolution,
   RemoteDesktopTransportAvailability,
@@ -22,6 +23,8 @@ export type RemoteDesktopSnapshot = {
   streamURL?: string;
   videoWidth: number;
   videoHeight: number;
+  videoCodec?: string;
+  videoFrameRate?: number;
   path?: RemoteDesktopPath;
   transportDiagnostics?: RemoteDesktopWebRTCStats;
   signalingReady: boolean;
@@ -36,6 +39,7 @@ export type RemoteDesktopSnapshot = {
   target: PersistedCaptureTarget;
   resolution: RemoteDesktopResolution;
   frameRate: RemoteDesktopFrameRate;
+  capturePrecision: RemoteDesktopCapturePrecision;
   transportAvailability: RemoteDesktopTransportAvailability;
   transportStates: Record<RemoteDesktopTransportKey, RemoteDesktopTransportState>;
 };
@@ -56,6 +60,7 @@ export const emptyRemoteDesktopSnapshot: RemoteDesktopSnapshot = {
   target: { kind: 'display' },
   resolution: 'auto',
   frameRate: 'auto',
+  capturePrecision: 'auto',
   transportAvailability: { p2p: true, turn: true, websocket: true },
   transportStates: { p2p: 'idle', turn: 'idle', websocket: 'idle' },
 };

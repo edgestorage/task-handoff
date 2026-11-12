@@ -94,7 +94,7 @@ export const RemoteDesktopCapabilitiesSchema = z.object({
   platform: Name,
   desktopSource: Name,
   sourceProviders: z.array(z.object({ kind:Name, available:z.boolean(), reason:z.string().nullable() }).strip()).max(32),
-  capture: z.object({ backends:Names, cursor:z.boolean() }).strip(),
+  capture: z.object({ backends:Names, cursor:z.boolean(), precisionModes:Names.default([]) }).strip(),
   encoders: Names,
   input: z.object({ backends:Names, textCommit:z.boolean(), keyboardLayout:z.boolean() }).strip(),
   transport: Names,
@@ -105,13 +105,19 @@ export const RemoteDesktopCapabilitiesSchema = z.object({
 }).strip();
 export type RemoteDesktopCapabilities = z.infer<typeof RemoteDesktopCapabilitiesSchema>;
 
+export function remoteDesktopSupportsCapturePrecision(
+  capabilities: RemoteDesktopCapabilities | null | undefined,
+) {
+  return capabilities?.capture.precisionModes.includes("performance") === true;
+}
+
 /** Compatibility for v0.0.50: missing/invalid desktop disables only this domain.
  * No server policy default or current platform list becomes a reader limit. */
 export function unsupportedRemoteDesktopCapabilities(reason = "REMOTE_DESKTOP_UNSUPPORTED"): RemoteDesktopCapabilities {
   return {
     available:false,status:"unavailable",reason,protocolVersion:REMOTE_DESKTOP_PROTOCOL_VERSION,
     runtimeKind:"unknown",platform:"unknown",desktopSource:"none",sourceProviders:[],
-    capture:{backends:[],cursor:false},encoders:[],
+    capture:{backends:[],cursor:false,precisionModes:[]},encoders:[],
     input:{backends:[],textCommit:false,keyboardLayout:false},transport:[],
     video:{codecs:[],maxWidth:0,maxHeight:0,maxFrameRate:0},
     features:{clipboard:false,keyboard:false,mouse:false},viewerLimit:0,
@@ -214,7 +220,8 @@ export const DesktopFallbackSessionSchema = z.object({
 export type DesktopFallbackSession = z.infer<typeof DesktopFallbackSessionSchema>;
 
 /** Media WS binary frame: magic `RD`, version, type, flags, frame id,
- * timestamp, chunk index/count and payload length, followed by H.264 Annex B. */
+ * timestamp, chunk index/count and payload length, followed by Annex B bytes.
+ * The codec is declared by the preceding fallback.configure message. */
 export const DESKTOP_FALLBACK_FRAME_VIDEO = 1;
 export const DESKTOP_FALLBACK_FLAG_KEYFRAME = 1;
 export type DesktopFallbackFrame = {

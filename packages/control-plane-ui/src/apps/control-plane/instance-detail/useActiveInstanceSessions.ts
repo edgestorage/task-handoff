@@ -24,6 +24,14 @@ import { canUseDesktopBrowserContext } from "../../../lib/desktopBridge";
 import { createBrowserUuid } from "../../../lib/random-id";
 import { ApiError } from "../../../api/client";
 import { remoteDesktopAvailable } from "../remoteDesktopCapability";
+import { CLOSE_SESSION_REMOTE_DESKTOP_EVENT, OPEN_SESSION_REMOTE_DESKTOP_EVENT, type CloseSessionRemoteDesktopDetail, type OpenSessionRemoteDesktopDetail } from "./sessionRemoteDesktopEvents";
+import {
+  removeSessionRemoteDesktopLink,
+  rememberSessionRemoteDesktopLink,
+  sanitizeSessionRemoteDesktopTarget,
+  sessionRemoteDesktopLinkFor,
+  touchSessionRemoteDesktopLink,
+} from "./sessionRemoteDesktopLinks";
 
 export type SessionPaneId = "left" | "right";
 
@@ -37,16 +45,22 @@ function loadRemoteDesktopSessionTabs(t: Translate): Record<string, SessionTab[]
     const tabs: Record<string, SessionTab[]> = {};
     for (const [instanceId, value] of Object.entries(parsed as Record<string, unknown>)) {
       if (!instanceId || !Array.isArray(value)) continue;
-      const key = `${REMOTE_DESKTOP_APP_ID}:${instanceId}`;
-      const item = value.find((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).key === key) as Record<string, unknown> | undefined;
-      if (!item) continue;
-      tabs[instanceId] = [{
-        key,
-        kind: "remote-desktop",
-        label: REMOTE_DESKTOP_APP_ID,
-        title: typeof item.title === "string" && item.title.trim() ? item.title.trim().slice(0, 120) : t("instances.remoteDesktop.title"),
-        status: "running",
-      }];
+      const instanceTabs = value.flatMap((entry) => {
+        if (!entry || typeof entry !== "object") return [];
+        const item = entry as Record<string, unknown>;
+        if (typeof item.key !== "string" || !item.key.startsWith(`${REMOTE_DESKTOP_APP_ID}:${instanceId}`)) return [];
+        const aiSessionId = typeof item.aiSessionId === "string" && item.aiSessionId ? item.aiSessionId : undefined;
+        const key = aiSessionId ? `${REMOTE_DESKTOP_APP_ID}:${instanceId}:${aiSessionId}` : `${REMOTE_DESKTOP_APP_ID}:${instanceId}`;
+        return [{
+          key,
+          kind: "remote-desktop" as const,
+          label: REMOTE_DESKTOP_APP_ID,
+          title: typeof item.title === "string" && item.title.trim() ? item.title.trim().slice(0, 120) : t("instances.remoteDesktop.title"),
+          status: "running",
+          ...(aiSessionId ? { source: { aiSessionId } } : {}),
+        }];
+      });
+      if (instanceTabs.length) tabs[instanceId] = instanceTabs;
     }
     return tabs;
   } catch {
@@ -60,7 +74,11 @@ function persistRemoteDesktopSessionTabs(tabs: Record<string, SessionTab[]>) {
     const value = Object.fromEntries(Object.entries(tabs).flatMap(([instanceId, instanceTabs]) => {
       const remoteTabs = instanceTabs
         .filter((tab) => tab.kind === "remote-desktop")
-        .map((tab) => ({ key: tab.key, ...(tab.title ? { title: tab.title } : {}) }));
+        .map((tab) => ({
+          key: tab.key,
+          ...(tab.title ? { title: tab.title } : {}),
+          ...(typeof tab.source?.aiSessionId === "string" ? { aiSessionId: tab.source.aiSessionId } : {}),
+        }));
       return remoteTabs.length ? [[instanceId, remoteTabs]] : [];
     }));
     window.localStorage?.setItem(REMOTE_DESKTOP_TABS_STORAGE_KEY, JSON.stringify(value));
@@ -513,6 +531,8 @@ export function useActiveInstanceSessions({
       return;
     }
     if (session.kind === "remote-desktop") {
+      const aiSessionId = typeof session.source?.aiSessionId === "string" ? session.source.aiSessionId : "";
+      if (aiSessionId) removeSessionRemoteDesktopLink(instance.id, aiSessionId);
       remoteDesktopSessionTabs[instance.id] = (remoteDesktopSessionTabs[instance.id] || []).filter((tab) => tab.key !== session.key);
       if (selectedSessionKeys[instance.id] === session.key) delete selectedSessionKeys[instance.id];
       if (rightSelectedSessionKeys[instance.id] === session.key) delete rightSelectedSessionKeys[instance.id];
@@ -669,9 +689,9 @@ export function useActiveInstanceSessions({
     rememberSessionKey(instanceId, key);
   }
 
-  function openRemoteDesktopTab(instanceId: string) {
+  function openRemoteDesktopTab(instanceId: string, aiSessionId?: string) {
     if (!remoteDesktopEnabled.value || activeInstance.value?.id !== instanceId) return;
-    const key = `${REMOTE_DESKTOP_APP_ID}:${instanceId}`;
+    const key = `${REMOTE_DESKTOP_APP_ID}:${instanceId}${aiSessionId ? `:${aiSessionId}` : ""}`;
     const tabs = remoteDesktopSessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
     if (!tabs.some((tab) => tab.key === key)) {
       tabs.push({
@@ -680,6 +700,7 @@ export function useActiveInstanceSessions({
         label: REMOTE_DESKTOP_APP_ID,
         title: t("instances.remoteDesktop.title"),
         status: "running",
+        ...(aiSessionId ? { source: { aiSessionId } } : {}),
       });
     }
     const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";
@@ -706,8 +727,46 @@ export function useActiveInstanceSessions({
     }
   }
 
-  onMounted(() => window.addEventListener("task-handoff:open-markdown-browser", handleMarkdownBrowserRequest));
-  onBeforeUnmount(() => window.removeEventListener("task-handoff:open-markdown-browser", handleMarkdownBrowserRequest));
+  function handleOpenRemoteDesktopRequest(event: Event) {
+    const detail = (event as CustomEvent<OpenSessionRemoteDesktopDetail>).detail;
+    if (!detail?.instanceId || !detail.sessionId || detail.instanceId !== activeInstance.value?.id) return;
+    const current = sessionRemoteDesktopLinkFor(detail.instanceId, detail.sessionId);
+    if (detail.target) {
+      rememberSessionRemoteDesktopLink({ instanceId: detail.instanceId, sessionId: detail.sessionId, target: detail.target });
+    } else if (!current) {
+      rememberSessionRemoteDesktopLink({
+        instanceId: detail.instanceId,
+        sessionId: detail.sessionId,
+        target: sanitizeSessionRemoteDesktopTarget({ kind: "display", title: t("instances.remoteDesktop.entireDesktop") }),
+      });
+    } else {
+      touchSessionRemoteDesktopLink(detail.instanceId, detail.sessionId);
+    }
+    openRemoteDesktopTab(detail.instanceId, detail.sessionId);
+  }
+
+  function handleCloseRemoteDesktopRequest(event: Event) {
+    const detail = (event as CustomEvent<CloseSessionRemoteDesktopDetail>).detail;
+    if (!detail?.instanceId || !detail.sessionId) return;
+    removeSessionRemoteDesktopLink(detail.instanceId, detail.sessionId);
+    const key = `${REMOTE_DESKTOP_APP_ID}:${detail.instanceId}:${detail.sessionId}`;
+    remoteDesktopSessionTabs[detail.instanceId] = (remoteDesktopSessionTabs[detail.instanceId] || []).filter((tab) => tab.key !== key);
+    if (selectedSessionKeys[detail.instanceId] === key) delete selectedSessionKeys[detail.instanceId];
+    if (rightSelectedSessionKeys[detail.instanceId] === key) delete rightSelectedSessionKeys[detail.instanceId];
+    delete rightPaneSessionKeys[detail.instanceId]?.[key];
+    normalizeSessionLayout();
+  }
+
+  onMounted(() => {
+    window.addEventListener("task-handoff:open-markdown-browser", handleMarkdownBrowserRequest);
+    window.addEventListener(OPEN_SESSION_REMOTE_DESKTOP_EVENT, handleOpenRemoteDesktopRequest);
+    window.addEventListener(CLOSE_SESSION_REMOTE_DESKTOP_EVENT, handleCloseRemoteDesktopRequest);
+  });
+  onBeforeUnmount(() => {
+    window.removeEventListener("task-handoff:open-markdown-browser", handleMarkdownBrowserRequest);
+    window.removeEventListener(OPEN_SESSION_REMOTE_DESKTOP_EVENT, handleOpenRemoteDesktopRequest);
+    window.removeEventListener(CLOSE_SESSION_REMOTE_DESKTOP_EVENT, handleCloseRemoteDesktopRequest);
+  });
 
   function updateBrowserTab(instanceId: string, sessionKey: string, patch: { title?: string; url?: string; status?: string }) {
     const session = browserSessionTabs[instanceId]?.find((tab) => tab.key === sessionKey);

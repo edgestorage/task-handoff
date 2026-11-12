@@ -81,25 +81,130 @@ fn receiver_level_and_optional_limits_bound_sender_work() {
 }
 
 #[test]
-fn level_four_and_full_hd_limits_are_promoted_for_h264() {
-    let offer = "m=video 9 UDP/TLS/RTP/SAVPF 108\r\n\
-        a=fmtp:108 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n";
-    let promoted = desktop_streaming::codec::promote_h264_level_4_0(offer);
-    assert!(promoted.contains("profile-level-id=42e028"));
-    assert!(promoted.contains("max-fs=8160"));
-    assert!(promoted.contains("max-mbps=244800"));
+fn answer_level_follows_receiver_sdp_capabilities() {
+    let full_hd = desktop_streaming::codec::negotiate_h264_offer(
+        "m=video 9 UDP/TLS/RTP/SAVPF 108\r\n\
+         a=fmtp:108 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f;max-fs=8160;max-mbps=244800\r\n",
+    )
+    .unwrap();
+    assert_eq!(full_hd.limits.level, 40);
     assert_eq!(
-        Limits::parse("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e028;max-fs=8160;max-mbps=244800")
-            .unwrap()
-            .level,
-        40
+        (full_hd.limits.max_fs, full_hd.limits.max_mbps),
+        (8160, 244800)
     );
+    assert!(full_hd.answer_fmtp.contains("profile-level-id=42e028"));
 
-    let no_asymmetry = "m=video 9 UDP/TLS/RTP/SAVPF 108\r\n\
-        a=fmtp:108 packetization-mode=1;profile-level-id=42e01f\r\n";
-    let promoted = desktop_streaming::codec::promote_h264_level_4_0(no_asymmetry);
-    assert!(promoted.contains("level-asymmetry-allowed=1"));
-    assert!(promoted.contains("profile-level-id=42e028"));
+    let offered_only = desktop_streaming::codec::negotiate_h264_offer(
+        "m=video 9 UDP/TLS/RTP/SAVPF 108\r\n\
+         a=fmtp:108 packetization-mode=1;profile-level-id=42e01f\r\n",
+    )
+    .unwrap();
+    assert_eq!(offered_only.limits.level, 31);
+    assert_eq!(
+        (offered_only.limits.max_fs, offered_only.limits.max_mbps),
+        (3600, 108000)
+    );
+    assert!(offered_only.answer_fmtp.contains("profile-level-id=42e01f"));
+
+    let asymmetric_only = desktop_streaming::codec::negotiate_h264_offer(
+        "m=video 9 UDP/TLS/RTP/SAVPF 108\r\n\
+         a=fmtp:108 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n",
+    )
+    .unwrap();
+    assert_eq!(asymmetric_only.limits.level, 51);
+    assert_eq!(
+        (
+            asymmetric_only.limits.max_fs,
+            asymmetric_only.limits.max_mbps
+        ),
+        (36864, 983040)
+    );
+    assert!(asymmetric_only
+        .answer_fmtp
+        .contains("profile-level-id=42e033"));
+
+    let only_frame_limit = desktop_streaming::codec::negotiate_h264_offer(
+        "m=video 9 UDP/TLS/RTP/SAVPF 108\r\n\
+         a=fmtp:108 packetization-mode=1;profile-level-id=42e01f;max-fs=8160\r\n",
+    )
+    .unwrap();
+    assert_eq!(only_frame_limit.limits.level, 40);
+    assert_eq!(only_frame_limit.limits.max_mbps, 245760);
+
+    let four_k = desktop_streaming::codec::negotiate_h264_offer(
+        "m=video 9 UDP/TLS/RTP/SAVPF 108\r\n\
+         a=fmtp:108 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e033;max-fs=36864;max-mbps=983040\r\n",
+    )
+    .unwrap();
+    assert_eq!(four_k.limits.level, 51);
+    assert_eq!(
+        (four_k.limits.max_fs, four_k.limits.max_mbps),
+        (36864, 983040)
+    );
+    assert!(four_k.answer_fmtp.contains("profile-level-id=42e033"));
+
+    let two_k = desktop_streaming::codec::negotiate_h264_offer(
+        "m=video 9 UDP/TLS/RTP/SAVPF 108\r\n\
+         a=fmtp:108 packetization-mode=1;profile-level-id=42e033;max-fs=22080;max-mbps=589824\r\n",
+    )
+    .unwrap();
+    assert_eq!(two_k.limits.level, 50);
+    assert!(two_k.answer_fmtp.contains("profile-level-id=42e032"));
+}
+
+#[test]
+fn h265_offer_uses_main_profile_and_receiver_level_limits() {
+    let offer = "m=video 9 UDP/TLS/RTP/SAVPF 49\r\n\
+        a=rtpmap:49 H265/90000\r\n\
+        a=fmtp:49 profile-id=1;tier-flag=0;level-id=153;max-br=16000;tx-mode=SRST\r\n";
+    let negotiation = desktop_streaming::codec::negotiate_h265_offer(offer).unwrap();
+    assert_eq!(negotiation.limits.level, 153);
+    assert_eq!(negotiation.limits.max_fs, 34_816);
+    assert_eq!(negotiation.limits.max_mbps, 2_088_960);
+    assert_eq!(negotiation.limits.max_bitrate, 16_000_000);
+
+    let level_four =
+        desktop_streaming::codec::negotiate_h265_fmtp("profile-id=1;tier-flag=0;level-id=120")
+            .unwrap();
+    assert_eq!(level_four.max_fs, 8_704);
+    assert_eq!(level_four.max_mbps, 261_120);
+    assert_eq!(level_four.max_bitrate, 8_000_000);
+}
+
+#[test]
+fn unsupported_h265_profiles_tiers_and_modes_fail_closed() {
+    for fmtp in [
+        "profile-id=2;level-id=153",
+        "profile-id=1;tier-flag=1;level-id=153",
+        "profile-id=1;tx-mode=MRMT",
+        "profile-id=1;level-id=121",
+        "profile-id=1;profile-id=1",
+        "profile-id=1;max-fs=0",
+    ] {
+        assert!(
+            desktop_streaming::codec::negotiate_h265_fmtp(fmtp).is_err(),
+            "accepted {fmtp}"
+        );
+    }
+    assert!(desktop_streaming::codec::negotiate_h265_offer(
+        "m=video 9 UDP/TLS/RTP/SAVPF 49\r\na=rtpmap:49 H264/90000\r\n"
+    )
+    .is_err());
+}
+
+#[test]
+fn negotiated_answer_fmtp_replaces_the_video_format() {
+    let answer = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n\
+        a=fmtp:96 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e028\r\n\
+        m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+    let rewritten = desktop_streaming::codec::rewrite_h264_answer_fmtp(
+        answer,
+        "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e033;max-fs=36864;max-mbps=983040;max-br=24000",
+    )
+    .unwrap();
+    assert!(rewritten.contains("profile-level-id=42e033"));
+    assert!(rewritten.contains("max-fs=36864"));
+    assert!(!rewritten.contains("profile-level-id=42e028"));
 }
 #[test]
 fn malformed_constraints_and_incompatible_profiles_are_not_silently_ignored() {
@@ -119,7 +224,7 @@ fn future_optional_parameters_and_large_receiver_allowances_do_not_restrict_loca
     let limits = Limits::parse("packetization-mode=1;profile-level-id=42e028;max-br=4294967295;max-fs=4294967295;max-mbps=4294967295;future-flag;future-value=a;future-value=b").unwrap();
     assert_eq!(limits.max_fs, 8192);
     assert_eq!(limits.max_mbps, 245760);
-    assert_eq!(limits.max_bitrate, 8_000_000);
+    assert_eq!(limits.max_bitrate, 24_000_000);
 }
 
 #[test]

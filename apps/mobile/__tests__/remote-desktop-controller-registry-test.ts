@@ -30,6 +30,7 @@ function acquire(registry: RegistryModule, sessionId: string, active = true) {
     target: { kind: 'display', sourceRef: `source_${sessionId}` },
     resolution: 'auto',
     frameRate: 'auto',
+    capturePrecision: 'auto',
     transportAvailability: { p2p: true, turn: true, websocket: true },
   });
 }

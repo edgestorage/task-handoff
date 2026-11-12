@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Gauge, Maximize2, MousePointer2, Users, X } from 'lucide-react-native';
+import { ArrowDownToLine, Gauge, Maximize2, MousePointer2, Users, Video, X } from 'lucide-react-native';
+import { remoteDesktopVideoCodecLabel } from '@task-handoff/control-plane-client';
 
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
@@ -26,6 +27,11 @@ export function RemoteDesktopConnectionInfo({ onClose, snapshot, visible }: Prop
     : diagnostics?.latencyMs !== undefined
       ? t('remoteDesktop.latencyValue', { value: diagnostics.latencyMs })
       : t('remoteDesktop.latencyMeasuring');
+  const bandwidth = activeTransport === 'websocket' || !diagnostics
+    ? t('remoteDesktop.latencyNotReported')
+    : diagnostics.bandwidthMbps === undefined
+      ? t('remoteDesktop.latencyMeasuring')
+      : t('remoteDesktop.bandwidthValue', { value: formatBandwidth(diagnostics.bandwidthMbps) });
   const candidate = diagnostics && (diagnostics.protocol || diagnostics.localCandidateType || diagnostics.remoteCandidateType)
     ? [
       diagnostics.protocol?.toUpperCase(),
@@ -35,6 +41,11 @@ export function RemoteDesktopConnectionInfo({ onClose, snapshot, visible }: Prop
   const resolution = snapshot.videoWidth > 0 && snapshot.videoHeight > 0
     ? `${snapshot.videoWidth} × ${snapshot.videoHeight}`
     : t('remoteDesktop.candidateUnknown');
+  const codec = remoteDesktopVideoCodecLabel(snapshot.videoCodec ?? diagnostics?.codec);
+  const frameRate = snapshot.videoFrameRate ?? diagnostics?.frameRate;
+  const encoding = codec
+    ? [codec, frameRate ? t('remoteDesktop.frameRateValue', { value: frameRate }) : undefined].filter(Boolean).join(' · ')
+    : t('remoteDesktop.latencyNotReported');
   const inputState = !snapshot.inputRequested
     ? t('remoteDesktop.inputDisabled')
     : snapshot.inputEnabled
@@ -70,8 +81,10 @@ export function RemoteDesktopConnectionInfo({ onClose, snapshot, visible }: Prop
 
         <View style={styles.metrics}>
           <Metric icon={<Gauge color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.latency')} value={latency} />
+          <Metric icon={<ArrowDownToLine color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.bandwidth')} value={bandwidth} />
           <Metric icon={<Users color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.viewersLabel')} value={t('remoteDesktop.viewers', { count: snapshot.viewerCount })} />
           <Metric icon={<Maximize2 color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.resolution')} value={resolution} />
+          <Metric icon={<Video color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.encoding')} value={encoding} />
           <Metric icon={<MousePointer2 color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.input')} value={inputState} />
         </View>
 
@@ -96,6 +109,10 @@ export function RemoteDesktopConnectionInfo({ onClose, snapshot, visible }: Prop
       </Pressable>
     </Pressable>
   </Modal>;
+}
+
+function formatBandwidth(value: number) {
+  return value >= 100 ? String(Math.round(value)) : value.toFixed(1);
 }
 
 function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {

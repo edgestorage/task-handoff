@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
+import { directoryRemoteDesktopCapabilities } from '@task-handoff/protocol/control-plane-directory';
 
 import { AppSessionDetailScreen } from '../app-sessions/AppSessionDetailScreen';
 import { appLaunchIcon } from '../app-sessions/app-launch-icon';
@@ -20,13 +21,14 @@ import { useI18n } from '../i18n';
 import { RepositoryResourceView } from '../repository/RepositoryResourceView';
 import { mobileResourceWorkspaceStore, openRepositoryFileResource, openSessionResource, removeSessionResource, sessionResourceKey, type SessionResource } from './resource-workspace-model';
 
-export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, instance, instanceId, onFractionChange, session, sessionId, syncReady }: {
+export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, instance, instanceId, onFractionChange, onOpenRemoteDesktop, session, sessionId, syncReady }: {
   contextKey: string;
   controlPlaneId: string;
   expanded: boolean;
   instance?: ControlPlaneInstanceResourceEntry;
   instanceId: string;
   onFractionChange(value: number): void;
+  onOpenRemoteDesktop?(): void;
   session?: { cwd?: string; cwdFolderId?: string };
   sessionId: string;
   syncReady: boolean;
@@ -51,6 +53,7 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ins
   }, [contextKey]);
   const ready = Boolean(syncReady && runtime.api && instance?.ready && instance.connectionStatus === 'online');
   const instanceCapabilities = instance?.capabilities;
+  const remoteDesktopAvailable = directoryRemoteDesktopCapabilities(instanceCapabilities)?.available !== false;
   const apps = appSessions.controlPlaneId === controlPlaneId ? appSessions.state.snapshot?.instances.find((item) => item.instanceId === instanceId)?.appSessions.sessions || [] : [];
   const tabs = browsers.tabs.filter((tab) => tab.controlPlaneId === controlPlaneId && tab.instanceId === instanceId);
   const canBrowse = browserSupport?.key === contextKey && browserSupport.supported;
@@ -156,6 +159,12 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ins
       { id: 'new-browser', title: t('browser.new'), image: 'plus', attributes: { disabled: !ready || !canBrowse || busy } },
       ...tabs.map<MenuAction>((tab) => ({ id: `browser:${tab.id}`, title: tab.title || tab.currentUrl || t('browser.browser'), image: 'globe' })),
     ] },
+    ...(remoteDesktopAvailable && onOpenRemoteDesktop ? [{
+      id: 'remote-desktop',
+      title: t('remoteDesktop.open'),
+      image: 'display',
+      attributes: { disabled: !ready },
+    } satisfies MenuAction] : []),
   ];
   const handleMenu = (id: string) => {
     if (id === 'files' || id === 'changes' || id === 'worktrees') open({ kind: 'repository', page: id });
@@ -163,6 +172,7 @@ export function SessionResourcePanel({ contextKey, controlPlaneId, expanded, ins
     else if (id.startsWith('app:')) open({ kind: 'app-session', sessionId: id.slice(4) });
     else if (id.startsWith('browser:')) open({ kind: 'browser', tabId: id.slice(8) });
     else if (id === 'new-browser') void launch();
+    else if (id === 'remote-desktop') onOpenRemoteDesktop?.();
   };
   const tabScroll = useRef<ScrollView>(null);
   const tabPositions = useRef(new Map<string, { x: number; width: number }>());

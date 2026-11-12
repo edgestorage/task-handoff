@@ -59,6 +59,149 @@ jobs:
           fi
           node --input-type=module -e 'import { resolveControlledInstanceImplementation } from "./runtime-packages.config.mjs"; console.log(`implementation=${resolveControlledInstanceImplementation()}`)' >> "$GITHUB_OUTPUT"
 
+  release-version:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+  remote-desktop-packages:
+    name: Remote desktop package (${{ matrix.platform }}-${{ matrix.arch }})
+    needs: release-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-15
+            platform: darwin
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - name: Build Linux component on the glibc baseline
+        if: matrix.platform == 'linux'
+        shell: bash
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.arch == 'x64' && 'x86_64-unknown-linux-gnu' || 'aarch64-unknown-linux-gnu' }}
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace/remote-desktop-rs \
+            -e CARGO_TARGET_DIR="target/linux-${{ matrix.arch }}" \
+            -e RUST_TOOLCHAIN="$RUST_TOOLCHAIN" \
+            rust:1.95-bookworm \
+            bash -c '
+              set -euo pipefail
+              export PATH="/usr/local/rustup/toolchains/1.95.0-${RUST_TOOLCHAIN}/bin:${PATH}"
+              cargo build --locked --release -p desktop-streaming --bin task-handoff-desktop-streaming
+              install -d -m 0755 /workspace/release/remote-desktop-packages/bin
+              install -m 0755 "$CARGO_TARGET_DIR/release/task-handoff-desktop-streaming" \
+                /workspace/release/remote-desktop-packages/bin/task-handoff-desktop-streaming
+            '
+
+      - name: Normalize Linux package artifact ownership
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" release/remote-desktop-packages
+
+      - name: Build macOS component
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          cargo +1.95.0 build --locked --release --manifest-path remote-desktop-rs/Cargo.toml \
+            -p desktop-streaming --bin task-handoff-desktop-streaming
+
+      - name: Pack the native npm artifact
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-version.outputs.version }}
+          BINARY: ${{ matrix.platform == 'linux' && 'release/remote-desktop-packages/bin/task-handoff-desktop-streaming' || 'remote-desktop-rs/target/release/task-handoff-desktop-streaming' }}
+        run: |
+          node scripts/remote-desktop-packages.mjs pack \
+            --version "$RELEASE_VERSION" \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --binary "$BINARY" \
+            --output release/remote-desktop-packages
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remote-desktop-package-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/remote-desktop-packages/*.tgz
+            release/remote-desktop-packages/*.metadata.json
+          if-no-files-found: error
+
+  remote-desktop-metadata:
+    name: Remote desktop package metadata (${{ needs.release-version.outputs.version }})
+    needs: [release-version, remote-desktop-packages]
+    if: ${{ !cancelled() && needs.release-version.result == 'success' && needs.remote-desktop-packages.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ needs.release-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: remote-desktop-package-*
+          path: release/remote-desktop-packages
+          merge-multiple: true
+
+      - name: Generate release metadata from the complete target set
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-version.outputs.version }}
+        run: |
+          node scripts/remote-desktop-packages.mjs metadata --complete \
+            --input release/remote-desktop-packages \
+            --output shared/remote-desktop-packages.json
+          node -e 'const {packages}=require("./shared/remote-desktop-packages.json"); if (packages.some((entry)=>entry.version!==process.env.RELEASE_VERSION)) throw new Error("Remote desktop package versions must equal the runtime release version.")'
+          cp shared/remote-desktop-packages.json release/remote-desktop-packages/remote-desktop-packages.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: task-handoff-remote-desktop-packages-${{ needs.release-version.outputs.version }}
+          path: release/remote-desktop-packages/*
+          if-no-files-found: error
+
   node-pty-prebuilds:
     name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})
     strategy:
@@ -105,8 +248,8 @@ jobs:
           if-no-files-found: error
 
   controlled-instance-rust-binaries:
-    needs: runtime-selection
-    if: needs.runtime-selection.outputs.implementation == 'rust'
+    needs: [runtime-selection, remote-desktop-metadata]
+    if: ${{ needs.runtime-selection.outputs.implementation == 'rust' && needs.remote-desktop-metadata.result == 'success' }}
     name: Rust controlled instance binary (linux-${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -122,6 +265,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: task-handoff-remote-desktop-packages-${{ needs.remote-desktop-metadata.outputs.version }}
+          path: release/remote-desktop-packages
+
+      - name: Embed the release package metadata
+        run: cp release/remote-desktop-packages/remote-desktop-packages.json shared/remote-desktop-packages.json
 
       - name: Build on the glibc baseline
         shell: bash
@@ -151,8 +302,8 @@ jobs:
 
   controlled-instance-artifact:
     name: Selected Linux controlled instance artifact
-    needs: [runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries]
-    if: ${{ !cancelled() && needs.runtime-selection.result == 'success' && needs.node-pty-prebuilds.result == 'success' && (needs.controlled-instance-rust-binaries.result == 'success' || needs.controlled-instance-rust-binaries.result == 'skipped') }}
+    needs: [runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries, remote-desktop-metadata]
+    if: ${{ !cancelled() && needs.runtime-selection.result == 'success' && needs.node-pty-prebuilds.result == 'success' && needs.remote-desktop-metadata.result == 'success' && (needs.controlled-instance-rust-binaries.result == 'success' || needs.controlled-instance-rust-binaries.result == 'skipped') }}
     env:
       TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: ${{ needs.runtime-selection.outputs.implementation }}
     runs-on: ubuntu-latest
@@ -193,6 +344,14 @@ jobs:
           pattern: node-pty-prebuild-*
           path: release/node-pty-prebuilds
           merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: task-handoff-remote-desktop-packages-${{ needs.remote-desktop-metadata.outputs.version }}
+          path: release/remote-desktop-packages
+
+      - name: Embed the release package metadata
+        run: cp release/remote-desktop-packages/remote-desktop-packages.json shared/remote-desktop-packages.json
 
       - uses: actions/download-artifact@v7
         if: env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION == 'rust'
@@ -373,8 +532,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [controlled-instance-artifact, runtime-packages, wsl-base-template]
-    if: ${{ !cancelled() && needs.controlled-instance-artifact.result == 'success' && needs.runtime-packages.result == 'success' && needs.wsl-base-template.result == 'success' && (github.event_name == 'push' || inputs.publish_npm) }}
+    needs: [controlled-instance-artifact, runtime-packages, wsl-base-template, remote-desktop-metadata]
+    if: ${{ !cancelled() && needs.controlled-instance-artifact.result == 'success' && needs.runtime-packages.result == 'success' && needs.wsl-base-template.result == 'success' && needs.remote-desktop-metadata.result == 'success' && (github.event_name == 'push' || inputs.publish_npm) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -400,6 +559,11 @@ jobs:
           name: wsl-base-template-${{ needs.runtime-packages.outputs.version }}
           path: release/runtime-artifacts
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: task-handoff-remote-desktop-packages-${{ needs.remote-desktop-metadata.outputs.version }}
+          path: release/remote-desktop-packages
+
       - uses: actions/setup-node@v7
         with:
           node-version: 24.15.0
@@ -416,10 +580,11 @@ jobs:
         run: |
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes --title "TaskHandoff $GITHUB_REF_NAME" \
-              release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh
+              release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh \
+              release/remote-desktop-packages/*.tgz release/remote-desktop-packages/*.metadata.json
           elif [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" == "true" ]]; then
             published_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
-            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
+            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh release/remote-desktop-packages/*.tgz release/remote-desktop-packages/*.metadata.json; do
               name="$(basename "$asset")"
               if ! grep -Fxq "$name" <<<"$published_assets"; then
                 gh release upload "$GITHUB_REF_NAME" "$asset"
@@ -427,7 +592,7 @@ jobs:
             done
           else
             published_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
-            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh; do
+            for asset in release/runtime-artifacts/* release/npm/artifacts/*.tgz release/npm/artifacts/install-server.sh release/remote-desktop-packages/*.tgz release/remote-desktop-packages/*.metadata.json; do
               name="$(basename "$asset")"
               if ! grep -Fxq "$name" <<<"$published_assets"; then
                 echo "Public release $GITHUB_REF_NAME is missing immutable asset $name." >&2
@@ -444,12 +609,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          publish_or_verify() {
-            local directory="$1"
-            local archive="$2"
-            local package version local_integrity remote_integrity
-            package="$(node -p "require('./$directory/package.json').name")"
-            version="$(node -p "require('./$directory/package.json').version")"
+          publish_or_verify_package() {
+            local package="$1"
+            local version="$2"
+            local archive="$3"
+            local local_integrity remote_integrity
             [[ "$version" == "$RELEASE_VERSION" ]]
             [[ -f "$archive" ]]
             local_integrity="sha512-$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto"); process.stdout.write(crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64"))' "$archive")"
@@ -464,11 +628,26 @@ jobs:
             fi
             npm publish "$archive" --access public --tag "$NPM_DIST_TAG"
           }
+          publish_or_verify() {
+            local directory="$1"
+            local archive="$2"
+            local package version
+            package="$(node -p "require('./$directory/package.json').name")"
+            version="$(node -p "require('./$directory/package.json').version")"
+            publish_or_verify_package "$package" "$version" "$archive"
+          }
           publish_or_verify release/npm/control-plane "release/npm/artifacts/task-handoff-control-plane-$RELEASE_VERSION.tgz"
           publish_or_verify release/npm/node-agent "release/npm/artifacts/task-handoff-node-agent-$RELEASE_VERSION.tgz"
           publish_or_verify release/npm/controlled-instance "release/npm/artifacts/task-handoff-controlled-instance-$RELEASE_VERSION.tgz"
           publish_or_verify release/npm/server "release/npm/artifacts/task-handoff-server-$RELEASE_VERSION.tgz"
           publish_or_verify release/npm/thctl "release/npm/artifacts/task-handoff-thctl-$RELEASE_VERSION.tgz"
+          for metadata in release/remote-desktop-packages/*.metadata.json; do
+            package="$(node -p "require('./${metadata}').package")"
+            version="$(node -p "require('./${metadata}').version")"
+            prefix="${package#@}"
+            prefix="${prefix//\//-}"
+            publish_or_verify_package "$package" "$version" "release/remote-desktop-packages/${prefix}-${version}.tgz"
+          done
 
       - name: Keep prereleases out of the latest dist-tag
         if: needs.runtime-packages.outputs.npm_tag != 'latest'
@@ -483,6 +662,9 @@ jobs:
             @task-handoff/server
             @task-handoff/thctl
           )
+          for metadata in release/remote-desktop-packages/*.metadata.json; do
+            packages+=("$(node -p "require('./${metadata}').package")")
+          done
           for package in "${packages[@]}"; do
             latest="$(npm view "$package" dist-tags.latest --json 2>/dev/null | node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(0, "utf8")); process.stdout.write(typeof value === "string" ? value : "")' || true)"
             if [[ "$latest" == "$RELEASE_VERSION" ]]; then
@@ -502,8 +684,8 @@ jobs:
 
   sync-npmmirror:
     name: Sync npmmirror (best effort)
-    needs: [publish, runtime-packages]
-    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    needs: [publish, runtime-packages, remote-desktop-metadata]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.remote-desktop-metadata.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The npm registry remains the authoritative source. A mirror delay or outage
@@ -520,6 +702,11 @@ jobs:
         with:
           node-version: 24.15.0
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: task-handoff-remote-desktop-packages-${{ needs.remote-desktop-metadata.outputs.version }}
+          path: release/remote-desktop-packages
+
       - name: Trigger and verify npmmirror sync
         env:
           RELEASE_VERSION: ${{ needs.runtime-packages.outputs.version }}
@@ -528,4 +715,5 @@ jobs:
         run: |
           node scripts/sync-npmmirror.mjs \
             --version "$RELEASE_VERSION" \
-            --dist-tag "$NPM_DIST_TAG"
+            --dist-tag "$NPM_DIST_TAG" \
+            --packages-file release/remote-desktop-packages/remote-desktop-packages.json

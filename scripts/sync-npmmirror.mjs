@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import fs from "node:fs";
 
 import { runtimePackages } from "../runtime-packages.config.mjs";
 
@@ -207,6 +208,7 @@ function parseCliArgs(argv) {
       version: { type: "string" },
       registry: { type: "string", default: DEFAULT_REGISTRY },
       "dist-tag": { type: "string" },
+      "packages-file": { type: "string" },
       "timeout-ms": { type: "string", default: String(DEFAULT_TIMEOUT_MS) },
       "poll-interval-ms": { type: "string", default: String(DEFAULT_POLL_INTERVAL_MS) },
     },
@@ -214,12 +216,27 @@ function parseCliArgs(argv) {
   }).values;
 }
 
+function additionalPackages(filename) {
+  if (!filename) return [];
+  const value = JSON.parse(fs.readFileSync(filename, "utf8"));
+  if (!Array.isArray(value?.packages)) throw new Error("--packages-file must contain a packages array.");
+  return value.packages.map((entry, index) => {
+    if (typeof entry?.package !== "string" || !entry.package.trim()) {
+      throw new Error(`--packages-file package ${index} is invalid.`);
+    }
+    return entry.package;
+  });
+}
+
 async function main() {
   const values = parseCliArgs(process.argv.slice(2));
   if (!values.version) throw new Error("--version is required");
   const result = await syncNpmmirror({
     version: values.version,
-    packages: Object.values(runtimePackages).map((definition) => definition.packageName),
+    packages: [...new Set([
+      ...Object.values(runtimePackages).map((definition) => definition.packageName),
+      ...additionalPackages(values["packages-file"]),
+    ])],
     registry: values.registry,
     distTag: values["dist-tag"],
     timeoutMs: Number(values["timeout-ms"]),

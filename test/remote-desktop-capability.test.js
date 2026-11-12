@@ -8,7 +8,7 @@ const ts=require('typescript');
 require('./workspace-require.js').registerWorkspaceRequire();
 function compile(source,filename){return ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,esModuleInterop:true},fileName:filename}).outputText;}
 require.extensions['.ts']=(module,filename)=>module._compile(compile(fs.readFileSync(filename,'utf8'),filename),filename);
-const {unsupportedRemoteDesktopCapabilities}=require('../packages/protocol/src/remote-desktop.ts');
+const {remoteDesktopSupportsCapturePrecision,unsupportedRemoteDesktopCapabilities}=require('../packages/protocol/src/remote-desktop.ts');
 const {controlledInstanceRemoteDesktopCapabilities,normalizeControlledInstanceCapabilities,ControlledInstanceCapabilitiesSchema}=require('../packages/protocol/src/control-plane.ts');
 const fixture=require('../shared/remote-desktop-capability-fixture.json');
 test('desktop uses shared disabled capability and malformed data cannot disable base features',()=>{
@@ -22,11 +22,20 @@ test('desktop uses shared disabled capability and malformed data cannot disable 
   }
 });
 test('future dates, diagnostics, backends and valid limits remain readable',()=>{
-  const remoteDesktop={...fixture,available:true,status:'future-status',reason:null,protocolVersion:'2030-01-01',platform:'future-os',sourceProviders:[{kind:'display',available:true,reason:null},{kind:'future-source',available:false,reason:'REMOTE_DESKTOP_FUTURE_PROVIDER'}],capture:{backends:['future-capture'],cursor:true},video:{codecs:['future-codec'],maxWidth:16384,maxHeight:16384,maxFrameRate:240},future:{extra:true}};
+  const remoteDesktop={...fixture,available:true,status:'future-status',reason:null,protocolVersion:'2030-01-01',platform:'future-os',sourceProviders:[{kind:'display',available:true,reason:null},{kind:'future-source',available:false,reason:'REMOTE_DESKTOP_FUTURE_PROVIDER'}],capture:{backends:['future-capture'],cursor:true,precisionModes:['auto','performance','future-precision']},video:{codecs:['future-codec'],maxWidth:16384,maxHeight:16384,maxFrameRate:240},future:{extra:true}};
   const result=controlledInstanceRemoteDesktopCapabilities({features:{remoteDesktop}});
   assert.equal(result.available,true);assert.equal(result.protocolVersion,'2030-01-01');
   assert.deepEqual(result.sourceProviders.map(provider=>provider.kind),['display','future-source']);assert.equal(result.video.maxFrameRate,240);
+  assert.deepEqual(result.capture.precisionModes,['auto','performance','future-precision']);
+  assert.equal(remoteDesktopSupportsCapturePrecision(result),true);
   assert.equal(result.future,undefined);
+});
+test('older capture capabilities without precision modes remain readable and close only that option',()=>{
+  const legacy={...fixture,available:true,status:'ready',reason:null,capture:{backends:['screencapturekit'],cursor:true}};
+  const result=controlledInstanceRemoteDesktopCapabilities({features:{remoteDesktop:legacy}});
+  assert.equal(result.available,true);
+  assert.deepEqual(result.capture.precisionModes,[]);
+  assert.equal(remoteDesktopSupportsCapturePrecision(result),false);
 });
 test('older components without fallback keep WebRTC available and close only fallback',()=>{
   const legacy={...fixture,available:true,status:'ready',reason:null};

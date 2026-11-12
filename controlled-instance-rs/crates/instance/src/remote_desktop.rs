@@ -3,14 +3,29 @@
 use controlled_instance_app_runtime::{AppPackageLifecycle, AppRecipeExecutionError};
 use controlled_instance_protocol::AppManagementOperation;
 use desktop_component_host::service::DesktopService;
-pub struct DesktopLifecycle(pub DesktopService);
+use std::path::PathBuf;
+pub struct DesktopLifecycle {
+    pub service: DesktopService,
+    install_base_dir: PathBuf,
+    state_dir: PathBuf,
+}
+
+impl DesktopLifecycle {
+    pub fn new(service: DesktopService, install_base_dir: PathBuf, state_dir: PathBuf) -> Self {
+        Self {
+            service,
+            install_base_dir,
+            state_dir,
+        }
+    }
+}
 #[async_trait::async_trait]
 impl AppPackageLifecycle for DesktopLifecycle {
     async fn before_change(
         &self,
         _operation: AppManagementOperation,
     ) -> Result<(), AppRecipeExecutionError> {
-        self.0.before_package_change().await.map_err(|_| {
+        self.service.before_package_change().await.map_err(|_| {
             AppRecipeExecutionError::new(
                 "app_drain_failed",
                 "Desktop component cleanup failed.",
@@ -23,7 +38,13 @@ impl AppPackageLifecycle for DesktopLifecycle {
         operation: AppManagementOperation,
         succeeded: bool,
     ) -> Result<(), AppRecipeExecutionError> {
-        self.0
+        if operation != AppManagementOperation::Uninstall && succeeded {
+            let _ = controlled_instance_app_runtime::remote_desktop::remove_legacy_managed_package(
+                &self.install_base_dir,
+                &self.state_dir,
+            );
+        }
+        self.service
             .package_changed(operation == AppManagementOperation::Uninstall && succeeded)
             .await
             .map_err(|_| {

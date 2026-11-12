@@ -164,7 +164,7 @@ export class DesktopAccess {
     this.tickets.delete(ticket); entry.ticket = undefined;
     return entry;
   }
-  issueFallback(principal: DesktopPrincipal, instanceId: string, id: string, bitrate = 4_000_000) {
+  issueFallback(principal: DesktopPrincipal, instanceId: string, id: string, bitrate = 8_000_000) {
     const entry = this.ownerEntry(principal, instanceId, id);
     // Progressive mode requests fallback while WebRTC is still negotiating.
     // The session creation time is not evidence that negotiation has settled;

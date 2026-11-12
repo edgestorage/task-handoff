@@ -4,6 +4,7 @@ import { SessionResourcePanel } from '../src/ai-sessions/SessionResourcePanel';
 import { mobileResourceWorkspaceStore, openSessionResource, resourceContextKey } from '../src/ai-sessions/resource-workspace-model';
 
 const mockLaunch = jest.fn();
+const mockOpenRemoteDesktop = jest.fn();
 const mockUpsert = jest.fn();
 const mockRuntime = { api: { appSessions: { launch: mockLaunch } }, profile: { id: 'cp-panel' } };
 const mockAppState = { controlPlaneId: 'cp-panel', state: { snapshot: { instances: [
@@ -28,9 +29,9 @@ jest.mock('../src/components/MenuView', () => ({
 
 const instance = { ready: true, connectionStatus: 'online', availableApps: [{ id: 'terminal', name: 'Terminal' }] } as ControlPlaneInstanceResourceEntry;
 function props(sessionId: string) {
-  return { contextKey: resourceContextKey('cp-panel', 'instance-1', sessionId), controlPlaneId: 'cp-panel', expanded: true, instance, instanceId: 'instance-1', onFractionChange: jest.fn(), session: { cwd: '/authoritative/worktree' }, sessionId, syncReady: true };
+  return { contextKey: resourceContextKey('cp-panel', 'instance-1', sessionId), controlPlaneId: 'cp-panel', expanded: true, instance, instanceId: 'instance-1', onFractionChange: jest.fn(), onOpenRemoteDesktop: mockOpenRemoteDesktop, session: { cwd: '/authoritative/worktree' }, sessionId, syncReady: true };
 }
-beforeEach(() => { mockLaunch.mockReset(); mockUpsert.mockReset(); mobileResourceWorkspaceStore.clearProfile('cp-panel'); });
+beforeEach(() => { mockLaunch.mockReset(); mockOpenRemoteDesktop.mockReset(); mockUpsert.mockReset(); mobileResourceWorkspaceStore.clearProfile('cp-panel'); });
 
 test('instance app selection is scoped to the target instance and launch uses the session cwd', async () => {
   mockLaunch.mockResolvedValue({ id: 'launched', appId: 'terminal' });
@@ -83,5 +84,13 @@ test('resource actions follow the active tab and include closing that tab', asyn
   await fireEvent.press(screen.getByTestId('close-tab'));
   expect(mobileResourceWorkspaceStore.snapshot(current.contextKey).resources).toHaveLength(0);
   expect(screen.queryByTestId('close-tab')).toBeNull();
+  await screen.unmount();
+});
+
+test('resource menu exposes remote desktop as a standalone action', async () => {
+  const current = props('session-remote-desktop');
+  const screen = await render(<SessionResourcePanel {...current} />);
+  await fireEvent.press(screen.getByTestId('remote-desktop'));
+  expect(mockOpenRemoteDesktop).toHaveBeenCalledTimes(1);
   await screen.unmount();
 });

@@ -1,8 +1,8 @@
 <template>
   <ConfigProvider :teleport-to="portalHost">
-  <section ref="viewer" class="remote-desktop-viewer" :class="{ 'is-connected': Boolean(session), embedded }" :aria-label="t('instances.remoteDesktop.title')">
+  <section ref="viewer" class="remote-desktop-viewer" :class="{ 'is-connected': Boolean(session), 'is-preview': preview, embedded }" :aria-label="t('instances.remoteDesktop.title')">
     <div class="remote-desktop-layout">
-    <header class="remote-desktop-head is-live">
+    <header v-if="!preview" class="remote-desktop-head is-live">
       <div class="remote-desktop-live-toolbar">
         <h2 class="sr-only">{{ t("instances.remoteDesktop.title") }}</h2>
         <div class="remote-desktop-live-main">
@@ -106,7 +106,10 @@
                           <strong>{{ transport.label }}</strong>
                           <span>{{ transport.status }}</span>
                         </div>
-                        <small>{{ transport.detail }}</small>
+                        <small v-if="transport.detail">{{ transport.detail }}</small>
+                        <div v-if="transport.details.length" class="remote-desktop-transport-tooltip-details">
+                          <small v-for="line in transport.details" :key="line">{{ line }}</small>
+                        </div>
                       </div>
                       <div v-for="failure in failedTransportIndicators" :key="failure.key" class="remote-desktop-transport-tooltip-failure">
                         <div class="remote-desktop-transport-tooltip-heading">
@@ -121,7 +124,6 @@
               </div>
             </TooltipProvider>
             <span v-if="session"><Users :size="12" aria-hidden="true" />{{ t("instances.remoteDesktop.viewerCount", { count: viewerCount }) }}</span>
-            <span v-if="session && !fallbackActive && webRTCLatencyDetail"><Gauge :size="12" aria-hidden="true" />{{ webRTCLatencyDetail }}</span>
             <span v-if="resolution"><Maximize2 :size="12" aria-hidden="true" />{{ resolution }}</span>
             <span v-if="sessionDeadline"><Clock3 :size="12" aria-hidden="true" />{{ sessionDeadline }}</span>
             <span v-if="idleDeadline" class="remote-desktop-idle-deadline">{{ idleDeadline }}</span>
@@ -165,6 +167,24 @@
                     <p class="remote-desktop-actions-hint">{{ t("instances.remoteDesktop.transportFrameRateHint") }}</p>
                     <DropdownMenuRadioGroup :model-value="transportFrameRate" @update:model-value="setTransportFrameRate(String($event))">
                       <DropdownMenuRadioItem v-for="option in transportFrameRateOptions" :key="option.value" :value="option.value" :disabled="!signalingReady || fallbackSwitching">
+                        <span class="remote-desktop-resolution-option">
+                          <span>{{ option.label }}</span>
+                          <small>{{ option.detail }}</small>
+                        </span>
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSub v-if="capturePrecisionSupported">
+                  <DropdownMenuSubTrigger :disabled="!signalingReady || fallbackSwitching">
+                    <Scan :size="14" aria-hidden="true" />
+                    <span>{{ t("instances.remoteDesktop.capturePrecision") }}</span>
+                    <small class="remote-desktop-menu-value">{{ transportCapturePrecisionLabel }}</small>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent class="remote-desktop-frame-rate-menu" :collision-padding="10" :side-offset="4">
+                    <p class="remote-desktop-actions-hint">{{ t("instances.remoteDesktop.capturePrecisionHint") }}</p>
+                    <DropdownMenuRadioGroup :model-value="transportCapturePrecision" @update:model-value="setTransportCapturePrecision(String($event))">
+                      <DropdownMenuRadioItem v-for="option in transportCapturePrecisionOptions" :key="option.value" :value="option.value" :disabled="!signalingReady || fallbackSwitching">
                         <span class="remote-desktop-resolution-option">
                           <span>{{ option.label }}</span>
                           <small>{{ option.detail }}</small>
@@ -264,22 +284,30 @@
       </div>
     </header>
 
-    <div v-if="error || !signalTransportReady" class="remote-desktop-error-banner" role="alert">
+    <div v-if="!preview && (error || !signalTransportReady)" class="remote-desktop-error-banner" role="alert">
       <CircleAlert :size="15" aria-hidden="true" />
       <span>{{ error || t("instances.remoteDesktop.secureTransportHint") }}</span>
     </div>
-    <div v-else-if="sourceEndedNotice" class="remote-desktop-error-banner remote-desktop-source-ended" role="status">
+    <div v-else-if="!preview && sourceEndedNotice" class="remote-desktop-error-banner remote-desktop-source-ended" role="status">
       <MonitorOff :size="15" aria-hidden="true" />
       <span>{{ sourceEndedNotice }}</span>
     </div>
 
-    <div v-if="!available" class="remote-desktop-unavailable">
+    <div v-if="!available && !preview" class="remote-desktop-unavailable">
       <span class="remote-desktop-unavailable-icon" aria-hidden="true"><MonitorOff :size="22" /></span>
       <strong>{{ t("instances.remoteDesktop.unavailable") }}</strong>
       <span>{{ t("instances.remoteDesktop.unavailableHint") }}</span>
     </div>
 
-    <div v-else-if="switchingScope || transportPolicyReconnecting" class="remote-desktop-switching" role="status">
+    <div v-else-if="!available && preview" class="remote-desktop-stage remote-desktop-preview-stage">
+      <div class="remote-desktop-overlay" role="status">
+        <MonitorOff :size="22" aria-hidden="true" />
+        <strong>{{ t("instances.remoteDesktop.unavailable") }}</strong>
+        <span>{{ t("instances.remoteDesktop.unavailableHint") }}</span>
+      </div>
+    </div>
+
+    <div v-else-if="(switchingScope || transportPolicyReconnecting) && !preview" class="remote-desktop-switching" role="status">
       <span class="remote-desktop-switching-icon" aria-hidden="true"><LoaderCircle class="remote-desktop-spin" :size="20" /></span>
       <span class="remote-desktop-switching-copy">
         <strong>{{ switchingOverlayTitle }}</strong>
@@ -287,7 +315,7 @@
       </span>
     </div>
 
-    <div v-else-if="!session" class="remote-desktop-stage remote-desktop-stage-setup">
+    <div v-else-if="!session && !preview" class="remote-desktop-stage remote-desktop-stage-setup">
     <div class="remote-desktop-setup">
       <div class="remote-desktop-setup-main">
         <div class="remote-desktop-section-heading">
@@ -434,6 +462,15 @@
     </div>
     </div>
 
+    <div v-else-if="!session && preview" class="remote-desktop-stage remote-desktop-preview-stage">
+      <div class="remote-desktop-overlay" role="status">
+        <LoaderCircle v-if="!error" class="remote-desktop-spin" :size="22" aria-hidden="true" />
+        <CircleAlert v-else :size="22" aria-hidden="true" />
+        <strong>{{ error || establishingTitle }}</strong>
+        <span v-if="!error">{{ establishingHint }}</span>
+      </div>
+    </div>
+
     <div v-else ref="stage" class="remote-desktop-stage">
       <div
         ref="surface"
@@ -464,14 +501,14 @@
           <Play :size="22" aria-hidden="true" />
           <strong>{{ t("instances.remoteDesktop.paused") }}</strong>
         </div>
-        <div v-if="controlHintVisible" class="remote-desktop-interaction-hint" role="status" aria-live="polite">
+        <div v-if="!preview && controlHintVisible" class="remote-desktop-interaction-hint" role="status" aria-live="polite">
           <MousePointer2 :size="14" aria-hidden="true" />
           <span>{{ hasController ? t("instances.remoteDesktop.viewingByOther", { count: viewerCount }) : t("instances.remoteDesktop.controlAvailable") }}</span>
           <Button variant="secondary" size="sm" :disabled="controlRequestPending || !signalingReady" @pointerdown.stop @click.stop="requestControl">
             {{ controlRequestPending ? t("instances.remoteDesktop.requestingControl") : t("instances.remoteDesktop.requestControl") }}
           </Button>
         </div>
-        <span v-if="streamReady && !inputEnabled" class="remote-desktop-view-only">
+        <span v-if="!preview && streamReady && !inputEnabled" class="remote-desktop-view-only">
           <MousePointer2 :size="13" aria-hidden="true" />
           {{ isController ? t("instances.remoteDesktop.viewOnly") : hasController ? t("instances.remoteDesktop.viewingByOther", { count: viewerCount }) : t("instances.remoteDesktop.controlAvailable") }}
         </span>
@@ -488,11 +525,15 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   isRecoverableRemoteDesktopInputResumeError,
+  parseRemoteDesktopWebRTCReceiveSample,
   parseRemoteDesktopWebRTCStats,
+  preferredRemoteDesktopVideoCodecs,
+  remoteDesktopVideoCodecLabel,
   remoteDesktopInputResumeRetryDelayMs,
   RemoteDesktopWheelPump,
   REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS,
   type RemoteDesktopWebRTCStats,
+  type RemoteDesktopWebRTCReceiveSample,
 } from "@task-handoff/control-plane-client";
 import {
   AppWindow,
@@ -517,6 +558,7 @@ import {
   Power,
   Radio,
   RefreshCw,
+  Scan,
   ScreenShare,
   Search,
   Square,
@@ -534,6 +576,7 @@ import {
   DesktopFallbackFrameAssembler,
   decodeDesktopFallbackFrame,
   isRemoteDesktopLocalNetworkAddress,
+  remoteDesktopSupportsCapturePrecision,
   type DesktopCaptureSelection,
   type DesktopFallbackSession,
   type DesktopSessionSnapshot,
@@ -545,6 +588,10 @@ import { translateApiError } from "../../../i18n/apiError";
 import { parseInputSuspension, shouldResumeAfterInputSuspension } from "./remoteDesktopInputSuspension";
 import { createRemoteDesktopDiagnostics, remoteDesktopErrorFields } from "./remoteDesktopDiagnostics";
 import { parseSelectedSourceIdentity, resolveRefreshedSource, selectedSourceIdentity as toSelectedSourceIdentity, type SelectedSourceIdentity } from "./remoteDesktopSourceSelection";
+import {
+  sessionRemoteDesktopSourceIdentity,
+  type SessionRemoteDesktopTarget,
+} from "./sessionRemoteDesktopLinks";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -564,6 +611,14 @@ const props = defineProps<{
   canManage?: boolean;
   embedded?: boolean;
   active?: boolean;
+  autoConnect?: boolean;
+  initialTarget?: SessionRemoteDesktopTarget;
+  preview?: boolean;
+}>();
+const emit = defineEmits<{
+  selectionChange: [target: SessionRemoteDesktopTarget];
+  stopped: [];
+  streamSize: [size: { width: number; height: number }];
 }>();
 
 const remote = computed(() => remoteDesktopCapabilities({ capabilities: props.capabilities ?? {} } as any));
@@ -581,16 +636,17 @@ const sourceQuery = ref("");
 const sourcesLoading = ref(false);
 const sourcesError = ref("");
 type TargetSelection = { kind: string; sourceRef?: string };
-type TransportResolutionValue = "auto" | "1080p" | "720p" | "540p" | "360p";
+type TransportResolutionValue = "auto" | "4k" | "2k" | "1080p" | "540p";
 type TransportFrameRateValue = "auto" | "60" | "30" | "24" | "15";
+type TransportCapturePrecisionValue = "auto" | "performance";
 type ConnectionMethodKey = "p2p" | "websocket" | "turn";
 type ConnectionMethodAvailability = Record<ConnectionMethodKey, boolean>;
 const CONNECTION_METHOD_KEYS: ConnectionMethodKey[] = ["p2p", "websocket", "turn"];
 const TRANSPORT_RESOLUTION_PRESETS = [
+  { value: "4k" as const, width: 3840, height: 2160 },
+  { value: "2k" as const, width: 2560, height: 1440 },
   { value: "1080p" as const, width: 1920, height: 1080 },
-  { value: "720p" as const, width: 1280, height: 720 },
   { value: "540p" as const, width: 960, height: 540 },
-  { value: "360p" as const, width: 640, height: 360 },
 ];
 const TRANSPORT_FRAME_RATE_PRESETS = [60, 30, 24, 15] as const;
 type RemoteDesktopViewerPreferences = {
@@ -598,11 +654,13 @@ type RemoteDesktopViewerPreferences = {
   selectedSource?: SelectedSourceIdentity;
   transportResolution: TransportResolutionValue;
   transportFrameRate: TransportFrameRateValue;
+  transportCapturePrecision: TransportCapturePrecisionValue;
   transportAvailability: ConnectionMethodAvailability;
 };
 const VIEWER_PREFERENCES_PREFIX = "task-handoff.control-plane.remote-desktop-viewer:";
-const TRANSPORT_RESOLUTION_VALUES: TransportResolutionValue[] = ["auto", "1080p", "720p", "540p", "360p"];
+const TRANSPORT_RESOLUTION_VALUES: TransportResolutionValue[] = ["auto", "4k", "2k", "1080p", "540p"];
 const TRANSPORT_FRAME_RATE_VALUES: TransportFrameRateValue[] = ["auto", "60", "30", "24", "15"];
+const TRANSPORT_CAPTURE_PRECISION_VALUES: TransportCapturePrecisionValue[] = ["auto", "performance"];
 
 function viewerPreferencesKey(instanceId: string) {
   return `${VIEWER_PREFERENCES_PREFIX}${instanceId}`;
@@ -629,20 +687,27 @@ function loadViewerPreferences(instanceId: string): RemoteDesktopViewerPreferenc
     const transportFrameRate = TRANSPORT_FRAME_RATE_VALUES.includes(value?.transportFrameRate)
       ? value.transportFrameRate as TransportFrameRateValue
       : "auto";
+    const transportCapturePrecision = TRANSPORT_CAPTURE_PRECISION_VALUES.includes(value?.transportCapturePrecision)
+      ? value.transportCapturePrecision as TransportCapturePrecisionValue
+      : "auto";
     const rawAvailability = value?.transportAvailability;
     const transportAvailability = rawAvailability && CONNECTION_METHOD_KEYS.some((key) => rawAvailability[key] === true)
       ? Object.fromEntries(CONNECTION_METHOD_KEYS.map((key) => [key, rawAvailability[key] === true])) as ConnectionMethodAvailability
       : { p2p: true, websocket: true, turn: true };
     const selectedSource = parseSelectedSourceIdentity(value?.selectedSource);
-    return { target: target ?? { kind: "display" }, selectedSource, transportResolution, transportFrameRate, transportAvailability };
+    return { target: target ?? { kind: "display" }, selectedSource, transportResolution, transportFrameRate, transportCapturePrecision, transportAvailability };
   } catch {
     return undefined;
   }
 }
 
 const viewerPreferences = loadViewerPreferences(props.instanceId);
-const target = ref<TargetSelection>(viewerPreferences?.target ?? { kind: "display" });
-const selectedSourceInfo = ref<SelectedSourceIdentity | undefined>(viewerPreferences?.selectedSource);
+const target = ref<TargetSelection>(props.initialTarget
+  ? { kind: props.initialTarget.kind, ...(props.initialTarget.sourceRef ? { sourceRef: props.initialTarget.sourceRef } : {}) }
+  : viewerPreferences?.target ?? { kind: "display" });
+const selectedSourceInfo = ref<SelectedSourceIdentity | undefined>(
+  sessionRemoteDesktopSourceIdentity(props.initialTarget) ?? viewerPreferences?.selectedSource,
+);
 const session = ref<RemoteDesktopCreated>();
 const snapshot = ref<DesktopSessionSnapshot>();
 const error = ref("");
@@ -659,8 +724,9 @@ const signalingReady = ref(false);
 const switchingScope = ref(false);
 const scopeMenuOpen = ref(false);
 const forceStopOpen = ref(false);
-const transportResolution = ref<TransportResolutionValue>(viewerPreferences?.transportResolution ?? "auto");
+const transportResolution = ref<TransportResolutionValue>(props.preview ? "540p" : viewerPreferences?.transportResolution ?? "auto");
 const transportFrameRate = ref<TransportFrameRateValue>(viewerPreferences?.transportFrameRate ?? "auto");
+const transportCapturePrecision = ref<TransportCapturePrecisionValue>(viewerPreferences?.transportCapturePrecision ?? "auto");
 const transportAvailability = ref<ConnectionMethodAvailability>(viewerPreferences?.transportAvailability ?? { p2p: true, websocket: true, turn: true });
 const activeTransportAvailability = ref<ConnectionMethodAvailability>({ ...transportAvailability.value });
 const transportPolicyReconnecting = ref(false);
@@ -679,16 +745,18 @@ const webrtcPeerConnected = ref(false);
 const webrtcPeerFailed = ref(false);
 const webCodecsSupported = ref<boolean | null>(null);
 const fallbackSize = ref<{ width: number; height: number }>();
+const fallbackEncodingDetail = ref("");
 const documentVisible = ref(typeof document === "undefined" ? true : document.visibilityState !== "hidden");
 
 function persistViewerPreferences() {
-  if (typeof window === "undefined") return;
+  if (props.preview || typeof window === "undefined") return;
   try {
     window.localStorage?.setItem(viewerPreferencesKey(props.instanceId), JSON.stringify({
       target: target.value,
       selectedSource: selectedSourceInfo.value,
       transportResolution: transportResolution.value,
       transportFrameRate: transportFrameRate.value,
+      transportCapturePrecision: transportCapturePrecision.value,
       transportAvailability: transportAvailability.value,
     } satisfies RemoteDesktopViewerPreferences));
   } catch {
@@ -696,7 +764,14 @@ function persistViewerPreferences() {
   }
 }
 
-watch([target, selectedSourceInfo, transportResolution, transportFrameRate, transportAvailability], persistViewerPreferences, { deep: true });
+watch([target, selectedSourceInfo, transportResolution, transportFrameRate, transportCapturePrecision, transportAvailability], persistViewerPreferences, { deep: true });
+watch([target, selectedSourceInfo], ([nextTarget, source]) => {
+  if (!source) return;
+  emit("selectionChange", {
+    ...source,
+    ...(nextTarget.sourceRef ? { sourceRef: nextTarget.sourceRef } : {}),
+  });
+}, { deep: true });
 
 const video = ref<HTMLVideoElement>();
 const fallbackCanvas = ref<HTMLCanvasElement>();
@@ -714,6 +789,7 @@ let inputAliveTimer: ReturnType<typeof setInterval> | undefined;
 let signalAliveTimer: ReturnType<typeof setInterval> | undefined;
 let pointerFrame: number | undefined;
 let wheelFrame: number | undefined;
+let webRTCReceiveSample: RemoteDesktopWebRTCReceiveSample | undefined;
 let controlHintTimer: ReturnType<typeof setTimeout> | undefined;
 let pendingPointer: { x: number; y: number } | undefined;
 let wheelAnchor: { x: number; y: number } | undefined;
@@ -892,7 +968,16 @@ const webRTCCandidateDetail = computed(() => {
 const webRTCLatencyDetail = computed(() => webRTCCandidatePair.value?.latencyMs === undefined
   ? ""
   : t("instances.remoteDesktop.transportLatency", { value: webRTCCandidatePair.value.latencyMs }));
-const activeWebRTCDetail = computed(() => [webRTCCandidateDetail.value, webRTCLatencyDetail.value].filter(Boolean).join(" · "));
+const webRTCBandwidthDetail = computed(() => webRTCCandidatePair.value?.bandwidthMbps === undefined
+  ? ""
+  : t("instances.remoteDesktop.transportBandwidth", { value: formatBandwidth(webRTCCandidatePair.value.bandwidthMbps) }));
+const webRTCEncodingDetail = computed(() => encodingDetailText(
+  webRTCCandidatePair.value?.codec,
+  webRTCCandidatePair.value?.frameRate,
+));
+const activeEncodingDetail = computed(() => fallbackActive.value
+  ? fallbackEncodingDetail.value
+  : webRTCEncodingDetail.value);
 const transportIndicators = computed(() => {
   const fallbackConnecting = fallbackState.value === "switching" || fallbackState.value === "reconnecting";
   const fallbackSelected = fallbackActive.value || fallbackConnecting || transportUpgrading.value;
@@ -943,12 +1028,15 @@ const transportIndicators = computed(() => {
       detail: p2pState === "failed"
         ? t("instances.remoteDesktop.transportP2pFailed")
         : p2pState === "active"
-          ? activeWebRTCDetail.value || t("instances.remoteDesktop.transportP2pActive")
+          ? t("instances.remoteDesktop.transportP2pActive")
           : p2pState === "pending"
             ? peerConnected
               ? t("instances.remoteDesktop.transportP2pSwitching")
               : t("instances.remoteDesktop.transportP2pConnecting")
             : t("instances.remoteDesktop.transportP2pIdle"),
+      details: p2pState === "active"
+        ? [webRTCCandidateDetail.value, webRTCLatencyDetail.value, webRTCBandwidthDetail.value, activeEncodingDetail.value].filter(Boolean)
+        : [],
     },
     {
       key: "websocket",
@@ -961,6 +1049,7 @@ const transportIndicators = computed(() => {
         : websocketState === "pending"
           ? t("instances.remoteDesktop.fallbackSwitchingHint")
           : t("instances.remoteDesktop.transportWebSocketIdle"),
+      details: websocketState === "active" && fallbackEncodingDetail.value ? [fallbackEncodingDetail.value] : [],
     },
     {
       key: "relay",
@@ -971,10 +1060,13 @@ const transportIndicators = computed(() => {
       detail: relayState === "failed"
         ? t("instances.remoteDesktop.transportRelayFailed")
         : relayState === "active"
-          ? activeWebRTCDetail.value || t("instances.remoteDesktop.transportRelayActive")
+          ? t("instances.remoteDesktop.transportRelayActive")
           : relayState === "pending"
             ? t("instances.remoteDesktop.transportRelaySwitching")
             : t("instances.remoteDesktop.transportRelayIdle"),
+      details: relayState === "active"
+        ? [webRTCCandidateDetail.value, webRTCLatencyDetail.value, webRTCBandwidthDetail.value, activeEncodingDetail.value].filter(Boolean)
+        : [],
     },
   ];
 });
@@ -1072,7 +1164,7 @@ const transportResolutionOptions = computed(() => {
     { value: "auto" as const, label: t("instances.remoteDesktop.autoResolution"), detail: t("instances.remoteDesktop.autoResolutionDetail"), width: null, height: null },
     ...TRANSPORT_RESOLUTION_PRESETS
       .filter((option) => maxWidth <= 0 || maxHeight <= 0 || (option.width <= maxWidth && option.height <= maxHeight))
-      .map((option) => ({ ...option, label: option.value, detail: `${option.width} × ${option.height}` })),
+      .map((option) => ({ ...option, label: option.value.toUpperCase(), detail: `${option.width} × ${option.height}` })),
   ];
 });
 const transportResolutionLabel = computed(() => {
@@ -1097,11 +1189,32 @@ const transportFrameRateLabel = computed(() => {
   return transportFrameRateOptions.value.find((option) => option.value === transportFrameRate.value)?.label
     ?? t("instances.remoteDesktop.autoFrameRate");
 });
+const capturePrecisionSupported = computed(() => {
+  return remoteDesktopSupportsCapturePrecision(remote.value);
+});
+const transportCapturePrecisionOptions = computed(() => [
+  { value: "auto" as const, label: t("instances.remoteDesktop.autoResolution"), detail: t("instances.remoteDesktop.capturePrecisionAutoDetail") },
+  { value: "performance" as const, label: t("instances.remoteDesktop.capturePrecisionPerformance"), detail: t("instances.remoteDesktop.capturePrecisionPerformanceDetail") },
+]);
+const transportCapturePrecisionLabel = computed(() => {
+  return transportCapturePrecisionOptions.value.find((option) => option.value === transportCapturePrecision.value)?.label
+    ?? t("instances.remoteDesktop.autoResolution");
+});
 const transportQualityLabel = computed(() => `${transportResolutionLabel.value} · ${transportFrameRateLabel.value}`);
 const selectedCaptureSelection = computed<DesktopCaptureSelection | undefined>(() => {
   return target.value.sourceRef ? { sourceRef: target.value.sourceRef } : undefined;
 });
 const canConnect = computed(() => Boolean(selectedCaptureSelection.value));
+const autoConnectPending = ref(props.autoConnect === true);
+function connectIfAutoConnectReady() {
+  if (!autoConnectPending.value || !canConnect.value || sourcesLoading.value || connecting.value || session.value) return;
+  autoConnectPending.value = false;
+  void connect();
+}
+watch([canConnect, sourcesLoading], ([ready, loading]) => {
+  if (!ready || loading) return;
+  connectIfAutoConnectReady();
+}, { flush: "post" });
 const connectionTone = computed(() => {
   if (!session.value) return "neutral";
   if (fallbackState.value === "active") return "active";
@@ -1546,7 +1659,22 @@ async function setupPeer() {
   webrtcPeerFailed.value = false;
   webRTCRoute.value = "unknown";
   webRTCCandidatePair.value = undefined;
-  peer.addTransceiver("video", { direction: "recvonly" });
+  webRTCReceiveSample = undefined;
+  const transceiver = peer.addTransceiver("video", { direction: "recvonly" });
+  if (typeof RTCRtpReceiver !== "undefined" && typeof transceiver.setCodecPreferences === "function") {
+    try {
+      const codecs = RTCRtpReceiver.getCapabilities("video")?.codecs;
+      if (codecs?.length) {
+        transceiver.setCodecPreferences(
+          preferredRemoteDesktopVideoCodecs(codecs, remote.value?.video.codecs ?? []),
+        );
+      }
+    } catch (reason) {
+      recordRemoteDesktopDiagnostic("video.codec.preferences", {
+        codecs: remote.value?.video.codecs.join(","),
+      }, reason);
+    }
+  }
   for (const [label, id] of [["control", 0], ["input", 1], ["pointer", 2], ["clipboard", 3]] as const) {
     const options: RTCDataChannelInit = { negotiated: true, id, ordered: label !== "pointer" };
     if (label === "pointer") options.maxRetransmits = 0;
@@ -1696,7 +1824,9 @@ function candidateTypeLabel(type: string) {
 async function refreshWebRTCTransport(peer: RTCPeerConnection) {
   try {
     const stats = await peer.getStats();
-    const diagnostics = parseRemoteDesktopWebRTCStats(stats);
+    const receiveSample = parseRemoteDesktopWebRTCReceiveSample(stats);
+    const diagnostics = parseRemoteDesktopWebRTCStats(stats, webRTCReceiveSample);
+    webRTCReceiveSample = receiveSample;
     if (pc !== peer) return;
     if (!diagnostics?.path) {
       webRTCRoute.value = "unknown";
@@ -1710,6 +1840,19 @@ async function refreshWebRTCTransport(peer: RTCPeerConnection) {
     webRTCRoute.value = "unknown";
     webRTCCandidatePair.value = undefined;
   }
+}
+
+function formatBandwidth(value: number) {
+  return value >= 100 ? String(Math.round(value)) : value.toFixed(1);
+}
+
+function encodingDetailText(codec: string | undefined, frameRate: number | undefined) {
+  const label = remoteDesktopVideoCodecLabel(codec);
+  if (!label) return "";
+  const value = frameRate
+    ? t("instances.remoteDesktop.transportEncodingWithFrameRate", { codec: label, fps: frameRate })
+    : label;
+  return t("instances.remoteDesktop.transportEncoding", { value });
 }
 
 function startWebRTCTransportWatch(peer: RTCPeerConnection) {
@@ -1802,11 +1945,14 @@ async function detectWebCodecs() {
     return false;
   }
   try {
-    const support = await VideoDecoder.isConfigSupported({
-      codec: "avc1.42E028",
-      optimizeForLatency: true,
-    });
-    webCodecsSupported.value = support.supported === true;
+    const checks = await Promise.all(
+      ["avc1.42E028", "hvc1.1.6.L120.90"].map(codec =>
+        VideoDecoder.isConfigSupported({ codec, optimizeForLatency: true })
+          .then(result => result.supported === true)
+          .catch(() => false),
+      ),
+    );
+    webCodecsSupported.value = checks.some(Boolean);
   } catch {
     webCodecsSupported.value = false;
   }
@@ -2115,6 +2261,7 @@ function closeFallbackDecoder() {
   }
   fallbackDecoder = undefined;
   fallbackConfig = undefined;
+  fallbackEncodingDetail.value = "";
   fallbackDecoderNeedsReset = false;
   fallbackFirstFrame = false;
   fallbackNeedsKeyframe = true;
@@ -2150,6 +2297,7 @@ function resetFallbackRuntime() {
   webrtcFrameWatch += 1;
   webrtcUpgradeBaseline = undefined;
   fallbackSize.value = undefined;
+  fallbackEncodingDetail.value = "";
   fallbackState.value = "idle";
 }
 
@@ -2167,13 +2315,14 @@ function handleFallbackMediaText(text: string, attempt: number) {
     if (!Number.isInteger(width) || width < 2 || width > 8192
       || !Number.isInteger(height) || height < 2 || height > 8192
       || !Number.isInteger(fps) || fps < 1 || fps > 120
-      || !Number.isInteger(bitrate) || bitrate < 1 || bitrate > 8_000_000
-      || codec !== "avc1.42E028") {
+      || !Number.isSafeInteger(bitrate) || bitrate < 1
+      || !/^(avc1|hvc1|hev1)\./i.test(codec)) {
       handleFallbackTransportFailure(attempt, "REMOTE_DESKTOP_FALLBACK_MEDIA_INVALID");
       return;
     }
     fallbackConfig = { codec, width, height, fps, bitrate };
     fallbackSize.value = { width, height };
+    fallbackEncodingDetail.value = encodingDetailText(codec, fps);
   } else if (value?.type === "fallback.error") {
     handleFallbackTransportFailure(attempt, String(value.payload?.code || "REMOTE_DESKTOP_FALLBACK_FAILED"));
   }
@@ -2196,22 +2345,29 @@ function ensureFallbackDecoder() {
   if (!config) return undefined;
   closeFallbackDecoder();
   fallbackConfig = config;
-  const decoder = new VideoDecoder({
-    output: frame => {
-      try { drawFallbackFrame(frame); } finally { frame.close(); }
-    },
-    error: () => {
-      fallbackDecoderNeedsReset = true;
-      fallbackNeedsKeyframe = true;
-      requestFallbackKeyframe();
-    },
-  });
-  decoder.configure({
-    codec: config.codec,
-    codedWidth: config.width,
-    codedHeight: config.height,
-    optimizeForLatency: true,
-  });
+  let decoder: VideoDecoder;
+  try {
+    decoder = new VideoDecoder({
+      output: frame => {
+        try { drawFallbackFrame(frame); } finally { frame.close(); }
+      },
+      error: () => {
+        fallbackDecoderNeedsReset = true;
+        fallbackNeedsKeyframe = true;
+        requestFallbackKeyframe();
+      },
+    });
+    decoder.configure({
+      codec: config.codec,
+      codedWidth: config.width,
+      codedHeight: config.height,
+      optimizeForLatency: true,
+    });
+  } catch {
+    fallbackDecoderNeedsReset = false;
+    handleFallbackTransportFailure(fallbackAttempt, "REMOTE_DESKTOP_FALLBACK_DECODER_UNSUPPORTED");
+    return undefined;
+  }
   fallbackDecoder = decoder;
   fallbackDecoderNeedsReset = false;
   return decoder;
@@ -2771,10 +2927,14 @@ function syncFullscreen() {
 function updateResolution() {
   if (fallbackActive.value && fallbackSize.value) {
     resolution.value = `${fallbackSize.value.width} × ${fallbackSize.value.height}`;
+    emit("streamSize", { width: fallbackSize.value.width, height: fallbackSize.value.height });
     return;
   }
   const element = video.value;
   resolution.value = element?.videoWidth && element.videoHeight ? `${element.videoWidth} × ${element.videoHeight}` : "";
+  if (element?.videoWidth && element.videoHeight) {
+    emit("streamSize", { width: element.videoWidth, height: element.videoHeight });
+  }
   streamReady.value = Boolean(resolution.value);
 }
 
@@ -2784,7 +2944,7 @@ function visibility() {
 }
 
 function surfacePaused() {
-  return documentVisible.value === false || props.active === false;
+  return documentVisible.value === false || (!props.preview && props.active === false);
 }
 
 function sendVisibility() {
@@ -2863,11 +3023,17 @@ function transportResolutionPayload() {
     maxWidth: option?.width ?? null,
     maxHeight: option?.height ?? null,
     maxFrameRate: frameRate,
+    capturePrecision: transportCapturePrecision.value,
   };
 }
 
 function applyTransportResolution(showError = false) {
-  if (transportResolution.value === "auto" && !transportResolutionRequested) return true;
+  if (
+    transportResolution.value === "auto"
+    && transportFrameRate.value === "auto"
+    && transportCapturePrecision.value === "auto"
+    && !transportResolutionRequested
+  ) return true;
   const control = controlChannel();
   if (!control) {
     recordRemoteDesktopDiagnostic("transport.resolution.failed", { reason: "control-channel-unavailable", showError, fallbackState: fallbackState.value, resolution: transportResolution.value });
@@ -2892,6 +3058,14 @@ function setTransportResolution(value: string) {
 function setTransportFrameRate(value: string) {
   if (!transportFrameRateOptions.value.some((option) => option.value === value)) return;
   transportFrameRate.value = value as TransportFrameRateValue;
+  transportResolutionRequested = true;
+  applyTransportResolution(true);
+}
+
+function setTransportCapturePrecision(value: string) {
+  if (!capturePrecisionSupported.value) return;
+  if (!TRANSPORT_CAPTURE_PRECISION_VALUES.includes(value as TransportCapturePrecisionValue)) return;
+  transportCapturePrecision.value = value as TransportCapturePrecisionValue;
   transportResolutionRequested = true;
   applyTransportResolution(true);
 }
@@ -2940,7 +3114,7 @@ async function closeCurrentSession() {
 
 async function stop() {
   if (!session.value) return;
-  await closeCurrentSession();
+  if (await closeCurrentSession()) emit("stopped");
 }
 
 async function forceStop() {
@@ -2949,6 +3123,7 @@ async function forceStop() {
   error.value = "";
   try {
     await forceStopRemoteDesktopSession(props.instanceId, session.value.snapshot.viewerSessionId);
+    emit("stopped");
   } catch (reason) {
     error.value = translateApiError(reason, t, t("instances.remoteDesktop.openFailed"));
   } finally {
@@ -2965,6 +3140,7 @@ function cleanup() {
   webrtcPeerFailed.value = false;
   webRTCRoute.value = "unknown";
   webRTCCandidatePair.value = undefined;
+  webRTCReceiveSample = undefined;
   const element = video.value;
   if (element) element.srcObject = null;
   stopInputAlive();
@@ -3027,6 +3203,7 @@ watch(() => hasSourceProvider.value, available => {
 }, { immediate: true });
 
 onMounted(() => {
+  connectIfAutoConnectReady();
   documentVisible.value = document.visibilityState !== "hidden";
   void detectWebCodecs();
   document.addEventListener("visibilitychange", visibility);
@@ -3086,6 +3263,28 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 0;
   box-shadow: none;
+}
+
+.remote-desktop-viewer.is-preview {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: #050506;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.remote-desktop-viewer.is-preview .remote-desktop-stage {
+  min-height: 0;
+}
+
+.remote-desktop-preview-stage {
+  position: relative;
+  overflow: hidden;
 }
 
 .remote-desktop-viewer:fullscreen {
@@ -3244,6 +3443,13 @@ onBeforeUnmount(() => {
   display: grid;
   min-width: 0;
   gap: 3px;
+}
+
+:global(.remote-desktop-transport-tooltip-details) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding-top: 3px;
 }
 
 :global(.remote-desktop-transport-tooltip-heading) {
@@ -3485,12 +3691,17 @@ onBeforeUnmount(() => {
   display: grid;
   flex: 1 1 auto;
   grid-template-columns: minmax(0, 1fr) minmax(240px, 286px);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: auto;
 }
 
 .remote-desktop-setup-main {
+  display: flex;
+  min-height: 0;
   min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
   padding: 13px;
 }
 
@@ -3583,6 +3794,10 @@ onBeforeUnmount(() => {
 }
 
 .remote-desktop-sources {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
   margin-top: 12px;
   padding-top: 11px;
   border-top: 1px solid var(--line-subtle);
@@ -3621,7 +3836,8 @@ onBeforeUnmount(() => {
 }
 
 .remote-desktop-source-scroll {
-  height: clamp(116px, 21vh, 214px);
+  flex: 1 1 auto;
+  min-height: 116px;
   margin-top: 7px;
   padding-right: 4px;
 }
@@ -3714,6 +3930,7 @@ onBeforeUnmount(() => {
 
 .remote-desktop-source-state {
   display: flex;
+  flex: 1 1 auto;
   min-height: 82px;
   align-items: center;
   justify-content: center;
@@ -3942,7 +4159,7 @@ onBeforeUnmount(() => {
   color: var(--text-subtle);
 }
 
-.remote-desktop-scope-popover {
+:deep(.remote-desktop-scope-popover) {
   display: flex;
   width: min(360px, var(--reka-popover-content-available-width));
   max-height: var(--reka-popover-content-available-height);
@@ -3983,10 +4200,16 @@ onBeforeUnmount(() => {
 }
 
 .remote-desktop-scope-scroll {
-  flex: 1 1 auto;
   min-height: 0;
-  max-height: min(310px, calc(var(--reka-popover-content-available-height) - 75px));
+  max-height: calc(var(--reka-popover-content-available-height) - 75px);
   padding: 5px;
+}
+
+/* Reka's viewport is outside this component's scoped attribute. It must be capped
+   directly because percentage heights do not resolve against a max-height-only parent. */
+.remote-desktop-scope-scroll :deep([data-task-handoff-scroll-viewport]) {
+  min-height: 0;
+  max-height: calc(var(--reka-popover-content-available-height) - 85px);
 }
 
 .remote-desktop-scope-options {
@@ -4284,6 +4507,7 @@ onBeforeUnmount(() => {
 @container (max-width: 760px) {
   .remote-desktop-setup {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
   }
 
   .remote-desktop-connect-panel {

@@ -5,13 +5,14 @@ use openh264::formats::{YUVBuffer, YUVSource};
 use std::time::Duration;
 
 /// Initial content budget; congestion feedback can reduce below this default.
-pub const INITIAL_BITRATE: u32 = 4_000_000;
-/// WebSocket fallback uses the same product resolution and frame rate as
-/// WebRTC. Only its proxy-chain bitrate is capped.
+pub const INITIAL_BITRATE: u32 = 8_000_000;
+/// WebSocket fallback uses the same product resolution, frame rate and initial
+/// encoder budget as WebRTC. The fallback has no receiver congestion feedback,
+/// so it must not be held at a lower fixed bitrate than the WebRTC start budget.
 pub const FALLBACK_MAX_WIDTH: u32 = 1920;
 pub const FALLBACK_MAX_HEIGHT: u32 = 1080;
 pub const FALLBACK_MAX_FRAME_RATE: u32 = 30;
-pub const FALLBACK_MAX_BITRATE: u32 = 4_000_000;
+pub const FALLBACK_MAX_BITRATE: u32 = INITIAL_BITRATE;
 pub const FALLBACK_LIMITS: crate::codec::Limits = crate::codec::Limits {
     level: 40,
     max_fs: 8160,
@@ -55,16 +56,19 @@ impl Budget {
         resolution: Option<(u32, u32)>,
         frame_rate: Option<u32>,
     ) -> Self {
-        let (max_width, max_height, fps) = match bitrate {
+        let (tier_width, tier_height, fps) = match bitrate {
             0..250_000 => (320, 180, 10),
             250_000..750_000 => (640, 360, 15),
             750_000..2_000_000 => (1280, 720, 24),
-            _ if limits.level >= 40 => (1920, 1080, 30),
+            2_000_000..12_000_000 if limits.level >= 40 => (1920, 1080, 30),
+            12_000_000..24_000_000 if limits.level >= 51 => (2560, 1440, 30),
+            24_000_000.. if limits.level >= 51 => (3840, 2160, 30),
             _ => (1280, 720, 30),
         };
-        let (max_width, max_height) = resolution
-            .map(|(width, height)| (max_width.min(width), max_height.min(height)))
-            .unwrap_or((max_width, max_height));
+        // An explicit user quality target controls pixel dimensions. The bitrate
+        // tier still controls frame rate and remains the automatic-resolution
+        // policy when no target was requested.
+        let (max_width, max_height) = resolution.unwrap_or((tier_width, tier_height));
         // Scale to content/rate first, then enforce the negotiated codec limits.
         let ratio = (max_width as f64 / width.max(1) as f64)
             .min(max_height as f64 / height.max(1) as f64)
@@ -232,6 +236,7 @@ pub fn scale_yuv(frame: YUVBuffer, budget: Budget) -> anyhow::Result<YUVBuffer> 
 pub struct FramePressure {
     max_pixels: Option<u64>,
     last_change: Option<std::time::Instant>,
+    probe_bitrate: u32,
 }
 impl FramePressure {
     fn wire_bytes(encoded_bytes: usize) -> usize {
@@ -244,17 +249,29 @@ impl FramePressure {
     pub fn fits(encoded_bytes: usize, bitrate: u32) -> bool {
         Self::wire_bytes(encoded_bytes) <= crate::pacing::byte_budget(bitrate as f64)
     }
-    pub fn fit(&mut self, base: Budget, now: std::time::Instant) -> Budget {
+    pub fn fits_frame(encoded_bytes: usize, bitrate: u32, keyframe: bool) -> bool {
+        let budget = if keyframe {
+            crate::pacing::keyframe_byte_budget(bitrate as f64)
+        } else {
+            crate::pacing::byte_budget(bitrate as f64)
+        };
+        Self::wire_bytes(encoded_bytes) <= budget
+    }
+    pub fn fit(&mut self, base: Budget, bitrate: u32, now: std::time::Instant) -> Budget {
         let base_pixels = base.width as u64 * base.height as u64;
-        if self
-            .last_change
-            .is_some_and(|at| now.saturating_duration_since(at) >= Duration::from_secs(1))
+        let has_rate_headroom = bitrate as u64 >= self.probe_bitrate as u64 * 5 / 4;
+        if self.max_pixels.is_some()
+            && has_rate_headroom
+            && self
+                .last_change
+                .is_some_and(|at| now.saturating_duration_since(at) >= Duration::from_secs(5))
         {
             self.max_pixels = self.max_pixels.and_then(|pixels| {
-                let increased = pixels.saturating_mul(4);
-                (increased < base_pixels).then_some(increased)
+                let increased = ((pixels as f64 * 1.5) as u64).min(base_pixels);
+                Some(increased)
             });
             self.last_change = Some(now);
+            self.probe_bitrate = bitrate;
         }
         let Some(limit) = self.max_pixels.filter(|pixels| *pixels < base_pixels) else {
             return base;
@@ -272,12 +289,17 @@ impl FramePressure {
         budget: Budget,
         bitrate: u32,
         now: std::time::Instant,
+        keyframe: bool,
     ) -> anyhow::Result<bool> {
-        if Self::fits(encoded_bytes, bitrate) {
+        if Self::fits_frame(encoded_bytes, bitrate, keyframe) {
             return Ok(true);
         }
         let wire = Self::wire_bytes(encoded_bytes);
-        let available = crate::pacing::byte_budget(bitrate as f64);
+        let available = if keyframe {
+            crate::pacing::keyframe_byte_budget(bitrate as f64)
+        } else {
+            crate::pacing::byte_budget(bitrate as f64)
+        };
         let pixels = budget.width as u64 * budget.height as u64;
         anyhow::ensure!(
             pixels > 160 * 90,
@@ -286,6 +308,7 @@ impl FramePressure {
         let ratio = (available as f64 / wire as f64 * 0.8).clamp(0.1, 0.64);
         self.max_pixels = Some(((pixels as f64 * ratio) as u64).max(160 * 90));
         self.last_change = Some(now);
+        self.probe_bitrate = bitrate;
         Ok(false)
     }
 }

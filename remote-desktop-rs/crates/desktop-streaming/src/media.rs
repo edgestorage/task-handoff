@@ -2,6 +2,7 @@
 use crate::{
     channel::{Channel, MAX_CLIPBOARD_WIRE, MAX_MESSAGE},
     synthetic::SyntheticInput,
+    traits::CapturePrecision,
 };
 use async_trait::async_trait;
 use rtc::{
@@ -32,7 +33,7 @@ use tokio::{
 use webrtc::{
     data_channel::{DataChannel, DataChannelEvent, RTCDataChannelInit},
     media_stream::{
-        track_local::{static_sample::TrackLocalStaticSample, TrackLocal},
+        track_local::{static_rtp::TrackLocalStaticRTP, TrackLocal},
         Track,
     },
     peer_connection::*,
@@ -78,6 +79,7 @@ pub struct MediaControl {
     format: Mutex<Option<crate::codec::Format>>,
     resolution: Mutex<Option<(u32, u32)>>,
     frame_rate: Mutex<Option<u32>>,
+    capture_precision: Mutex<CapturePrecision>,
     pub wake: Notify,
     pub frames_sent: AtomicU64,
     pub frame_budget_drops: AtomicU64,
@@ -96,6 +98,7 @@ impl Default for MediaControl {
             format: Mutex::new(None),
             resolution: Mutex::new(None),
             frame_rate: Mutex::new(None),
+            capture_precision: Mutex::new(CapturePrecision::Auto),
             wake: Notify::new(),
             frames_sent: AtomicU64::new(0),
             frame_budget_drops: AtomicU64::new(0),
@@ -122,6 +125,17 @@ impl MediaControl {
         self.idr.store(true, Ordering::SeqCst);
         self.wake.notify_one();
     }
+    pub fn set_capture_precision(&self, precision: CapturePrecision) {
+        if *self.capture_precision.lock().unwrap() == precision {
+            return;
+        }
+        *self.capture_precision.lock().unwrap() = precision;
+        self.idr.store(true, Ordering::SeqCst);
+        self.wake.notify_one();
+    }
+    pub fn capture_precision(&self) -> CapturePrecision {
+        *self.capture_precision.lock().unwrap()
+    }
     pub fn resolution_limit(&self) -> Option<(u32, u32)> {
         *self.resolution.lock().unwrap()
     }
@@ -146,9 +160,16 @@ impl MediaControl {
         if format.is_none() {
             *format = Some(crate::codec::Format {
                 payload_type: 96,
+                codec: crate::codec::VideoCodec::H264,
                 limits: crate::video::FALLBACK_LIMITS,
             });
         }
+    }
+    pub fn video_codec(&self) -> crate::codec::VideoCodec {
+        self.format
+            .lock()
+            .unwrap()
+            .map_or(crate::codec::VideoCodec::H264, |format| format.codec)
     }
     pub fn fallback_sender(
         &self,
@@ -335,12 +356,37 @@ impl Interceptor for KeyframeFeedback {
     fn unbind_remote_stream(&mut self, _: &StreamInfo) {}
 }
 
+fn rtc_video_codec(codec: crate::codec::VideoCodec) -> RTCRtpCodec {
+    RTCRtpCodec {
+        mime_type: codec.mime_type().into(),
+        clock_rate: 90_000,
+        channels: 0,
+        sdp_fmtp_line: match codec {
+            crate::codec::VideoCodec::H264 => {
+                "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e028".into()
+            }
+            // A single profile constraint exact-matches every Main-profile offer,
+            // regardless of the receiver's level-id. Level/dimension limits are
+            // parsed from the selected payload's fmtp after negotiation.
+            crate::codec::VideoCodec::H265 => "profile-id=1".into(),
+        },
+        rtcp_feedback: vec![],
+    }
+}
+
+fn video_payload_type(codec: crate::codec::VideoCodec) -> u8 {
+    match codec {
+        crate::codec::VideoCodec::H264 => 96,
+        crate::codec::VideoCodec::H265 => 97,
+    }
+}
+
 pub struct MediaPeer {
     pc: Arc<dyn PeerConnection>,
     control: Arc<MediaControl>,
     tasks: Arc<Mutex<JoinSet<()>>>,
     gather: tokio::sync::watch::Receiver<u64>,
-    track: Arc<TrackLocalStaticSample>,
+    track: Arc<crate::dynamic_track::DynamicVideoTrack>,
     target: Arc<AtomicU64>,
     sender: Arc<dyn webrtc::rtp_transceiver::RtpSender>,
     started: bool,
@@ -391,28 +437,41 @@ impl MediaPeer {
         events: mpsc::Sender<PeerEvent>,
         source: crate::capture::Source,
     ) -> anyhow::Result<Self> {
+        // Synthetic test peers have no native HEVC encoder. Real macOS capture
+        // advertises H.265 only after VideoToolbox hardware HEVC is proven.
+        let available_codecs = if matches!(&source, crate::capture::Source::Synthetic) {
+            vec![crate::codec::VideoCodec::H264]
+        } else {
+            crate::codec::local_video_codecs()
+        };
+        Self::with_source_and_codecs(session, events, source, available_codecs).await
+    }
+    async fn with_source_and_codecs(
+        session: String,
+        events: mpsc::Sender<PeerEvent>,
+        source: crate::capture::Source,
+        available_codecs: Vec<crate::codec::VideoCodec>,
+    ) -> anyhow::Result<Self> {
         let control = Arc::new(MediaControl::default());
         let tasks = Arc::new(Mutex::new(JoinSet::new()));
         let (gather_events, gather) = tokio::sync::watch::channel(0);
         let target = Arc::new(AtomicU64::new(crate::video::INITIAL_BITRATE as u64));
-        let codec = RTCRtpCodec {
-            mime_type: "video/H264".into(),
-            clock_rate: 90000,
-            channels: 0,
-            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e028"
-                .into(),
-            rtcp_feedback: vec![],
-        };
         let mut engine = MediaEngine::default();
-        engine.register_codec(
-            RTCRtpCodecParameters {
-                rtp_codec: codec.clone(),
-                payload_type: 96,
-            },
-            RtpCodecKind::Video,
-        )?;
+        for codec in &available_codecs {
+            engine.register_codec(
+                RTCRtpCodecParameters {
+                    rtp_codec: rtc_video_codec(*codec),
+                    payload_type: video_payload_type(*codec),
+                },
+                RtpCodecKind::Video,
+            )?;
+        }
         let estimator = ReportingEstimator {
-            inner: Gcc::new(crate::video::INITIAL_BITRATE as f64, 100_000.0, 8_000_000.0),
+            inner: Gcc::new(
+                crate::video::INITIAL_BITRATE as f64,
+                100_000.0,
+                crate::codec::MAX_H264_BITRATE as f64,
+            ),
             target: target.clone(),
         };
         let registry = configure_congestion_control(
@@ -479,22 +538,34 @@ impl MediaPeer {
                 .await?;
             handler.on_data_channel(dc).await;
         }
-        let track = Arc::new(TrackLocalStaticSample::new(
-            Instant::now(),
-            MediaStreamTrack::new(
-                "synthetic-video".into(),
-                "synthetic-stream".into(),
-                "G1 synthetic".into(),
-                RtpCodecKind::Video,
-                vec![RTCRtpEncodingParameters {
-                    rtp_coding_parameters: RTCRtpCodingParameters {
-                        ssrc: Some(rand::random()),
-                        ..Default::default()
-                    },
-                    codec,
+        let ssrc = rand::random();
+        let encodings = available_codecs
+            .iter()
+            .map(|codec| RTCRtpEncodingParameters {
+                rtp_coding_parameters: RTCRtpCodingParameters {
+                    ssrc: Some(ssrc),
                     ..Default::default()
-                }],
-            ),
+                },
+                codec: rtc_video_codec(*codec),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let media_track = MediaStreamTrack::new(
+            "synthetic-video".into(),
+            "synthetic-stream".into(),
+            "G1 synthetic".into(),
+            RtpCodecKind::Video,
+            encodings,
+        );
+        let codecs = available_codecs
+            .iter()
+            .map(|codec| (*codec, rtc_video_codec(*codec)))
+            .collect::<Vec<_>>();
+        let track = Arc::new(crate::dynamic_track::DynamicVideoTrack::new(
+            Instant::now(),
+            media_track,
+            ssrc,
+            &codecs,
         )?);
         let sender = pc.add_track(track.clone() as Arc<dyn TrackLocal>).await?;
         Ok(Self {
@@ -511,6 +582,37 @@ impl MediaPeer {
     }
     pub fn control(&self) -> Arc<MediaControl> {
         self.control.clone()
+    }
+    /// Replace the core sender's track metadata without touching the driver's
+    /// bound track. The dynamic track keeps packetizers for every advertised
+    /// codec; only the metadata used by SDP and interceptors must follow the
+    /// selected codec.
+    async fn install_sender_codec(&self, codec: crate::codec::VideoCodec) -> anyhow::Result<()> {
+        let ssrc = self
+            .track
+            .ssrcs()
+            .await
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("missing SSRC"))?;
+        let metadata = MediaStreamTrack::new(
+            "synthetic-video".into(),
+            "synthetic-stream".into(),
+            "G1 synthetic".into(),
+            RtpCodecKind::Video,
+            vec![RTCRtpEncodingParameters {
+                rtp_coding_parameters: RTCRtpCodingParameters {
+                    ssrc: Some(ssrc),
+                    ..Default::default()
+                },
+                codec: rtc_video_codec(codec),
+                ..Default::default()
+            }],
+        );
+        self.sender
+            .replace_track(Arc::new(TrackLocalStaticRTP::new(metadata)))
+            .await?;
+        Ok(())
     }
     pub async fn answer(
         &mut self,
@@ -530,7 +632,7 @@ impl MediaPeer {
             video == 1 && app == 1 && sdp.lines().filter(|l| l.starts_with("m=")).count() == 2,
             "invalid media layout"
         );
-        let offer = RTCSessionDescription::offer(crate::codec::promote_h264_level_4_0(&sdp))?;
+        let offer = RTCSessionDescription::offer(sdp)?;
         let old = self.pc.current_remote_description().await;
         let initial = old.is_none();
         let gather_required = match old {
@@ -546,18 +648,55 @@ impl MediaPeer {
             self.pc.restart_ice().await?;
         }
         self.pc.set_remote_description(offer).await?;
-        let answer = self.pc.create_answer(None).await?;
-        self.pc.set_local_description(answer).await?;
+        // The maintained stack has applied the remote offer's codec order at
+        // this point. Pin the sender metadata to the codec that the answer will
+        // actually select before local description starts the RTP senders, so
+        // interceptor stream binding and msid describe the same format as the
+        // packetizer selected by `start()`.
         let parameters = self.sender.get_parameters().await?;
         let codec = parameters
             .rtp_parameters
             .codecs
             .first()
             .ok_or_else(|| anyhow::anyhow!("missing negotiated codec"))?;
+        let video_codec = crate::codec::VideoCodec::from_mime_type(&codec.rtp_codec.mime_type)
+            .ok_or_else(|| anyhow::anyhow!("unsupported negotiated video codec"))?;
+        self.install_sender_codec(video_codec).await?;
+        let answer = self.pc.create_answer(None).await?;
+        self.pc.set_local_description(answer).await?;
+        let (limits, answer_fmtp) = match video_codec {
+            crate::codec::VideoCodec::H264 => {
+                let negotiation =
+                    crate::codec::negotiate_h264_fmtp(&codec.rtp_codec.sdp_fmtp_line)?;
+                (negotiation.limits, Some(negotiation.answer_fmtp))
+            }
+            crate::codec::VideoCodec::H265 => (
+                crate::codec::negotiate_h265_fmtp(&codec.rtp_codec.sdp_fmtp_line)?,
+                None,
+            ),
+        };
+        if diagnostic_logs_enabled() {
+            eprintln!(
+                "desktop {} negotiated level={} max_fs={} max_mbps={} max_br={}",
+                video_codec.as_str(),
+                limits.level,
+                limits.max_fs,
+                limits.max_mbps,
+                limits.max_bitrate
+            );
+        }
+        let previous_format = *self.control.format.lock().unwrap();
+        anyhow::ensure!(
+            !(fallback_active
+                && previous_format.is_some_and(|previous| previous.codec != video_codec)),
+            "video codec cannot change while fallback is active"
+        );
         let format = crate::codec::Format {
             payload_type: codec.payload_type,
-            limits: crate::codec::Limits::parse(&codec.rtp_codec.sdp_fmtp_line)?,
+            codec: video_codec,
+            limits,
         };
+        self.control.pacing.set_codec(video_codec);
         {
             let mut previous = self.control.format.lock().unwrap();
             if previous.is_some_and(|old| old != format) {
@@ -599,12 +738,22 @@ impl MediaPeer {
                 result?;
             }
         }
-        let answer = self
+        let mut answer = self
             .pc
             .local_description()
             .await
             .ok_or_else(|| anyhow::anyhow!("missing answer"))?
             .sdp;
+        // rtc validates set_local_description against its own generated answer,
+        // so keep that internal description intact and rewrite only the wire SDP.
+        // The encoder uses the negotiated limits captured above.
+        if let Some(answer_fmtp) = answer_fmtp {
+            answer = crate::codec::rewrite_h264_answer_fmtp_for_payload(
+                &answer,
+                &codec.payload_type.to_string(),
+                &answer_fmtp,
+            )?;
+        }
         Ok((answer, gather_required))
     }
     pub fn metrics(&self) -> crate::contract::MediaMetrics {
@@ -647,11 +796,6 @@ impl MediaPeer {
         let target = self.target.clone();
         self.tasks.lock().unwrap().spawn(async move {
             let result = async {
-                let ssrc = *track
-                    .ssrcs()
-                    .await
-                    .first()
-                    .ok_or_else(|| anyhow::anyhow!("missing SSRC"))?;
                 let mut format = control
                     .format
                     .lock()
@@ -667,6 +811,7 @@ impl MediaPeer {
                     format.limits,
                     0,
                     policy,
+                    format.codec,
                 )?;
                 let mut index = 0;
                 let mut previous_sample = Instant::now();
@@ -676,12 +821,13 @@ impl MediaPeer {
                 let process_start = Instant::now();
                 let mut fallback_frame_id = 0u32;
                 let mut geometry = source.geometry();
+                let mut capture_size = source.capture_dimensions();
                 let mut geometry_unstable = None;
                 let mut resolution = control.resolution_limit();
                 let mut frame_rate = control.frame_rate_limit();
                 let mut budget = crate::video::Budget::select_with_limits_resolution_and_fps(
-                    geometry.width,
-                    geometry.height,
+                    capture_size.0,
+                    capture_size.1,
                     crate::video::INITIAL_BITRATE,
                     format.limits,
                     resolution,
@@ -706,12 +852,27 @@ impl MediaPeer {
                         continue;
                     }
 
-                    let (next_source, refreshed) = tokio::task::spawn_blocking(move || {
-                        let refreshed = source.refresh_geometry();
-                        (source, refreshed)
-                    })
-                    .await?;
+                    let requested_precision = control.capture_precision();
+                    let (next_source, precision_changed, refreshed, next_capture_size) =
+                        tokio::task::spawn_blocking(move || {
+                            let precision_changed =
+                                source.set_capture_precision(requested_precision)?;
+                            let refreshed = source.refresh_geometry();
+                            let capture_size = source.capture_dimensions();
+                            Ok::<_, anyhow::Error>((
+                                source,
+                                precision_changed,
+                                refreshed,
+                                capture_size,
+                            ))
+                        })
+                        .await??;
                     source = next_source;
+                    if precision_changed || next_capture_size != capture_size {
+                        frame_pressure = crate::video::FramePressure::default();
+                        control.idr.store(true, Ordering::SeqCst);
+                    }
+                    capture_size = next_capture_size;
                     let refreshed = match refreshed {
                         Ok(g) => {
                             geometry_unstable = None;
@@ -764,7 +925,12 @@ impl MediaPeer {
                     let min_qp = quality.floor(Instant::now());
                     if next_format != format || min_qp != encoder.min_qp() {
                         format = next_format;
-                        encoder.reconfigure(encoder.bitrate(), format.limits, min_qp)?;
+                        encoder.reconfigure(
+                            encoder.bitrate(),
+                            format.limits,
+                            min_qp,
+                            format.codec,
+                        )?;
                         control.idr.store(true, Ordering::SeqCst);
                     }
                     let idr = control.idr.swap(false, Ordering::SeqCst)
@@ -782,7 +948,7 @@ impl MediaPeer {
                     if last_rate.elapsed() >= Duration::from_secs(1)
                         && encoder.bitrate().abs_diff(desired) > encoder.bitrate() / 5
                     {
-                        encoder.reconfigure(desired, format.limits, min_qp)?;
+                        encoder.reconfigure(desired, format.limits, min_qp, format.codec)?;
                         last_rate = Instant::now();
                         control.idr.store(true, Ordering::SeqCst);
                     }
@@ -796,13 +962,14 @@ impl MediaPeer {
                     }
                     let next_budget = frame_pressure.fit(
                         crate::video::Budget::select_with_limits_resolution_and_fps(
-                            geometry.width,
-                            geometry.height,
+                            capture_size.0,
+                            capture_size.1,
                             desired,
                             format.limits,
                             resolution,
                             frame_rate,
                         ),
+                        desired,
                         Instant::now(),
                     );
                     if next_budget != budget {
@@ -834,8 +1001,11 @@ impl MediaPeer {
                         }
                         continue;
                     };
-                    if !crate::video::FramePressure::fits(frame.annex_b.len(), desired)
-                        && encoder.is_software()
+                    if !crate::video::FramePressure::fits_frame(
+                        frame.annex_b.len(),
+                        desired,
+                        frame.keyframe,
+                    ) && encoder.is_software()
                         && quality.reject(Instant::now())
                     {
                         control.frame_budget_drops.fetch_add(1, Ordering::Relaxed);
@@ -847,6 +1017,7 @@ impl MediaPeer {
                         budget,
                         desired,
                         Instant::now(),
+                        frame.keyframe,
                     )? {
                         control.frame_budget_drops.fetch_add(1, Ordering::Relaxed);
                         // This frame was encoded but not sent. No dependent P
@@ -914,7 +1085,7 @@ impl MediaPeer {
                                 // emits no RTP for empty data while advancing its clock.
                                 track
                                     .write_sample(
-                                        ssrc,
+                                        format.codec,
                                         format.payload_type,
                                         &Sample {
                                             duration: gap,
@@ -925,7 +1096,7 @@ impl MediaPeer {
                                     .await?;
                                 track
                                     .write_sample(
-                                        ssrc,
+                                        format.codec,
                                         format.payload_type,
                                         &Sample {
                                             data: frame_data.into(),
@@ -978,6 +1149,176 @@ impl MediaPeer {
         self.tasks.lock().unwrap().abort_all();
         let _ = tokio::time::timeout(Duration::from_secs(5), self.pc.close()).await;
     }
+}
+
+#[cfg(test)]
+mod negotiation_tests {
+    use super::*;
+    use crate::codec::VideoCodec;
+
+    struct OfferHandler;
+
+    #[async_trait::async_trait]
+    impl PeerConnectionEventHandler for OfferHandler {}
+
+    async fn offer_with_codecs_and_payloads(codecs: &[(VideoCodec, u8)]) -> anyhow::Result<String> {
+        let mut media = MediaEngine::default();
+        for (codec, payload_type) in codecs {
+            media.register_codec(
+                RTCRtpCodecParameters {
+                    rtp_codec: rtc_video_codec(*codec),
+                    payload_type: *payload_type,
+                },
+                RtpCodecKind::Video,
+            )?;
+        }
+        let peer = PeerConnectionBuilder::new()
+            .with_media_engine(media)
+            .with_handler(Arc::new(OfferHandler))
+            .with_udp_addrs(vec!["127.0.0.1:0"])
+            .build()
+            .await?;
+        peer.add_transceiver_from_kind(RtpCodecKind::Video, None)
+            .await?;
+        peer.create_data_channel("control", None).await?;
+        let offer = peer.create_offer(None).await?;
+        peer.set_local_description(offer.clone()).await?;
+        Ok(offer.sdp)
+    }
+
+    fn answer_video_codec(answer: &str) -> String {
+        let video = answer
+            .lines()
+            .find(|line| line.starts_with("m=video "))
+            .expect("answer video section");
+        let payload = video.split_whitespace().nth(3).expect("video payload");
+        let rtpmap = format!("a=rtpmap:{payload} ");
+        answer
+            .lines()
+            .find_map(|line| line.strip_prefix(&rtpmap))
+            .expect("video rtpmap")
+            .split('/')
+            .next()
+            .expect("codec name")
+            .to_ascii_uppercase()
+    }
+
+    fn answer_video_payload_type(answer: &str) -> u8 {
+        answer
+            .lines()
+            .find(|line| line.starts_with("m=video "))
+            .and_then(|line| line.split_whitespace().nth(3))
+            .and_then(|payload| payload.parse().ok())
+            .expect("answer video payload type")
+    }
+
+    async fn negotiated_peer(
+        codecs: &[VideoCodec],
+        offered: &[VideoCodec],
+    ) -> anyhow::Result<(MediaPeer, String)> {
+        let offered = offered
+            .iter()
+            .map(|codec| (*codec, video_payload_type(*codec)))
+            .collect::<Vec<_>>();
+        negotiated_peer_with_payloads(codecs, &offered).await
+    }
+
+    async fn negotiated_peer_with_payloads(
+        codecs: &[VideoCodec],
+        offered: &[(VideoCodec, u8)],
+    ) -> anyhow::Result<(MediaPeer, String)> {
+        let (events, _receiver) = mpsc::channel(8);
+        let mut peer = MediaPeer::with_source_and_codecs(
+            "negotiation".into(),
+            events,
+            crate::capture::Source::Synthetic,
+            codecs.to_vec(),
+        )
+        .await?;
+        let (answer, _) = peer
+            .answer(offer_with_codecs_and_payloads(offered).await?, false)
+            .await?;
+        Ok((peer, answer))
+    }
+
+    #[tokio::test]
+    async fn h265_only_offer_selects_h265() -> anyhow::Result<()> {
+        // Chrome advertises HEVC with a dynamic payload such as 49, not the
+        // local media-engine preference. The answer and RTP sender must keep
+        // the remote payload so the receiver accepts every packet.
+        let (peer, answer) = negotiated_peer_with_payloads(
+            &[VideoCodec::H265, VideoCodec::H264],
+            &[(VideoCodec::H265, 49)],
+        )
+        .await?;
+        assert_eq!(peer.control().video_codec(), VideoCodec::H265);
+        assert_eq!(answer_video_codec(&answer), "H265");
+        assert_eq!(
+            peer.control.format.lock().unwrap().unwrap().payload_type,
+            answer_video_payload_type(&answer),
+            "sender payload type must match the answer"
+        );
+        assert!(peer.track.supports_codec(VideoCodec::H265));
+        assert!(!answer.contains(" H264/90000"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn offer_order_selects_h265_when_hevc_is_preferred() -> anyhow::Result<()> {
+        let (peer, answer) = negotiated_peer(
+            &[VideoCodec::H265, VideoCodec::H264],
+            &[VideoCodec::H265, VideoCodec::H264],
+        )
+        .await?;
+        assert_eq!(peer.control().video_codec(), VideoCodec::H265);
+        assert_eq!(answer_video_codec(&answer), "H265");
+        let parameters = peer.sender.get_parameters().await?;
+        assert_eq!(
+            parameters
+                .rtp_parameters
+                .codecs
+                .first()
+                .map(|codec| codec.rtp_codec.mime_type.as_str()),
+            Some("video/H265")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn h264_only_offer_falls_back_to_h264() -> anyhow::Result<()> {
+        let (peer, answer) =
+            negotiated_peer(&[VideoCodec::H265, VideoCodec::H264], &[VideoCodec::H264]).await?;
+        assert_eq!(peer.control().video_codec(), VideoCodec::H264);
+        assert_eq!(answer_video_codec(&answer), "H264");
+        assert!(peer.track.supports_codec(VideoCodec::H264));
+        assert!(!answer.contains(" H265/90000"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn h264_first_offer_stays_h264() -> anyhow::Result<()> {
+        // RFC 8829 keeps the offerer's codec order. A client that wants HEVC
+        // must put it first (setCodecPreferences or an HEVC-only offer).
+        let (peer, answer) = negotiated_peer(
+            &[VideoCodec::H265, VideoCodec::H264],
+            &[VideoCodec::H264, VideoCodec::H265],
+        )
+        .await?;
+        assert_eq!(peer.control().video_codec(), VideoCodec::H264);
+        assert_eq!(answer_video_codec(&answer), "H264");
+        Ok(())
+    }
+}
+
+fn diagnostic_logs_enabled() -> bool {
+    std::env::var("TASK_HANDOFF_DIAGNOSTIC_LOGS")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
 }
 
 /// Effective ICE credentials per media section, parsed by the maintained SDP

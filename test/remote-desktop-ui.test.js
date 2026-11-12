@@ -20,7 +20,7 @@ test('remote desktop opens from the app tab launcher instead of an instance-deta
   assert.match(activeSessions, /remoteDesktopAvailable\(activeInstance\.value\)/);
   assert.match(activeSessions, /id: REMOTE_DESKTOP_APP_ID/);
   assert.match(activeSessions, /function openRemoteDesktopTab/);
-  assert.match(activeSessions, /const key = `\$\{REMOTE_DESKTOP_APP_ID\}:\$\{instanceId\}`/);
+  assert.match(activeSessions, /const key = `\$\{REMOTE_DESKTOP_APP_ID\}:\$\{instanceId\}[^`]*`/);
   assert.match(activeSessions, /if \(!tabs\.some\(\(tab\) => tab\.key === key\)\)/);
   assert.match(activeSessions, /kind: "remote-desktop"/);
   assert.match(activeSessions, /remoteDesktopSessionTabs\[instance\.id\] = .*filter\(\(tab\) => tab\.key !== session\.key\)/);
@@ -56,6 +56,7 @@ test('remote desktop viewer preferences survive local reloads', () => {
   assert.match(viewer, /target: target\.value/);
   assert.match(viewer, /transportResolution: transportResolution\.value/);
   assert.match(viewer, /transportFrameRate: transportFrameRate\.value/);
+  assert.match(viewer, /transportCapturePrecision: transportCapturePrecision\.value/);
   assert.match(viewer, /transportAvailability: transportAvailability\.value/);
 });
 
@@ -82,12 +83,14 @@ test('a closed window returns to source selection with a neutral prompt', () => 
   assert.match(viewer, /remote-desktop-source-ended/);
 });
 
-test('websocket fallback uses the same resolution ceiling as WebRTC', () => {
+test('websocket fallback uses the same resolution and bitrate budget as WebRTC', () => {
   const routes = fs.readFileSync('packages/control-plane/src/control-plane/http/remote-desktop-routes.ts', 'utf8');
   const protocolCapability = fs.readFileSync('controlled-instance-rs/crates/protocol/src/remote_desktop.rs', 'utf8');
   const streaming = fs.readFileSync('remote-desktop-rs/crates/desktop-streaming/src/service.rs', 'utf8');
   assert.match(routes, /capability\.video\.maxWidth/);
   assert.match(routes, /Math\.min\(capability\.fallback\.maxWidth, videoMaxWidth\)/);
+  assert.match(routes, /maxBitrate: capability\.fallback\.maxBitrate/);
+  assert.doesNotMatch(routes, /maxBitrate: Math\.min\([^\n]*4_000_000/);
   assert.doesNotMatch(routes, /Math\.min\(capability\.fallback\.maxWidth \|\| 1280, 1280\)/);
   assert.match(protocolCapability, /max_width: 1920,\s*\n\s*max_height: 1080/);
   assert.match(streaming, /crate::video::FALLBACK_LIMITS/);
@@ -148,7 +151,12 @@ test('remote desktop header keeps active and used paths while failures stay in t
   assert.match(viewer, /remote-desktop-transport-tooltip-body/);
   assert.match(viewer, /remote-desktop-transport-tooltip-heading/);
   assert.match(viewer, /TooltipContent[\s\S]*transport\.detail/);
-  assert.match(viewer, /parseRemoteDesktopWebRTCStats\(stats\)/);
+  assert.match(viewer, /parseRemoteDesktopWebRTCStats\(stats, webRTCReceiveSample\)/);
+  assert.match(viewer, /parseRemoteDesktopWebRTCReceiveSample\(stats\)/);
+  assert.match(viewer, /transportBandwidth/);
+  assert.match(viewer, /transportEncoding/);
+  assert.match(viewer, /remote-desktop-transport-tooltip-details/);
+  assert.doesNotMatch(viewer, /session && !fallbackActive && webRTC(?:Latency|Bandwidth)Detail/);
   assert.doesNotMatch(viewer, /selectedCandidatePairId/);
   assert.match(viewer, /transportCandidateHost/);
   assert.doesNotMatch(viewer, /remote-desktop-transport-mode/);
@@ -252,19 +260,29 @@ test('remote desktop live actions collapse into one menu with resolution and fra
   assert.match(viewer, /DropdownMenuRadioGroup/);
   assert.match(viewer, /transportResolutionOptions/);
   assert.match(viewer, /transportFrameRateOptions/);
+  assert.match(viewer, /transportCapturePrecisionOptions/);
   assert.match(viewer, /remote-desktop-frame-rate-menu/);
   assert.match(viewer, /DropdownMenuSubTrigger :disabled="!signalingReady \|\| fallbackSwitching">[\s\S]*?transportFrameRate/);
   assert.match(viewer, /const TRANSPORT_FRAME_RATE_PRESETS = \[60, 30, 24, 15\] as const/);
   assert.match(viewer, /maxFrameRate: frameRate/);
+  assert.match(viewer, /capturePrecision: transportCapturePrecision\.value/);
   assert.match(viewer, /stream\.resolution/);
   assert.match(viewer, /function setTransportResolution\(value: string\)/);
   assert.match(viewer, /function setTransportFrameRate\(value: string\)/);
+  assert.match(viewer, /function setTransportCapturePrecision\(value: string\)/);
   assert.match(viewer, /function applyTransportResolution\(showError = false\)/);
   assert.match(viewer, /transportResolutionRequested/);
   assert.match(viewer, /@resize="updateResolution"/);
   assert.match(viewer, /remote-desktop-menu-danger[\s\S]*instances\.remoteDesktop\.stop/);
   assert.doesNotMatch(viewer, /remote-desktop-action-divider/);
   assert.doesNotMatch(viewer, /remote-desktop-clipboard-popover/);
+});
+
+test('remote desktop quality presets expose 4K and 2K without retired resolutions', () => {
+  assert.match(viewer, /type TransportResolutionValue = "auto" \| "4k" \| "2k" \| "1080p" \| "540p"/);
+  assert.match(viewer, /const TRANSPORT_RESOLUTION_PRESETS = \[[\s\S]*?value: "4k" as const, width: 3840, height: 2160[\s\S]*?value: "2k" as const, width: 2560, height: 1440[\s\S]*?value: "1080p" as const/);
+  assert.doesNotMatch(viewer, /value: "(?:720p|360p)" as const/);
+  assert.match(viewer, /label: option\.value\.toUpperCase\(\)/);
 });
 
 test('remote desktop teleported menus and tooltips keep a bounded width and wrap long copy', () => {

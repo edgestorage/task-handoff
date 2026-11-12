@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 
 import { unsupportedRemoteDesktopCapabilities, type DesktopSource, type RemoteDesktopCapabilities } from '@task-handoff/protocol/remote-desktop';
 
@@ -87,6 +87,12 @@ test('loads selectable sources when opened and refreshes on demand', async () =>
   });
   await waitFor(() => expect(screen.getByText(/Locked app/)).toBeTruthy());
   expect(loadSources).toHaveBeenCalledTimes(2);
+  const displayGroup = within(screen.getByTestId('remote-desktop-source-group-display'));
+  expect(displayGroup.getByText('remoteDesktop.entireDesktop')).toBeTruthy();
+  expect(displayGroup.getByText('1')).toBeTruthy();
+  const windowGroup = within(screen.getByTestId('remote-desktop-source-group-window'));
+  expect(windowGroup.getByText('remoteDesktop.singleWindow')).toBeTruthy();
+  expect(windowGroup.getByText('2')).toBeTruthy();
 
   fireEvent.press(screen.getByText('Editor'));
   expect(onSelect).toHaveBeenCalledWith({

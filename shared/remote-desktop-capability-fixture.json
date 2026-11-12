@@ -9,7 +9,8 @@
   "sourceProviders": [],
   "capture": {
     "backends": [],
-    "cursor": false
+    "cursor": false,
+    "precisionModes": []
   },
   "encoders": [],
   "input": {

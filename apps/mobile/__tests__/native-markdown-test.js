@@ -211,7 +211,8 @@ test('AI session detail uses native Markdown for responses while keeping user bu
   expect(sessionDetailSource).toContain("if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><MarkdownContent");
   expect(sessionDetailSource).toContain("<MarkdownContent onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile}>{item.text ?? ''}</MarkdownContent>");
   expect(sessionDetailSource).toContain('onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} streamKey={item.streamKey}');
-  expect(sessionDetailSource).toContain('streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}');
+  expect(sessionDetailSource).toContain('const messageActionsVisible = Boolean(item.actions && item.text);');
+  expect(sessionDetailSource).toContain('streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd || messageActionsVisible}');
 });
 
 test('native Markdown wrapper owns link gestures and falls back without the module', () => {

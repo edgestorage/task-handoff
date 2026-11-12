@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { Stack, useNavigation, useRouter, type NativeStackHeaderItem, type NativeStackHeaderItemButton, type NativeStackHeaderItemMenuAction } from 'expo-router';
+import { Stack, useNavigation, useRouter, type NativeStackHeaderItem, type NativeStackHeaderItemButton } from 'expo-router';
 import { useHeaderHeight, useIsFocused } from 'expo-router/react-navigation';
 import { AccessibilityInfo, Alert, findNodeHandle, Platform, Pressable, StyleSheet, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
-import { MenuView, type MenuAction } from '../components/MenuView';
+import { MenuView } from '../components/MenuView';
 
 import { clearRepositoryViewProfile } from '../repository/view-memory';
 import { SessionResourceLayout } from './SessionResourceLayout';
@@ -32,7 +32,10 @@ import { createMobileControlPlaneClient } from '../control-plane/client';
 import { PaneHeaderRestore } from '../master-detail/use-pane-header-restore';
 import { closeRemoteDesktopControllersForSession } from '../remote-desktop/controller-registry';
 import { SessionRemoteDesktopFloatingPreview } from '../remote-desktop/SessionRemoteDesktopFloatingPreview';
+import { SessionRemoteDesktopInlinePreview } from '../remote-desktop/SessionRemoteDesktopInlinePreview';
+import { useSessionPreviewPresentation } from '../remote-desktop/session-preview-presentation';
 import { removeSessionRemoteDesktopLink, useSessionRemoteDesktopLink } from '../remote-desktop/session-links';
+import { floatingSessionMenuActions, nativeSessionMenuItems, type SessionMenuAction, type SessionMenuGroup, type SessionMenuItem } from './session-menu-model';
 
 export function AiSessionDetailScreen({
   instanceId,
@@ -118,13 +121,30 @@ export function AiSessionDetailScreen({
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameError, setRenameError] = useState('');
   const [renaming, setRenaming] = useState(false);
-  const renameRequestId = useRef('');
+  const [renameRequestId, setRenameRequestId] = useState(() => Crypto.randomUUID());
   const [remoteDesktopPreview, setRemoteDesktopPreview] = useState({ open: false, sessionId });
-  const remoteDesktopPreviewOpen = remoteDesktopPreview.open && remoteDesktopPreview.sessionId === sessionId;
+  const sessionPreviewPresentation = useSessionPreviewPresentation();
+  const remoteDesktopPreviewOpen = remoteDesktopPreview.open
+    && remoteDesktopPreview.sessionId === sessionId
+    && sessionPreviewPresentation === 'floating';
   const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
   const defaultPermissionMode = instance?.config.defaultCodexPermissionMode;
   const remoteDesktopLink = useSessionRemoteDesktopLink(controlPlaneId, instanceId, sessionId);
+  // iOS 26+ defaults to content-wide back swipes, which compete with preview
+  // dragging. While the preview is visible, keep only the native edge swipe.
+  const fullScreenGestureEnabled = screenFocused && remoteDesktopLink && remoteDesktopPreviewOpen ? false : undefined;
   const remoteDesktopAvailable = directoryRemoteDesktopCapabilities(instance?.capabilities)?.available !== false;
+  const openRemoteDesktopDetails = useCallback(() => {
+    router.push({
+      pathname: '/remote-desktop/[instanceId]' as never,
+      params: { instanceId, origin: 'session-card', sessionId },
+    });
+  }, [instanceId, router, sessionId]);
+  const removeRemoteDesktopFromSession = useCallback(() => {
+    setRemoteDesktopPreview({ open: false, sessionId });
+    removeSessionRemoteDesktopLink(controlPlaneId, instanceId, sessionId);
+    closeRemoteDesktopControllersForSession(controlPlaneId, instanceId, sessionId);
+  }, [controlPlaneId, instanceId, sessionId, setRemoteDesktopPreview]);
   const markVisible = useCallback(() => {
     if (!client || !controlPlaneId || !session?.unread) return;
     void client.aiSessions.markRead(instanceId, sessionId).catch(() => undefined);
@@ -176,12 +196,6 @@ export function AiSessionDetailScreen({
     }).catch(() => { if (!abort.signal.aborted) setModelEntities([]); });
     return () => abort.abort();
   }, [controlPlaneId]);
-  const liveActivityAction: MenuAction | undefined = taskStatus.available && taskStatus.loaded && !taskStatus.autoStart ? {
-    id: 'live-activity',
-    image: trackedHere ? 'waveform.slash' : 'waveform',
-    title: trackedHere ? t('liveActivity.stop') : t('liveActivity.start'),
-    attributes: { disabled: !trackedHere && (!canTrack || !controlPlaneId) },
-  } : undefined;
   const closeSession = () => Alert.alert(t('sessions.closeConfirmTitle', { name: title }), t('sessions.closeConfirmDescription'), [
     { text: t('common.cancel'), style: 'cancel' },
     { text: t('sessions.closeSession'), style: 'destructive', onPress: () => {
@@ -202,7 +216,7 @@ export function AiSessionDetailScreen({
   ]);
   const openRename = () => {
     if (!canRename) return;
-    renameRequestId.current = Crypto.randomUUID();
+    setRenameRequestId(Crypto.randomUUID());
     setRenameError('');
     setRenameOpen(true);
   };
@@ -213,7 +227,7 @@ export function AiSessionDetailScreen({
     void actions.rename(instanceId, sessionId, {
       title: nextTitle,
       expectedTitle: session.title?.trim() || '',
-      clientRequestId: renameRequestId.current,
+      clientRequestId: renameRequestId,
     }).then((result) => {
       if (result.disposition === 'accepted') {
         setRenameOpen(false);
@@ -237,33 +251,76 @@ export function AiSessionDetailScreen({
     });
     else if (event === 'close') closeSession();
   };
-  const menuActions: MenuAction[] = [
-    { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.compact') },
-    { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.conversation') },
-    { id: 'remote-desktop', image: 'display', title: t('remoteDesktop.open'), attributes: { disabled: !controlPlaneId || !remoteDesktopAvailable } },
-    ...(canRename ? [{ id: 'rename', image: 'pencil', title: renaming ? t('sessions.renaming') : t('sessions.rename'), attributes: { disabled: renaming || !actions || sessionView.syncPhase !== 'ready' } } as MenuAction] : []),
-    ...(liveActivityAction ? [liveActivityAction] : []),
-    ...(triggers.available ? [{ id: 'triggers', image: 'bolt', title: t('triggers.sessionTitle') } as MenuAction] : []),
-    { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' } },
+  const liveActivityEnabled = taskStatus.available && taskStatus.loaded && !taskStatus.autoStart;
+  const manageSessionActions: SessionMenuAction[] = [
+    ...(canRename ? [{
+      id: 'rename',
+      label: renaming ? t('sessions.renaming') : t('sessions.rename'),
+      symbol: 'pencil',
+      disabled: renaming || !actions || sessionView.syncPhase !== 'ready',
+      onPress: () => handleMenuEvent('rename'),
+    } satisfies SessionMenuAction] : []),
+    ...(liveActivityEnabled ? [{
+      id: 'live-activity',
+      label: trackedHere ? t('liveActivity.stop') : t('liveActivity.start'),
+      symbol: trackedHere ? 'waveform.slash' : 'waveform',
+      selected: trackedHere,
+      disabled: !trackedHere && (!canTrack || !controlPlaneId),
+      onPress: () => handleMenuEvent('live-activity'),
+    } satisfies SessionMenuAction] : []),
+    ...(triggers.available ? [{
+      id: 'triggers',
+      label: t('triggers.sessionTitle'),
+      symbol: 'bolt',
+      onPress: () => handleMenuEvent('triggers'),
+    } satisfies SessionMenuAction] : []),
   ];
+  const sessionViewGroup: SessionMenuGroup = {
+    id: 'session-view',
+    label: t('sessions.sessionView'),
+    actions: [
+      { id: 'view-turn', label: t('sessions.compact'), symbol: 'rectangle.stack', selected: detailMode === 'turn', onPress: () => handleMenuEvent('view-turn') },
+      { id: 'view-conversation', label: t('sessions.conversation'), symbol: 'text.bubble', selected: detailMode === 'conversation', onPress: () => handleMenuEvent('view-conversation') },
+    ],
+  };
+  const remoteDesktopAction: SessionMenuAction = {
+    id: 'remote-desktop',
+    label: t('remoteDesktop.open'),
+    symbol: 'display',
+    disabled: !controlPlaneId || !remoteDesktopAvailable,
+    onPress: () => handleMenuEvent('remote-desktop'),
+  };
+  const sessionMenuItems: SessionMenuItem[] = [
+    { type: 'group', group: sessionViewGroup },
+    { type: 'action', action: remoteDesktopAction },
+    ...(manageSessionActions.length ? [{
+      type: 'group' as const,
+      group: {
+        id: 'session-actions',
+        label: t('sessions.sessionActions'),
+        actions: manageSessionActions,
+      },
+    }] : []),
+  ];
+  const closeSessionAction: SessionMenuAction = {
+    id: 'close',
+    label: closing ? t('sessions.closing') : t('sessions.closeSession'),
+    symbol: 'xmark.circle',
+    destructive: true,
+    disabled: closing || !actions || sessionView.syncPhase !== 'ready',
+    onPress: () => handleMenuEvent('close'),
+  };
+  const menuActions = floatingSessionMenuActions(sessionMenuItems, [closeSessionAction]);
   const menu = <MenuView
     actions={menuActions}
     onPressAction={({ nativeEvent }) => handleMenuEvent(nativeEvent.event)}
-    title={t('sessions.sessionView')}
+    title={t('sessions.moreActions')}
   >
     <Pressable accessibilityLabel={t('sessions.moreActions')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.menuButton, pressed && styles.menuButtonPressed]}>
       <Icon color={colors.primary} name="ellipsis-horizontal" size={23} />
     </Pressable>
   </MenuView>;
-  const nativeMenuActions = [
-    { type: 'action', label: t('sessions.compact'), onPress: () => handleMenuEvent('view-turn'), state: detailMode === 'turn' ? 'on' : 'off' },
-    { type: 'action', label: t('sessions.conversation'), onPress: () => handleMenuEvent('view-conversation'), state: detailMode === 'conversation' ? 'on' : 'off' },
-    { type: 'action' as const, label: t('remoteDesktop.open'), onPress: () => handleMenuEvent('remote-desktop'), disabled: !controlPlaneId || !remoteDesktopAvailable },
-    ...(canRename ? [{ type: 'action' as const, label: renaming ? t('sessions.renaming') : t('sessions.rename'), onPress: openRename, disabled: renaming || !actions || sessionView.syncPhase !== 'ready' }] : []),
-    ...(liveActivityAction ? [{ type: 'action' as const, label: liveActivityAction.title, onPress: () => handleMenuEvent('live-activity'), disabled: Boolean(liveActivityAction.attributes?.disabled), state: trackedHere ? 'on' as const : 'off' as const }] : []),
-    ...(triggers.available ? [{ type: 'action' as const, label: t('triggers.sessionTitle'), onPress: () => handleMenuEvent('triggers') }] : []),
-    { type: 'action' as const, label: closing ? t('sessions.closing') : t('sessions.closeSession'), onPress: () => handleMenuEvent('close'), destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' },
-  ] satisfies NativeStackHeaderItemMenuAction[];
+  const nativeMenuActions = nativeSessionMenuItems(sessionMenuItems, [closeSessionAction]);
   const resourceIconSize = 20;
   const resourceSymbolPointSize = 18;
   const nativeHeaderRightItems = () => [
@@ -286,7 +343,7 @@ export function AiSessionDetailScreen({
       sharesBackground: false,
       tintColor: colors.primary,
       type: 'menu' as const,
-      menu: { title: t('sessions.sessionView'), items: nativeMenuActions },
+      menu: { title: t('sessions.moreActions'), items: nativeMenuActions },
     },
   ] satisfies NativeStackHeaderItem[];
   const nativeHeaderRightItemsRef = useRef(nativeHeaderRightItems);
@@ -309,8 +366,8 @@ export function AiSessionDetailScreen({
     renaming,
     Boolean(actions),
     sessionView.syncPhase,
-    liveActivityAction?.id,
-    liveActivityAction?.title,
+    liveActivityEnabled,
+    trackedHere,
     trackedHere,
     triggers.available,
     remoteDesktopAvailable,
@@ -319,9 +376,9 @@ export function AiSessionDetailScreen({
   useLayoutEffect(() => {
     if (!embeddedHeader) return;
     navigation.setOptions(Platform.OS === 'ios'
-      ? { title, unstable_headerRightItems: embeddedHeaderRightItems }
+      ? { title, unstable_headerRightItems: embeddedHeaderRightItems, fullScreenGestureEnabled }
       : { headerRight: embeddedHeaderRight, title });
-  }, [embeddedHeader, embeddedHeaderRight, embeddedHeaderRightItems, headerMenuKey, navigation, title]);
+  }, [embeddedHeader, embeddedHeaderRight, embeddedHeaderRightItems, fullScreenGestureEnabled, headerMenuKey, navigation, title]);
   const workspace = <SessionWorkspace
     actions={actions}
     controlPlaneId={controlPlaneId || '__booting__'}
@@ -342,6 +399,15 @@ export function AiSessionDetailScreen({
     onOpenBuiltinBrowser={openBuiltinBrowser}
     onOpenFile={openFileInResources}
     onOpenRemoteDesktopPreview={() => setRemoteDesktopPreview({ open: true, sessionId })}
+    onOpenRemoteDesktopDetail={openRemoteDesktopDetails}
+    onRemoveRemoteDesktop={removeRemoteDesktopFromSession}
+    renderRemoteDesktopInlinePreview={({ instanceId: previewInstanceId, onOpenDetail, sessionId: previewSessionId }) => (
+      <SessionRemoteDesktopInlinePreview
+        instanceId={previewInstanceId}
+        onOpenDetail={onOpenDetail}
+        sessionId={previewSessionId}
+      />
+    )}
     onOpenSession={(nextSessionId) => {
       if (onOpenSession) onOpenSession(instanceId, nextSessionId);
       else router.push({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId, sessionId: nextSessionId } });
@@ -362,12 +428,13 @@ export function AiSessionDetailScreen({
   } : undefined;
   return <View style={styles.root}>
     {embeddedHeader ? null : <Stack.Screen options={Platform.OS === 'ios'
-      ? { ...(pane ? {} : { title }), unstable_headerRightItems: nativeHeaderRightItems }
+      ? { ...(pane ? {} : { title }), unstable_headerRightItems: nativeHeaderRightItems, fullScreenGestureEnabled }
       : pane ? { headerRight: () => headerActions } : { title, headerRight: () => headerActions }} />}
     {embeddedHeader ? null : <PaneHeaderRestore pane={pane} />}
     <SessionResourceLayout activity={resourceActivity?.text || resourceActivity?.lastMessage ? resourceActivity : undefined} topInset={sessionResourceTopInset(Platform.OS, headerHeight)} expanded={resourceExpanded} fraction={fraction} onClose={closeResources} onFractionChange={changeFraction}
       panel={<SessionResourcePanel key={contextKey} contextKey={contextKey} controlPlaneId={controlPlaneId || ''} expanded={resourceExpanded}
         instance={instance} instanceId={instanceId} sessionId={sessionId} session={session} syncReady={sessionView.syncPhase === 'ready'}
+        onOpenRemoteDesktop={openRemoteDesktopDetails}
         onFractionChange={changeFraction} />}
     >{workspace}</SessionResourceLayout>
     <SessionRenameModal
@@ -378,14 +445,13 @@ export function AiSessionDetailScreen({
       onSubmit={submitRename}
       open={renameOpen}
     />
-    {screenFocused && remoteDesktopLink ? <SessionRemoteDesktopFloatingPreview
+    {screenFocused && remoteDesktopLink && sessionPreviewPresentation === 'floating' ? <SessionRemoteDesktopFloatingPreview
+      controlPlaneId={controlPlaneId}
       instanceId={instanceId}
       onClose={() => setRemoteDesktopPreview({ open: false, sessionId })}
-      onOpen={() => router.push({
-        pathname: '/remote-desktop/[instanceId]' as never,
-        params: { instanceId, origin: 'session-card', sessionId },
-      })}
+      onOpen={openRemoteDesktopDetails}
       sessionId={sessionId}
+      topInset={sessionResourceTopInset(Platform.OS, headerHeight)}
       visible={remoteDesktopPreviewOpen}
     /> : null}
   </View>;

@@ -17,6 +17,7 @@ import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { clearDiagnosticLogs, copyRecentDiagnosticLogs, getDiagnosticLogsEnabled, setDiagnosticLogsEnabled, subscribeDiagnosticLogs } from '../observability/diagnostic-logs';
 import { useTaskStatusSettings } from '../task-status/settings';
+import { setSessionPreviewPresentation, useSessionPreviewPresentation } from '../remote-desktop/session-preview-presentation';
 import type { NativeProfilesScreenProps } from './NativeProfilesScreen';
 import { mobileControlPlaneProfileConnectionLabel } from './connection-presentation';
 import { sameMobileControlPlaneProfileIdentity } from './profile';
@@ -26,6 +27,7 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
   const { colors, dark, preference: appearance, setPreference: setAppearance } = useMobileTheme();
   const { preference, setPreference, t } = useI18n();
   const taskStatus = useTaskStatusSettings();
+  const sessionPreviewPresentation = useSessionPreviewPresentation();
   const diagnosticsEnabled = useSyncExternalStore(subscribeDiagnosticLogs, getDiagnosticLogsEnabled);
 
   const copyDiagnostics = async () => {
@@ -67,6 +69,21 @@ export function NativeProfilesScreen(props: NativeProfilesScreenProps) {
             <Button label={`${appearance === 'system' ? '✓ ' : ''}${t('appearance.system')}`} systemImage="gearshape" onPress={() => { void setAppearance('system'); }} />
             <Button label={`${appearance === 'light' ? '✓ ' : ''}${t('appearance.light')}`} systemImage="sun.max" onPress={() => { void setAppearance('light'); }} />
             <Button label={`${appearance === 'dark' ? '✓ ' : ''}${t('appearance.dark')}`} systemImage="moon" onPress={() => { void setAppearance('dark'); }} />
+          </Section>
+          <Section title={t('remoteDesktop.previewPresentation')}>
+            <Button
+              label={`${sessionPreviewPresentation === 'floating' ? '✓ ' : ''}${t('remoteDesktop.previewPresentationFloating')}`}
+              systemImage="rectangle.on.rectangle"
+              onPress={() => setSessionPreviewPresentation('floating')}
+            />
+            <Button
+              label={`${sessionPreviewPresentation === 'expanded' ? '✓ ' : ''}${t('remoteDesktop.previewPresentationExpanded')}`}
+              systemImage="arrow.up.left.and.arrow.down.right"
+              onPress={() => setSessionPreviewPresentation('expanded')}
+            />
+            <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>
+              {t('remoteDesktop.previewPresentationHelp')}
+            </Text>
           </Section>
           <Section title={t('diagnostics.title')}>
             <Toggle

@@ -17,7 +17,7 @@ const owner={actorId:'actor',deviceSessionId:'device'};
 function service(t,extra={}){
   const dataDir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-service-'));
   t.after(()=>fs.rmSync(dataDir,{recursive:true,force:true}));
-  const instance=new DesktopService({dataDir,version:'1',mode:'local',installedPackage:()=>undefined,canStart:()=>true,...extra});
+  const instance=new DesktopService({dataDir,mode:'local',installedPackage:()=>undefined,canStart:()=>true,...extra});
   t.after(()=>instance.close());return instance;
 }
 async function appFor(t,instance){
@@ -114,6 +114,33 @@ test('attach binding forwards configureIce and candidates to the component',{tim
   const serverSocket=[...app.websocketServer.clients].at(-1);
   const disconnected=once(serverSocket,'close');serverSocket.terminate();await disconnected;
   await wait(()=>calls.some(call=>call.command.type==='signalClosed'));
+});
+
+test('attach accepts a normal trickle ICE burst without closing signaling',{timeout:5000},async t=>{
+  const instance=new EventEmitter();const calls=[];const closed=[];
+  instance.componentRunning=()=>true;
+  instance.request=async(id,command,boot)=>{
+    calls.push({id,command,boot});
+    if(command.type==='attach')return {type:'snapshot',bootId:'boot',snapshot:{viewerSessionId:'viewer',sessionRevision:1}};
+    if(command.type==='candidate')await new Promise(resolve=>setTimeout(resolve,2));
+    return {type:'acknowledged'};
+  };
+  const app=await appFor(t,instance);
+  const client=await app.injectWS('/api/internal/remote-desktop/attach',{headers});
+  client.on('close',(code,reason)=>closed.push({code,reason:String(reason)}));
+  client.send(JSON.stringify({requestId:'a',owner,viewerSessionId:'viewer',captureSelection,attachToken:'valid'}));
+  await waitFor(()=>calls.some(call=>call.command.type==='attach'));
+  const candidates=20;
+  for(let index=0;index<candidates;index++)client.send(JSON.stringify({
+    type:'candidate',
+    requestId:`d${index}`,
+    candidate:{candidate:`candidate:${index+1} 1 UDP 1 127.0.0.1 ${10000+index} typ host`,sdpMid:'0',sdpMLineIndex:0},
+  }));
+  await waitFor(()=>calls.filter(call=>call.command.type==='candidate').length===candidates);
+  assert.deepEqual(closed,[]);
+  assert.deepEqual(calls.slice(1).map(call=>call.id),Array.from({length:candidates},(_,index)=>`d${index}`));
+  const serverSocket=[...app.websocketServer.clients].at(-1);
+  const disconnected=once(serverSocket,'close');serverSocket.terminate();await disconnected;
 });
 
 test('fallback proxy forwards the role protocol and frames to the loopback component',{timeout:5000},async t=>{

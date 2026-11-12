@@ -2,8 +2,9 @@ import type { DesktopCaptureSelection, DesktopSource } from '@task-handoff/proto
 
 import { createPersistedPreferenceStore } from '../platform/persisted-preferences';
 
-export type RemoteDesktopResolution = 'auto' | '1080p' | '720p' | '540p' | '360p';
+export type RemoteDesktopResolution = 'auto' | '4k' | '2k' | '1080p' | '540p';
 export type RemoteDesktopFrameRate = 'auto' | '60' | '30' | '24' | '15';
+export type RemoteDesktopCapturePrecision = 'auto' | 'performance';
 export type RemoteDesktopMouseMode = 'direct' | 'trackpad';
 export type RemoteDesktopTransportKey = 'p2p' | 'turn' | 'websocket';
 export type RemoteDesktopTransportAvailability = Record<RemoteDesktopTransportKey, boolean>;
@@ -21,26 +22,43 @@ export type RemoteDesktopInstancePreferences = {
   target: PersistedCaptureTarget;
   resolution: RemoteDesktopResolution;
   frameRate: RemoteDesktopFrameRate;
+  capturePrecision: RemoteDesktopCapturePrecision;
   mouseMode: RemoteDesktopMouseMode;
   transportAvailability: RemoteDesktopTransportAvailability;
 };
 
 type RemoteDesktopPreferences = { byInstance: Record<string, RemoteDesktopInstancePreferences> };
 
-export const REMOTE_DESKTOP_RESOLUTIONS: readonly RemoteDesktopResolution[] = ['auto', '1080p', '720p', '540p', '360p'];
+export const REMOTE_DESKTOP_RESOLUTIONS: readonly RemoteDesktopResolution[] = ['auto', '4k', '2k', '1080p', '540p'];
 export const REMOTE_DESKTOP_FRAME_RATES: readonly RemoteDesktopFrameRate[] = ['auto', '60', '30', '24', '15'];
+export const REMOTE_DESKTOP_CAPTURE_PRECISIONS: readonly RemoteDesktopCapturePrecision[] = ['auto', 'performance'];
 export const REMOTE_DESKTOP_TRANSPORTS: readonly RemoteDesktopTransportKey[] = ['p2p', 'turn', 'websocket'];
 export const REMOTE_DESKTOP_RESOLUTION_PRESETS: Record<Exclude<RemoteDesktopResolution, 'auto'>, { width: number; height: number }> = {
+  '4k': { width: 3840, height: 2160 },
+  '2k': { width: 2560, height: 1440 },
   '1080p': { width: 1920, height: 1080 },
-  '720p': { width: 1280, height: 720 },
   '540p': { width: 960, height: 540 },
-  '360p': { width: 640, height: 360 },
 };
+
+export function remoteDesktopStreamResolution(
+  resolution: RemoteDesktopResolution,
+  frameRate: RemoteDesktopFrameRate,
+  capturePrecision: RemoteDesktopCapturePrecision = 'auto',
+) {
+  const preset = resolution === 'auto' ? undefined : REMOTE_DESKTOP_RESOLUTION_PRESETS[resolution];
+  return {
+    maxWidth: preset?.width ?? null,
+    maxHeight: preset?.height ?? null,
+    maxFrameRate: frameRate === 'auto' ? null : Number(frameRate),
+    capturePrecision,
+  };
+}
 
 export const defaultRemoteDesktopPreferences: RemoteDesktopInstancePreferences = {
   target: { kind: 'display' },
   resolution: 'auto',
   frameRate: 'auto',
+  capturePrecision: 'auto',
   mouseMode: 'direct',
   transportAvailability: { p2p: true, turn: true, websocket: true },
 };
@@ -136,6 +154,9 @@ function sanitizeInstancePreferences(value: Record<string, unknown>): RemoteDesk
   const frameRate = REMOTE_DESKTOP_FRAME_RATES.includes(value.frameRate as RemoteDesktopFrameRate)
     ? value.frameRate as RemoteDesktopFrameRate
     : 'auto';
+  const capturePrecision = REMOTE_DESKTOP_CAPTURE_PRECISIONS.includes(value.capturePrecision as RemoteDesktopCapturePrecision)
+    ? value.capturePrecision as RemoteDesktopCapturePrecision
+    : 'auto';
   const mouseMode = value.mouseMode === 'trackpad' ? 'trackpad' : 'direct';
   const raw = value.transportAvailability as Partial<RemoteDesktopTransportAvailability> | undefined;
   const transportAvailability: RemoteDesktopTransportAvailability = {
@@ -148,7 +169,7 @@ function sanitizeInstancePreferences(value: Record<string, unknown>): RemoteDesk
     transportAvailability.turn = true;
     transportAvailability.websocket = true;
   }
-  return { target, resolution, frameRate, mouseMode, transportAvailability };
+  return { target, resolution, frameRate, capturePrecision, mouseMode, transportAvailability };
 }
 
 export function sanitizePersistedCaptureTarget(value: unknown): PersistedCaptureTarget {

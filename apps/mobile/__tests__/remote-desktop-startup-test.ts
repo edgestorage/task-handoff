@@ -1,5 +1,5 @@
 import type { createControlPlaneRemoteDesktopApi } from '@task-handoff/control-plane-client';
-import { RTCPeerConnection } from 'react-native-webrtc';
+import { RTCPeerConnection, RTCRtpReceiver } from 'react-native-webrtc';
 
 import type {
   MobileAuthenticatedWebSocketHandlers,
@@ -16,6 +16,7 @@ import {
 
 jest.mock('react-native-webrtc', () => ({
   RTCPeerConnection: jest.fn(),
+  RTCRtpReceiver: { getCapabilities: jest.fn(() => ({ codecs: [] })) },
 }));
 
 jest.mock('../modules/task-handoff-remote-desktop/src', () => ({
@@ -33,6 +34,11 @@ jest.mock('../src/observability/diagnostic-logs', () => ({
   diagnosticLog: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
+beforeEach(() => {
+  jest.clearAllMocks();
+  (RTCRtpReceiver.getCapabilities as jest.Mock).mockReturnValue({ codecs: [] });
+});
+
 type RemoteDesktopApi = ReturnType<typeof createControlPlaneRemoteDesktopApi>;
 type OpenedSocket = {
   options: MobileAuthenticatedWebSocketOptions;
@@ -42,10 +48,10 @@ type OpenedSocket = {
   close: jest.Mock;
 };
 
-function createdSession() {
+function createdSession(viewerSessionId = 'rdv_1', sourceRef = 'display-primary') {
   return {
     snapshot: {
-      viewerSessionId: 'rdv_1',
+      viewerSessionId,
       sessionRevision: 1,
       controlRevision: 0,
       isController: true,
@@ -53,7 +59,7 @@ function createdSession() {
       viewerCount: 1,
       transport: 'webrtc',
       phase: 'starting',
-      captureSelection: { sourceRef: 'display-primary' },
+      captureSelection: { sourceRef },
       sessionExpiresAt: Date.now() + 60_000,
       idleExpiresAt: null,
       mediaPaused: false,
@@ -65,6 +71,16 @@ function createdSession() {
     ticketExpiresAt: Date.now() + 60_000,
     protocolVersion: '2026-11-11',
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
 }
 
 function fallbackSession() {
@@ -80,7 +96,11 @@ function fallbackSession() {
   } as const;
 }
 
-function setup(availability: { p2p: boolean; turn: boolean; websocket: boolean }, interactive = true) {
+function setup(
+  availability: { p2p: boolean; turn: boolean; websocket: boolean },
+  interactive = true,
+  videoCodecs: readonly string[] = [],
+) {
   const sockets: OpenedSocket[] = [];
   const openAuthenticatedWebSocket = jest.fn((options: MobileAuthenticatedWebSocketOptions, handlers: MobileAuthenticatedWebSocketHandlers) => {
     const socket: OpenedSocket = {
@@ -119,7 +139,9 @@ function setup(availability: { p2p: boolean; turn: boolean; websocket: boolean }
     target: { kind: 'display', sourceRef: 'display-primary' },
     resolution: 'auto',
     frameRate: 'auto',
+    capturePrecision: 'auto',
     transportAvailability: availability,
+    videoCodecs,
   });
   return { api, controller, openAuthenticatedWebSocket, sockets };
 }
@@ -130,6 +152,36 @@ test('view-only startup never requests remote input', async () => {
   expect(controller.getSnapshot().inputRequested).toBe(false);
   expect(controller.getSnapshot().inputEnabled).toBe(false);
   expect(controller.getSnapshot().controlRequestPending).toBe(false);
+  await controller.close();
+});
+
+test('native WebRTC dimensions become the shared snapshot geometry', async () => {
+  const { controller } = setup({ p2p: true, turn: true, websocket: true });
+
+  controller.setVideoDimensions(2560.4, 1440.6);
+  expect(controller.getSnapshot().videoWidth).toBe(2560);
+  expect(controller.getSnapshot().videoHeight).toBe(1441);
+
+  controller.setVideoDimensions(0, 1080);
+  expect(controller.getSnapshot().videoWidth).toBe(2560);
+  expect(controller.getSnapshot().videoHeight).toBe(1441);
+
+  await controller.close();
+});
+
+test('WebRTC prefers HEVC Main when the instance advertises H265', async () => {
+  const h264 = { mimeType: 'video/H264', sdpFmtpLine: 'profile-level-id=42e01f' };
+  const hevc = { mimeType: 'video/H265', sdpFmtpLine: 'profile-id=1;tier-flag=0;tx-mode=SRST' };
+  (RTCRtpReceiver.getCapabilities as jest.Mock).mockReturnValue({ codecs: [h264, hevc] });
+  const { transceiver } = installFakePeerConnection();
+  const { controller, sockets } = setup({ p2p: true, turn: true, websocket: true }, true, ['h264', 'h265']);
+
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  expect(transceiver.setCodecPreferences).toHaveBeenCalledWith([hevc, h264]);
   await controller.close();
 });
 
@@ -157,6 +209,7 @@ function fallbackMediaFrame(keyframe = true) {
 
 function installFakePeerConnection() {
   const listeners = new Map<string, Array<(event?: unknown) => void>>();
+  const transceiver = { setCodecPreferences: jest.fn() };
   const peer = {
     iceConnectionState: 'new',
     connectionState: 'new',
@@ -164,7 +217,7 @@ function installFakePeerConnection() {
     addEventListener(type: string, listener: (event?: unknown) => void) {
       listeners.set(type, [...(listeners.get(type) ?? []), listener]);
     },
-    addTransceiver: jest.fn(),
+    addTransceiver: jest.fn(() => transceiver),
     createDataChannel: jest.fn(() => ({ readyState: 'connecting', send: jest.fn(), close: jest.fn() })),
     createOffer: jest.fn(async () => ({ type: 'offer' as const, sdp: 'v=0\r\n' })),
     setLocalDescription: jest.fn(async (description: { type: 'offer'; sdp: string }) => { peer.localDescription = description; }),
@@ -175,7 +228,7 @@ function installFakePeerConnection() {
     close: jest.fn(),
   };
   (RTCPeerConnection as unknown as jest.Mock).mockImplementation(() => peer);
-  return peer;
+  return { peer, transceiver };
 }
 
 test('WebSocket-only startup attaches signaling before requesting fallback', async () => {
@@ -202,6 +255,67 @@ test('WebSocket-only startup attaches signaling before requesting fallback', asy
   await controller.close();
 });
 
+test('switching capture targets while stopping starts only the latest target', async () => {
+  const { api, controller } = setup({ p2p: false, turn: false, websocket: true });
+  (api.sources as jest.Mock).mockResolvedValue({
+    sources: [
+      { sourceRef: 'display-primary', kind: 'display', title: 'Primary display', subtitle: null, width: 1920, height: 1080, capturable: true, reason: null },
+      { sourceRef: 'window-a', kind: 'window', title: 'Window A', subtitle: 'App A', width: 1280, height: 720, capturable: true, reason: null },
+      { sourceRef: 'window-b', kind: 'window', title: 'Window B', subtitle: 'App B', width: 1440, height: 900, capturable: true, reason: null },
+    ],
+  });
+  await controller.start();
+  expect(api.createSession).toHaveBeenCalledTimes(1);
+
+  const stopped = deferred<{ stopped: boolean }>();
+  (api.stop as jest.Mock).mockImplementationOnce(() => stopped.promise);
+  const first = controller.switchTarget({ kind: 'window', sourceRef: 'window-a' });
+  await flushMicrotasks();
+  expect(api.stop).toHaveBeenCalledWith('instance_1', 'rdv_1');
+
+  const second = controller.switchTarget({ kind: 'window', sourceRef: 'window-b' });
+  stopped.resolve({ stopped: true });
+  await Promise.all([first, second]);
+
+  expect(api.createSession).toHaveBeenCalledTimes(2);
+  expect((api.createSession as jest.Mock).mock.calls[1][1]).toEqual({ sourceRef: 'window-b' });
+  expect(controller.getSnapshot().target.sourceRef).toBe('window-b');
+  await controller.close();
+});
+
+test('releases a stale session created after a newer target supersedes it', async () => {
+  const { api, controller } = setup({ p2p: false, turn: false, websocket: true });
+  (api.sources as jest.Mock).mockResolvedValue({
+    sources: [
+      { sourceRef: 'display-primary', kind: 'display', title: 'Primary display', subtitle: null, width: 1920, height: 1080, capturable: true, reason: null },
+      { sourceRef: 'window-a', kind: 'window', title: 'Window A', subtitle: 'App A', width: 1280, height: 720, capturable: true, reason: null },
+      { sourceRef: 'window-b', kind: 'window', title: 'Window B', subtitle: 'App B', width: 1440, height: 900, capturable: true, reason: null },
+    ],
+  });
+  await controller.start();
+
+  const staleCreation = deferred<ReturnType<typeof createdSession>>();
+  (api.createSession as jest.Mock)
+    .mockImplementationOnce(() => staleCreation.promise)
+    .mockImplementation(async (_instanceId: string, selection: { sourceRef: string }) => createdSession(`rdv_${selection.sourceRef}`, selection.sourceRef));
+
+  const first = controller.switchTarget({ kind: 'window', sourceRef: 'window-a' });
+  await flushMicrotasks();
+  expect(api.createSession).toHaveBeenCalledTimes(2);
+  const second = controller.switchTarget({ kind: 'window', sourceRef: 'window-b' });
+  staleCreation.resolve(createdSession('rdv_stale', 'window-a'));
+  await Promise.all([first, second]);
+
+  expect(api.stop).toHaveBeenCalledWith('instance_1', 'rdv_stale');
+  expect((api.createSession as jest.Mock).mock.calls.map((call) => call[1])).toEqual([
+    { sourceRef: 'display-primary' },
+    { sourceRef: 'window-a' },
+    { sourceRef: 'window-b' },
+  ]);
+  expect(controller.getSnapshot().target.sourceRef).toBe('window-b');
+  await controller.close();
+});
+
 test('signaling failure before attach does not request a fallback ticket', async () => {
   const { api, controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
 
@@ -212,6 +326,25 @@ test('signaling failure before attach does not request a fallback ticket', async
   expect(api.fallback).not.toHaveBeenCalled();
   expect(controller.getSnapshot().phase).toBe('error');
   await controller.close();
+});
+
+test('coalesces duplicate WebRTC stats watchers for the same peer', async () => {
+  jest.useFakeTimers();
+  const { controller } = setup({ p2p: true, turn: false, websocket: false });
+  const peer = { getStats: jest.fn(async () => new Map()) };
+  (controller as unknown as { peer: unknown }).peer = peer;
+
+  (controller as unknown as { startStatsWatch(peer: unknown): void }).startStatsWatch(peer);
+  (controller as unknown as { startStatsWatch(peer: unknown): void }).startStatsWatch(peer);
+  await flushMicrotasks();
+  expect(peer.getStats).toHaveBeenCalledTimes(1);
+
+  jest.advanceTimersByTime(2_000);
+  await flushMicrotasks();
+  expect(peer.getStats).toHaveBeenCalledTimes(2);
+
+  await controller.close();
+  jest.useRealTimers();
 });
 
 test('fallback ticket request retries after a temporary transport outage', async () => {
@@ -310,12 +443,13 @@ test('fallback configuration keeps the decoder alive for the first keyframe', as
   media.handlers.onOpen?.();
   media.handlers.onMessage(JSON.stringify({
     type: 'fallback.configure',
-    payload: { width: 1920, height: 1080, fps: 30, bitrate: 4_000_000, codec: 'avc1.42E028' },
+    payload: { width: 1920, height: 1080, fps: 30, bitrate: 12_000_000, codec: 'avc1.42E028' },
   }));
   media.handlers.onMessage(fallbackMediaFrame());
   await flushMicrotasks();
 
   expect(configure).toHaveBeenCalledTimes(1);
+  expect(configure).toHaveBeenCalledWith(expect.objectContaining({ bitrate: 12_000_000 }));
   expect(decode).toHaveBeenCalledTimes(1);
   expect(reset).not.toHaveBeenCalled();
   expect(controller.getSnapshot().videoWidth).toBe(1920);

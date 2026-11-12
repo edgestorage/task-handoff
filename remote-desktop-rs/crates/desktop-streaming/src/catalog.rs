@@ -128,6 +128,36 @@ impl<H> Catalog<H> {
                 },
             );
         }
+        // Window order is authoritative and shared by every client. Window
+        // sources carry the owning application in `subtitle`, so group them by
+        // application first and then by the visible window title. Sources
+        // without provider context fall back to their title as the app key.
+        // Other source kinds keep provider order (notably Primary display
+        // selection).
+        let mut windows = entries
+            .iter()
+            .filter(|entry| entry.kind == "window")
+            .cloned()
+            .collect::<Vec<_>>();
+        windows.sort_by_cached_key(|entry| {
+            let application = entry
+                .subtitle
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .unwrap_or(&entry.title);
+            (
+                application.to_lowercase(),
+                application.to_string(),
+                entry.title.to_lowercase(),
+                entry.title.clone(),
+                entry.kind.clone(),
+                entry.source_ref.clone(),
+            )
+        });
+        let mut windows = windows.into_iter();
+        for entry in entries.iter_mut().filter(|entry| entry.kind == "window") {
+            *entry = windows.next().expect("window source count is unchanged");
+        }
         if serde_json::to_vec(&entries)
             .map_err(|_| CatalogError::TooLarge)?
             .len()

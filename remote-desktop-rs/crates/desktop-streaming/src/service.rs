@@ -342,6 +342,7 @@ impl Service {
                     height: budget.height,
                     fps: budget.fps,
                     bitrate: crate::video::INITIAL_BITRATE,
+                    codec: live.control.video_codec(),
                 }));
                 self.activate_fallback(&generation).await?;
             }
@@ -1544,6 +1545,7 @@ impl Service {
                     max_width,
                     max_height,
                     max_frame_rate,
+                    capture_precision,
                 } => {
                     let resolution = match (max_width, max_height) {
                         (None, None) => None,
@@ -1588,6 +1590,11 @@ impl Service {
                         .control
                         .set_stream_limits(resolution, max_frame_rate);
                     self.live
+                        .get(&id)
+                        .ok_or_else(|| anyhow::anyhow!("peer closed"))?
+                        .control
+                        .set_capture_precision(capture_precision);
+                    self.live
                         .get_mut(&id)
                         .ok_or_else(|| anyhow::anyhow!("peer closed"))?
                         .reply(
@@ -1597,7 +1604,8 @@ impl Service {
                                 "payload":{
                                     "maxWidth":max_width,
                                     "maxHeight":max_height,
-                                    "maxFrameRate":max_frame_rate
+                                    "maxFrameRate":max_frame_rate,
+                                    "capturePrecision":capture_precision
                                 }
                             }),
                         )

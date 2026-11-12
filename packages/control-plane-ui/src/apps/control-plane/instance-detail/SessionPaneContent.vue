@@ -92,6 +92,7 @@
     <InstanceSessionPanel
       v-else-if="session?.kind === 'ai'"
       :active-session="session"
+      :can-interact-remote-desktop="canInteractRemoteDesktop === true"
       :choose-project-folder="chooseProjectFolder"
       :instance="instance"
       :instance-action-menu="instanceActionMenuBindings"

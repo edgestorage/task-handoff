@@ -3,7 +3,7 @@ import { act, fireEvent, render, waitFor, within } from '@testing-library/react-
 import * as Clipboard from 'expo-clipboard';
 import { File } from 'expo-file-system';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
-import { Animated, Dimensions, FlatList, Keyboard, PixelRatio, Platform, StyleSheet, Text } from 'react-native';
+import { Animated, Dimensions, FlatList, Keyboard, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import { BookOpen, Brain, CircleHelp, ClipboardCheck, CornerDownRight, Download, FilePenLine, FileSearch, ListTodo, Minimize2, Pencil, RotateCcw, SquareTerminal, Trash2 } from 'lucide-react-native';
 import { SafeAreaInsetsContext, SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@task-handoff/control-plane-client';
@@ -23,6 +23,7 @@ import { MobileToastProvider } from '../src/components/MobileToast';
 import { TimelineActivityGroup, timelineActivityIcon } from '../src/ai-sessions/TimelineActivityGroup';
 import { mobileWebMetric, mobileWebType } from '../src/components/mobile-web-typography';
 import { mobileLightColors } from '../src/components/theme';
+import { setSessionPreviewPresentation } from '../src/remote-desktop/session-preview-presentation';
 
 const session = ControlPlaneAiSessionSummarySchema.parse({
   id: 'session-1', agent: 'codex', title: 'Long session', status: 'running', phase: 'tool',
@@ -56,6 +57,62 @@ test('session footer opens the saved remote desktop preview after tool activity'
   await fireEvent.press(screen.getByTestId('session-remote-desktop-entry'));
   expect(onOpenRemoteDesktopPreview).toHaveBeenCalledTimes(1);
   await screen.unmount();
+});
+
+test('session remote desktop card separates preview, details, and removal actions', async () => {
+  const onOpenRemoteDesktopPreview = jest.fn();
+  const onOpenRemoteDesktopDetail = jest.fn();
+  const onRemoveRemoteDesktop = jest.fn();
+  const screen = await render(<SessionDetail
+    messages={[]}
+    onOpenRemoteDesktopDetail={onOpenRemoteDesktopDetail}
+    onOpenRemoteDesktopPreview={onOpenRemoteDesktopPreview}
+    onRemoveRemoteDesktop={onRemoveRemoteDesktop}
+    remoteDesktopTarget={{ kind: 'window', sourceRef: 'window_1', subtitle: 'Preview', title: 'Editor' }}
+    session={ControlPlaneAiSessionSummarySchema.parse({ ...session, currentTool: undefined, phase: 'thinking', status: 'idle', subAgents: [] })}
+  />);
+
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-entry'));
+  expect(onOpenRemoteDesktopPreview).toHaveBeenCalledTimes(1);
+  expect(onOpenRemoteDesktopDetail).not.toHaveBeenCalled();
+  expect(onRemoveRemoteDesktop).not.toHaveBeenCalled();
+
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-open-detail'));
+  expect(onOpenRemoteDesktopPreview).toHaveBeenCalledTimes(1);
+  expect(onOpenRemoteDesktopDetail).toHaveBeenCalledTimes(1);
+  expect(onRemoveRemoteDesktop).not.toHaveBeenCalled();
+
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-remove'));
+  expect(onOpenRemoteDesktopPreview).toHaveBeenCalledTimes(1);
+  expect(onOpenRemoteDesktopDetail).toHaveBeenCalledTimes(1);
+  expect(onRemoveRemoteDesktop).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+});
+
+test('expanded preview mode toggles an inline surface from the session card', async () => {
+  setSessionPreviewPresentation('expanded');
+  const onOpenRemoteDesktopPreview = jest.fn();
+  const onOpenRemoteDesktopDetail = jest.fn();
+  const screen = await render(<SessionDetail
+    instanceId="instance-1"
+    messages={[]}
+    onOpenRemoteDesktopDetail={onOpenRemoteDesktopDetail}
+    onOpenRemoteDesktopPreview={onOpenRemoteDesktopPreview}
+    remoteDesktopTarget={{ kind: 'window', sourceRef: 'window_1', subtitle: 'Preview', title: 'Editor' }}
+    renderRemoteDesktopInlinePreview={() => <View testID="session-remote-desktop-inline-preview-stub" />}
+    session={ControlPlaneAiSessionSummarySchema.parse({ ...session, currentTool: undefined, phase: 'thinking', status: 'idle', subAgents: [] })}
+  />);
+
+  expect(screen.queryByTestId('session-remote-desktop-inline-preview-stub')).toBeNull();
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-entry'));
+  expect(screen.getByTestId('session-remote-desktop-inline-preview-stub')).toBeTruthy();
+  expect(onOpenRemoteDesktopPreview).not.toHaveBeenCalled();
+
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-entry'));
+  expect(screen.queryByTestId('session-remote-desktop-inline-preview-stub')).toBeNull();
+  expect(onOpenRemoteDesktopPreview).not.toHaveBeenCalled();
+  await screen.unmount();
+  setSessionPreviewPresentation('floating');
 });
 
 function setViewportWidth(width: number) {
@@ -2052,6 +2109,21 @@ test('safe markdown can remove the final paragraph spacing inside message bubble
   const screen = await render(<SafeMarkdown trimEnd>One paragraph</SafeMarkdown>);
   const paragraph = screen.getByTestId('markdown-selectable-text');
   expect(StyleSheet.flatten(paragraph?.props.style).marginBottom).toBe(0);
+});
+
+test('assistant markdown trims its end spacing when message actions are visible', async () => {
+  const completed = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    phase: 'responding',
+    status: 'idle',
+    subAgents: [],
+    turns: [{ ...session.turns![0], completedAt: '2026-08-05T00:01:00.000Z', lastMessage: 'Done', status: 'completed' }],
+  });
+  const screen = await render(<SessionDetail messages={[]} session={completed} />);
+  const paragraphs = screen.getAllByTestId('markdown-selectable-text');
+  expect(StyleSheet.flatten(paragraphs.at(-1)?.props.style).marginBottom).toBe(0);
+  await screen.unmount();
 });
 
 test('streaming text uses the Web fade duration while tables and reduced motion disable character fades', () => {

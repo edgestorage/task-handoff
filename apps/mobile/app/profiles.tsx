@@ -16,6 +16,11 @@ import { NativeProfilesScreen } from '../src/control-plane/NativeProfilesScreen'
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { useI18n, type LocalePreference } from '../src/i18n';
 import { clearDiagnosticLogs, copyRecentDiagnosticLogs, getDiagnosticLogsEnabled, setDiagnosticLogsEnabled, subscribeDiagnosticLogs } from '../src/observability/diagnostic-logs';
+import {
+  setSessionPreviewPresentation,
+  useSessionPreviewPresentation,
+  type SessionPreviewPresentation,
+} from '../src/remote-desktop/session-preview-presentation';
 
 export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInTabs?: boolean }) {
   const { colors } = useMobileTheme();
@@ -137,6 +142,7 @@ export default function ProfilesScreen({ embeddedInTabs = false }: { embeddedInT
           </View>
           <LanguageRow />
           <AppearanceRow />
+          <RemoteDesktopPreviewRow />
           <DiagnosticLogsRow />
           <AboutRow />
         </View>
@@ -179,6 +185,7 @@ export function ProfilesWelcome({ cloudAccount, onAdd, onOpenCloudAccount }: {
       <View style={styles.welcomeFooter}>
         <LanguageRow compact />
         <AppearanceRow compact />
+        <RemoteDesktopPreviewRow compact />
         <AboutRow compact />
         <Text style={[styles.requirement, { color: colors.textMuted }]}>{isMobileTestMode ? t('profiles.requirementTest') : t('profiles.requirement')}</Text>
       </View>
@@ -253,6 +260,29 @@ function AppearanceRow({ compact = false }: { compact?: boolean }) {
       <Icon color={colors.textMuted} name="contrast-outline" size={18} />
       <Text style={[styles.languageLabel, { color: colors.text }]}>{t('appearance.title')}</Text>
       <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[preference]}</Text>
+      <Icon color={colors.textMuted} name="chevron-forward" size={12} />
+    </Pressable>}
+  </OptionMenu>;
+}
+
+function RemoteDesktopPreviewRow({ compact = false }: { compact?: boolean }) {
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const presentation = useSessionPreviewPresentation();
+  const labels: Record<SessionPreviewPresentation, string> = {
+    expanded: t('remoteDesktop.previewPresentationExpanded'),
+    floating: t('remoteDesktop.previewPresentationFloating'),
+  };
+  const options: OptionMenuOption<SessionPreviewPresentation>[] = (Object.keys(labels) as SessionPreviewPresentation[]).map((value) => ({
+    label: labels[value],
+    systemImage: value === 'floating' ? 'rectangle.on.rectangle' : 'arrow.up.left.and.arrow.down.right',
+    value,
+  }));
+  return <OptionMenu cancelLabel={t('common.cancel')} onSelect={setSessionPreviewPresentation} options={options} selectedValue={presentation} title={t('remoteDesktop.previewPresentation')}>
+    {(open) => <Pressable accessibilityRole="button" onPress={open} style={[styles.languageRow, !compact && { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <Icon color={colors.textMuted} name="desktop-outline" size={18} />
+      <Text style={[styles.languageLabel, { color: colors.text }]}>{t('remoteDesktop.previewPresentation')}</Text>
+      <Text style={[styles.languageValue, { color: colors.textMuted }]}>{labels[presentation]}</Text>
       <Icon color={colors.textMuted} name="chevron-forward" size={12} />
     </Pressable>}
   </OptionMenu>;

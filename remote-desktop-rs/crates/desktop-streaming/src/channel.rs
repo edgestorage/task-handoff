@@ -1,5 +1,6 @@
 //! Browser DataChannel boundary. No media, host credentials or OS handles.
 use crate::contract::CHANNEL_VERSION;
+use crate::traits::CapturePrecision;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_MESSAGE: usize = 16 * 1024;
@@ -76,6 +77,10 @@ pub enum Control {
         max_height: Option<u32>,
         #[serde(rename = "maxFrameRate")]
         max_frame_rate: Option<u32>,
+        /// Additive to the existing resolution message. Older components ignore
+        /// it; readers default it to Auto when a client predates the preference.
+        #[serde(default, rename = "capturePrecision")]
+        capture_precision: CapturePrecision,
     },
     #[serde(rename = "session.stop")]
     Stop,

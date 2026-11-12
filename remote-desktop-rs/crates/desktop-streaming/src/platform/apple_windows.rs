@@ -2,8 +2,9 @@
 //! Only an explicit capture request creates a stream; no screenshot
 //! commands or full-screen cropping can implement a window target.
 use super::frame_mailbox::FrameMailbox;
+use crate::capture::resolve_capture_size;
 use crate::error::BackendError;
-use crate::traits::{Geometry, RawFrame};
+use crate::traits::{CapturePrecision, Geometry, RawFrame};
 use crabgrab::{
     feature::bitmap::{FrameBitmap, VideoFrameBitmap},
     prelude::*,
@@ -64,10 +65,13 @@ pub async fn enumerate_displays() -> anyhow::Result<Vec<crate::catalog::NativeSo
     Ok(sources)
 }
 pub struct Capture {
+    target: Target,
     config: CaptureConfig,
     stream: Option<CaptureStream>,
     latest: FrameMailbox<Arc<VideoFrame>>,
     geometry: Geometry,
+    capture_size: (u32, u32),
+    precision: CapturePrecision,
     display_geometry: Option<super::display_geometry::DisplayGeometry>,
     pixel_size: Option<(usize, usize)>,
 }
@@ -103,6 +107,7 @@ impl Capture {
             crate::platform::windows_access::prepare_dpi()?;
             crate::platform::windows_access::check()?;
         }
+        let retained_target = target.clone();
         let display_target = matches!(&target, Target::Display(_));
         let (rect, config) = match target {
             Target::Display(d) => (
@@ -127,17 +132,83 @@ impl Capture {
         let display_geometry = display_target
             .then(|| super::display_geometry::DisplayGeometry::bind(geometry))
             .transpose()?;
+        let precision = CapturePrecision::Auto;
+        let capture_size = capture_size_for(&retained_target, precision)?;
         Ok(Self {
-            config: config.with_buffer_count(2).with_show_cursor(show_cursor),
+            target: retained_target,
+            config: config
+                .with_output_size(Size {
+                    width: capture_size.0 as f64,
+                    height: capture_size.1 as f64,
+                })
+                .with_buffer_count(2)
+                .with_show_cursor(show_cursor),
             stream: None,
             latest: FrameMailbox::default(),
             geometry,
+            capture_size,
+            precision,
             display_geometry,
             pixel_size: None,
         })
     }
     pub fn geometry(&self) -> Geometry {
         self.geometry
+    }
+    pub fn set_capture_precision(&mut self, precision: CapturePrecision) -> anyhow::Result<bool> {
+        if precision == self.precision {
+            return Ok(false);
+        }
+        self.precision = precision;
+        self.reconfigure_capture_size()?;
+        Ok(true)
+    }
+    pub fn capture_dimensions(&self) -> (u32, u32) {
+        self.capture_size
+    }
+    fn reconfigure_capture_size(&mut self) -> anyhow::Result<()> {
+        let next = capture_size_for(&self.target, self.precision)?;
+        if next == self.capture_size {
+            return Ok(());
+        }
+        self.pause()?;
+        self.capture_size = next;
+        self.pixel_size = None;
+        self.config = self.config.clone().with_output_size(Size {
+            width: next.0 as f64,
+            height: next.1 as f64,
+        });
+        Ok(())
+    }
+    pub fn refresh_geometry(&mut self) -> anyhow::Result<Geometry> {
+        if let Some(display) = &self.display_geometry {
+            display.validate()?;
+        }
+        let rect = match &self.target {
+            Target::Display(display) => display.rect(),
+            Target::Window(window) => {
+                anyhow::ensure!(window.is_visible(), BackendError::WindowUnavailable);
+                window.rect()
+            }
+        };
+        let geometry = Geometry::from_actuator_rect(
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height,
+        )?;
+        let next_capture_size = capture_size_for(&self.target, self.precision)?;
+        if geometry != self.geometry || next_capture_size != self.capture_size {
+            self.pause()?;
+            self.geometry = geometry;
+            self.capture_size = next_capture_size;
+            self.pixel_size = None;
+            self.config = self.config.clone().with_output_size(Size {
+                width: next_capture_size.0 as f64,
+                height: next_capture_size.1 as f64,
+            });
+        }
+        Ok(self.geometry)
     }
     pub fn resume(&mut self) -> anyhow::Result<()> {
         if self.stream.is_some() {
@@ -214,6 +285,46 @@ impl Capture {
             captured_at: frame.capture_time(),
         }))
     }
+}
+
+#[cfg(target_os = "windows")]
+fn logical_scale_for_rect(rect: crabgrab::prelude::Rect) -> f64 {
+    use windows_sys::Win32::{
+        Foundation::RECT,
+        Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONEAREST},
+        UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
+    };
+    let rect = RECT {
+        left: rect.origin.x.round() as i32,
+        top: rect.origin.y.round() as i32,
+        right: (rect.origin.x + rect.size.width).round() as i32,
+        bottom: (rect.origin.y + rect.size.height).round() as i32,
+    };
+    let monitor = unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_null() {
+        return 1.0;
+    }
+    let (mut dpi_x, mut dpi_y) = (0u32, 0u32);
+    let ok = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+    if ok != 0 || dpi_x == 0 {
+        return 1.0;
+    }
+    (96.0 / dpi_x as f64).clamp(0.25, 4.0)
+}
+
+fn capture_size_for(target: &Target, precision: CapturePrecision) -> anyhow::Result<(u32, u32)> {
+    let rect = match target {
+        Target::Display(display) => display.rect(),
+        Target::Window(window) => window.rect(),
+    };
+    let width = rect.size.width.round();
+    let height = rect.size.height.round();
+    anyhow::ensure!(width >= 1.0 && height >= 1.0, BackendError::InvalidGeometry);
+    // Per-monitor DPI aware V2 exposes WGC rectangles in physical pixels.
+    // Performance mode divides that native size by the monitor scale, while
+    // auto keeps the compositor's native pixels unchanged.
+    let scale = logical_scale_for_rect(rect);
+    resolve_capture_size(width as u32, height as u32, precision, scale, scale)
 }
 impl Drop for Capture {
     fn drop(&mut self) {

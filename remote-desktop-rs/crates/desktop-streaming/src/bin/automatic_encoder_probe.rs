@@ -1,17 +1,23 @@
 //! Synthetic pixels only; exercise real hardware selection/fallback and IDRs.
 fn main() -> anyhow::Result<()> {
     use desktop_streaming::{
-        codec::Limits,
+        codec::{Limits, VideoCodec},
         encoder::{Encoder, Policy},
         synthetic::{pattern, SyntheticInput},
     };
     use openh264::formats::YUVSource;
     let expect_software = std::env::args().any(|a| a == "--expect-software");
-    let mut encoder = Encoder::new(2_000_000, Limits::default(), 0, Policy::Automatic)?;
+    let mut encoder = Encoder::new(
+        2_000_000,
+        Limits::default(),
+        0,
+        Policy::Automatic,
+        VideoCodec::H264,
+    )?;
     let mut samples = Vec::new();
     for i in 0..12 {
         if i == 7 {
-            encoder.reconfigure(1_800_000, Limits::default(), 0)?;
+            encoder.reconfigure(1_800_000, Limits::default(), 0, VideoCodec::H264)?;
         }
         let start = std::time::Instant::now();
         let encoded = encoder

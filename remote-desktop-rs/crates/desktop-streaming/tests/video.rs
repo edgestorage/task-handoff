@@ -1,6 +1,10 @@
 use desktop_streaming::{
+    codec::Limits,
     traits::{Geometry, RawFrame},
-    video::{from_bgra, Budget, FALLBACK_LIMITS, FALLBACK_MAX_HEIGHT, FALLBACK_MAX_WIDTH},
+    video::{
+        from_bgra, Budget, FALLBACK_LIMITS, FALLBACK_MAX_BITRATE, FALLBACK_MAX_HEIGHT,
+        FALLBACK_MAX_WIDTH, INITIAL_BITRATE,
+    },
 };
 use openh264::formats::YUVSource;
 use std::time::Instant;
@@ -79,10 +83,12 @@ fn truncated_frames_fail_and_budgets_keep_aspect_ratio_even_dimensions_and_codec
 
 #[test]
 fn websocket_fallback_budget_reaches_full_hd_and_still_respects_explicit_resolution_caps() {
+    assert_eq!(FALLBACK_MAX_BITRATE, INITIAL_BITRATE);
+    assert_eq!(FALLBACK_LIMITS.max_bitrate, FALLBACK_MAX_BITRATE);
     let full_hd = Budget::select_with_limits_and_resolution(
         1920,
         1080,
-        4_000_000,
+        FALLBACK_MAX_BITRATE,
         FALLBACK_LIMITS,
         Some((FALLBACK_MAX_WIDTH, FALLBACK_MAX_HEIGHT)),
     );
@@ -93,7 +99,7 @@ fn websocket_fallback_budget_reaches_full_hd_and_still_respects_explicit_resolut
     let capped = Budget::select_with_limits_and_resolution(
         1920,
         1080,
-        4_000_000,
+        FALLBACK_MAX_BITRATE,
         FALLBACK_LIMITS,
         Some((1280, 720)),
     );
@@ -101,7 +107,43 @@ fn websocket_fallback_budget_reaches_full_hd_and_still_respects_explicit_resolut
 }
 
 #[test]
-fn oversized_idr_reduces_pixel_cost_and_stable_frames_probe_back_within_five_seconds() {
+fn explicit_two_k_and_four_k_targets_follow_the_negotiated_level() {
+    let level_five_one = Limits::parse("packetization-mode=1;profile-level-id=42e033").unwrap();
+    for (requested, expected) in [
+        ((2560, 1440), (2560, 1440, 30)),
+        ((3840, 2160), (3840, 2160, 30)),
+    ] {
+        let budget = Budget::select_with_limits_resolution_and_fps(
+            requested.0,
+            requested.1,
+            24_000_000,
+            level_five_one,
+            Some(requested),
+            None,
+        );
+        assert_eq!((budget.width, budget.height, budget.fps), expected);
+        let macroblocks = budget.width.div_ceil(16) * budget.height.div_ceil(16);
+        assert!(macroblocks <= level_five_one.max_fs);
+        assert!(macroblocks * budget.fps <= level_five_one.max_mbps);
+    }
+}
+
+#[test]
+fn ultrawide_native_capture_downscales_within_the_four_k_budget_without_stretching() {
+    let level_five_one = Limits::parse("packetization-mode=1;profile-level-id=42e033").unwrap();
+    let budget = Budget::select_with_limits_resolution_and_fps(
+        5120,
+        2160,
+        24_000_000,
+        level_five_one,
+        Some((3840, 2160)),
+        Some(30),
+    );
+    assert_eq!((budget.width, budget.height), (3840, 1620));
+}
+
+#[test]
+fn oversized_idr_reduces_pixel_cost_and_recovers_only_with_rate_headroom() {
     use desktop_streaming::video::FramePressure;
     let now = Instant::now();
     let base = Budget {
@@ -110,19 +152,24 @@ fn oversized_idr_reduces_pixel_cost_and_stable_frames_probe_back_within_five_sec
         fps: 30,
     };
     let mut pressure = FramePressure::default();
-    assert!(!pressure.admit(300_000, base, 2_000_000, now).unwrap());
-    let smaller = pressure.fit(base, now);
+    assert!(!pressure.admit(300_000, base, 2_000_000, now, true).unwrap());
+    let smaller = pressure.fit(base, 2_000_000, now);
     assert!(smaller.width < base.width && smaller.height < base.height);
-    assert!(pressure.admit(1000, smaller, 2_000_000, now).unwrap());
+    assert!(pressure
+        .admit(1000, smaller, 2_000_000, now, false)
+        .unwrap());
     assert_eq!(
-        pressure.fit(base, now + std::time::Duration::from_millis(999)),
+        pressure.fit(base, 2_000_000, now + std::time::Duration::from_secs(60)),
         smaller
     );
-    let mut recovered = smaller;
-    for seconds in 1..=4 {
-        recovered = pressure.fit(base, now + std::time::Duration::from_secs(seconds));
-    }
-    assert_eq!(recovered, base);
+    let recovered = pressure.fit(base, 2_500_000, now + std::time::Duration::from_secs(61));
+    assert!(recovered.width > smaller.width && recovered.height > smaller.height);
+    assert_eq!(
+        pressure.fit(base, 2_500_000, now + std::time::Duration::from_secs(120)),
+        recovered
+    );
+    let recovered_again = pressure.fit(base, 3_200_000, now + std::time::Duration::from_secs(121));
+    assert!(recovered_again.width > recovered.width && recovered_again.height > recovered.height);
     assert!(pressure
         .admit(
             100_000,
@@ -132,7 +179,8 @@ fn oversized_idr_reduces_pixel_cost_and_stable_frames_probe_back_within_five_sec
                 fps: 10
             },
             100_000,
-            now
+            now,
+            false,
         )
         .is_err());
 }
@@ -148,10 +196,11 @@ fn quality_pressure_is_bounded_and_probes_back_without_immediate_pixel_loss() {
     }
     assert_eq!(quality.floor(now), 36);
     assert!(!quality.reject(now));
-    // Actual editor IDR probe:122196B at8Mbps does not fit,88403B does.
-    assert!(!FramePressure::fits(122196, 8_000_000));
-    assert!(FramePressure::fits(88403, 8_000_000));
-    quality.observe_keyframe(88_403, 8_000_000);
+    // A normal editor IDR fits the bounded keyframe burst; a pathological IDR
+    // still has to fit before quality may probe upward.
+    assert!(!FramePressure::fits_frame(400_000, 8_000_000, true));
+    assert!(FramePressure::fits_frame(162_537, 8_600_000, true));
+    quality.observe_keyframe(400_000, 8_000_000);
     // This exact editor has insufficient IDR headroom. Repeating a timer
     // must not manufacture another known-oversized IDR every five seconds.
     for seconds in [4, 5, 10, 30, 300] {

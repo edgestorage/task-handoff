@@ -7,6 +7,7 @@ pub mod channel;
 pub mod clipboard;
 pub mod codec;
 pub mod contract;
+mod dynamic_track;
 pub mod error;
 pub mod fallback_server;
 pub mod framing;

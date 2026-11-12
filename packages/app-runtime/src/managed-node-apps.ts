@@ -3,7 +3,7 @@ import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { resolveExecutable } from "@task-handoff/core/core/executable-resolver";
 import { selectInstallRecipe } from "./managed-apps";
-import { detectManagedAppRecipeTarget, managedNativeAppLauncher } from "./native-package";
+import { detectManagedAppRecipeTarget, managedNativeAppLauncher, managedNativeAppRoot } from "./native-package";
 import type { ManagedAppDefinition, ManagedAppRecipeArch, ManagedAppRecipePlatform, ManagedAppRecipeTarget } from "./types";
 
 export function managedNodePackageRoot(root: string, appId: string) {
@@ -31,6 +31,22 @@ function managedTarget(root: string, definition: ManagedAppDefinition, platform:
     installers: ["apt", "dnf", "brew", "npm"],
     privilege: "root",
   }, target).recipe;
+  if (selected?.type === "native-package") {
+    const native = managedNativeAppLauncher(root, definition.launcher.id, selected.launchPath);
+    if (fs.existsSync(managedNativeAppRoot(root, definition.launcher.id)) || fs.existsSync(native)) return native;
+    const legacy = definition.distribution.recipes.find((recipe) => recipe.type === "archive-ownership"
+      && recipe.platforms.includes(platform as ManagedAppRecipePlatform)
+      && (!recipe.arches?.length || recipe.arches.includes(arch as ManagedAppRecipeArch)));
+    if (legacy?.type === "archive-ownership") {
+      const command = definition.launcher.command;
+      if (command && !path.isAbsolute(command) && !command.split(/[\\/]/).some((part) => part === ".." || !part)) {
+        const base = path.resolve(root);
+        const previous = path.resolve(base, legacy.installRoot, command);
+        if (previous.startsWith(`${base}${path.sep}`) && fs.existsSync(previous)) return previous;
+      }
+    }
+    return native;
+  }
   const archive = selected?.type === "archive" ? selected : definition.distribution.recipes.find(recipe=>recipe.type === "archive-ownership" && recipe.platforms.includes(platform as ManagedAppRecipePlatform) && (!recipe.arches?.length || recipe.arches.includes(arch as ManagedAppRecipeArch)));
   if (archive && (archive.type === "archive" || archive.type === "archive-ownership")) {
     const command = definition.launcher.command;
@@ -39,7 +55,6 @@ function managedTarget(root: string, definition: ManagedAppDefinition, platform:
     const target = path.resolve(base, archive.installRoot, command);
     return target.startsWith(`${base}${path.sep}`) ? target : undefined;
   }
-  if (selected?.type === "native-package") return managedNativeAppLauncher(root, definition.launcher.id, selected.launchPath);
   if (selected?.type === "node-package" && selected.managed) return path.join(managedNodePackageBin(root, definition.launcher.id), definition.launcher.id);
   return undefined;
 }

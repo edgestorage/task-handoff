@@ -55,6 +55,8 @@
     "runtime:pack:thctl": "node scripts/build-runtime-packages.mjs --target thctl --pack",
     "runtime:artifact": "node scripts/runtime-artifact.mjs build",
     "runtime:artifact:verify": "node scripts/runtime-artifact.mjs verify",
+    "remote-desktop:package": "node scripts/remote-desktop-packages.mjs",
+    "remote-desktop:build": "node scripts/build-remote-desktop.mjs",
     "web:typecheck": "pnpm run control-plane-ui:typecheck",
     "web:build": "pnpm run control-plane-ui:build",
     "desktop:runtime:prepare": "node scripts/prepare-desktop-runtime.mjs prepare",

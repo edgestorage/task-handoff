@@ -39,6 +39,7 @@ const mockController = {
   }),
   setResolution: jest.fn(),
   setFrameRate: jest.fn(),
+  setCapturePrecision: jest.fn(),
   setTransportAvailability: jest.fn(),
   close: jest.fn(async () => undefined),
 };
@@ -58,7 +59,7 @@ import {
   removeSessionRemoteDesktopLink,
   rememberSessionRemoteDesktopLink,
 } from '../src/remote-desktop/session-links';
-import { updateRemoteDesktopPreferences } from '../src/remote-desktop/preferences';
+import { remoteDesktopPreferencesFor, updateRemoteDesktopPreferences } from '../src/remote-desktop/preferences';
 import { useRemoteDesktop } from '../src/remote-desktop/use-remote-desktop';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../src/directories/use-directories';
@@ -82,6 +83,8 @@ beforeEach(() => {
   mockSnapshot = { ...emptyRemoteDesktopSnapshot };
   mockController.switchTarget.mockClear();
   mockController.start.mockClear();
+  mockController.setResolution.mockClear();
+  mockController.setCapturePrecision.mockClear();
   updateRemoteDesktopPreferences(controlPlaneId, instanceId, { target: instanceTarget });
   rememberSessionRemoteDesktopLink({ controlPlaneId, instanceId, sessionId, target: sessionTarget });
 });
@@ -99,5 +102,31 @@ test('removing a stopped session link does not fall back and restart the control
 
   expect(hook.result.current.preferences.target.sourceRef).toBe('window-help');
   expect(mockController.switchTarget).not.toHaveBeenCalledWith(instanceTarget);
+  hook.unmount();
+});
+
+test('switching a session target issues one controller transition', async () => {
+  const hook = await renderHook(() => useRemoteDesktop(instanceId, { sessionId }));
+  await waitFor(() => expect(hook.result.current.ready).toBe(true));
+  await waitFor(() => expect(mockController.switchTarget).toHaveBeenCalled());
+  mockController.switchTarget.mockClear();
+
+  await act(async () => { hook.result.current.setTarget(instanceTarget); });
+
+  await waitFor(() => expect(mockController.switchTarget).toHaveBeenCalledTimes(1));
+  await act(async () => { await Promise.resolve(); });
+  expect(mockController.switchTarget).toHaveBeenCalledTimes(1);
+  expect(mockController.switchTarget).toHaveBeenCalledWith(instanceTarget);
+  expect(hook.result.current.preferences.target).toEqual(instanceTarget);
+  hook.unmount();
+});
+
+test('applies a preview resolution override without overwriting the instance preference', async () => {
+  updateRemoteDesktopPreferences(controlPlaneId, instanceId, { resolution: 'auto' });
+  const hook = await renderHook(() => useRemoteDesktop(instanceId, { resolutionOverride: '540p', sessionId }));
+  await waitFor(() => expect(hook.result.current.ready).toBe(true));
+  await waitFor(() => expect(mockController.setResolution).toHaveBeenLastCalledWith('540p'));
+  expect(hook.result.current.preferences.resolution).toBe('540p');
+  expect(remoteDesktopPreferencesFor(controlPlaneId, instanceId).resolution).toBe('auto');
   hook.unmount();
 });

@@ -25,6 +25,7 @@ const SF_SYMBOL_TO_ICON: Partial<Record<string, IconName>> = {
   'chevron.left': 'chevron-back',
   'chevron.right': 'chevron-forward',
   'circle.lefthalf.filled': 'contrast-outline',
+  'display': 'desktop-outline',
   'doc.text': 'document-text-outline',
   'ellipsis': 'ellipsis-horizontal',
   'exclamationmark.shield': 'warning-outline',

@@ -8,14 +8,17 @@ use crate::{
 use controlled_instance_protocol::RemoteDesktopCapabilities;
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 use tokio::sync::{broadcast, Mutex};
 #[derive(Clone)]
 pub struct DesktopPackage {
     pub binary: PathBuf,
-    /// Managed-app release metadata used only for update reconciliation. Component
-    /// compatibility is owned by the IPC protocol handshake.
+    /// Installed artifact provenance. Component compatibility is owned only by
+    /// the IPC protocol handshake; this version is never a gate or update trigger.
     pub version: String,
 }
 #[derive(Clone)]
@@ -29,8 +32,8 @@ type UpdateRequest = Arc<dyn Fn() -> UpdateFuture + Send + Sync>;
 #[derive(Clone)]
 pub struct DesktopService {
     pub settings: DesktopSettings,
-    disposed: Arc<std::sync::atomic::AtomicBool>,
-    version: String,
+    disposed: Arc<AtomicBool>,
+    protocol_update_requested: Arc<AtomicBool>,
     mode: CaptureMode,
     installed: Arc<dyn Fn() -> anyhow::Result<Option<DesktopPackage>> + Send + Sync>,
     can_start: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -42,16 +45,15 @@ pub struct DesktopService {
 impl DesktopService {
     pub fn new(
         data_dir: &Path,
-        version: String,
         mode: CaptureMode,
         installed: impl Fn() -> anyhow::Result<Option<DesktopPackage>> + Send + Sync + 'static,
         can_start: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Self {
         let (events, _) = broadcast::channel(128);
         Self {
-            disposed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            disposed: Arc::new(AtomicBool::new(false)),
+            protocol_update_requested: Arc::new(AtomicBool::new(false)),
             settings: DesktopSettings::new(data_dir),
-            version,
             mode,
             installed: Arc::new(installed),
             can_start: Arc::new(can_start),
@@ -69,17 +71,6 @@ impl DesktopService {
         self
     }
     pub async fn reconcile(&self) -> RemoteDesktopCapabilities {
-        if !self.disposed.load(std::sync::atomic::Ordering::SeqCst)
-            && (self.can_start)()
-            && (self.installed)()
-                .ok()
-                .flatten()
-                .is_some_and(|package| package.version != self.version)
-        {
-            if let Some(request) = &self.request_update {
-                request().await;
-            }
-        }
         self.refresh().await
     }
     pub fn status(&self) -> RemoteDesktopCapabilities {
@@ -112,7 +103,7 @@ impl DesktopService {
         if !self.settings.enabled() {
             return closed("REMOTE_DESKTOP_DISABLED");
         }
-        if self.disposed.load(std::sync::atomic::Ordering::SeqCst) || !(self.can_start)() {
+        if self.disposed.load(Ordering::SeqCst) || !(self.can_start)() {
             return closed("REMOTE_DESKTOP_UPDATING");
         }
         self.projected
@@ -137,9 +128,29 @@ impl DesktopService {
             let _ = self.events.send(DesktopEvent::Changed);
             return status;
         }
-        let _ = self.request_bound("preflight", Command::Probe, None).await;
+        let probe = self.request_bound("preflight", Command::Probe, None).await;
+        if probe.is_ok() {
+            self.protocol_update_requested
+                .store(false, Ordering::SeqCst);
+        }
+        let status = self.status();
+        self.maybe_request_protocol_update(&status);
         let _ = self.events.send(DesktopEvent::Changed);
-        self.status()
+        status
+    }
+    fn maybe_request_protocol_update(&self, status: &RemoteDesktopCapabilities) {
+        if status.reason.as_deref() != Some("REMOTE_DESKTOP_PROTOCOL_MISMATCH") {
+            return;
+        }
+        let Some(request) = self.request_update.clone() else {
+            return;
+        };
+        if self.protocol_update_requested.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // The App queue stops this service before changing package files. Do not
+        // turn a capability projection into a nested lifecycle await.
+        tokio::spawn(async move { request().await });
     }
     /// Called by the App event producer without reading its locked manager.
     pub fn package_operation_changed(&self) {
@@ -151,7 +162,7 @@ impl DesktopService {
     pub async fn set_enabled(&self, enabled: bool) -> anyhow::Result<()> {
         let mut host = self.host.lock().await;
         anyhow::ensure!(
-            !self.disposed.load(std::sync::atomic::Ordering::SeqCst) && (self.can_start)(),
+            !self.disposed.load(Ordering::SeqCst) && (self.can_start)(),
             "REMOTE_DESKTOP_UPDATING"
         );
         self.settings.set(enabled)?;
@@ -194,7 +205,7 @@ impl DesktopService {
             (self.installed)()?.ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_NOT_INSTALLED"))?;
         anyhow::ensure!(self.settings.enabled(), "REMOTE_DESKTOP_DISABLED");
         anyhow::ensure!(
-            !self.disposed.load(std::sync::atomic::Ordering::SeqCst) && (self.can_start)(),
+            !self.disposed.load(Ordering::SeqCst) && (self.can_start)(),
             "REMOTE_DESKTOP_UPDATING"
         );
         if host.as_ref().is_none_or(ComponentHost::is_closed) {
@@ -288,6 +299,8 @@ impl DesktopService {
     }
     pub async fn package_changed(&self, uninstall_succeeded: bool) -> anyhow::Result<()> {
         let _host = self.host.lock().await;
+        self.protocol_update_requested
+            .store(false, Ordering::SeqCst);
         if uninstall_succeeded {
             self.settings.clear()?;
         }
@@ -295,8 +308,7 @@ impl DesktopService {
         Ok(())
     }
     pub async fn close(&self) -> anyhow::Result<()> {
-        self.disposed
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.disposed.store(true, Ordering::SeqCst);
         let mut host = self.host.lock().await;
         Self::stop(&mut host).await?;
         *self.projected.write().unwrap() = None;
@@ -327,7 +339,7 @@ mod tests {
     use super::*;
     use crate::model::Owner;
     #[tokio::test]
-    async fn package_version_only_drives_update_reconciliation_and_never_gates_use() {
+    async fn package_metadata_version_never_requests_update_or_gates_use() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         let dir = tempfile::tempdir().unwrap();
         let present = Arc::new(AtomicBool::new(false));
@@ -336,7 +348,6 @@ mod tests {
         let called = requests.clone();
         let service = DesktopService::new(
             dir.path(),
-            "current".into(),
             CaptureMode::Local,
             move || {
                 Ok(installed.load(Ordering::SeqCst).then(|| DesktopPackage {
@@ -357,11 +368,11 @@ mod tests {
             service.reconcile().await.reason.as_deref(),
             Some("REMOTE_DESKTOP_DISABLED")
         );
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
         service.refresh().await;
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
         service.reconcile().await;
-        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
         service.settings.set(true).unwrap();
         assert_eq!(
             service.status().reason.as_deref(),
@@ -370,6 +381,27 @@ mod tests {
         assert!(service.host.lock().await.is_none());
         service.close().await.unwrap();
         service.reconcile().await;
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn protocol_mismatch_requests_update_once_until_package_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let called = requests.clone();
+        let service = DesktopService::new(dir.path(), CaptureMode::Local, || Ok(None), || true)
+            .with_update_request(move || {
+                called.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {})
+            });
+        let mismatch = RemoteDesktopCapabilities::unavailable("REMOTE_DESKTOP_PROTOCOL_MISMATCH");
+        service.maybe_request_protocol_update(&mismatch);
+        service.maybe_request_protocol_update(&mismatch);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        service.package_changed(false).await.unwrap();
+        service.maybe_request_protocol_update(&mismatch);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(requests.load(Ordering::SeqCst), 2);
     }
     #[tokio::test]
@@ -379,7 +411,6 @@ mod tests {
         let package_present = installed.clone();
         let service = DesktopService::new(
             dir.path(),
-            "1".into(),
             CaptureMode::Local,
             move || {
                 Ok(package_present

@@ -4,6 +4,16 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 pub type Result<T> = anyhow::Result<T>;
+/// Capture quality is independent from the encoded resolution preset. `Auto`
+/// asks each platform for its best native/backing pixels; `Performance` keeps
+/// the smaller logical dimensions and trades detail for capture cost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CapturePrecision {
+    #[default]
+    Auto,
+    Performance,
+}
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Geometry {
     pub x: i32,

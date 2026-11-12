@@ -1,4 +1,4 @@
-use desktop_streaming::{channel::*, contract::MAX_IPC_FRAME, framing};
+use desktop_streaming::{channel::*, contract::MAX_IPC_FRAME, framing, traits::CapturePrecision};
 use serde_json::{json, Value};
 use tokio::io::AsyncWriteExt;
 #[tokio::test]
@@ -105,24 +105,27 @@ fn unit_control_messages_accept_empty_payload_but_reject_content() {
 
 #[test]
 fn transport_resolution_is_an_optional_bounded_control_message() {
-    for (seq, payload, expected_resolution, expected_frame_rate) in [
+    for (seq, payload, expected_resolution, expected_frame_rate, expected_precision) in [
         (
             0,
             json!({"maxWidth":1280,"maxHeight":720,"maxFrameRate":30}),
             Some((1280, 720)),
             Some(30),
+            CapturePrecision::Auto,
         ),
         (
             1,
-            json!({"maxWidth":null,"maxHeight":null,"maxFrameRate":null}),
+            json!({"maxWidth":null,"maxHeight":null,"maxFrameRate":null,"capturePrecision":"performance"}),
             None,
             None,
+            CapturePrecision::Performance,
         ),
         (
             2,
             json!({"maxWidth":1920,"maxHeight":1080,"maxFrameRate":15}),
             Some((1920, 1080)),
             Some(15),
+            CapturePrecision::Auto,
         ),
     ] {
         let mut decoder = Decoder::default();
@@ -137,6 +140,7 @@ fn transport_resolution_is_an_optional_bounded_control_message() {
                 max_width,
                 max_height,
                 max_frame_rate,
+                capture_precision,
             }),
             _,
         ) = decoder.decode(Channel::Control, &wire).unwrap()
@@ -145,6 +149,7 @@ fn transport_resolution_is_an_optional_bounded_control_message() {
         };
         assert_eq!(max_width.zip(max_height), expected_resolution);
         assert_eq!(max_frame_rate, expected_frame_rate);
+        assert_eq!(capture_precision, expected_precision);
     }
 }
 

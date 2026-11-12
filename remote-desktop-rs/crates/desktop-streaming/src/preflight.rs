@@ -64,9 +64,13 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
     }
     .into()];
     capability.capture.cursor = show_cursor;
-    // Only the initialized encoder is advertised. Hardware is selected and
-    // verified when stream geometry is known, with the existing software fallback.
-    capability.encoders = vec!["openh264".into()];
+    capability.capture.precision_modes = vec!["auto".into(), "performance".into()];
+    let codecs = crate::codec::local_video_codecs();
+    capability.encoders = if codecs.contains(&crate::codec::VideoCodec::H265) {
+        vec!["videotoolbox".into(), "openh264".into()]
+    } else {
+        vec!["openh264".into()]
+    };
     capability.input.backends = vec![if cfg!(target_os = "macos") {
         "cgevent"
     } else {
@@ -76,9 +80,9 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
     capability.input.text_commit = true;
     capability.input.keyboard_layout = false;
     capability.transport = vec!["webrtc".into()];
-    capability.video.codecs = vec!["h264".into()];
-    capability.video.max_width = 1920;
-    capability.video.max_height = 1080;
+    capability.video.codecs = codecs.iter().map(|codec| codec.as_str().into()).collect();
+    capability.video.max_width = 3840;
+    capability.video.max_height = 2160;
     capability.video.max_frame_rate = 30;
     capability.features.keyboard = true;
     capability.features.mouse = true;
@@ -145,6 +149,7 @@ fn check(mode: Mode) -> anyhow::Result<()> {
         crate::codec::Limits::default(),
         20,
         crate::encoder::Policy::Software,
+        crate::codec::VideoCodec::H264,
     )?;
     Ok(())
 }

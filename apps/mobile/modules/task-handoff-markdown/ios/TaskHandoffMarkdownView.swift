@@ -1068,10 +1068,24 @@ private enum NativeMarkdownRenderer {
       previous = context
     }
 
-    if !trimEnd, result.length > 0 {
-      result.append(NSAttributedString(string: "\n", attributes: baseAttributes(appearance: appearance, compact: compact)))
+    if result.length > 0 {
+      if trimEnd {
+        trimTrailingParagraphSpacing(result)
+      } else {
+        result.append(NSAttributedString(string: "\n", attributes: baseAttributes(appearance: appearance, compact: compact)))
+      }
     }
     return result
+  }
+
+  private static func trimTrailingParagraphSpacing(_ value: NSMutableAttributedString) {
+    let lastIndex = value.length - 1
+    let paragraphRange = (value.string as NSString).paragraphRange(for: NSRange(location: lastIndex, length: 0))
+    guard paragraphRange.length > 0,
+          let style = value.attribute(.paragraphStyle, at: lastIndex, effectiveRange: nil) as? NSParagraphStyle,
+          let trimmed = style.mutableCopy() as? NSMutableParagraphStyle else { return }
+    trimmed.paragraphSpacing = 0
+    value.addAttribute(.paragraphStyle, value: trimmed, range: paragraphRange)
   }
 
   private static func blockContext(_ intent: PresentationIntent?) -> MarkdownBlockContext {

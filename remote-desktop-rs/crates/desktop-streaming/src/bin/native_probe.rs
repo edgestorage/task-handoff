@@ -8,15 +8,20 @@ async fn main() -> anyhow::Result<()> {
         platform::macos::{Capture, WindowCatalog},
         session::Owner,
         synthetic::SoftwareEncoder,
+        traits::CapturePrecision,
         video::{from_bgra, Budget},
     };
     use openh264::formats::YUVSource;
     use std::time::{Duration, Instant};
-    let owned_window = match std::env::args().nth(1).as_deref() {
-        None => false,
-        Some("--owned-window") => true,
-        _ => anyhow::bail!("expected no arguments or --owned-window"),
-    };
+    let mut owned_window = false;
+    let mut precision = CapturePrecision::Auto;
+    for argument in std::env::args().skip(1) {
+        match argument.as_str() {
+            "--owned-window" => owned_window = true,
+            "--performance" => precision = CapturePrecision::Performance,
+            _ => anyhow::bail!("expected --owned-window and/or --performance"),
+        }
+    }
     let mut replay_rejected = false;
     let mut capture = if owned_window {
         let mut catalog = WindowCatalog::default();
@@ -37,7 +42,9 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Capture::primary_display().await?
     };
+    capture.set_capture_precision(precision)?;
     let geometry = capture.geometry();
+    let capture_size = capture.capture_dimensions();
     let mut phases = Vec::new();
     for phase in 0..2 {
         let began = Instant::now();
@@ -86,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
     }
     println!(
         "{}",
-        serde_json::json!({"ok":true,"target":if owned_window{"owned-window"}else{"display"},"actuatorSize":[geometry.width,geometry.height],"replayRejected":replay_rejected,"phases":phases})
+        serde_json::json!({"ok":true,"target":if owned_window{"owned-window"}else{"display"},"precision":precision,"captureSize":[capture_size.0,capture_size.1],"actuatorSize":[geometry.width,geometry.height],"replayRejected":replay_rejected,"phases":phases})
     );
     Ok(())
 }

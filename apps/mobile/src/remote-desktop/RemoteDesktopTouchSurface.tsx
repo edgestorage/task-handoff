@@ -11,19 +11,31 @@ import { RemoteDesktopCursor } from './RemoteDesktopCursor';
 import {
   IDENTITY_REMOTE_DESKTOP_TRANSFORM,
   constrainRemoteDesktopTransform,
+  keepRemoteDesktopCursorVisible,
   remoteDesktopContainRect,
   remoteDesktopPinchTransform,
   remoteDesktopMultiTouchIntent,
+  remoteDesktopMultiTouchInTapDeadZone,
   remoteDesktopPointForTouch,
   remoteDesktopScrollAnchor,
   remoteDesktopTouchDistance,
   remoteDesktopTouchMidpoint,
   remoteDesktopTouchOrientation,
+  remoteDesktopTrackpadMove,
   type RemoteDesktopPoint,
   type RemoteDesktopSize,
   type RemoteDesktopTransform,
 } from './geometry';
 import type { RemoteDesktopMouseMode } from './preferences';
+import {
+  EMPTY_REMOTE_DESKTOP_TOUCH_SEQUENCE,
+  canCommitRemoteDesktopMultiTouchTap,
+  startRemoteDesktopTouchSequence,
+  suppressRemoteDesktopTap,
+  updateRemoteDesktopTouchSequence,
+  type RemoteDesktopMultiTouchTapCandidate,
+  type RemoteDesktopTouchSequence,
+} from './touch-sequence';
 import type { RemoteDesktopSnapshot } from './types';
 import { useLatestRef } from './use-latest-ref';
 import { RemoteDesktopVideoSurface } from './RemoteDesktopVideoSurface';
@@ -31,6 +43,7 @@ import { RemoteDesktopVideoSurface } from './RemoteDesktopVideoSurface';
 const TRACKPAD_DRAG_DELAY_MS = 420;
 const DIRECT_PRESS_DELAY_MS = 180;
 const DIRECT_MOVE_THRESHOLD = 3;
+const RIGHT_MOUSE_BUTTON = 2;
 
 type Props = {
   controller?: RemoteDesktopController;
@@ -40,6 +53,10 @@ type Props = {
 
 type GestureMode = 'none' | 'direct-pending' | 'direct' | 'trackpad' | 'multi';
 type ZoomState = { targetKey: string; transform: RemoteDesktopTransform };
+type MultiTouchTap = RemoteDesktopMultiTouchTapCandidate & {
+  mode: RemoteDesktopMouseMode;
+  point?: RemoteDesktopPoint;
+};
 
 export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: Props) {
   const { colors } = useMobileTheme();
@@ -87,7 +104,9 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     scrollPoint: RemoteDesktopPoint;
     intent: 'pending' | 'scroll' | 'pinch';
   } | undefined>(undefined);
+  const multiTouchTapRef = useRef<MultiTouchTap | undefined>(undefined);
   const controlHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchSequenceRef = useRef<RemoteDesktopTouchSequence>(EMPTY_REMOTE_DESKTOP_TOUCH_SEQUENCE);
 
   const inputReady = snapshot.inputEnabled && snapshot.isController && !snapshot.paused;
   const inputReadyRef = useLatestRef(inputReady);
@@ -188,8 +207,21 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     setTrackpadDragging(false);
   }, [clearTrackpadDragTimer, controllerRef]);
 
+  const commitMultiTouchTap = useCallback(() => {
+    const candidate = multiTouchTapRef.current;
+    multiTouchTapRef.current = undefined;
+    if (!candidate || !inputReadyRef.current || !canCommitRemoteDesktopMultiTouchTap(candidate, Date.now())) return;
+    const point = candidate.mode === 'trackpad'
+      ? candidate.point ?? cursorRef.current
+      : candidate.point;
+    if (!point) return;
+    controllerRef.current?.sendButton(point.x, point.y, RIGHT_MOUSE_BUTTON, true);
+    controllerRef.current?.sendButton(point.x, point.y, RIGHT_MOUSE_BUTTON, false);
+  }, [controllerRef, inputReadyRef]);
+
   const beginMultiTouch = useCallback((touches: readonly NativeTouchEvent[]) => {
     if (gestureRef.current === 'multi') return;
+    const interruptedPrimaryGesture = gestureRef.current === 'direct' || trackpadDraggingRef.current;
     clearDirectPressTimer();
     directPressPointRef.current = undefined;
     if (gestureRef.current === 'direct' && lastMappedRef.current) {
@@ -203,6 +235,7 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     const firstPoint = { x: first.locationX, y: first.locationY };
     const secondPoint = { x: second.locationX, y: second.locationY };
     const midpoint = remoteDesktopTouchMidpoint(firstPoint, secondPoint);
+    const directPoint = mapViewportPoint(midpoint, true);
     multiTouchRef.current = {
       start: transformRef.current,
       startMidpoint: midpoint,
@@ -212,7 +245,17 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
       scrollPoint: remoteDesktopScrollAnchor(mouseModeRef.current, cursorRef.current, lastMappedRef.current),
       intent: 'pending',
     };
-  }, [clearDirectPressTimer, clearWheelPump, controllerRef, finishTrackpadDrag, mouseModeRef, transformRef]);
+    multiTouchTapRef.current = {
+      eligible: touches.length === 2
+        && !interruptedPrimaryGesture
+        && inputReadyRef.current
+        && directPoint !== undefined,
+      intent: 'pending',
+      mode: mouseModeRef.current,
+      point: mouseModeRef.current === 'trackpad' ? cursorRef.current : directPoint,
+      startedAt: Date.now(),
+    };
+  }, [clearDirectPressTimer, clearWheelPump, controllerRef, finishTrackpadDrag, inputReadyRef, mapViewportPoint, mouseModeRef, transformRef]);
 
   const updateMultiTouch = useCallback((touches: readonly NativeTouchEvent[]) => {
     const multiTouch = multiTouchRef.current;
@@ -231,8 +274,18 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
         multiTouch.startOrientation,
       );
     }
+    const tapCandidate = multiTouchTapRef.current;
+    if (tapCandidate) {
+      tapCandidate.intent = multiTouch.intent;
+      if (touches.length !== 2 || !remoteDesktopMultiTouchInTapDeadZone(
+        multiTouch.startMidpoint,
+        midpoint,
+        multiTouch.startDistance,
+        distance,
+      )) tapCandidate.eligible = false;
+    }
     if (multiTouch.intent === 'pinch') {
-      updateTransform(remoteDesktopPinchTransform(
+      const nextTransform = remoteDesktopPinchTransform(
         multiTouch.start,
         multiTouch.startMidpoint,
         midpoint,
@@ -240,7 +293,21 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
         distance,
         viewportRef.current,
         contentSizeRef.current,
-      ));
+      );
+      updateTransform(nextTransform);
+      if (mouseModeRef.current === 'trackpad') {
+        const nextCursor = keepRemoteDesktopCursorVisible(
+          cursorRef.current,
+          nextTransform,
+          viewportRef.current,
+          contentSizeRef.current,
+        );
+        if (nextCursor.x !== cursorRef.current.x || nextCursor.y !== cursorRef.current.y) {
+          cursorRef.current = nextCursor;
+          setCursor(nextCursor);
+          if (inputReadyRef.current) controllerRef.current?.sendPointer(nextCursor.x, nextCursor.y);
+        }
+      }
     } else if (multiTouch.intent === 'scroll') {
       const rect = remoteDesktopContainRect(viewportRef.current, contentSizeRef.current);
       const transformedWidth = rect.width * transformRef.current.scale;
@@ -252,7 +319,7 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
       }
     }
     multiTouch.lastMidpoint = midpoint;
-  }, [contentSizeRef, queueWheel, transformRef, updateTransform, viewportRef]);
+  }, [contentSizeRef, controllerRef, inputReadyRef, mouseModeRef, queueWheel, transformRef, updateTransform, viewportRef]);
 
   const commitDirectPress = useCallback(() => {
     clearDirectPressTimer();
@@ -266,9 +333,16 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
   const finishGesture = useCallback((event: GestureResponderEvent) => {
     clearTrackpadDragTimer();
     clearDirectPressTimer();
+    touchSequenceRef.current = updateRemoteDesktopTouchSequence(
+      touchSequenceRef.current,
+      event.nativeEvent.touches.length,
+    );
+    if (event.nativeEvent.touches.length === 0) commitMultiTouchTap();
+    const tapSuppressed = suppressRemoteDesktopTap(touchSequenceRef.current)
+      || event.nativeEvent.touches.length > 0;
     const mode = gestureRef.current;
     gestureRef.current = 'none';
-    if (mode === 'direct-pending' && lastMappedRef.current) {
+    if (mode === 'direct-pending' && !tapSuppressed && lastMappedRef.current) {
       const point = event.nativeEvent.touches[0] ? mapTouchClamped(event.nativeEvent.touches[0]) : lastMappedRef.current;
       const releasePoint = point ?? lastMappedRef.current;
       controllerRef.current?.sendButton(releasePoint.x, releasePoint.y, 0, true);
@@ -276,7 +350,7 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     } else if (mode === 'direct' && lastMappedRef.current) {
       const point = event.nativeEvent.touches[0] ? mapTouchClamped(event.nativeEvent.touches[0]) : lastMappedRef.current;
       controllerRef.current?.sendButton((point ?? lastMappedRef.current).x, (point ?? lastMappedRef.current).y, 0, false);
-    } else if (mode === 'trackpad' && !trackpadMovedRef.current) {
+    } else if (mode === 'trackpad' && !trackpadMovedRef.current && !tapSuppressed) {
       if (trackpadDraggingRef.current) finishTrackpadDrag(true);
       else {
         const point = cursorRef.current;
@@ -290,13 +364,19 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     multiTouchRef.current = undefined;
     lastTouchRef.current = undefined;
     trackpadMovedRef.current = false;
-  }, [clearDirectPressTimer, clearTrackpadDragTimer, controllerRef, finishTrackpadDrag, mapTouchClamped]);
+  }, [clearDirectPressTimer, clearTrackpadDragTimer, commitMultiTouchTap, controllerRef, finishTrackpadDrag, mapTouchClamped]);
 
   const onPanResponderGrant = useCallback((event: GestureResponderEvent) => {
     const touches = event.nativeEvent.touches;
+    touchSequenceRef.current = startRemoteDesktopTouchSequence(touchSequenceRef.current, touches.length);
     clearWheelPump();
     if (touches.length > 1) {
       beginMultiTouch(touches);
+      return;
+    }
+    if (suppressRemoteDesktopTap(touchSequenceRef.current)) {
+      gestureRef.current = 'multi';
+      multiTouchRef.current = undefined;
       return;
     }
     if (!inputReadyRef.current) {
@@ -334,6 +414,7 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
 
   const onPanResponderMove = useCallback((event: GestureResponderEvent) => {
     const touches = event.nativeEvent.touches;
+    touchSequenceRef.current = updateRemoteDesktopTouchSequence(touchSequenceRef.current, touches.length);
     if (touches.length > 1) {
       if (gestureRef.current !== 'multi') beginMultiTouch(touches);
       else updateMultiTouch(touches);
@@ -358,13 +439,17 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
       const deltaX = (currentTouch.x - previousTouch.x) / transformedWidth;
       const deltaY = (currentTouch.y - previousTouch.y) / transformedHeight;
       if (Math.abs(deltaX) + Math.abs(deltaY) > 0.0015) trackpadMovedRef.current = true;
-      const next = {
-        x: clamp01(cursorRef.current.x + deltaX * 1.35),
-        y: clamp01(cursorRef.current.y + deltaY * 1.35),
-      };
-      cursorRef.current = next;
-      setCursor(next);
-      controllerRef.current?.sendPointer(next.x, next.y);
+      const moved = remoteDesktopTrackpadMove(
+        cursorRef.current,
+        { x: deltaX * 1.35, y: deltaY * 1.35 },
+        transformRef.current,
+        viewportRef.current,
+        contentSizeRef.current,
+      );
+      cursorRef.current = moved.cursor;
+      setCursor(moved.cursor);
+      updateTransform(moved.transform);
+      controllerRef.current?.sendPointer(moved.cursor.x, moved.cursor.y);
       return;
     }
     if (gestureRef.current === 'direct-pending') {
@@ -376,11 +461,30 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     if (gestureRef.current === 'direct') {
       controllerRef.current?.sendPointer(point.x, point.y);
     }
-  }, [beginMultiTouch, clearTrackpadDragTimer, commitDirectPress, controllerRef, contentSizeRef, inputReadyRef, mapTouchClamped, transformRef, updateMultiTouch, viewportRef]);
+  }, [beginMultiTouch, clearTrackpadDragTimer, commitDirectPress, controllerRef, contentSizeRef, inputReadyRef, mapTouchClamped, transformRef, updateMultiTouch, updateTransform, viewportRef]);
 
   const onTouchStart = useCallback((event: GestureResponderEvent) => {
-    if (event.nativeEvent.touches.length > 1) beginMultiTouch(event.nativeEvent.touches);
+    const touches = event.nativeEvent.touches;
+    touchSequenceRef.current = startRemoteDesktopTouchSequence(touchSequenceRef.current, touches.length);
+    if (touches.length > 1) beginMultiTouch(touches);
+    if (touches.length > 2 && multiTouchTapRef.current) multiTouchTapRef.current.eligible = false;
   }, [beginMultiTouch]);
+
+  const onTouchEnd = useCallback((event: GestureResponderEvent) => {
+    touchSequenceRef.current = updateRemoteDesktopTouchSequence(
+      touchSequenceRef.current,
+      event.nativeEvent.touches.length,
+    );
+    if (event.nativeEvent.touches.length === 0) commitMultiTouchTap();
+  }, [commitMultiTouchTap]);
+
+  const onTouchCancel = useCallback((event: GestureResponderEvent) => {
+    touchSequenceRef.current = updateRemoteDesktopTouchSequence(
+      touchSequenceRef.current,
+      event.nativeEvent.touches.length,
+    );
+    multiTouchTapRef.current = undefined;
+  }, []);
 
   // PanResponder stores these callbacks; it never invokes them during render.
   // eslint-disable-next-line react-hooks/refs
@@ -447,6 +551,7 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     <View pointerEvents="none" style={[styles.media, mediaFrame]}>
       <RemoteDesktopVideoSurface
         onStreamSizeChange={(next) => {
+          controllerRef.current?.setVideoDimensions(next.width, next.height);
           if (next.width === streamSizeRef.current.width && next.height === streamSizeRef.current.height) return;
           streamSizeRef.current = next;
           setStreamSize(next);
@@ -455,7 +560,7 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
       />
       {inputReady && mouseMode === 'trackpad' ? <RemoteDesktopCursor accentColor={colors.primary} dragging={trackpadDragging} point={cursor} /> : null}
     </View>
-    <View {...panResponder.panHandlers} onTouchStart={onTouchStart} style={StyleSheet.absoluteFill} />
+    <View {...panResponder.panHandlers} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} onTouchCancel={onTouchCancel} style={StyleSheet.absoluteFill} />
     {activeControlHint ? <View pointerEvents="box-none" style={styles.controlHintHost}>
       <View accessibilityLiveRegion="polite" style={[styles.controlHint, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <Hand color={colors.text} size={18} strokeWidth={1.9} />
@@ -473,10 +578,6 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     </View> : null}
     {scale > 1.01 ? <View pointerEvents="none" style={[styles.zoomBadge, { backgroundColor: colors.surface, borderColor: colors.border }]}><Text style={[styles.zoomText, { color: colors.text }]}>{scale.toFixed(1)}×</Text></View> : null}
   </View>;
-}
-
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 }
 
 function createPanResponder(

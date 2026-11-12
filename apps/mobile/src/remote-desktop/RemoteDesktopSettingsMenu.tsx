@@ -5,13 +5,23 @@ import { Icon } from '../components/Icon';
 import { MenuView, type MenuAction } from '../components/MenuView';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
-import { canDisableTransport, type RemoteDesktopFrameRate, type RemoteDesktopResolution, type RemoteDesktopTransportKey } from './preferences';
+import {
+  canDisableTransport,
+  REMOTE_DESKTOP_CAPTURE_PRECISIONS,
+  REMOTE_DESKTOP_RESOLUTIONS,
+  type RemoteDesktopCapturePrecision,
+  type RemoteDesktopFrameRate,
+  type RemoteDesktopResolution,
+  type RemoteDesktopTransportKey,
+} from './preferences';
 import { transportLabel, transportStateLabel } from './transport-presentation';
 import type { RemoteDesktopSnapshot } from './types';
 
 type Props = {
   children?: ReactNode;
+  capturePrecisionSupported?: boolean;
   onDisconnect(): void;
+  onSetCapturePrecision(value: RemoteDesktopCapturePrecision): void;
   onSetInputEnabled(enabled: boolean): void;
   onSetFrameRate(value: RemoteDesktopFrameRate): void;
   onSetResolution(value: RemoteDesktopResolution): void;
@@ -19,7 +29,6 @@ type Props = {
   snapshot: RemoteDesktopSnapshot;
 };
 
-const resolutions: readonly RemoteDesktopResolution[] = ['auto', '1080p', '720p', '540p', '360p'];
 const frameRates: readonly RemoteDesktopFrameRate[] = ['auto', '60', '30', '24', '15'];
 const transports: readonly RemoteDesktopTransportKey[] = ['p2p', 'turn', 'websocket'];
 
@@ -27,6 +36,7 @@ export function RemoteDesktopSettingsMenu(props: Props) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const { snapshot } = props;
+  const capturePrecisionSupported = props.capturePrecisionSupported === true;
   const transportActions: MenuAction[] = transports.map((key) => {
     const enabled = snapshot.transportAvailability[key];
     return {
@@ -48,7 +58,7 @@ export function RemoteDesktopSettingsMenu(props: Props) {
       id: 'resolution',
       title: t('remoteDesktop.resolution'),
       image: 'arrow.up.left.and.arrow.down.right',
-      subactions: resolutions.map((value) => ({
+      subactions: REMOTE_DESKTOP_RESOLUTIONS.map((value) => ({
         id: `resolution:${value}`,
         title: resolutionLabel(value, t),
         state: snapshot.resolution === value ? 'on' : 'off',
@@ -64,6 +74,16 @@ export function RemoteDesktopSettingsMenu(props: Props) {
         state: snapshot.frameRate === value ? 'on' : 'off',
       })),
     },
+    ...(capturePrecisionSupported ? [{
+      id: 'capture-precision',
+      title: t('remoteDesktop.capturePrecision'),
+      image: 'viewfinder' as const,
+      subactions: REMOTE_DESKTOP_CAPTURE_PRECISIONS.map((value) => ({
+        id: `capture-precision:${value}`,
+        title: value === 'auto' ? t('remoteDesktop.auto') : t('remoteDesktop.performance'),
+        state: snapshot.capturePrecision === value ? 'on' as const : 'off' as const,
+      })),
+    }] : []),
     {
       id: 'connection-methods',
       title: t('remoteDesktop.connectionMethods'),
@@ -82,6 +102,7 @@ export function RemoteDesktopSettingsMenu(props: Props) {
     else if (event === 'disconnect') props.onDisconnect();
     else if (event.startsWith('resolution:')) props.onSetResolution(event.slice('resolution:'.length) as RemoteDesktopResolution);
     else if (event.startsWith('frame-rate:')) props.onSetFrameRate(event.slice('frame-rate:'.length) as RemoteDesktopFrameRate);
+    else if (event.startsWith('capture-precision:')) props.onSetCapturePrecision(event.slice('capture-precision:'.length) as RemoteDesktopCapturePrecision);
     else if (event.startsWith('transport:')) props.onToggleTransport(event.slice('transport:'.length) as RemoteDesktopTransportKey);
   };
   return <MenuView actions={actions} onPressAction={({ nativeEvent }) => select(nativeEvent.event)} title={t('remoteDesktop.settings')}>
