@@ -140,6 +140,7 @@ export const instances = {
     signalingFailed: "Remote desktop signaling failed",
     openFailed: "Unable to open remote desktop",
     messageInvalid: "Remote desktop message invalid",
+    controlFailed: "The remote desktop input operation failed. Try again.",
     inputPhase: "Input: {phase}",
   },
 

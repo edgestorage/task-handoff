@@ -74,6 +74,7 @@ export type RemoteDesktopControllerInput = {
   transport: MobileControlPlaneTransport;
   instanceId: string;
   active?: boolean;
+  interactive?: boolean;
   target: PersistedCaptureTarget;
   resolution: RemoteDesktopResolution;
   frameRate: RemoteDesktopFrameRate;
@@ -104,6 +105,7 @@ export class RemoteDesktopController {
   private seq = 0;
   private destroyed = false;
   private active = true;
+  private interactive = true;
   private starting = false;
   private stopping = false;
   private signalOpen = false;
@@ -131,9 +133,11 @@ export class RemoteDesktopController {
 
   constructor(private readonly input: RemoteDesktopControllerInput) {
     this.active = input.active !== false;
+    this.interactive = input.interactive !== false;
     this.snapshotValue = {
       ...emptyRemoteDesktopSnapshot,
       paused: !this.active,
+      inputRequested: this.interactive,
       target: input.target,
       resolution: input.resolution,
       frameRate: input.frameRate,
@@ -162,7 +166,7 @@ export class RemoteDesktopController {
     if (this.destroyed || this.starting || this.session) return;
     this.starting = true;
     this.stopping = false;
-    this.update({ phase: 'connecting', error: undefined, inputRequested: true, transportDiagnostics: undefined });
+    this.update({ phase: 'connecting', error: undefined, inputRequested: this.interactive, transportDiagnostics: undefined });
     this.armStartupTimeout();
     try {
       const selection = await this.resolveCaptureSelection();
@@ -213,7 +217,7 @@ export class RemoteDesktopController {
   async disconnect() {
     if (this.destroyed) return;
     await this.stopCurrentSession(true);
-    this.update({ phase: 'stopped', error: undefined, paused: false });
+    this.update({ phase: 'stopped', error: undefined, paused: false, inputRequested: false });
   }
 
   async switchTarget(target: PersistedCaptureTarget) {
@@ -221,7 +225,7 @@ export class RemoteDesktopController {
     // A new capture target is a new component session. Keeping the old
     // reservation alive leaves the component busy for the replacement.
     await this.stopCurrentSession(true);
-    this.update({ target, error: undefined, phase: 'connecting', streamURL: undefined, videoWidth: 0, videoHeight: 0, path: undefined, transportDiagnostics: undefined, signalingReady: false, inputRequested: true });
+    this.update({ target, error: undefined, phase: 'connecting', streamURL: undefined, videoWidth: 0, videoHeight: 0, path: undefined, transportDiagnostics: undefined, signalingReady: false, inputRequested: this.interactive });
     if (this.active) await this.start();
   }
 
@@ -238,6 +242,17 @@ export class RemoteDesktopController {
     if (this.snapshotValue.phase === 'connecting' || this.snapshotValue.phase === 'reconnecting') this.armStartupTimeout();
     this.requestKeyframe();
     if (this.snapshotValue.inputRequested) this.resumeWanted();
+  }
+
+  setInteractive(interactive: boolean) {
+    if (this.destroyed || this.interactive === interactive) return;
+    this.interactive = interactive;
+    if (!interactive) {
+      this.disableInput();
+      return;
+    }
+    this.update({ inputRequested: true });
+    if (this.active) this.enableInput();
   }
 
   private async resolveCaptureSelection() {
@@ -784,6 +799,10 @@ export class RemoteDesktopController {
         });
       }
       if (this.destroyed || generation !== this.epoch || this.fallbackState === 'idle') return;
+      if (!this.active) {
+        this.fallbackNeedsKeyframe = true;
+        return;
+      }
       await decodeRemoteDesktopFrame(assembled.payload, assembled.keyframe, timestampUs);
       if (assembled.keyframe) this.fallbackNeedsKeyframe = false;
       if (!this.fallbackFirstFrame) {
@@ -953,7 +972,9 @@ export class RemoteDesktopController {
       this.clearInputResumeTimers();
       this.inputResumeRetryCount = 0;
       this.startInputAlive();
-      this.update({ inputEnabled: true, inputPending: false, inputRequested: true });
+      const wantsInput = this.snapshotValue.inputRequested;
+      this.update({ inputEnabled: true, inputPending: false, inputRequested: wantsInput });
+      if (!wantsInput) this.suspendInput();
       diagnosticLog.info('remote.desktop.input.resumed', { inputEpoch: this.inputEpoch });
     } else if (value?.type === 'input.suspended') {
       const payload = value.payload ?? {};
@@ -1022,7 +1043,7 @@ export class RemoteDesktopController {
   }
 
   private resumeWanted() {
-    if (this.destroyed || !this.active || this.snapshotValue.paused || this.snapshotValue.inputEnabled || this.snapshotValue.inputPending) return;
+    if (this.destroyed || !this.active || this.snapshotValue.paused || this.snapshotValue.inputEnabled || this.snapshotValue.inputPending || this.inputResumeRetryTimer !== undefined) return;
     if (this.snapshotValue.session?.phase !== 'active' && this.snapshotValue.phase !== 'connected') return;
     if (this.snapshotValue.session?.mediaPaused) return;
     if (!this.snapshotValue.isController) {

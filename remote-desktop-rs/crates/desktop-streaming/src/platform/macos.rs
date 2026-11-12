@@ -80,7 +80,7 @@ pub struct Capture {
     geometry: Geometry,
     display_geometry: Option<super::display_geometry::DisplayGeometry>,
     pixel_size: (usize, usize),
-    window: Option<(super::macos_window::Identity, super::macos_window::Lease)>,
+    window: Option<super::macos_window::Identity>,
     stream: Option<SCStream>,
     latest: FrameMailbox<(CMSampleBuffer, Instant)>,
 }
@@ -111,7 +111,7 @@ impl Capture {
         preflight()?;
         let retained_target = target.clone();
         let display_target = matches!(&target, Target::Display(_));
-        let mut window_lease = None;
+        let mut window_identity = None;
         let (rect, width, height, filter) = match target {
             Target::Display(display) => {
                 let rect = display.frame();
@@ -128,12 +128,6 @@ impl Capture {
                     BackendError::WindowUnavailable
                 );
                 let rect = window.frame();
-                let geometry = Geometry::from_actuator_rect(
-                    rect.origin.x,
-                    rect.origin.y,
-                    rect.size.width,
-                    rect.size.height,
-                )?;
                 let identity = super::macos_window::Identity {
                     window: window.window_id(),
                     pid: window
@@ -141,10 +135,7 @@ impl Capture {
                         .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?
                         .process_id(),
                 };
-                window_lease = Some((
-                    identity,
-                    super::macos_window::Lease::bind(identity, geometry)?,
-                ));
+                window_identity = Some(identity);
                 let filter = SCContentFilter::create()
                     .with_window(&window)
                     .build()
@@ -188,7 +179,7 @@ impl Capture {
             geometry,
             display_geometry,
             pixel_size: (width as usize, height as usize),
-            window: window_lease,
+            window: window_identity,
             stream: None,
             latest: FrameMailbox::default(),
         })
@@ -197,11 +188,11 @@ impl Capture {
         self.target.clone()
     }
     pub fn window_input(&self) -> Option<(super::macos_window::Identity, Geometry)> {
-        self.window.as_ref().map(|(id, _)| (*id, self.geometry))
+        self.window.map(|identity| (identity, self.geometry))
     }
     pub fn refresh_geometry(&mut self) -> anyhow::Result<Geometry> {
-        if let Some((_, lease)) = &self.window {
-            let current = lease.geometry()?;
+        if let Some(identity) = self.window {
+            let current = super::macos_window::geometry(identity)?;
             anyhow::ensure!(
                 current.width <= 8192 && current.height <= 8192,
                 BackendError::InvalidGeometry

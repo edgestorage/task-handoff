@@ -7,6 +7,7 @@ export * from "./browser.ts";
 export * from "./remote-desktop.ts";
 export * from "./remote-desktop-stats.ts";
 export * from "./remote-desktop-input-resume.ts";
+export * from "./remote-desktop-source-state.ts";
 export * from "./remote-desktop-wheel-pump.ts";
 export * from "./app-inventory.ts";
 export * from "./instance-shell.ts";

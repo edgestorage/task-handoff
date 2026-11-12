@@ -43,6 +43,21 @@ const opencodePermissionCapabilities = ControlPlaneInstanceDirectoryCapabilities
 const initialWindowMetrics = Dimensions.get('window');
 const initialScreenMetrics = Dimensions.get('screen');
 
+test('session footer opens the saved remote desktop preview after tool activity', async () => {
+  const onOpenRemoteDesktopPreview = jest.fn();
+  const screen = await render(<SessionDetail
+    messages={[]}
+    onOpenRemoteDesktopPreview={onOpenRemoteDesktopPreview}
+    remoteDesktopTarget={{ kind: 'window', sourceRef: 'window_1', subtitle: 'Preview', title: 'Editor' }}
+    session={ControlPlaneAiSessionSummarySchema.parse({ ...session, currentTool: undefined, phase: 'thinking', status: 'idle', subAgents: [] })}
+  />);
+  screen.getByText('Editor');
+  screen.getByText('Last opened · Preview');
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-entry'));
+  expect(onOpenRemoteDesktopPreview).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+});
+
 function setViewportWidth(width: number) {
   Dimensions.set({
     screen: { ...initialScreenMetrics, width },

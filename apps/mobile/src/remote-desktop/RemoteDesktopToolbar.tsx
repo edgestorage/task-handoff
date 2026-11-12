@@ -38,6 +38,7 @@ const CONTROL_BUTTON_EXITING = FadeOut.duration(130).easing(Easing.in(Easing.cub
 
 type Props = {
   bottomInset: number;
+  hidden?: boolean;
   keyboardVisible: boolean;
   mouseMode: RemoteDesktopMouseMode;
   obscured?: boolean;
@@ -135,10 +136,10 @@ export function RemoteDesktopToolbar(props: Props) {
   };
 
   return <Animated.View
-    accessibilityElementsHidden={props.obscured}
-    importantForAccessibility={props.obscured ? 'no-hide-descendants' : 'auto'}
-    pointerEvents={props.obscured ? 'none' : 'auto'}
-    style={[styles.root, { bottom }, actionRowSize ? surfaceStyle : undefined]}
+    accessibilityElementsHidden={props.obscured || props.hidden}
+    importantForAccessibility={props.obscured || props.hidden ? 'no-hide-descendants' : 'auto'}
+    pointerEvents={props.obscured || props.hidden ? 'none' : 'auto'}
+    style={[styles.root, { bottom }, actionRowSize ? surfaceStyle : undefined, props.hidden && styles.hidden]}
     testID="remote-desktop-toolbar"
   >
     <Animated.View style={[styles.clip, actionRowSize ? styles.clipMeasured : undefined, actionRowSize ? clipStyle : undefined]}>
@@ -203,6 +204,7 @@ function toolbarWidth(actionsWidth: number, viewportWidth: number) {
 
 const styles = StyleSheet.create({
   root: { backgroundColor: 'rgba(20,21,25,0.92)', borderColor: 'rgba(255,255,255,0.12)', borderWidth: StyleSheet.hairlineWidth, maxWidth: '94%', position: 'absolute', right: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.28, shadowRadius: 18 },
+  hidden: { display: 'none' },
   clip: { borderRadius: EXPANDED_RADIUS, overflow: 'hidden' },
   clipMeasured: { bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
   content: { alignItems: 'center', flexDirection: 'row', paddingHorizontal: CONTENT_PADDING, paddingVertical: CONTENT_PADDING },

@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, View, type GestureResponderEvent, type LayoutChangeEvent, type NativeTouchEvent } from 'react-native';
-import { RTCView } from 'react-native-webrtc';
 import { Hand } from 'lucide-react-native';
 import { RemoteDesktopWheelPump } from '@task-handoff/control-plane-client';
 
-import RemoteDesktopSurface from '../../modules/task-handoff-remote-desktop/src/RemoteDesktopSurface';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { remoteDesktopControlHint, type RemoteDesktopControlHint } from './control-presentation';
@@ -28,6 +26,7 @@ import {
 import type { RemoteDesktopMouseMode } from './preferences';
 import type { RemoteDesktopSnapshot } from './types';
 import { useLatestRef } from './use-latest-ref';
+import { RemoteDesktopVideoSurface } from './RemoteDesktopVideoSurface';
 
 const TRACKPAD_DRAG_DELAY_MS = 420;
 const DIRECT_PRESS_DELAY_MS = 180;
@@ -446,20 +445,14 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
 
   return <View onLayout={onLayout} style={styles.root}>
     <View pointerEvents="none" style={[styles.media, mediaFrame]}>
-      {snapshot.path === 'websocket' ? <RemoteDesktopSurface style={StyleSheet.absoluteFill} />
-        : snapshot.streamURL ? <RTCView
-        mirror={false}
-        objectFit="contain"
-        onDimensionsChange={(event) => {
-          const next = { width: event.nativeEvent.width, height: event.nativeEvent.height };
-          if (next.width > 0 && next.height > 0 && (next.width !== streamSizeRef.current.width || next.height !== streamSizeRef.current.height)) {
-            streamSizeRef.current = next;
-            setStreamSize(next);
-          }
+      <RemoteDesktopVideoSurface
+        onStreamSizeChange={(next) => {
+          if (next.width === streamSizeRef.current.width && next.height === streamSizeRef.current.height) return;
+          streamSizeRef.current = next;
+          setStreamSize(next);
         }}
-        streamURL={snapshot.streamURL}
-        style={StyleSheet.absoluteFill}
-      /> : null}
+        snapshot={snapshot}
+      />
       {inputReady && mouseMode === 'trackpad' ? <RemoteDesktopCursor accentColor={colors.primary} dragging={trackpadDragging} point={cursor} /> : null}
     </View>
     <View {...panResponder.panHandlers} onTouchStart={onTouchStart} style={StyleSheet.absoluteFill} />

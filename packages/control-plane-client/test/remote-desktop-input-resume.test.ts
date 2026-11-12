@@ -14,6 +14,7 @@ test("input resume retries only transient binding races", () => {
     "REMOTE_DESKTOP_GEOMETRY_CHANGED",
     "REMOTE_DESKTOP_INVALID_STATE",
     "REMOTE_DESKTOP_STALE_EPOCH",
+    "REMOTE_DESKTOP_WINDOW_FOCUS_REQUIRED",
   ]) {
     assert.equal(isRecoverableRemoteDesktopInputResumeError(code), true);
   }

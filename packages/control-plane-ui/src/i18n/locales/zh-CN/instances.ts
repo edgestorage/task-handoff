@@ -143,6 +143,7 @@ export const instances = {
     signalingFailed: "远程桌面信令失败",
     openFailed: "无法打开远程桌面",
     messageInvalid: "远程桌面消息无效",
+    controlFailed: "远程桌面输入操作失败，请重试。",
     inputPhase: "输入：{phase}",
   },
 

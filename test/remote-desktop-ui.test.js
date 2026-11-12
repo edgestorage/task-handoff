@@ -75,6 +75,13 @@ test('remote desktop source directory loads when capabilities arrive after mount
   assert.doesNotMatch(mounted, /loadSources\(\)/);
 });
 
+test('a closed window returns to source selection with a neutral prompt', () => {
+  assert.match(viewer, /isRemoteDesktopSourceEndedError\(snapshot\.value\.reason\)/);
+  assert.match(viewer, /sourceEndedNotice\.value = translateApiError/);
+  assert.match(viewer, /if \(sourceEnded\) void loadSources\(\)/);
+  assert.match(viewer, /remote-desktop-source-ended/);
+});
+
 test('websocket fallback uses the same resolution ceiling as WebRTC', () => {
   const routes = fs.readFileSync('packages/control-plane/src/control-plane/http/remote-desktop-routes.ts', 'utf8');
   const protocolCapability = fs.readFileSync('controlled-instance-rs/crates/protocol/src/remote_desktop.rs', 'utf8');
@@ -303,10 +310,12 @@ test('remote desktop retries input resume after a lost acknowledgement or stale 
   assert.match(viewer, /REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS/);
   assert.match(viewer, /isRecoverableRemoteDesktopInputResumeError\(code\)/);
   assert.match(viewer, /inputResumeRetryTimer !== undefined/);
+  assert.match(viewer, /inputResumePending\n\s+\|\| inputResumeRetryTimer !== undefined/);
   assert.match(viewer, /scheduleInputResumeRetry\("ack-timeout"\)/);
   assert.match(viewer, /remoteDesktopInputResumeRetryDelayMs\(attempt\)/);
   assert.match(viewer, /inputResumeRetryTimer = setTimeout\(\(\) => \{[\s\S]*?resumeWanted\(\)/);
   assert.match(viewer, /inputResumeAckTimer = setTimeout\(\(\) => \{[\s\S]*?inputResumePending = false;[\s\S]*?scheduleInputResumeRetry\("ack-timeout"\)/);
+  assert.match(viewer, /inputEnabled\.value = true;[\s\S]*?error\.value = "";/);
 });
 
 test('remote desktop enables clipboard once per session without overriding a manual disable', () => {

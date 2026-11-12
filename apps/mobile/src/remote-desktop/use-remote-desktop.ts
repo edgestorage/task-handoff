@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useIsFocused } from 'expo-router/react-navigation';
 import {
   directoryRemoteDesktopCapabilities,
@@ -8,7 +8,10 @@ import {
 import { useActiveDirectories } from '../directories/use-directories';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { subscribeToAppLifecycle, type MobileAppPhase } from '../platform/lifecycle';
-import { acquireRemoteDesktopController } from './controller-registry';
+import {
+  acquireRemoteDesktopController,
+  markRemoteDesktopControllerActive,
+} from './controller-registry';
 import type { RemoteDesktopController } from './controller';
 import {
   canDisableTransport,
@@ -22,45 +25,76 @@ import {
   type RemoteDesktopTransportAvailability,
   type RemoteDesktopTransportKey,
 } from './preferences';
+import {
+  rememberSessionRemoteDesktopLink,
+  sessionRemoteDesktopLinkFor,
+  sessionRemoteDesktopLinkStore,
+  useSessionRemoteDesktopLink,
+} from './session-links';
 import { emptyRemoteDesktopSnapshot, type RemoteDesktopSnapshot } from './types';
 import { useLatestRef } from './use-latest-ref';
 
 const noSubscribe = () => () => undefined;
 
-export function useRemoteDesktop(instanceId: string) {
+export type UseRemoteDesktopOptions = {
+  sessionId?: string;
+  interactive?: boolean;
+};
+
+export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOptions = {}) {
+  const { interactive = true, sessionId } = options;
   const runtime = useMobileControlPlaneRuntime();
   const { controlPlaneId, state } = useActiveDirectories();
   const focused = useIsFocused();
   const [appPhase, setAppPhase] = useState<MobileAppPhase>('active');
   const active = focused && appPhase === 'active';
   const activeRef = useLatestRef(active);
+  const interactiveRef = useLatestRef(interactive);
   const [acquired, setAcquired] = useState<{ key: string; controller: RemoteDesktopController }>();
-  const runtimeKey = runtime.api && runtime.transport && controlPlaneId ? `${controlPlaneId}:${instanceId}` : undefined;
+  const runtimeKey = runtime.api && runtime.transport && controlPlaneId
+    ? JSON.stringify([controlPlaneId, instanceId, sessionId || 'direct'])
+    : undefined;
   const controller = acquired && acquired.key === runtimeKey ? acquired.controller : undefined;
   const instance = state.instances.find((candidate) => candidate.id === instanceId);
   const capability = directoryRemoteDesktopCapabilities(instance?.capabilities);
+  const sessionLink = useSessionRemoteDesktopLink(controlPlaneId, instanceId, sessionId || '__direct__');
 
-  const preferences = useSyncExternalStore(
+  const storedPreferences = useSyncExternalStore(
     remoteDesktopPreferenceStore.subscribe,
     () => remoteDesktopPreferencesFor(controlPlaneId, instanceId),
     () => remoteDesktopPreferencesFor(controlPlaneId, instanceId),
   );
+  const controllerSnapshot = controller?.getSnapshot();
+  // Stopping a session removes its link. Keep the controller's target after an
+  // explicit stop so that removal alone cannot look like a source change and
+  // restart the just-stopped controller.
+  const target = sessionId
+    ? sessionLink?.target
+      ?? (controllerSnapshot?.phase === 'stopped' ? controllerSnapshot.target : undefined)
+      ?? storedPreferences.target
+    : storedPreferences.target;
+  const preferences = useMemo(() => ({ ...storedPreferences, target }), [storedPreferences, target]);
 
   useEffect(() => subscribeToAppLifecycle(setAppPhase), []);
 
   useEffect(() => {
     let live = true;
     if (!runtime.api || !runtime.transport || !controlPlaneId || !runtimeKey) return () => { live = false; };
-    void remoteDesktopPreferenceStore.ready().then(() => {
+    void Promise.all([remoteDesktopPreferenceStore.ready(), sessionRemoteDesktopLinkStore.ready()]).then(() => {
       if (!live || !runtime.api || !runtime.transport || !controlPlaneId) return;
       const current = remoteDesktopPreferencesFor(controlPlaneId, instanceId);
+      const nextTarget = sessionId
+        ? sessionRemoteDesktopLinkFor(controlPlaneId, instanceId, sessionId)?.target ?? current.target
+        : current.target;
       const next = acquireRemoteDesktopController({
         controlPlaneId,
         api: runtime.api.remoteDesktop,
         transport: runtime.transport,
         instanceId,
+        sessionId,
         active: activeRef.current,
-        target: current.target,
+        interactive: interactiveRef.current,
+        target: nextTarget,
         resolution: current.resolution,
         frameRate: current.frameRate,
         transportAvailability: current.transportAvailability,
@@ -68,30 +102,36 @@ export function useRemoteDesktop(instanceId: string) {
       setAcquired({ key: runtimeKey, controller: next });
     });
     return () => { live = false; };
-  }, [activeRef, controlPlaneId, instanceId, runtime.api, runtime.transport, runtimeKey]);
+  }, [activeRef, controlPlaneId, instanceId, interactiveRef, runtime.api, runtime.transport, runtimeKey, sessionId]);
 
   useEffect(() => {
     if (!controller) return;
+    const scope = { controlPlaneId, instanceId, sessionId };
+    controller.setInteractive(interactive);
     controller.setActive(active);
+    markRemoteDesktopControllerActive(scope, active);
     if (active) void controller.start();
-    return () => { controller.setActive(false); };
-  }, [active, controller]);
+    return () => {
+      markRemoteDesktopControllerActive(scope, false);
+      controller.setActive(false);
+    };
+  }, [active, controlPlaneId, controller, instanceId, interactive, sessionId]);
 
   useEffect(() => {
-    void controller?.switchTarget(preferences.target);
-  }, [controller, preferences.target]);
+    void controller?.switchTarget(target);
+  }, [controller, target]);
 
   useEffect(() => {
-    controller?.setResolution(preferences.resolution);
-  }, [controller, preferences.resolution]);
+    controller?.setResolution(storedPreferences.resolution);
+  }, [controller, storedPreferences.resolution]);
 
   useEffect(() => {
-    controller?.setFrameRate(preferences.frameRate);
-  }, [controller, preferences.frameRate]);
+    controller?.setFrameRate(storedPreferences.frameRate);
+  }, [controller, storedPreferences.frameRate]);
 
   useEffect(() => {
-    controller?.setTransportAvailability(preferences.transportAvailability);
-  }, [controller, preferences.transportAvailability]);
+    controller?.setTransportAvailability(storedPreferences.transportAvailability);
+  }, [controller, storedPreferences.transportAvailability]);
 
   const snapshot: RemoteDesktopSnapshot = useSyncExternalStore(
     controller?.subscribe ?? noSubscribe,
@@ -99,10 +139,14 @@ export function useRemoteDesktop(instanceId: string) {
     controller?.getSnapshot ?? (() => emptyRemoteDesktopSnapshot),
   );
 
-  const setTarget = useCallback((target: PersistedCaptureTarget) => {
-    updateRemoteDesktopPreferences(controlPlaneId, instanceId, { target });
-    void controller?.switchTarget(target);
-  }, [controlPlaneId, controller, instanceId]);
+  const setTarget = useCallback((nextTarget: PersistedCaptureTarget) => {
+    if (sessionId) {
+      rememberSessionRemoteDesktopLink({ controlPlaneId, instanceId, sessionId, target: nextTarget });
+    } else {
+      updateRemoteDesktopPreferences(controlPlaneId, instanceId, { target: nextTarget });
+    }
+    void controller?.switchTarget(nextTarget);
+  }, [controlPlaneId, controller, instanceId, sessionId]);
 
   const setResolution = useCallback((resolution: RemoteDesktopResolution) => {
     updateRemoteDesktopPreferences(controlPlaneId, instanceId, { resolution });
@@ -153,6 +197,7 @@ export function useRemoteDesktop(instanceId: string) {
   return {
     active,
     capability,
+    controlPlaneId,
     controller,
     instance: instance as ControlPlaneInstanceDirectoryEntry | undefined,
     loadSources,

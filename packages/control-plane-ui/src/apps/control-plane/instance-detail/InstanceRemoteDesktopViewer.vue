@@ -268,6 +268,10 @@
       <CircleAlert :size="15" aria-hidden="true" />
       <span>{{ error || t("instances.remoteDesktop.secureTransportHint") }}</span>
     </div>
+    <div v-else-if="sourceEndedNotice" class="remote-desktop-error-banner remote-desktop-source-ended" role="status">
+      <MonitorOff :size="15" aria-hidden="true" />
+      <span>{{ sourceEndedNotice }}</span>
+    </div>
 
     <div v-if="!available" class="remote-desktop-unavailable">
       <span class="remote-desktop-unavailable-icon" aria-hidden="true"><MonitorOff :size="22" /></span>
@@ -534,6 +538,7 @@ import {
   type DesktopFallbackSession,
   type DesktopSessionSnapshot,
 } from "@task-handoff/protocol/remote-desktop";
+import { isRemoteDesktopSourceEndedError } from "@task-handoff/control-plane-client";
 import { createRemoteDesktopSession, forceStopRemoteDesktopSession, listRemoteDesktopSources, requestRemoteDesktopFallback, stopRemoteDesktopSession, type RemoteDesktopCreated, type RemoteDesktopSource } from "../../../api/remoteDesktop";
 import { useControlPlaneSettingsQuery } from "../../../api/queries";
 import { translateApiError } from "../../../i18n/apiError";
@@ -641,6 +646,7 @@ const selectedSourceInfo = ref<SelectedSourceIdentity | undefined>(viewerPrefere
 const session = ref<RemoteDesktopCreated>();
 const snapshot = ref<DesktopSessionSnapshot>();
 const error = ref("");
+const sourceEndedNotice = ref("");
 const connecting = ref(false);
 const clipboard = ref(false);
 const clipboardBusy = ref(false);
@@ -1312,6 +1318,7 @@ async function connect() {
   activeTransportAvailability.value = { ...transportAvailability.value };
   connecting.value = true;
   error.value = "";
+  sourceEndedNotice.value = "";
   sourceQuery.value = "";
   clipboard.value = false;
   clipboardRequested = false;
@@ -1416,8 +1423,15 @@ async function message(event: MessageEvent) {
       const previousTransport = snapshot.value?.transport;
       snapshot.value = next;
       if (snapshot.value.phase === "stopped" || snapshot.value.phase === "failed") {
-        error.value = translateApiError({ code: snapshot.value.reason }, t, t("instances.remoteDesktop.closed"));
+        const sourceEnded = isRemoteDesktopSourceEndedError(snapshot.value.reason);
+        if (sourceEnded) {
+          sourceEndedNotice.value = translateApiError({ code: snapshot.value.reason }, t, t("instances.remoteDesktop.closed"));
+          error.value = "";
+        } else {
+          error.value = translateApiError({ code: snapshot.value.reason }, t, t("instances.remoteDesktop.closed"));
+        }
         cleanup();
+        if (sourceEnded) void loadSources();
         return;
       }
       if (!next.isController) {
@@ -2297,6 +2311,7 @@ function handleControlValue(value: any, channel = "control") {
     clearInputResumeTimers();
     inputResumeRetryCount = 0;
     startInputAlive();
+    error.value = "";
     recordRemoteDesktopDiagnostic("input.resumed", { inputEpoch: epoch, attempt });
   } else if (value.type === "input.suspended") {
     const notice = parseInputSuspension(value);
@@ -2353,7 +2368,7 @@ function handleControlValue(value: any, channel = "control") {
     inputResumePending = false;
     clearInputResumeTimers();
     inputResumeRetryCount = 0;
-    error.value = translateApiError({ code }, t, t("instances.remoteDesktop.messageInvalid"));
+    error.value = translateApiError({ code }, t, t("instances.remoteDesktop.controlFailed"));
   } else if (value.type === "clipboard.written" || value.type === "clipboard.text") {
     // Fallback control combines clipboard responses with control frames; the
     // fallback caller handles these values after this function returns.
@@ -2522,7 +2537,14 @@ async function resume() {
     return;
   }
   inputRequested.value = true;
-  if (!signalingReady.value || fallbackSwitching.value || inputEnabled.value || inputResumePending || surfacePaused()) return;
+  if (
+    !signalingReady.value
+    || fallbackSwitching.value
+    || inputEnabled.value
+    || inputResumePending
+    || inputResumeRetryTimer !== undefined
+    || surfacePaused()
+  ) return;
   const control = controlChannel();
   if (!control) return;
   inputResumePending = true;
@@ -3417,6 +3439,12 @@ onBeforeUnmount(() => {
 .remote-desktop-error-banner > svg {
   flex: 0 0 auto;
   margin-top: 1px;
+}
+
+.remote-desktop-source-ended {
+  border-bottom-color: color-mix(in srgb, var(--status-warning) 24%, var(--line-subtle));
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
 }
 
 .remote-desktop-unavailable {

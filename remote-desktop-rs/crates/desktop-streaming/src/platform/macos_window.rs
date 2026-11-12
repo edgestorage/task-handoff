@@ -13,7 +13,17 @@ use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
     CFArray as AxArray, CFBoolean, CFRetained, CFString, CFType as AxType, CGPoint, CGSize,
 };
-use std::{ptr::NonNull, sync::mpsc, time::Duration};
+use std::{
+    ptr::NonNull,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
+
+const FOCUS_ACTIVATION_TIMEOUT: Duration = Duration::from_millis(600);
+const FOCUS_ACTIVATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const WINDOW_BIND_TIMEOUT: Duration = Duration::from_millis(600);
+const WINDOW_BIND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Identity {
@@ -38,7 +48,19 @@ impl Lease {
         let (tx, rx) = mpsc::sync_channel::<Request>(4);
         let (ready, wait) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
-            let native = Native::bind(identity, geometry);
+            let deadline = Instant::now() + WINDOW_BIND_TIMEOUT;
+            let mut native = Native::bind(identity, geometry);
+            while let Err(error) = &native {
+                let retryable = matches!(
+                    error.downcast_ref::<BackendError>(),
+                    Some(BackendError::WindowUnavailable | BackendError::GeometryChanged)
+                );
+                if !retryable || Instant::now() >= deadline {
+                    break;
+                }
+                thread::sleep(WINDOW_BIND_POLL_INTERVAL);
+                native = Native::bind(identity, geometry);
+            }
             let _ = ready.send(
                 native
                     .as_ref()
@@ -79,6 +101,19 @@ impl Lease {
     pub fn validate(&self, geometry: Geometry, point: Option<(i32, i32)>) -> anyhow::Result<()> {
         self.call(Operation::Validate(geometry, point)).map(|_| ())
     }
+}
+
+/// WindowServer geometry is sufficient for capture layout. Accessibility can
+/// briefly omit a live window while its application updates its AX tree; that
+/// must not make the capture source unavailable. Input binding still validates
+/// AX and CG together in the dedicated input worker.
+pub fn geometry(identity: Identity) -> anyhow::Result<Geometry> {
+    anyhow::ensure!(identity.pid > 0, BackendError::WindowUnavailable);
+    let current = visible_windows()?
+        .into_iter()
+        .find(|window| window.id == identity.window && window.pid == identity.pid)
+        .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?;
+    Ok(current.geometry)
 }
 fn attribute(element: &AXUIElement, key: &str) -> anyhow::Result<CFRetained<AxType>> {
     let mut value: *const AxType = std::ptr::null();
@@ -203,10 +238,20 @@ impl Native {
             } == AXError::Success,
             BackendError::WindowFocusRequired
         );
-        // Activation may still be in flight. Arm fails closed until actual
-        // focus is observed; it never ACKs merely because activation was sent.
-        self.focused()?;
-        Ok(geometry)
+        // AXRaise/AXFrontmost return before WindowServer and NSWorkspace publish
+        // the new foreground application. Wait for the observed transition
+        // instead of failing immediately and leaving the viewer in a retry
+        // loop even though activation is already in flight.
+        let deadline = Instant::now() + FOCUS_ACTIVATION_TIMEOUT;
+        loop {
+            match self.focused() {
+                Ok(()) => return Ok(geometry),
+                Err(_) if Instant::now() < deadline => {
+                    thread::sleep(FOCUS_ACTIVATION_POLL_INTERVAL);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
     fn validate(&self, expected: Geometry, point: Option<(i32, i32)>) -> anyhow::Result<Geometry> {
         let geometry = self.geometry()?;

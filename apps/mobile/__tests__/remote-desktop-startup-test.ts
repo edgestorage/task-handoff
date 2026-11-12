@@ -80,7 +80,7 @@ function fallbackSession() {
   } as const;
 }
 
-function setup(availability: { p2p: boolean; turn: boolean; websocket: boolean }) {
+function setup(availability: { p2p: boolean; turn: boolean; websocket: boolean }, interactive = true) {
   const sockets: OpenedSocket[] = [];
   const openAuthenticatedWebSocket = jest.fn((options: MobileAuthenticatedWebSocketOptions, handlers: MobileAuthenticatedWebSocketHandlers) => {
     const socket: OpenedSocket = {
@@ -115,6 +115,7 @@ function setup(availability: { p2p: boolean; turn: boolean; websocket: boolean }
     api,
     transport,
     instanceId: 'instance_1',
+    interactive,
     target: { kind: 'display', sourceRef: 'display-primary' },
     resolution: 'auto',
     frameRate: 'auto',
@@ -122,6 +123,15 @@ function setup(availability: { p2p: boolean; turn: boolean; websocket: boolean }
   });
   return { api, controller, openAuthenticatedWebSocket, sockets };
 }
+
+test('view-only startup never requests remote input', async () => {
+  const { controller } = setup({ p2p: true, turn: true, websocket: true }, false);
+  await controller.start();
+  expect(controller.getSnapshot().inputRequested).toBe(false);
+  expect(controller.getSnapshot().inputEnabled).toBe(false);
+  expect(controller.getSnapshot().controlRequestPending).toBe(false);
+  await controller.close();
+});
 
 async function flushMicrotasks() {
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
@@ -529,13 +539,57 @@ test('retries input resume when the acknowledgement never arrives', async () => 
   const resumes = control.send.mock.calls
     .map(([data]) => JSON.parse(String(data)))
     .filter((message) => message.type === 'input.resume');
-  expect(resumes).toHaveLength(3);
+  expect(resumes).toHaveLength(2);
   expect(resumes.at(-1)?.payload).toEqual({ sessionRevision: 6 });
   expect(controller.getSnapshot().inputPending).toBe(true);
 
   control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 10 } }));
   await flushMicrotasks();
   expect(controller.getSnapshot().inputEnabled).toBe(true);
+
+  await controller.close();
+  jest.useRealTimers();
+});
+
+test('keeps input resume backoff when a snapshot arrives while a retry is pending', async () => {
+  jest.useFakeTimers();
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
+
+  controller.disableInput();
+  control.send.mockClear();
+  controller.enableInput();
+  await flushMicrotasks();
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .filter((message) => message.type === 'input.resume')).toHaveLength(1);
+
+  jest.advanceTimersByTime(2_500);
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputPending).toBe(false);
+
+  sockets[0].handlers.onMessage(JSON.stringify({
+    type: 'snapshot',
+    snapshot: { ...createdSession().snapshot, sessionRevision: 8, transport: 'websocket', phase: 'active', isController: true, hasController: true },
+  }));
+  await flushMicrotasks();
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .filter((message) => message.type === 'input.resume')).toHaveLength(1);
+
+  jest.advanceTimersByTime(250);
+  await flushMicrotasks();
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .filter((message) => message.type === 'input.resume')).toHaveLength(2);
 
   await controller.close();
   jest.useRealTimers();

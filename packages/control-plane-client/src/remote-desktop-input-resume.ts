@@ -6,6 +6,10 @@ const RECOVERABLE_INPUT_RESUME_ERRORS = new Set([
   'REMOTE_DESKTOP_GEOMETRY_CHANGED',
   'REMOTE_DESKTOP_INVALID_STATE',
   'REMOTE_DESKTOP_STALE_EPOCH',
+  // macOS activates the selected window asynchronously. The component waits
+  // for activation before acknowledging input, but a bounded client retry
+  // still covers the race when the host is busy switching applications.
+  'REMOTE_DESKTOP_WINDOW_FOCUS_REQUIRED',
 ]);
 
 /** A rejected resume can be retried against the latest authoritative session

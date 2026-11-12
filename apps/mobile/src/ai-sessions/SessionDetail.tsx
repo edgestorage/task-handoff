@@ -33,6 +33,8 @@ import { AnimatedDisclosure, DisclosureChevron } from './AnimatedDisclosure';
 
 import { MessageAttachments, SessionAttachmentContext } from './MessageAttachments';
 import { CollapsibleUserMessage } from './CollapsibleUserMessage';
+import type { PersistedCaptureTarget } from '../remote-desktop/preferences';
+import { sourceKindLabel, sourceTargetLabel } from '../remote-desktop/source-label';
 
 const english: Translate = (key, params) => translate('en-US', key, params);
 const SCROLL_BOTTOM_THRESHOLD = 48;
@@ -96,6 +98,8 @@ export function SessionDetail({
   recovering = false,
   keyboardViewportRevision = 0,
   instanceName,
+  onOpenRemoteDesktopPreview,
+  remoteDesktopTarget,
   workspaceName,
 }: {
   client?: ControlPlaneClient;
@@ -130,6 +134,8 @@ export function SessionDetail({
   recovering?: boolean;
   keyboardViewportRevision?: number;
   instanceName?: string;
+  onOpenRemoteDesktopPreview?(): void;
+  remoteDesktopTarget?: PersistedCaptureTarget;
   workspaceName?: string;
 }) {
   const { colors } = useMobileTheme();
@@ -308,9 +314,10 @@ export function SessionDetail({
       </View> : null}
     </View>
   </View>;
-  const listFooter = (!timelineVisible && showsLatest && activityText) || session.subAgents.length ? <View style={styles.footer}>
+  const listFooter = (!timelineVisible && showsLatest && activityText) || session.subAgents.length || (remoteDesktopTarget && onOpenRemoteDesktopPreview) ? <View style={styles.footer}>
     {!timelineVisible && showsLatest && activityText ? <View style={styles.tool}><ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={session.status === 'running'} textStyle={styles.currentActivityText}>{activityText}</ToolActivityText></View> : null}
     <SubAgents agents={session.subAgents} locale={locale} />
+    {remoteDesktopTarget && onOpenRemoteDesktopPreview ? <SessionRemoteDesktopEntry target={remoteDesktopTarget} onPress={onOpenRemoteDesktopPreview} /> : null}
   </View> : null;
   const listContentStyle = adaptiveContentContainerStyle([styles.list, {
     backgroundColor: colors.background,
@@ -890,6 +897,35 @@ function SubAgents({ agents, locale }: { agents: ControlPlaneAiSessionSummary['s
   );
 }
 
+function SessionRemoteDesktopEntry({ onPress, target }: { onPress(): void; target: PersistedCaptureTarget }) {
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const title = sourceTargetLabel(target, t);
+  const detail = target.subtitle?.trim() || sourceKindLabel(target.kind, t);
+  return <Pressable
+    accessibilityHint={t('remoteDesktop.previewHint')}
+    accessibilityLabel={`${t('remoteDesktop.open')}: ${title}`}
+    accessibilityRole="button"
+    onPress={onPress}
+    style={({ pressed }) => [styles.remoteDesktopEntry, {
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
+    }, pressed && styles.remoteDesktopEntryPressed]}
+    testID="session-remote-desktop-entry"
+  >
+    <View style={[styles.remoteDesktopIcon, { backgroundColor: colors.primarySoft }]}>
+      <Icon color={colors.primary} name="desktop-outline" size={20} />
+    </View>
+    <View style={styles.remoteDesktopCopy}>
+      <Text numberOfLines={1} style={[styles.remoteDesktopTitle, { color: colors.text }]}>{title}</Text>
+      <Text numberOfLines={1} style={[styles.remoteDesktopDetail, { color: colors.textMuted }]}>
+        {t('remoteDesktop.lastOpened')} · {detail}
+      </Text>
+    </View>
+    <Icon color={colors.textMuted} name="open-outline" size={18} />
+  </Pressable>;
+}
+
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   scrollToBottom: {
@@ -914,6 +950,12 @@ const styles = StyleSheet.create({
   emptyText: { maxWidth: 260, textAlign: 'center' },
   footer: { gap: 18, marginTop: 6 },
   tool: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 24, paddingHorizontal: 2 },
+  remoteDesktopEntry: { alignItems: 'center', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 12, minHeight: 64, paddingHorizontal: 14, paddingVertical: 10 },
+  remoteDesktopEntryPressed: { opacity: 0.72 },
+  remoteDesktopIcon: { alignItems: 'center', borderRadius: 10, height: 38, justifyContent: 'center', width: 38 },
+  remoteDesktopCopy: { flex: 1, gap: 3, minWidth: 0 },
+  remoteDesktopTitle: { fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
+  remoteDesktopDetail: { fontSize: mobileWebType.tiny, lineHeight: mobileWebType.timeLine },
   header: { gap: 12, marginBottom: 20 },
   itemSeparator: { height: mobileWebMetric(16) },
   modePicker: { alignSelf: 'center', maxWidth: '100%', width: 210 },

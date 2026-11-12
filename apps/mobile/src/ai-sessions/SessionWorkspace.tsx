@@ -85,7 +85,9 @@ export function SessionWorkspace({
   onVisible,
   onOpenBuiltinBrowser,
   onOpenFile,
+  onOpenRemoteDesktopPreview,
   onOpenSession,
+  remoteDesktopTarget,
   detailMode: controlledDetailMode,
   onDetailModeChange,
   syncPhase = 'ready',
@@ -112,7 +114,9 @@ export function SessionWorkspace({
   onVisible?(): void;
   onOpenBuiltinBrowser?(url: string): void | Promise<void>;
   onOpenFile?(href: string): void | Promise<void>;
+  onOpenRemoteDesktopPreview?(): void;
   onOpenSession?(sessionId: string): void;
+  remoteDesktopTarget?: import('../remote-desktop/preferences').PersistedCaptureTarget;
   detailMode?: SessionDetailMode;
   onDetailModeChange?(mode: SessionDetailMode): void;
   syncPhase?: 'idle' | 'loading' | 'ready' | 'stale' | 'offline' | 'error';
@@ -942,6 +946,7 @@ export function SessionWorkspace({
           toolActivityWindows={toolActivity.windows}
           onOpenBuiltinBrowser={onOpenBuiltinBrowser}
           onOpenFile={onOpenFile}
+          onOpenRemoteDesktopPreview={onOpenRemoteDesktopPreview}
           onRetryTimeline={(turn) => {
             if (selectedTurnBodyFailure) {
               setTurnBodyFailure(undefined);
@@ -954,6 +959,7 @@ export function SessionWorkspace({
           onVisible={onVisible}
           onTurnIndexChange={requestTurnSelection}
           pendingTurnIndex={pendingTurnIndex}
+          remoteDesktopTarget={remoteDesktopTarget}
           session={session}
           showModePicker={controlledDetailMode === undefined}
           timelineEnabled={supportsTurnTimeline || supportsSessionTimeline || supportsLiveTimeline}

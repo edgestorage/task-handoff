@@ -1,5 +1,9 @@
+import { isRemoteDesktopSourceEndedError } from '@task-handoff/control-plane-client';
+
 import type { Translate } from '../i18n';
 import type { RemoteDesktopError } from './types';
+
+export { isRemoteDesktopSourceEndedError } from '@task-handoff/control-plane-client';
 
 export function remoteDesktopErrorMessage(error: RemoteDesktopError | undefined, t: Translate) {
   if (!error) return '';
@@ -7,6 +11,7 @@ export function remoteDesktopErrorMessage(error: RemoteDesktopError | undefined,
   if (code === 'REMOTE_DESKTOP_NOT_FOUND' || code === 'REMOTE_DESKTOP_STALE_BOOT' || code === 'REMOTE_DESKTOP_DEADLINE_EXCEEDED' || code === 'REMOTE_DESKTOP_SESSION_CLOSED') return t('remoteDesktop.sessionNotFound');
   if (code === 'REMOTE_DESKTOP_DISABLED' || code === 'REMOTE_DESKTOP_UNSUPPORTED' || code === 'REMOTE_DESKTOP_PLATFORM_UNSUPPORTED' || code === 'REMOTE_DESKTOP_BACKEND_NOT_IMPLEMENTED' || code === 'REMOTE_DESKTOP_WSL_UNSUPPORTED' || code === 'REMOTE_DESKTOP_WAYLAND_UNSUPPORTED' || code === 'REMOTE_DESKTOP_VIRTUAL_PLATFORM_UNSUPPORTED') return t('remoteDesktop.unsupportedDescription');
   if (code === 'REMOTE_DESKTOP_SOURCE_SELECTION_REQUIRED') return t('remoteDesktop.sourceSelectionRequired');
+  if (isRemoteDesktopSourceEndedError(code)) return t('remoteDesktop.sourceEndedDetail');
   if (code.startsWith('REMOTE_DESKTOP_SOURCE_') || code.startsWith('REMOTE_DESKTOP_WINDOW_')) return t('remoteDesktop.sourceCaptureUnavailable');
   if (code === 'REMOTE_DESKTOP_CAPTURE_FAILED' || code === 'REMOTE_DESKTOP_CAPTURE_STOP_FAILED' || code === 'REMOTE_DESKTOP_CAPTURE_FORMAT_UNSUPPORTED') return t('remoteDesktop.sourceCaptureFailed');
   if (code === 'REMOTE_DESKTOP_SCREEN_PERMISSION_REQUIRED' || code === 'REMOTE_DESKTOP_INPUT_PERMISSION_REQUIRED' || code === 'REMOTE_DESKTOP_CAPTURE_UNAVAILABLE' || code === 'REMOTE_DESKTOP_DESKTOP_UNAVAILABLE' || code === 'REMOTE_DESKTOP_NO_INTERACTIVE_SESSION') return t('remoteDesktop.needsPermission');

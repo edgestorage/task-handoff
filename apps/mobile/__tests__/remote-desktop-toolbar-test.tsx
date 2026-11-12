@@ -67,3 +67,21 @@ test('reflows the capsule whenever the control action is added or removed', asyn
   expect(twoActionsWidth).toBeGreaterThan(148);
   screen.unmount();
 });
+
+test('hides the floating capsule while either keyboard is visible', async () => {
+  const screen = await render(<RemoteDesktopToolbar
+    bottomInset={0}
+    hidden
+    keyboardVisible
+    mouseMode="direct"
+    onInput={jest.fn()}
+    onKeyboard={jest.fn()}
+    onMouseMode={jest.fn()}
+    snapshot={{ ...emptyRemoteDesktopSnapshot, phase: 'connected', inputEnabled: true, isController: true }}
+  />);
+  const toolbar = screen.getByTestId('remote-desktop-toolbar', { includeHiddenElements: true });
+  expect(StyleSheet.flatten(toolbar.props.style).display).toBe('none');
+  expect(toolbar.props.pointerEvents).toBe('none');
+  expect(toolbar.props.accessibilityElementsHidden).toBe(true);
+  screen.unmount();
+});

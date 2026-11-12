@@ -129,7 +129,7 @@ export function canDisableTransport(availability: RemoteDesktopTransportAvailabi
 }
 
 function sanitizeInstancePreferences(value: Record<string, unknown>): RemoteDesktopInstancePreferences {
-  const target = sanitizeTarget(value.target);
+  const target = sanitizePersistedCaptureTarget(value.target);
   const resolution = REMOTE_DESKTOP_RESOLUTIONS.includes(value.resolution as RemoteDesktopResolution)
     ? value.resolution as RemoteDesktopResolution
     : 'auto';
@@ -151,7 +151,7 @@ function sanitizeInstancePreferences(value: Record<string, unknown>): RemoteDesk
   return { target, resolution, frameRate, mouseMode, transportAvailability };
 }
 
-function sanitizeTarget(value: unknown): PersistedCaptureTarget {
+export function sanitizePersistedCaptureTarget(value: unknown): PersistedCaptureTarget {
   if (!value || typeof value !== 'object') return { kind: 'display' };
   const record = value as Record<string, unknown>;
   const kind = typeof record.kind === 'string' && record.kind.trim() && record.kind.length <= 64 ? record.kind.trim() : 'display';
