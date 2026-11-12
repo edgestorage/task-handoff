@@ -66,6 +66,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   private readonly options: CodexAppServerBridgeOptions;
   private readonly timelineItemListeners = new Set<AiSessionProviderTimelineItemListener>();
   private readonly timelineSourceByThread = new Map<string, "adapter-store" | "codex-native">();
+  private readonly timelineSourceReads = new Map<string, Promise<"adapter-store" | "codex-native">>();
   private directCreateRequests = 0;
   private readonly pendingThreadSettings = new Set<string>();
 
@@ -97,6 +98,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       onEvent: (event) => this.applyProviderEvent(event),
       onInvalidate: () => {
         this.timelineSourceByThread.clear();
+        this.timelineSourceReads.clear();
         this.options.onEventSourceClose?.();
         this.approvalCoordinator?.resetConnection();
         this.projector?.resetConnection();
@@ -191,6 +193,37 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
 
   private timelineHistorySource(providerSessionId: string): "adapter-store" | "codex-native" {
     return this.timelineSourceByThread.get(providerSessionId) || "adapter-store";
+  }
+
+  /**
+   * A connection generation can find a thread already loaded and therefore
+   * skip `thread/resume`, which is normally the source of `historyMode`.
+   * Resolve the source from metadata instead of assuming adapter-owned
+   * history: that fallback hydrates the complete thread for every read and
+   * makes long paginated threads take seconds per Timeline request.
+   */
+  private async resolveTimelineHistorySource(
+    client: CodexAppServerClientLike,
+    providerSessionId: string,
+  ): Promise<"adapter-store" | "codex-native"> {
+    const known = this.timelineSourceByThread.get(providerSessionId);
+    if (known) return known;
+    const pending = this.timelineSourceReads.get(providerSessionId);
+    if (pending) return pending;
+    const read = (async () => {
+      const thread = client.readThread
+        ? await client.readThread(providerSessionId, { includeTurns: false })
+        : undefined;
+      if (!thread) return "adapter-store" as const;
+      this.recordTimelineHistorySource(thread);
+      return this.timelineHistorySource(providerSessionId);
+    })().finally(() => {
+      if (this.timelineSourceReads.get(providerSessionId) === read) {
+        this.timelineSourceReads.delete(providerSessionId);
+      }
+    });
+    this.timelineSourceReads.set(providerSessionId, read);
+    return read;
   }
 
   async ensureReady(appSessions: CodexAppSession[] = []) {
@@ -548,7 +581,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     const matchesTurn = (turnId: string) => !providerTurnId || turnId === providerTurnId || turnId === publicTurnId;
     const realtimeItems = this.projector.realtimeTimelineItems(session.providerSessionId)
       .filter((entry) => matchesTurn(entry.turnId));
-    const source = this.timelineHistorySource(session.providerSessionId);
+    const source = await this.resolveTimelineHistorySource(client, session.providerSessionId);
     if (source === "adapter-store") {
       if (!client.readThread || !this.timelineStore) {
         throw aiSessionControlError("AI_SESSION_TIMELINE_UNSUPPORTED", "Codex adapter Timeline history is unavailable.", 409);
@@ -557,10 +590,22 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         .filter((item) => matchesTurn(item.turnId));
       const thread = await client.readThread(session.providerSessionId, { includeTurns: true });
       if (!thread) throw aiSessionControlError("AI_SESSION_THREAD_NOT_FOUND", "Codex thread was not found.", 404);
+      const rawTurns = Array.isArray(thread.turns) ? thread.turns : [];
+      const threadForRead = providerTurnId
+        ? {
+            ...thread,
+            turns: rawTurns.filter((rawTurn) => {
+              const turnId = rawTurn && typeof rawTurn === "object" && !Array.isArray(rawTurn)
+                ? (rawTurn as Record<string, unknown>).id
+                : undefined;
+              return typeof turnId === "string" && matchesTurn(turnId);
+            }),
+          }
+        : thread;
       const timeline = codexThreadTimeline(
         session.id,
         session.providerSessionId,
-        thread,
+        threadForRead,
         new Date().toISOString(),
         realtimeItems,
       );

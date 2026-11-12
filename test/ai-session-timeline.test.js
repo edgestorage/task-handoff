@@ -540,6 +540,60 @@ test("Codex bridge returns one authoritative turn Timeline", async () => {
   bridge.stop();
 });
 
+test("Codex Timeline resolves paginated history when the thread was already loaded", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-loaded-timeline-"));
+  const snapshot = {
+    id: "thread_already_loaded",
+    historyMode: "paginated",
+    cwd: "/workspace",
+    status: { type: "idle" },
+    turns: [{ id: "turn_loaded", status: "completed", items: [] }],
+  };
+  const metadataReads = [];
+  const fullReads = [];
+  const itemReads = [];
+  class LoadedThreadCodexClient extends EventEmitter {
+    async start() {}
+    async listLoadedThreadIds() { return [snapshot.id]; }
+    async resumeThread() { throw new Error("an already loaded thread must not be resumed"); }
+    async readThread(_threadId, options = {}) {
+      if (options.includeTurns) {
+        fullReads.push(options);
+        return snapshot;
+      }
+      metadataReads.push(options);
+      return { ...snapshot, turns: [] };
+    }
+    async listThreadItems(_threadId, turnId) {
+      itemReads.push(turnId);
+      return [{ turnId, item: { id: "message_loaded", type: "agentMessage", text: "Loaded" } }];
+    }
+    stop() {}
+  }
+
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: snapshot.id,
+    cwd: "/workspace",
+    status: "idle",
+    phase: "unknown",
+    turns: [{ id: "turn_loaded", providerTurnId: "turn_loaded", userPrompt: "Loaded", status: "completed" }],
+  });
+  const bridge = new CodexAppServerSessionBridge(registry, new LoadedThreadCodexClient());
+  await bridge.ensureReady();
+
+  const first = await bridge.turnTimeline(session, "turn_loaded");
+  const second = await bridge.turnTimeline(session, "turn_loaded");
+  assert.deepEqual(first.items.map((item) => item.id), ["message_loaded"]);
+  assert.deepEqual(second.items.map((item) => item.id), ["message_loaded"]);
+  assert.equal(metadataReads.length, 1);
+  assert.equal(fullReads.length, 0);
+  assert.deepEqual(itemReads, ["turn_loaded", "turn_loaded"]);
+  bridge.stop();
+});
+
 test("Codex client pages through the persistent single-item history", async () => {
   const client = new CodexAppServerClient();
   const requests = [];
