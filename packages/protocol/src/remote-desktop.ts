@@ -164,6 +164,13 @@ export const DesktopCaptureSelectionSchema = z.object({
   streamRegion: DesktopNormalizedRectSchema.optional(),
   controlRegion: DesktopNormalizedRectSchema.optional(),
 }).strict();
+/** Source-level viewer totals. Viewer identity never crosses this boundary. */
+export const DesktopViewerSourceSchema = z.object({
+  sourceRef: z.string().min(1).max(4096),
+  viewerCount: z.number().int().positive(),
+}).strip();
+export const DesktopViewerSourcesSchema = z.array(DesktopViewerSourceSchema).max(64);
+export type DesktopViewerSource = z.infer<typeof DesktopViewerSourceSchema>;
 export const DesktopCreateSchema = z.object({ requestId: DesktopRequestIdSchema, selection: DesktopCaptureSelectionSchema }).strict();
 export const DesktopSessionSnapshotSchema = z.object({
   viewerSessionId: z.string().min(1), sessionRevision: z.number().int().nonnegative(),
@@ -175,6 +182,9 @@ export const DesktopSessionSnapshotSchema = z.object({
   // A terminal session has no live viewers; keep that authoritative state
   // readable instead of requiring every recovery snapshot to invent a viewer.
   viewerCount: z.number().int().nonnegative().default(1),
+  // Missing on older components: viewers still get the instance-wide count,
+  // they just cannot break it down by capture source.
+  viewerSources: DesktopViewerSourcesSchema.default([]),
   // Component-owned transport state. Missing values keep the WebRTC baseline
   // for older components; readers accept future transport names.
   transport: z.string().min(1).default("webrtc"),
@@ -195,6 +205,14 @@ export const DesktopIceServerSchema = z.object({
 export const DesktopIceConfigSchema = z.object({ iceServers: z.array(DesktopIceServerSchema).max(16), iceCredentialsExpiresAt: z.number().int().positive().nullable() }).strip();
 export const DesktopCreatedSchema = DesktopIceConfigSchema.extend({
   snapshot: DesktopSessionSnapshotSchema, signalUrl: z.string(), ticketExpiresAt: z.number().int().positive(), protocolVersion: z.string(),
+}).strip();
+/** Additive resume credential for an existing viewer session. The legacy
+ * create-time signal URL remains one-time; a relay reconnect exchanges the
+ * authenticated session for a fresh short-lived tunnel without re-attaching
+ * the component or changing the media session. */
+export const DesktopSignalResumeRequestSchema = z.object({ requestId: DesktopRequestIdSchema }).strict();
+export const DesktopSignalTicketSchema = z.object({
+  signalUrl: z.string().min(1), ticketExpiresAt: z.number().int().positive(), protocolVersion: z.string(),
 }).strip();
 export const DesktopFallbackReasonSchema = z.enum(["ice-failed", "recovery-timeout"]);
 export const DesktopFallbackRequestSchema = z.object({
@@ -360,3 +378,4 @@ export type DesktopSource = z.infer<typeof DesktopSourceSchema>;
 export type DesktopIceServer = z.infer<typeof DesktopIceServerSchema>;
 export type DesktopIceConfig = z.infer<typeof DesktopIceConfigSchema>;
 export type DesktopCreated = z.infer<typeof DesktopCreatedSchema>;
+export type DesktopSignalTicket = z.infer<typeof DesktopSignalTicketSchema>;

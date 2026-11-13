@@ -9,11 +9,13 @@ import {
   DesktopCreatedSchema,
   DesktopFallbackSessionSchema,
   DesktopSessionSnapshotSchema,
+  DesktopSignalTicketSchema,
   DesktopSourcesSchema,
   type DesktopCaptureSelection,
   type DesktopCreated,
   type DesktopFallbackSession,
   type DesktopSessionSnapshot,
+  type DesktopSignalTicket,
   type DesktopSource,
 } from "@task-handoff/protocol/remote-desktop";
 import type { ControlPlaneClientTransport } from "./transport.ts";
@@ -27,6 +29,7 @@ export type RemoteDesktopSource = DesktopSource;
 export type RemoteDesktopCreated = DesktopCreated;
 export type RemoteDesktopFallback = DesktopFallbackSession;
 export type RemoteDesktopSnapshot = DesktopSessionSnapshot;
+export type RemoteDesktopSignalTicket = DesktopSignalTicket;
 export type RemoteDesktopSettings = z.infer<typeof RemoteDesktopSettingsSchema>;
 
 /** Same capability probe as the browser byte-channel, scoped to the desktop
@@ -63,6 +66,13 @@ export function createControlPlaneRemoteDesktopApi(transport: ControlPlaneClient
         `${session(instanceId, sessionId)}/takeover`,
         DesktopCreatedSchema,
         jsonPost({ requestId, selection }),
+      );
+    },
+    resumeSignal(instanceId: string, sessionId: string, requestId = remoteDesktopRequestId()) {
+      return requestData(
+        `${session(instanceId, sessionId)}/signal`,
+        DesktopSignalTicketSchema,
+        jsonPost({ requestId }),
       );
     },
     snapshot(instanceId: string, sessionId: string, signal?: AbortSignal) {

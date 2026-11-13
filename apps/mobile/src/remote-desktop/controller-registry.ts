@@ -23,7 +23,13 @@ type Entry = {
   transport: MobileControlPlaneTransport;
   controller: RemoteDesktopController;
   active: boolean;
+  consumers: Map<object, RemoteDesktopControllerConsumerState>;
   lastUsedAt: number;
+};
+
+export type RemoteDesktopControllerConsumerState = {
+  active: boolean;
+  interactive: boolean;
 };
 
 export const MAX_RETAINED_REMOTE_DESKTOP_CONTROLLERS = 2;
@@ -60,7 +66,6 @@ export function acquireRemoteDesktopController(input: {
   const key = remoteDesktopControllerKey(input.controlPlaneId, input.instanceId, input.sessionId);
   const existing = entries.get(key);
   if (existing && existing.api === input.api && existing.transport === input.transport) {
-    existing.active = input.active;
     existing.lastUsedAt = Date.now();
     return existing.controller;
   }
@@ -86,17 +91,28 @@ export function acquireRemoteDesktopController(input: {
     transport: input.transport,
     controller,
     active: input.active,
+    consumers: new Map(),
     lastUsedAt: Date.now(),
   });
   evictInactiveControllers(key);
   return controller;
 }
 
-export function markRemoteDesktopControllerActive(scope: RemoteDesktopControllerScope, active: boolean) {
+export function updateRemoteDesktopControllerConsumer(
+  scope: RemoteDesktopControllerScope,
+  consumer: object,
+  state: RemoteDesktopControllerConsumerState,
+) {
   const entry = entries.get(scopeKey(scope));
   if (!entry) return;
-  entry.active = active;
-  if (active) entry.lastUsedAt = Date.now();
+  entry.consumers.set(consumer, state);
+  syncEntryActivation(entry);
+}
+
+export function releaseRemoteDesktopControllerConsumer(scope: RemoteDesktopControllerScope, consumer: object) {
+  const entry = entries.get(scopeKey(scope));
+  if (!entry || !entry.consumers.delete(consumer)) return;
+  syncEntryActivation(entry);
 }
 
 export function forgetRemoteDesktopController(scope: RemoteDesktopControllerScope, options: { close?: boolean } = {}) {
@@ -124,4 +140,14 @@ function evictInactiveControllers(keepKey: string) {
     entries.delete(candidate[0]);
     void candidate[1].controller.close();
   }
+}
+
+function syncEntryActivation(entry: Entry) {
+  const consumers = [...entry.consumers.values()];
+  const active = consumers.some((consumer) => consumer.active);
+  const interactive = consumers.some((consumer) => consumer.active && consumer.interactive);
+  entry.active = active;
+  if (active) entry.lastUsedAt = Date.now();
+  entry.controller.setInteractive(interactive);
+  entry.controller.setActive(active);
 }

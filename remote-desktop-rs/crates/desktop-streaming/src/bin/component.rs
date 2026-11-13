@@ -120,12 +120,30 @@ async fn component() -> anyhow::Result<()> {
         args.next()
             .ok_or_else(|| anyhow::anyhow!("missing IPC endpoint"))?,
     );
-    let show_cursor = match args.next() {
-        Some(argument) if argument == std::ffi::OsStr::new("--system-cursor") => false,
-        Some(_) => anyhow::bail!("unexpected argument"),
-        None => true,
-    };
-    anyhow::ensure!(args.next().is_none(), "unexpected argument");
+    let mut show_cursor = true;
+    let mut state_dir = None;
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("--system-cursor") if show_cursor => show_cursor = false,
+            Some("--state-dir") if state_dir.is_none() => {
+                state_dir = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("missing state directory"))?,
+                ));
+            }
+            _ => anyhow::bail!("unexpected argument"),
+        }
+    }
+    // Keep compatibility with hosts older than the explicit `--state-dir`
+    // argument. Environment names are ignored by old components, so a newer
+    // host can pass the directory without breaking a rolling component update.
+    let state_dir = state_dir
+        .or_else(|| std::env::var_os("TASK_HANDOFF_DESKTOP_STATE_DIR").map(PathBuf::from))
+        .or_else(|| std::env::var_os("TASK_HANDOFF_DATA_DIR").map(PathBuf::from));
+    let source_salt = state_dir
+        .as_deref()
+        .map(desktop_streaming::catalog::load_or_create_source_salt)
+        .transpose()?;
     // Tokio stdin uses a blocking runtime worker that can keep runtime shutdown
     // waiting forever. A detached OS thread owns the inherited pipe instead;
     // normal component exit never waits for a still-live host to close stdin.
@@ -169,7 +187,7 @@ async fn component() -> anyhow::Result<()> {
         "host authentication failed"
     );
     tokio::select! {
-        result = desktop_streaming::service::serve_mode_with_cursor(stream,mode,show_cursor) => result,
+        result = desktop_streaming::service::serve_mode_with_cursor_and_source_salt(stream,mode,show_cursor,source_salt) => result,
         _ = death_rx => Ok(()),
     }
 }

@@ -32,6 +32,7 @@ type UpdateRequest = Arc<dyn Fn() -> UpdateFuture + Send + Sync>;
 #[derive(Clone)]
 pub struct DesktopService {
     pub settings: DesktopSettings,
+    data_dir: PathBuf,
     disposed: Arc<AtomicBool>,
     protocol_update_requested: Arc<AtomicBool>,
     mode: CaptureMode,
@@ -54,6 +55,7 @@ impl DesktopService {
             disposed: Arc::new(AtomicBool::new(false)),
             protocol_update_requested: Arc::new(AtomicBool::new(false)),
             settings: DesktopSettings::new(data_dir),
+            data_dir: data_dir.to_path_buf(),
             mode,
             installed: Arc::new(installed),
             can_start: Arc::new(can_start),
@@ -209,7 +211,13 @@ impl DesktopService {
             "REMOTE_DESKTOP_UPDATING"
         );
         if host.as_ref().is_none_or(ComponentHost::is_closed) {
-            let child = match ComponentHost::spawn(&package.binary, self.mode).await {
+            let child = match ComponentHost::spawn_with_state_dir(
+                &package.binary,
+                self.mode,
+                &self.data_dir,
+            )
+            .await
+            {
                 Ok(child) => child,
                 Err(error) => {
                     let reason = if error.to_string() == "REMOTE_DESKTOP_PROTOCOL_MISMATCH" {

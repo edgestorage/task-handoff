@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { remoteDesktopSupportsCapturePrecision } from '@task-handoff/protocol/remote-desktop';
+import { remoteDesktopSupportsCapturePrecision, type DesktopSource } from '@task-handoff/protocol/remote-desktop';
 import {
   startRemoteDesktopTextInputObservation,
   stopRemoteDesktopTextInputObservation,
@@ -50,6 +50,7 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   const remote = useRemoteDesktop(instanceId, { sessionId });
   const [sourcePicker, setSourcePicker] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState(false);
+  const [connectionSources, setConnectionSources] = useState<DesktopSource[]>([]);
   const [keyboard, setKeyboard] = useState<MobileKeyboardState>(INITIAL_KEYBOARD_STATE);
   const [keyboardMode, setKeyboardMode] = useState<RemoteDesktopKeyboardMode>('system');
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -81,6 +82,15 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
       target: remote.snapshot.target,
     });
   }, [instanceId, remote.controlPlaneId, remote.ready, remote.snapshot.target, sessionId]);
+
+  useEffect(() => {
+    if (!connectionInfo || !remote.capability?.sourceProviders.some((provider) => provider.available)) return;
+    const controller = new AbortController();
+    void remote.loadSources(controller.signal)
+      .then((items) => { if (!controller.signal.aborted) setConnectionSources(items); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [connectionInfo, remote.capability, remote.loadSources]);
 
   useEffect(() => {
     snapshotRef.current = snapshot;
@@ -370,7 +380,7 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
       target={snapshot.target}
       visible={sourcePicker}
     />
-    <RemoteDesktopConnectionInfo onClose={() => setConnectionInfo(false)} snapshot={snapshot} visible={connectionInfo} />
+    <RemoteDesktopConnectionInfo onClose={() => setConnectionInfo(false)} snapshot={snapshot} sources={connectionSources} visible={connectionInfo} />
   </View>;
 }
 

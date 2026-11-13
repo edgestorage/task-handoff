@@ -6,6 +6,12 @@ export type InputSuspensionNotice = {
   sessionRevision?: number;
 };
 
+export type InputRecoveryState = {
+  inputRequested: boolean;
+  isController: boolean;
+  surfacePaused: boolean;
+};
+
 export function parseInputSuspension(value: unknown): InputSuspensionNotice {
   const payload = value && typeof value === "object" && "payload" in value
     ? (value as { payload?: unknown }).payload
@@ -22,18 +28,22 @@ export function parseInputSuspension(value: unknown): InputSuspensionNotice {
 
 export function shouldResumeAfterInputSuspension(
   notice: InputSuspensionNotice,
-  state: {
-    inputRequested: boolean;
-    isController: boolean;
-    surfacePaused: boolean;
-    documentFocused: boolean;
-  },
+  state: InputRecoveryState & { documentFocused: boolean },
 ) {
   return notice.recoverable
-    && notice.cause === REMOTE_DESKTOP_GEOMETRY_CHANGED
     && notice.sessionRevision !== undefined
     && state.inputRequested
     && state.isController
     && !state.surfacePaused
     && state.documentFocused;
+}
+
+export function shouldResumeAfterInputError(
+  recoverable: boolean,
+  state: InputRecoveryState,
+) {
+  return recoverable
+    && state.inputRequested
+    && state.isController
+    && !state.surfacePaused;
 }

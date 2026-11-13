@@ -7,10 +7,50 @@ import {
   supportsDirectoryRemoteDesktop,
 } from "../src/control-plane-directory.ts";
 import {
+  DesktopSessionSnapshotSchema,
+  DesktopSignalTicketSchema,
   parseRemoteDesktopRelayPath,
   remoteDesktopRelaySubprotocol,
   unsupportedRemoteDesktopCapabilities,
 } from "../src/remote-desktop.ts";
+
+test("session snapshots accept total and per-source viewer counts", () => {
+  const base = {
+    viewerSessionId: "rdv_a",
+    sessionRevision: 3,
+    phase: "active",
+    captureSelection: { sourceRef: "display-primary" },
+    sessionExpiresAt: 1,
+    idleExpiresAt: null,
+    mediaPaused: false,
+    reason: null,
+  };
+  assert.deepEqual(DesktopSessionSnapshotSchema.parse(base).viewerSources, []);
+  assert.deepEqual(DesktopSessionSnapshotSchema.parse({
+    ...base,
+    viewerCount: 2,
+    viewerSources: [
+      { sourceRef: "display-primary", viewerCount: 1 },
+      { sourceRef: "window-secondary", viewerCount: 1, future: true },
+    ],
+  }).viewerSources, [
+    { sourceRef: "display-primary", viewerCount: 1 },
+    { sourceRef: "window-secondary", viewerCount: 1 },
+  ]);
+});
+
+test("signal resume tickets ignore future server fields", () => {
+  assert.deepEqual(DesktopSignalTicketSchema.parse({
+    signalUrl: "/api/remote-desktop/signal?ticket=ticket_a",
+    ticketExpiresAt: 1,
+    protocolVersion: "2026-11-11",
+    futureCapability: true,
+  }), {
+    signalUrl: "/api/remote-desktop/signal?ticket=ticket_a",
+    ticketExpiresAt: 1,
+    protocolVersion: "2026-11-11",
+  });
+});
 
 test("directory remote desktop capability is additive and N-1 safe", () => {
   assert.equal(directoryRemoteDesktopCapabilities(undefined), undefined);

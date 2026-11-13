@@ -788,3 +788,26 @@ test('approval startup shares the list request and later derives decisions from 
     jest.useRealTimers();
   }
 });
+
+test('a failed Story snapshot read acknowledges the cached result instead of retrying every debounce window', async () => {
+  jest.useFakeTimers();
+  const api = client();
+  const stories = new MobileStoryListController(api);
+  await stories.refresh();
+  const readFailure = jest.spyOn(stories, 'read').mockRejectedValue(new Error('Story snapshot was superseded.'));
+  const controller = new MobileApprovalCenterController('cp_a', api, {
+    stories, aiSessions: aiState, directory,
+    supportsAiSessions: true, supportsStories: true, supportsNodes: true,
+  });
+  try {
+    await controller.start(new AbortController().signal);
+    await jest.advanceTimersByTimeAsync(2_000);
+
+    expect(readFailure).toHaveBeenCalledTimes(1);
+    expect(controller.snapshot().sources['story-decision'].health.phase).toBe('unavailable');
+  } finally {
+    controller.stop();
+    stories.stop();
+    jest.useRealTimers();
+  }
+});

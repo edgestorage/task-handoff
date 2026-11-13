@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useIsFocused } from 'expo-router/react-navigation';
 import {
   directoryRemoteDesktopCapabilities,
@@ -10,7 +10,8 @@ import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-contro
 import { subscribeToAppLifecycle, type MobileAppPhase } from '../platform/lifecycle';
 import {
   acquireRemoteDesktopController,
-  markRemoteDesktopControllerActive,
+  releaseRemoteDesktopControllerConsumer,
+  updateRemoteDesktopControllerConsumer,
 } from './controller-registry';
 import type { RemoteDesktopController } from './controller';
 import {
@@ -53,6 +54,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
   const activeRef = useLatestRef(active);
   const interactiveRef = useLatestRef(interactive);
   const resolutionOverrideRef = useLatestRef(resolutionOverride);
+  const controllerConsumerRef = useRef({});
   const [acquired, setAcquired] = useState<{ key: string; controller: RemoteDesktopController }>();
   const runtimeKey = runtime.api && runtime.transport && controlPlaneId
     ? JSON.stringify([controlPlaneId, instanceId, sessionId || 'direct'])
@@ -118,13 +120,11 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
   useEffect(() => {
     if (!controller) return;
     const scope = { controlPlaneId, instanceId, sessionId };
-    controller.setInteractive(interactive);
-    controller.setActive(active);
-    markRemoteDesktopControllerActive(scope, active);
+    const consumer = controllerConsumerRef.current;
+    updateRemoteDesktopControllerConsumer(scope, consumer, { active, interactive });
     if (active) void controller.start();
     return () => {
-      markRemoteDesktopControllerActive(scope, false);
-      controller.setActive(false);
+      releaseRemoteDesktopControllerConsumer(scope, consumer);
     };
   }, [active, controlPlaneId, controller, instanceId, interactive, sessionId]);
 

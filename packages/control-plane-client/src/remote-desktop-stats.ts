@@ -1,12 +1,7 @@
-export type RemoteDesktopWebRTCStats = {
+import type { RemoteDesktopTransportDiagnostics } from './remote-desktop-transport.ts';
+
+export type RemoteDesktopWebRTCStats = Omit<RemoteDesktopTransportDiagnostics, 'path'> & {
   path?: 'p2p' | 'turn';
-  protocol?: string;
-  localCandidateType?: string;
-  remoteCandidateType?: string;
-  latencyMs?: number;
-  bandwidthMbps?: number;
-  codec?: string;
-  frameRate?: number;
 };
 
 export type RemoteDesktopWebRTCReceiveSample = {

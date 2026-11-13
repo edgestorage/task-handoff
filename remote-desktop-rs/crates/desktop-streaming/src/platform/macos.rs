@@ -439,6 +439,11 @@ pub fn enumerate_displays() -> anyhow::Result<Vec<crate::catalog::NativeSource<D
     Ok(sources)
 }
 impl WindowCatalog {
+    pub fn new(source_salt: String) -> Self {
+        Self {
+            references: crate::catalog::Catalog::with_salt(source_salt),
+        }
+    }
     pub async fn enumerate(
         &mut self,
         owner: crate::session::Owner,

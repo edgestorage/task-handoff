@@ -122,8 +122,30 @@
                   </TooltipContent>
                 </Tooltip>
               </div>
+              <Tooltip v-if="session">
+                <TooltipTrigger as-child>
+                  <span class="remote-desktop-viewer-count" tabindex="0" role="img" :aria-label="t('instances.remoteDesktop.viewerCount', { count: viewerCount })">
+                    <Users :size="12" aria-hidden="true" />{{ t("instances.remoteDesktop.viewerCount", { count: viewerCount }) }}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" :side-offset="8" class="remote-desktop-transport-tooltip">
+                  <div class="remote-desktop-transport-tooltip-body">
+                    <div class="remote-desktop-viewer-tooltip-heading">
+                      <strong>{{ t("instances.remoteDesktop.viewerSourcesTitle") }}</strong>
+                      <span>{{ t("instances.remoteDesktop.viewerCount", { count: viewerCount }) }}</span>
+                    </div>
+                    <div v-for="row in viewerSourceRows" :key="row.sourceRef" class="remote-desktop-viewer-tooltip-row">
+                      <span class="remote-desktop-viewer-tooltip-copy">
+                        <strong>{{ row.title }}</strong>
+                        <small v-if="row.subtitle || row.current">{{ [row.current ? t("instances.remoteDesktop.viewerSourceCurrent") : "", row.subtitle].filter(Boolean).join(" · ") }}</small>
+                      </span>
+                      <small>{{ t("instances.remoteDesktop.viewerCount", { count: row.viewerCount }) }}</small>
+                    </div>
+                    <small v-if="!viewerSourceRows.length">{{ t("instances.remoteDesktop.viewerSourcesUnavailable") }}</small>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
             </TooltipProvider>
-            <span v-if="session"><Users :size="12" aria-hidden="true" />{{ t("instances.remoteDesktop.viewerCount", { count: viewerCount }) }}</span>
             <span v-if="resolution"><Maximize2 :size="12" aria-hidden="true" />{{ resolution }}</span>
             <span v-if="sessionDeadline"><Clock3 :size="12" aria-hidden="true" />{{ sessionDeadline }}</span>
             <span v-if="idleDeadline" class="remote-desktop-idle-deadline">{{ idleDeadline }}</span>
@@ -530,8 +552,13 @@ import {
   preferredRemoteDesktopVideoCodecs,
   remoteDesktopVideoCodecLabel,
   remoteDesktopInputResumeRetryDelayMs,
+  REMOTE_DESKTOP_DIAGNOSTICS_INTERVAL_MS,
   RemoteDesktopWheelPump,
+  RemoteDesktopReceiveRateMeter,
+  RemoteDesktopRttProbe,
   REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS,
+  REMOTE_DESKTOP_RTT_INTERVAL_MS,
+  type RemoteDesktopFallbackDiagnostics,
   type RemoteDesktopWebRTCStats,
   type RemoteDesktopWebRTCReceiveSample,
 } from "@task-handoff/control-plane-client";
@@ -585,7 +612,7 @@ import { isRemoteDesktopSourceEndedError } from "@task-handoff/control-plane-cli
 import { createRemoteDesktopSession, forceStopRemoteDesktopSession, listRemoteDesktopSources, requestRemoteDesktopFallback, stopRemoteDesktopSession, type RemoteDesktopCreated, type RemoteDesktopSource } from "../../../api/remoteDesktop";
 import { useControlPlaneSettingsQuery } from "../../../api/queries";
 import { translateApiError } from "../../../i18n/apiError";
-import { parseInputSuspension, shouldResumeAfterInputSuspension } from "./remoteDesktopInputSuspension";
+import { parseInputSuspension, shouldResumeAfterInputError, shouldResumeAfterInputSuspension } from "./remoteDesktopInputSuspension";
 import { createRemoteDesktopDiagnostics, remoteDesktopErrorFields } from "./remoteDesktopDiagnostics";
 import { parseSelectedSourceIdentity, resolveRefreshedSource, selectedSourceIdentity as toSelectedSourceIdentity, type SelectedSourceIdentity } from "./remoteDesktopSourceSelection";
 import {
@@ -746,6 +773,7 @@ const webrtcPeerFailed = ref(false);
 const webCodecsSupported = ref<boolean | null>(null);
 const fallbackSize = ref<{ width: number; height: number }>();
 const fallbackEncodingDetail = ref("");
+const fallbackDiagnostics = ref<RemoteDesktopFallbackDiagnostics>();
 const documentVisible = ref(typeof document === "undefined" ? true : document.visibilityState !== "hidden");
 
 function persistViewerPreferences() {
@@ -836,6 +864,15 @@ let webrtcUpgradeBaseline: number | undefined;
 let webRTCTransportTimer: ReturnType<typeof setTimeout> | undefined;
 let webRTCTransportPeer: RTCPeerConnection | undefined;
 const fallbackAssembler = new DesktopFallbackFrameAssembler();
+const fallbackRttProbe = new RemoteDesktopRttProbe();
+const fallbackReceiveRate = new RemoteDesktopReceiveRateMeter();
+let fallbackDiagnosticsTimer: ReturnType<typeof setInterval> | undefined;
+let fallbackNextPingAt = 0;
+let fallbackLastMetricsLogAt = 0;
+let fallbackFramesReceived = 0;
+let fallbackFramesDecoded = 0;
+let fallbackDroppedFrames = 0;
+let fallbackKeyframeRequests = 0;
 
 type RecentRemoteDesktopFrame = {
   direction: "send" | "receive";
@@ -971,6 +1008,24 @@ const webRTCLatencyDetail = computed(() => webRTCCandidatePair.value?.latencyMs 
 const webRTCBandwidthDetail = computed(() => webRTCCandidatePair.value?.bandwidthMbps === undefined
   ? ""
   : t("instances.remoteDesktop.transportBandwidth", { value: formatBandwidth(webRTCCandidatePair.value.bandwidthMbps) }));
+const websocketLatencyDetail = computed(() => {
+  const diagnostics = fallbackDiagnostics.value;
+  if (diagnostics?.latencyMs !== undefined) {
+    return t("instances.remoteDesktop.transportControlLatency", { value: diagnostics.latencyMs });
+  }
+  return diagnostics?.latencyStatus === "unavailable"
+    ? t("instances.remoteDesktop.transportControlLatencyNotReported")
+    : t("instances.remoteDesktop.transportControlLatencyMeasuring");
+});
+const websocketBandwidthDetail = computed(() => {
+  const diagnostics = fallbackDiagnostics.value;
+  if (diagnostics?.bandwidthMbps !== undefined) {
+    return t("instances.remoteDesktop.transportReceiveBandwidth", { value: formatBandwidth(diagnostics.bandwidthMbps) });
+  }
+  return diagnostics?.bandwidthStatus === "unavailable"
+    ? t("instances.remoteDesktop.transportReceiveBandwidthNotReported")
+    : t("instances.remoteDesktop.transportReceiveBandwidthMeasuring");
+});
 const webRTCEncodingDetail = computed(() => encodingDetailText(
   webRTCCandidatePair.value?.codec,
   webRTCCandidatePair.value?.frameRate,
@@ -1049,7 +1104,9 @@ const transportIndicators = computed(() => {
         : websocketState === "pending"
           ? t("instances.remoteDesktop.fallbackSwitchingHint")
           : t("instances.remoteDesktop.transportWebSocketIdle"),
-      details: websocketState === "active" && fallbackEncodingDetail.value ? [fallbackEncodingDetail.value] : [],
+      details: websocketState === "active"
+        ? [websocketLatencyDetail.value, websocketBandwidthDetail.value, fallbackEncodingDetail.value].filter(Boolean)
+        : [],
     },
     {
       key: "relay",
@@ -1239,6 +1296,23 @@ const connectionLabel = computed(() => {
 const isController = computed(() => snapshot.value?.isController !== false);
 const hasController = computed(() => snapshot.value?.hasController !== false);
 const viewerCount = computed(() => snapshot.value?.viewerCount ?? 1);
+const viewerSourceRows = computed(() => {
+  const currentRef = target.value.sourceRef;
+  return (snapshot.value?.viewerSources ?? [])
+    .map((group) => {
+      const source = sources.value.find((item) => item.sourceRef === group.sourceRef);
+      return {
+        current: group.sourceRef === currentRef,
+        sourceRef: group.sourceRef,
+        subtitle: source ? sourceSecondaryText(source) : "",
+        title: source ? sourcePrimaryText(source) : t("instances.remoteDesktop.unknownViewerSource"),
+        viewerCount: group.viewerCount,
+      };
+    })
+    .sort((left, right) => Number(right.current) - Number(left.current)
+      || right.viewerCount - left.viewerCount
+      || left.title.localeCompare(right.title));
+});
 const inputActionLabel = computed(() => {
   if (inputEnabled.value) return t("instances.remoteDesktop.inputActive");
   if (!isController.value) {
@@ -2054,6 +2128,7 @@ function openFallbackSockets(info: DesktopFallbackSession, attempt: number) {
   media.binaryType = "arraybuffer";
   media.onmessage = event => {
     if (attempt !== fallbackAttempt || fallbackMedia !== media) return;
+    fallbackReceiveRate.add(messageByteLength(event) ?? 0);
     if (typeof event.data === "string") handleFallbackMediaText(event.data, attempt);
     else if (event.data instanceof ArrayBuffer) handleFallbackBinary(event.data, attempt);
   };
@@ -2106,10 +2181,75 @@ function markFallbackReady(info: DesktopFallbackSession, attempt: number) {
   connectionState.value = "connected";
   error.value = "";
   applyTransportResolution();
+  startFallbackDiagnostics();
   syncVisibility();
   enableClipboardByDefault();
   if (pc) void startWebRTCUpgradeWatch(pc);
   if (document.hasFocus()) resumeWanted();
+}
+
+function startFallbackDiagnostics() {
+  stopFallbackDiagnostics();
+  probeFallbackRtt();
+  fallbackNextPingAt = Date.now() + REMOTE_DESKTOP_RTT_INTERVAL_MS;
+  publishFallbackDiagnostics();
+  fallbackDiagnosticsTimer = setInterval(() => {
+    if (fallbackState.value !== "active") return;
+    const now = Date.now();
+    if (now >= fallbackNextPingAt) {
+      fallbackNextPingAt = now + REMOTE_DESKTOP_RTT_INTERVAL_MS;
+      probeFallbackRtt();
+    }
+    publishFallbackDiagnostics();
+  }, REMOTE_DESKTOP_DIAGNOSTICS_INTERVAL_MS);
+}
+
+function probeFallbackRtt() {
+  const request = fallbackRttProbe.begin();
+  if (request && (!wireOpen(fallbackControl) || !wire(fallbackControl, "fallback.rtt.ping", { requestId: request.requestId }))) {
+    fallbackRttProbe.cancel(request.requestId);
+  }
+}
+
+function stopFallbackDiagnostics() {
+  if (fallbackDiagnosticsTimer !== undefined) clearInterval(fallbackDiagnosticsTimer);
+  fallbackDiagnosticsTimer = undefined;
+  fallbackNextPingAt = 0;
+  fallbackLastMetricsLogAt = 0;
+  fallbackFramesReceived = 0;
+  fallbackFramesDecoded = 0;
+  fallbackDroppedFrames = 0;
+  fallbackKeyframeRequests = 0;
+  fallbackRttProbe.reset();
+  fallbackReceiveRate.reset();
+  fallbackDiagnostics.value = undefined;
+}
+
+function publishFallbackDiagnostics() {
+  if (fallbackState.value !== "active") return;
+  const latency = fallbackRttProbe.snapshot();
+  const bandwidth = fallbackReceiveRate.sample();
+  fallbackDiagnostics.value = {
+    path: "websocket",
+    latencyStatus: latency.status,
+    bandwidthStatus: bandwidth.status,
+    ...(latency.latencyMs === undefined ? {} : { latencyMs: latency.latencyMs }),
+    ...(bandwidth.mbps === undefined ? {} : { bandwidthMbps: bandwidth.mbps }),
+  };
+  const now = Date.now();
+  if (now - fallbackLastMetricsLogAt >= 900) {
+    const metrics = {
+      receiveMbps: bandwidth.mbps,
+      decodeQueueSize: fallbackDecoder?.decodeQueueSize ?? 0,
+      rttMs: latency.latencyMs,
+      droppedFrames: fallbackDroppedFrames,
+      receivedFrames: fallbackFramesReceived,
+      decodedFrames: fallbackFramesDecoded,
+      keyframeRequests: fallbackKeyframeRequests,
+    };
+    recordRemoteDesktopDiagnostic("fallback.metrics", metrics);
+    fallbackLastMetricsLogAt = now;
+  }
 }
 
 function scheduleFallbackRetry(attempt: number, code: string) {
@@ -2251,6 +2391,7 @@ function closeFallbackSockets() {
   const control = fallbackControl;
   fallbackMedia = undefined;
   fallbackControl = undefined;
+  stopFallbackDiagnostics();
   media?.close();
   control?.close();
 }
@@ -2335,7 +2476,11 @@ function handleFallbackBinary(buffer: ArrayBuffer, attempt: number) {
   let assembled;
   try { assembled = fallbackAssembler.push(frame); } catch { handleFallbackTransportFailure(attempt, "REMOTE_DESKTOP_FALLBACK_MEDIA_INVALID"); return; }
   if (assembled.type !== "frame") return;
-  if (assembled.skippedFrames) fallbackNeedsKeyframe = true;
+  fallbackFramesReceived += 1;
+  if (assembled.skippedFrames) {
+    fallbackDroppedFrames += 1;
+    fallbackNeedsKeyframe = true;
+  }
   decodeFallbackVideo(assembled.payload, assembled.keyframe, assembled.timestampUs);
 }
 
@@ -2354,6 +2499,7 @@ function ensureFallbackDecoder() {
       error: () => {
         fallbackDecoderNeedsReset = true;
         fallbackNeedsKeyframe = true;
+        fallbackDroppedFrames += 1;
         requestFallbackKeyframe();
       },
     });
@@ -2382,6 +2528,7 @@ function decodeFallbackVideo(data: Uint8Array, keyframe: boolean, timestampUs: b
   const decoder = ensureFallbackDecoder();
   if (!decoder) return;
   if (!keyframe && decoder.decodeQueueSize > 8) {
+    fallbackDroppedFrames += 1;
     fallbackNeedsKeyframe = true;
     requestFallbackKeyframe();
     return;
@@ -2390,6 +2537,7 @@ function decodeFallbackVideo(data: Uint8Array, keyframe: boolean, timestampUs: b
   fallbackLastTimestampUs = timestamp;
   try {
     decoder.decode(new EncodedVideoChunk({ type: keyframe ? "key" : "delta", timestamp, data }));
+    fallbackFramesDecoded += 1;
     if (keyframe) fallbackNeedsKeyframe = false;
   } catch {
     fallbackDecoderNeedsReset = true;
@@ -2419,11 +2567,19 @@ function requestFallbackKeyframe() {
   const now = Date.now();
   if (now - fallbackLastKeyframeRequest < 500) return;
   fallbackLastKeyframeRequest = now;
+  fallbackKeyframeRequests += 1;
   fallbackMedia.send(JSON.stringify({ type: "fallback.keyframe-request" }));
 }
 
 function handleFallbackControlValue(value: any, attempt: number) {
   if (attempt !== fallbackAttempt || !fallbackSession) return;
+  if (value?.type === "fallback.rtt.pong") {
+    if (typeof value.payload?.requestId === "string") {
+      fallbackRttProbe.complete(value.payload.requestId);
+      publishFallbackDiagnostics();
+    }
+    return;
+  }
   if (value?.type === "fallback.ready") {
     if (value.payload?.fallbackGeneration !== fallbackSession.fallbackGeneration) return;
     markFallbackReady(fallbackSession, attempt);
@@ -2507,11 +2663,14 @@ function handleControlValue(value: any, channel = "control") {
       recordRemoteDesktopDiagnostic("input.late-error.ignored", { controlCode: code, inputEpoch: epoch });
       return;
     }
-    const retryingInput = (
-      inputResumePending
-      || inputResumeRetryTimer !== undefined
-      || inputResumeRetryCount > 0
-    ) && isRecoverableRemoteDesktopInputResumeError(code);
+    const retryingInput = shouldResumeAfterInputError(
+      isRecoverableRemoteDesktopInputResumeError(code),
+      {
+        inputRequested: inputRequested.value,
+        isController: isController.value,
+        surfacePaused: surfacePaused(),
+      },
+    );
     if (retryingInput) {
       releaseInputState(false);
       recordRemoteDesktopDiagnostic("input.resume.error", {
@@ -2628,7 +2787,10 @@ function pointerMove(event: PointerEvent) {
 
 function pointerButton(event: PointerEvent, down: boolean) {
   if (!inputEnabled.value) {
-    if (down) showControlHint();
+    if (down) {
+      if (inputRequested.value && isController.value && !surfacePaused()) resumeWanted();
+      else showControlHint();
+    }
     return;
   }
   const position = normalizedPointer(event);
@@ -3478,6 +3640,51 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 400;
   line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.remote-desktop-viewer-count {
+  cursor: help;
+}
+
+:global(.remote-desktop-viewer-tooltip-heading) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+:global(.remote-desktop-viewer-tooltip-heading strong) {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+:global(.remote-desktop-viewer-tooltip-heading span) {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+:global(.remote-desktop-viewer-tooltip-row) {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-subtle);
+}
+
+:global(.remote-desktop-viewer-tooltip-copy) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+:global(.remote-desktop-viewer-tooltip-copy strong) {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 

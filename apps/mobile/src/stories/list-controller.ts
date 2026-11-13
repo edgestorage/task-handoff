@@ -90,11 +90,11 @@ export class MobileStoryListController {
 
   /** A reader never owns cancellation of the shared HTTP request. */
   async read(signal?: AbortSignal): Promise<StoryList> {
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     if (this.state.phase === 'error') throw this.lastError;
     const result = this.inFlight ? await this.inFlight
       : this.state.phase === 'ready' && this.state.result ? this.state.result : await this.refresh();
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     return result;
   }
 
@@ -152,4 +152,8 @@ export function mobileStoryListFor(client: ControlPlaneClient) {
   let controller = controllers.get(client);
   if (!controller) { controller = new MobileStoryListController(client); controllers.set(client, controller); }
   return controller;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw (signal as AbortSignal & { reason?: unknown }).reason ?? new Error('Aborted');
 }

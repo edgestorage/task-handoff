@@ -25,7 +25,9 @@ function isRemoteDesktopNotFound(error: unknown) {
 }
 type Entry = {
   principal: DesktopPrincipal; key: string; instanceId: string; nodeId: string; viewerSessionId: string;
-  captureSelection: DesktopCaptureSelection; attachToken?: string; ticket?: string; ticketExpiresAt: number;
+  captureSelection: DesktopCaptureSelection; attachToken?: string; initialTicket?: string;
+  attached?: boolean; attachTask?: Promise<void>;
+  signalBind?: (socket: NodeAgentWebSocket) => void; signalSend?: (value: unknown) => void;
   ice: DesktopIceConfig; socket?: NodeAgentWebSocket; release?: () => void;
   timers: Set<ReturnType<typeof setTimeout>>; closed: boolean;
   transportLossTimer?: ReturnType<typeof setTimeout>;
@@ -45,7 +47,12 @@ type FallbackCapacity = { maxSessions: number; maxTotalBitrate: number };
  * order. Keep the component reservation long enough for the viewer to obtain a
  * fresh signal or fallback pair instead of turning a transport interruption
  * into a session stop. */
-const TRANSPORT_LOSS_GRACE_MS = 15_000;
+const TRANSPORT_LOSS_GRACE_MS = 30_000;
+/** A resumed signal credential is short-lived and only usable by the same
+ * owner, instance and viewer session. It is deliberately not the create-time
+ * attach token: reconnect replaces the browser tunnel without re-attaching the
+ * component or changing the WebRTC media session. */
+const SIGNAL_TICKET_TTL_MS = 15_000;
 /** The component expires its signaling lease after six seconds. The browser
  * socket may disappear independently of the Control Plane -> component attach
  * channel, so keep that upstream channel alive from the Control Plane while the
@@ -65,7 +72,7 @@ type Options = {
  * sole session authority: no copied lifecycle state or synthesized revisions. */
 export class DesktopAccess {
   private readonly entries = new Map<string, Entry>();
-  private readonly tickets = new Map<string, Entry>();
+  private readonly tickets = new Map<string, { entry: Entry; expiresAt: number }>();
   private readonly retries = new Map<string, { until: number; input: string; promise: Promise<unknown>; principalKey: string }>();
   private readonly rates = new Map<string, number[]>();
   private readonly fallbackCapacity: FallbackCapacity;
@@ -97,6 +104,7 @@ export class DesktopAccess {
     const now = this.now();
     for (const [key, value] of this.retries) if (value.until <= now) this.retries.delete(key);
     for (const [key, values] of this.rates) { const recent = values.filter(at => at > now - 60_000); if (recent.length) this.rates.set(key, recent); else this.rates.delete(key); }
+    for (const [ticket, value] of this.tickets) if (value.expiresAt <= now) this.tickets.delete(ticket);
   }
   async mutate(principal: DesktopPrincipal, instanceId: string, requestId: string, input: unknown, run: () => Promise<unknown>) {
     this.purge();
@@ -124,11 +132,11 @@ export class DesktopAccess {
     // roundtrip in the caller; authority may additionally expose a shorter one.
     const authorityDeadline = typeof result.attachExpiresAt === "number" ? result.attachExpiresAt : this.now();
     const expires = Math.min(this.now() + 30_000, authorityDeadline, principal.expiresAt ?? Infinity);
-    const entry: Entry = { principal, key: desktopPrincipalKey(principal), instanceId, nodeId, viewerSessionId: snapshot.viewerSessionId, captureSelection, attachToken: result.attachToken, ticketExpiresAt: expires, ice, timers: new Set(), closed: false };
-    const ticket = randomBytes(32).toString("base64url"); entry.ticket = ticket;
+    const entry: Entry = { principal, key: desktopPrincipalKey(principal), instanceId, nodeId, viewerSessionId: snapshot.viewerSessionId, captureSelection, attachToken: result.attachToken, ice, timers: new Set(), closed: false };
+    const ticket = randomBytes(32).toString("base64url"); entry.initialTicket = ticket;
     entry.release = this.options.watch?.(principal, () => void this.close(entry));
-    this.entries.set(entry.viewerSessionId, entry); this.tickets.set(ticket, entry);
-    this.timer(entry, expires - this.now(), () => { if (entry.ticket) void this.close(entry); });
+    this.entries.set(entry.viewerSessionId, entry); this.tickets.set(ticket, { entry, expiresAt: expires });
+    this.timer(entry, expires - this.now(), () => { if (this.tickets.has(ticket)) void this.close(entry); });
     if (principal.expiresAt !== undefined) this.timer(entry, principal.expiresAt - this.now(), () => void this.close(entry));
     return { snapshot, ticket, ticketExpiresAt: expires, ...ice };
   }
@@ -159,10 +167,19 @@ export class DesktopAccess {
     const entry = this.entries.get(id); if (entry?.instanceId === instanceId) await this.close(entry, false); return result;
   }
   consume(principal: DesktopPrincipal, instanceId: string, id: string, ticket: string) {
-    const entry = this.tickets.get(ticket);
-    if (!entry || entry.instanceId !== instanceId || entry.viewerSessionId !== id || entry.key !== desktopPrincipalKey(principal) || entry.closed || entry.ticketExpiresAt <= this.now()) throw failure("REMOTE_DESKTOP_TICKET_INVALID", 401);
-    this.tickets.delete(ticket); entry.ticket = undefined;
+    const value = this.tickets.get(ticket);
+    const entry = value?.entry;
+    if (!value || !entry || value.expiresAt <= this.now() || entry.instanceId !== instanceId || entry.viewerSessionId !== id || entry.key !== desktopPrincipalKey(principal) || entry.closed) throw failure("REMOTE_DESKTOP_TICKET_INVALID", 401);
+    this.tickets.delete(ticket);
     return entry;
+  }
+  issueSignalTicket(principal: DesktopPrincipal, instanceId: string, id: string) {
+    const entry = this.ownerEntry(principal, instanceId, id);
+    this.purge();
+    const ticket = randomBytes(32).toString("base64url");
+    const expiresAt = Math.min(this.now() + SIGNAL_TICKET_TTL_MS, principal.expiresAt ?? Infinity);
+    this.tickets.set(ticket, { entry, expiresAt });
+    return { ticket, ticketExpiresAt: expiresAt };
   }
   issueFallback(principal: DesktopPrincipal, instanceId: string, id: string, bitrate = 8_000_000) {
     const entry = this.ownerEntry(principal, instanceId, id);
@@ -255,15 +272,30 @@ export class DesktopAccess {
     for (const socket of sockets) socket.close(1000, "Remote desktop fallback replaced.");
   }
   async connect(entry: Entry, socket: NodeAgentWebSocket) {
-    if (entry.closed || !entry.attachToken) throw failure("REMOTE_DESKTOP_TICKET_INVALID", 401);
+    if (entry.closed) throw failure("REMOTE_DESKTOP_TICKET_INVALID", 401);
+    // A resumed signal ticket replaces only the browser-facing tunnel. The
+    // component attach (and therefore the WebRTC peer/media) stays alive.
+    if (entry.attached && entry.signalBind) {
+      this.clearTransportLoss(entry);
+      entry.signalBind(socket);
+      return;
+    }
+    if (entry.attachTask) {
+      await entry.attachTask;
+      if (entry.closed || !entry.signalBind) throw failure("REMOTE_DESKTOP_TICKET_INVALID", 401);
+      this.clearTransportLoss(entry);
+      entry.signalBind(socket);
+      return;
+    }
+    if (!entry.attachToken) throw failure("REMOTE_DESKTOP_TICKET_INVALID", 401);
     this.clearTransportLoss(entry);
-    entry.socket = socket;
-    let closed = false, ready = false, count = 0, candidates = 0, rateAt = performance.now(), lastRevision = -1;
+    let ready = false, count = 0, candidates = 0, rateAt = performance.now(), lastRevision = -1;
     let configuring: string | undefined; let negotiation: string | undefined; let renewal: DesktopIceConfig | undefined;
     let browserRecovered = false;
     let lastTransportGeneration = -1; let renewalTransportGeneration = -1;
+    let latestSnapshot: ReturnType<typeof DesktopSessionSnapshotSchema.parse> | undefined;
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
-    const send = (value: unknown) => { if (!closed && socket.readyState === 1) socket.send(JSON.stringify(value)); };
+    const send = (value: unknown) => entry.signalSend?.(value);
     const fail = (code = "REMOTE_DESKTOP_SIGNAL_INVALID") => { send({ type: "error", code }); void this.close(entry); };
     const relay = new EventEmitter() as EventEmitter & NodeAgentWebSocket;
     relay.readyState = 1;
@@ -281,7 +313,7 @@ export class DesktopAccess {
       if (entry.closed || relay.readyState !== 1) return;
       relay.emit("message", Buffer.from(JSON.stringify(value)), false);
     };
-    const forward = (value: unknown) => { if (!closed) forwardUpstream(value); };
+    const forward = (value: unknown) => forwardUpstream(value);
     const installExpiry = (ice: DesktopIceConfig) => {
       if (expiryTimer) { clearTimeout(expiryTimer); entry.timers.delete(expiryTimer); }
       if (ice.iceCredentialsExpiresAt !== null) expiryTimer = this.timer(entry, ice.iceCredentialsExpiresAt - this.now(), () => void this.close(entry));
@@ -290,7 +322,7 @@ export class DesktopAccess {
       if (entry.ice.iceCredentialsExpiresAt === null) return;
       this.timer(entry, entry.ice.iceCredentialsExpiresAt - this.now() - 120_000, () => {
         void (async () => {
-          if (closed || negotiation || configuring || !(await this.options.renewAuthorization(entry.principal))) throw failure("REMOTE_DESKTOP_AUTHORIZATION_CHANGED");
+          if (entry.closed || negotiation || configuring || !(await this.options.renewAuthorization(entry.principal))) throw failure("REMOTE_DESKTOP_AUTHORIZATION_CHANGED");
           renewal = this.options.issueIce();
           configuring = randomBytes(16).toString("hex");
           forward({ type: "configureIce", requestId: configuring, ...renewal });
@@ -298,6 +330,67 @@ export class DesktopAccess {
         })().catch(() => void this.close(entry));
       });
     };
+    const bindSignalSocket = (nextSocket: NodeAgentWebSocket) => {
+      const previous = entry.socket;
+      entry.socket = nextSocket;
+      let socketClosed = false;
+      const socketSend = (value: unknown) => {
+        if (!socketClosed && nextSocket.readyState === 1) nextSocket.send(JSON.stringify(value));
+      };
+      entry.signalSend = socketSend;
+      const socketLost = () => {
+        if (entry.socket !== nextSocket) return;
+        entry.socket = undefined;
+        entry.signalSend = undefined;
+        if (entry.closed) return;
+        this.retainAfterTransportLoss(entry, TRANSPORT_LOSS_GRACE_MS);
+      };
+      nextSocket.on("close", () => { socketClosed = true; socketLost(); });
+      nextSocket.on("error", socketLost);
+      nextSocket.on("message", (data: unknown, binary: unknown) => {
+        try {
+          if (socketClosed || entry.socket !== nextSocket) return;
+          const now = performance.now(); if (now - rateAt >= 1000) { rateAt = now; count = 0; }
+          const text = String(data); if (binary || Buffer.byteLength(text) > 512 * 1024 || ++count > 64) throw new Error();
+          const message = DesktopSignalSchema.parse(JSON.parse(text));
+          // Liveness may arrive immediately after the socket opens, before the
+          // component has sent its first snapshot. Accept it instead of failing
+          // the viewer, but only relay it once the upstream binding is ready so
+          // the component can renew its own six-second signal lease.
+          if (message.type === "signalAlive") {
+            if (ready) forward(message);
+            return;
+          }
+          if (!ready || configuring) throw new Error();
+          if (message.type === "stop") { void this.close(entry); return; }
+          // Browser acknowledgements are transport-local. The component's own
+          // configuration acknowledgement is the authority used by relay.send.
+          if (message.type === "acknowledged") return;
+          if (message.type === "iceRestarted") {
+            if (!renewal) return;
+            browserRecovered = true;
+            completeRenewal();
+            return;
+          }
+          if (message.type === "candidate" && ++candidates > 256) throw new Error();
+          if (message.type === "offer") { if (negotiation) throw new Error(); negotiation = message.requestId; }
+          forward(message);
+        } catch {
+          socketSend({ type: "error", code: "REMOTE_DESKTOP_SIGNAL_INVALID" });
+          if (entry.socket === nextSocket) void this.close(entry);
+        }
+      });
+      // Install the replacement before closing the old tunnel so its close
+      // handler cannot start a transport-loss grace for the live session.
+      if (previous && previous !== nextSocket) previous.close(1000, "Remote desktop signaling replaced.");
+      if (entry.attached) {
+        if (latestSnapshot) socketSend({ type: "snapshot", snapshot: latestSnapshot });
+        if (ready) socketSend({ type: "ready" });
+        else if (configuring) socketSend({ type: "configureIce", requestId: configuring, ...entry.ice });
+      }
+    };
+    entry.signalBind = bindSignalSocket;
+    bindSignalSocket(socket);
     // Credential renewal is two-sided: the browser must observe its restored
     // candidate pair, and the component must advance its own transport
     // generation after the restarted ICE generation connects. A snapshot
@@ -311,7 +404,7 @@ export class DesktopAccess {
     };
     relay.send = (data: unknown, options?: { binary?: boolean }) => {
       try {
-        if (closed) return;
+        if (entry.closed) return;
         const text = String(data); if (options?.binary || Buffer.byteLength(text) > 512 * 1024) throw new Error();
         const message = JSON.parse(text) as Record<string, any>;
         if (message.type === "snapshot") {
@@ -319,6 +412,7 @@ export class DesktopAccess {
           if (typeof generation === "number" && Number.isSafeInteger(generation) && generation >= 0) lastTransportGeneration = Math.max(lastTransportGeneration, generation);
           const snapshot = DesktopSessionSnapshotSchema.parse(message.snapshot);
           if (snapshot.viewerSessionId !== entry.viewerSessionId) throw new Error();
+          latestSnapshot = snapshot;
           if (snapshot.sessionRevision <= lastRevision) return;
           lastRevision = snapshot.sessionRevision; send({ type: "snapshot", snapshot });
           if (!ready) {
@@ -356,54 +450,26 @@ export class DesktopAccess {
         else if (message.type !== "acknowledged") throw new Error();
       } catch { fail(); }
     };
-    const signalLost = () => {
-      if (entry.socket === socket) entry.socket = undefined;
-      if (entry.closed) return;
-      this.retainAfterTransportLoss(entry, TRANSPORT_LOSS_GRACE_MS);
-    };
-    socket.on("close", () => { closed = true; signalLost(); });
-    socket.on("error", signalLost);
-    socket.on("message", (data: unknown, binary: unknown) => {
+    const attachTask = (async () => {
       try {
-        if (closed) return;
-        const now = performance.now(); if (now - rateAt >= 1000) { rateAt = now; count = 0; }
-        const text = String(data); if (binary || Buffer.byteLength(text) > 512 * 1024 || ++count > 64) throw new Error();
-        const message = DesktopSignalSchema.parse(JSON.parse(text));
-        // Liveness may arrive immediately after the socket opens, before the
-        // component has sent its first snapshot. Accept it instead of failing
-        // the viewer, but only relay it once the upstream binding is ready so
-        // the component can renew its own six-second signal lease.
-        if (message.type === "signalAlive") {
-          if (ready) forward(message);
-          return;
-        }
-        if (!ready || configuring) throw new Error();
-        if (message.type === "stop") { void this.close(entry); return; }
-        // Browser acknowledgements are transport-local. The component's own
-        // configuration acknowledgement is the authority used by relay.send.
-        if (message.type === "acknowledged") return;
-        if (message.type === "iceRestarted") {
-          if (!renewal) return;
-          browserRecovered = true;
-          completeRenewal();
-          return;
-        }
-        if (message.type === "candidate" && ++candidates > 256) throw new Error();
-        if (message.type === "offer") { if (negotiation) throw new Error(); negotiation = message.requestId; }
-        forward(message);
-      } catch { fail(); }
-    });
-    try {
-      await this.options.attach(entry.instanceId, relay);
-      if (entry.closed || closed) return;
-      forward({ requestId: randomBytes(16).toString("hex"), owner: desktopOwner(entry.principal), viewerSessionId: entry.viewerSessionId, captureSelection: entry.captureSelection, attachToken: entry.attachToken });
-      entry.attachToken = undefined;
-      const heartbeat = () => forwardUpstream({ type: "signalAlive", requestId: randomBytes(16).toString("hex") });
-      heartbeat();
-      entry.upstreamHeartbeat = setInterval(heartbeat, UPSTREAM_SIGNAL_ALIVE_MS);
-      entry.upstreamHeartbeat.unref?.();
-      installExpiry(entry.ice);
-    } catch { await this.close(entry); }
+        await this.options.attach(entry.instanceId, relay);
+        if (entry.closed) return;
+        entry.attached = true;
+        // Once the component attach succeeds, a fresh signal-ticket recovery is
+        // allowed to complete even if the original create ticket was never
+        // consumed. The create-time deadline must not tear down a live viewer.
+        if (entry.initialTicket) { this.tickets.delete(entry.initialTicket); entry.initialTicket = undefined; }
+        forward({ requestId: randomBytes(16).toString("hex"), owner: desktopOwner(entry.principal), viewerSessionId: entry.viewerSessionId, captureSelection: entry.captureSelection, attachToken: entry.attachToken });
+        entry.attachToken = undefined;
+        const heartbeat = () => forwardUpstream({ type: "signalAlive", requestId: randomBytes(16).toString("hex") });
+        heartbeat();
+        entry.upstreamHeartbeat = setInterval(heartbeat, UPSTREAM_SIGNAL_ALIVE_MS);
+        entry.upstreamHeartbeat.unref?.();
+        installExpiry(entry.ice);
+      } catch { await this.close(entry); }
+    })();
+    entry.attachTask = attachTask;
+    try { await attachTask; } finally { if (entry.attachTask === attachTask) entry.attachTask = undefined; }
   }
   bind(entry: Entry, release: () => void) { if (entry.closed) release(); else entry.release = release; }
   async close(entry: Entry, stop = true) {
@@ -411,9 +477,10 @@ export class DesktopAccess {
     this.clearTransportLoss(entry);
     if (entry.upstreamHeartbeat) clearInterval(entry.upstreamHeartbeat);
     entry.upstreamHeartbeat = undefined;
-    if (entry.ticket) this.tickets.delete(entry.ticket);
+    for (const [ticket, value] of this.tickets) if (value.entry === entry) this.tickets.delete(ticket);
     this.closeFallback(entry);
-    entry.attachToken = undefined; entry.ticket = undefined;
+    entry.attachToken = undefined; entry.initialTicket = undefined;
+    entry.signalBind = undefined; entry.signalSend = undefined;
     this.entries.delete(entry.viewerSessionId);
     // Clear cached create responses as well: tickets/TURN credentials must not
     // survive a revoked authorization or consumed/terminated reservation.

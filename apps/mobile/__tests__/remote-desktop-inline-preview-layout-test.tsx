@@ -24,13 +24,14 @@ jest.mock('../src/remote-desktop/RemoteDesktopVideoSurface', () => ({
   RemoteDesktopVideoSurface: () => null,
 }));
 
+let mockRemoteDesktopPhase: 'connecting' | 'connected' = 'connecting';
 jest.mock('../src/remote-desktop/use-remote-desktop', () => ({
   useRemoteDesktop: () => ({
     controller: undefined,
     ready: true,
     snapshot: {
       path: null,
-      phase: 'connecting',
+      phase: mockRemoteDesktopPhase,
       target: { height: 720, kind: 'window', sourceRef: 'window-1', width: 1280 },
       videoHeight: 0,
       videoWidth: 0,
@@ -52,6 +53,19 @@ test('inline preview fills the card width and expands without its own top gap or
   }));
   expect(StyleSheet.flatten(host.props.style).marginTop).toBeUndefined();
   expect(screen.queryByTestId('icon-expand-outline')).toBeNull();
+  expect(screen.getByTestId('session-remote-desktop-inline-status')).toBeTruthy();
+});
+
+test('connected inline previews omit the redundant connection badge', async () => {
+  mockRemoteDesktopPhase = 'connected';
+  const screen = await render(<SessionRemoteDesktopInlinePreview
+    instanceId="instance-1"
+    onOpenDetail={jest.fn()}
+    sessionId="session-1"
+  />);
+
+  expect(screen.queryByTestId('session-remote-desktop-inline-status')).toBeNull();
+  mockRemoteDesktopPhase = 'connecting';
 });
 
 test('caps tall inline previews while keeping the card full width', async () => {

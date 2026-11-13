@@ -1,5 +1,5 @@
-import type { DesktopSessionSnapshot } from '@task-handoff/protocol/remote-desktop';
-import type { RemoteDesktopWebRTCStats } from '@task-handoff/control-plane-client';
+import type { DesktopSessionSnapshot, DesktopViewerSource } from '@task-handoff/protocol/remote-desktop';
+import type { RemoteDesktopTransportDiagnostics } from '@task-handoff/control-plane-client';
 
 import type {
   PersistedCaptureTarget,
@@ -26,7 +26,7 @@ export type RemoteDesktopSnapshot = {
   videoCodec?: string;
   videoFrameRate?: number;
   path?: RemoteDesktopPath;
-  transportDiagnostics?: RemoteDesktopWebRTCStats;
+  transportDiagnostics?: RemoteDesktopTransportDiagnostics;
   signalingReady: boolean;
   paused: boolean;
   inputEnabled: boolean;
@@ -36,6 +36,7 @@ export type RemoteDesktopSnapshot = {
   isController: boolean;
   hasController: boolean;
   viewerCount: number;
+  viewerSources: DesktopViewerSource[];
   target: PersistedCaptureTarget;
   resolution: RemoteDesktopResolution;
   frameRate: RemoteDesktopFrameRate;
@@ -57,6 +58,7 @@ export const emptyRemoteDesktopSnapshot: RemoteDesktopSnapshot = {
   isController: true,
   hasController: true,
   viewerCount: 1,
+  viewerSources: [],
   target: { kind: 'display' },
   resolution: 'auto',
   frameRate: 'auto',

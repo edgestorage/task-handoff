@@ -1,7 +1,12 @@
 jest.mock('../src/remote-desktop/controller', () => {
   const instances: Array<{ close: jest.Mock; input: Record<string, unknown> }> = [];
   const RemoteDesktopController = jest.fn().mockImplementation((input: Record<string, unknown>) => {
-    const controller = { close: jest.fn(async () => undefined), input };
+    const controller = {
+      close: jest.fn(async () => undefined),
+      input,
+      setActive: jest.fn(),
+      setInteractive: jest.fn(),
+    };
     instances.push(controller);
     return controller;
   });
@@ -35,6 +40,10 @@ function acquire(registry: RegistryModule, sessionId: string, active = true) {
   });
 }
 
+function scope(sessionId: string) {
+  return { controlPlaneId: 'cp_1', instanceId: 'instance_1', sessionId };
+}
+
 test('reuses one controller for the same session scope', () => {
   const registry = loadRegistry();
   const first = acquire(registry, 'session_a');
@@ -47,9 +56,9 @@ test('keeps two real controller scopes and evicts the least recently used inacti
   jest.spyOn(Date, 'now').mockImplementation(() => now++);
   const registry = loadRegistry();
   const first = acquire(registry, 'session_a');
-  registry.markRemoteDesktopControllerActive({ controlPlaneId: 'cp_1', instanceId: 'instance_1', sessionId: 'session_a' }, false);
+  registry.updateRemoteDesktopControllerConsumer(scope('session_a'), {}, { active: false, interactive: false });
   const second = acquire(registry, 'session_b');
-  registry.markRemoteDesktopControllerActive({ controlPlaneId: 'cp_1', instanceId: 'instance_1', sessionId: 'session_b' }, false);
+  registry.updateRemoteDesktopControllerConsumer(scope('session_b'), {}, { active: false, interactive: false });
   const third = acquire(registry, 'session_c');
 
   expect((first as unknown as { close: jest.Mock }).close).toHaveBeenCalledTimes(1);
@@ -61,6 +70,34 @@ test('keeps two real controller scopes and evicts the least recently used inacti
   expect((third as unknown as { close: jest.Mock }).close).not.toHaveBeenCalled();
   expect((fourth as unknown as { close: jest.Mock }).close).not.toHaveBeenCalled();
   jest.restoreAllMocks();
+});
+
+test('keeps a shared controller active until the last consumer releases its lease', () => {
+  const registry = loadRegistry();
+  const controller = acquire(registry, 'session_a') as unknown as {
+    setActive: jest.Mock;
+    setInteractive: jest.Mock;
+  };
+  const previewConsumer = {};
+  const detailConsumer = {};
+
+  registry.updateRemoteDesktopControllerConsumer(scope('session_a'), previewConsumer, {
+    active: true,
+    interactive: false,
+  });
+  registry.updateRemoteDesktopControllerConsumer(scope('session_a'), detailConsumer, {
+    active: true,
+    interactive: true,
+  });
+  registry.releaseRemoteDesktopControllerConsumer(scope('session_a'), previewConsumer);
+
+  expect(controller.setActive).toHaveBeenLastCalledWith(true);
+  expect(controller.setInteractive).toHaveBeenLastCalledWith(true);
+
+  registry.releaseRemoteDesktopControllerConsumer(scope('session_a'), detailConsumer);
+
+  expect(controller.setActive).toHaveBeenLastCalledWith(false);
+  expect(controller.setInteractive).toHaveBeenLastCalledWith(false);
 });
 
 test('does not evict a currently active controller', () => {

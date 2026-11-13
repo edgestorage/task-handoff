@@ -100,18 +100,18 @@ export class DesktopComponentHost extends EventEmitter {
   }
   get closed() { return this.ended; }
 
-  static async spawn(binary: string, mode: "local" | "virtual" | "control") {
+  static async spawn(binary: string, mode: "local" | "virtual" | "control", stateDir?: string) {
     if (process.platform === "win32") throw new Error("REMOTE_DESKTOP_PLATFORM_UNSUPPORTED");
     if (!path.isAbsolute(binary)) throw new Error("REMOTE_DESKTOP_PACKAGE_INVALID");
     const host = new DesktopComponentHost();
-    try { await host.start(binary, mode); return host; }
+    try { await host.start(binary, mode, stateDir); return host; }
     catch (error) {
       await host.close();
       if (error instanceof Error && (error.message === "REMOTE_DESKTOP_PROTOCOL_MISMATCH" || error.message === "REMOTE_DESKTOP_IPC_AUTH_FAILED")) throw error;
       throw new Error("REMOTE_DESKTOP_COMPONENT_START_FAILED");
     }
   }
-  private async start(binary: string, mode: "local" | "virtual" | "control") {
+  private async start(binary: string, mode: "local" | "virtual" | "control", stateDir?: string) {
     this.directory = fs.mkdtempSync(path.join(process.platform === "darwin" ? "/private/tmp" : os.tmpdir(), "th-desktop-host-"));
     fs.chmodSync(this.directory, 0o700);
     const endpoint = path.join(this.directory, "host.sock");
@@ -155,7 +155,10 @@ export class DesktopComponentHost extends EventEmitter {
         const args = mode === "control"
           ? ["--ipc", endpoint]
           : [mode === "local" ? "--native" : "--virtual", "--ipc", endpoint, "--system-cursor"];
-        this.child = spawn(binary, args, { stdio: ["pipe", "pipe", "pipe"] });
+        const env = stateDir
+          ? { ...process.env, TASK_HANDOFF_DESKTOP_STATE_DIR: stateDir }
+          : process.env;
+        this.child = spawn(binary, args, { stdio: ["pipe", "pipe", "pipe"], env });
         this.child.stdout.resume(); this.child.stderr.resume();
         this.child.stdin.on("error", () => { settle(new Error("REMOTE_DESKTOP_IPC_CLOSED")); void this.close(); });
         this.exit = new Promise<void>((resolveExit) => {

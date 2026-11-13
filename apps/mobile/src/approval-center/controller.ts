@@ -38,7 +38,7 @@ import type { MobileStoryListController } from '../stories/list-controller';
 import { isStoryDecisionResumePending } from '../stories/story-decision';
 import type { MobileControlPlaneEvent } from '../control-plane/transport';
 import { MobileControlPlaneTransportError } from '../control-plane/transport';
-import { diagnosticLog } from '../observability/diagnostic-logs';
+import { diagnosticErrorDetails, diagnosticLog } from '../observability/diagnostic-logs';
 import { traceDiagnosticTask } from '../observability/diagnostic-timing';
 import { mobileMetrics } from '../observability/mobile-metrics';
 
@@ -507,6 +507,21 @@ export class MobileApprovalCenterController {
         this.updateStoryItems(partial ? 'stale' : 'ready', partial ? 'SOURCE_PARTIAL' : undefined);
       } catch (cause) {
         if (!this.live(epoch, signal)) return;
+        // A failed read leaves `observedStoryResult` on the previous value. If
+        // the shared Story controller still has that cached snapshot in the
+        // `ready` phase, both the subscription and the refresh `finally` below
+        // see a permanent "result changed" signal and retry every debounce
+        // window. Acknowledge the current authoritative result on failure so
+        // recovery is driven by the Story controller's next transition or an
+        // explicit retry, not by a tight refresh loop.
+        const shared = this.options.stories.snapshot();
+        this.observedStoryResult = shared.result;
+        diagnosticLog.warn('approval.stories.snapshot-read.failed', {
+          refreshId,
+          storyPhase: shared.phase,
+          hasStoryResult: Boolean(shared.result),
+          ...diagnosticErrorDetails(cause),
+        });
         this.markUnavailable(source, cause);
       }
     }, signal);

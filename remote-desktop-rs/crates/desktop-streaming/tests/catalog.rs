@@ -151,6 +151,67 @@ fn source_references_are_opaque_stable_and_owner_bound() {
         Err(CatalogError::InvalidReference)
     );
 }
+
+#[test]
+fn source_reference_survives_temporary_absence_from_catalog() {
+    let now = Instant::now();
+    let mut c = Catalog::default();
+    let first = c.publish(owner(), vec![source()], now).unwrap().remove(0);
+    c.publish(owner(), Vec::<NativeSource<u64>>::new(), now)
+        .unwrap();
+    let reappeared = c.publish(owner(), vec![source()], now).unwrap().remove(0);
+    assert_eq!(first.source_ref, reappeared.source_ref);
+}
+
+#[test]
+fn source_reference_survives_catalog_restart_with_same_instance_salt() {
+    let now = Instant::now();
+    let salt = "ab".repeat(32);
+    let mut first = Catalog::<u64>::with_salt(salt.clone());
+    let before_restart = first
+        .publish(owner(), vec![source()], now)
+        .unwrap()
+        .remove(0);
+
+    let mut restarted = Catalog::<u64>::with_salt(salt);
+    let after_restart = restarted
+        .publish(owner(), vec![source()], now)
+        .unwrap()
+        .remove(0);
+
+    assert_eq!(before_restart.source_ref, after_restart.source_ref);
+    assert_eq!(
+        restarted.consume(&before_restart.source_ref, &owner(), now),
+        Ok(0x123456)
+    );
+}
+
+#[test]
+fn source_reference_is_scoped_to_the_instance_salt() {
+    let now = Instant::now();
+    let mut first = Catalog::<u64>::with_salt("ab".repeat(32));
+    let mut second = Catalog::<u64>::with_salt("cd".repeat(32));
+    let first = first
+        .publish(owner(), vec![source()], now)
+        .unwrap()
+        .remove(0);
+    let second = second
+        .publish(owner(), vec![source()], now)
+        .unwrap()
+        .remove(0);
+    assert_ne!(first.source_ref, second.source_ref);
+}
+
+#[test]
+fn source_salt_is_persisted_and_reused() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = load_or_create_source_salt(dir.path()).unwrap();
+    let second = load_or_create_source_salt(dir.path()).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 64);
+    assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+}
+
 #[test]
 fn ttl_boundary_and_size_limits_are_enforced_without_truncation() {
     let now = Instant::now();
@@ -195,6 +256,7 @@ fn oversized_sources_are_visible_but_never_retain_selectable_handles() {
     let now = Instant::now();
     let mut c = Catalog::default();
     let mut huge = source();
+    huge.identity = "oversized".into();
     huge.width = MAX_CAPTURE_DIMENSION + 1;
     let entries = c.publish(owner(), vec![huge, source()], now).unwrap();
     let huge_entry = entries

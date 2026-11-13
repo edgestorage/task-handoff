@@ -1,14 +1,17 @@
-//! Opaque, process-stable source identity with short-lived native handles.
+//! Opaque, instance-stable source identity with short-lived native handles.
 //! Native handles never cross IPC/wire.
 use crate::session::{secret, Owner};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    path::Path,
     time::{Duration, Instant},
 };
 pub const SOURCE_TTL: Duration = Duration::from_secs(60);
 pub const MAX_SOURCES: usize = 256;
 pub const MAX_CAPTURE_DIMENSION: u32 = 8192;
 pub const MAX_CATALOG_BYTES: usize = 512 * 1024;
+const SOURCE_SALT_FILE: &str = "remote-desktop-source-salt";
 
 pub use remote_desktop_protocol::model::CaptureSource;
 
@@ -44,7 +47,7 @@ struct Reference<H> {
 }
 pub struct Catalog<H> {
     references: HashMap<String, Reference<H>>,
-    identities: HashMap<String, String>,
+    source_salt: String,
 }
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CatalogError {
@@ -55,13 +58,30 @@ pub enum CatalogError {
 }
 impl<H> Default for Catalog<H> {
     fn default() -> Self {
-        Self {
-            references: HashMap::new(),
-            identities: HashMap::new(),
-        }
+        Self::with_salt(secret())
     }
 }
 impl<H> Catalog<H> {
+    /// A persistent per-instance salt makes opaque references deterministic for
+    /// the same native identity across component restarts without persisting a
+    /// growing source map or exposing native handles.
+    pub fn with_salt(source_salt: String) -> Self {
+        Self {
+            references: HashMap::new(),
+            source_salt,
+        }
+    }
+    fn source_ref(&self, identity: &str) -> String {
+        let mut digest = Sha256::new();
+        digest.update(self.source_salt.as_bytes());
+        digest.update([0]);
+        digest.update(identity.as_bytes());
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
     /// Invalidate before starting asynchronous enumeration, including a failed
     /// native request. No periodic enumeration or expired-handle polling.
     pub fn invalidate(&mut self) {
@@ -87,7 +107,6 @@ impl<H> Catalog<H> {
             return Err(CatalogError::TooLarge);
         }
         let mut references = HashMap::new();
-        let mut identities = HashMap::new();
         let mut entries = Vec::new();
         for source in sources {
             // Filtering platform shell/cloaked/protected windows belongs in the
@@ -98,12 +117,7 @@ impl<H> Catalog<H> {
             let capturable = source.unavailable_reason.is_none()
                 && source.width <= MAX_CAPTURE_DIMENSION
                 && source.height <= MAX_CAPTURE_DIMENSION;
-            let source_ref = self
-                .identities
-                .get(&source.identity)
-                .cloned()
-                .unwrap_or_else(secret);
-            identities.insert(source.identity, source_ref.clone());
+            let source_ref = self.source_ref(&source.identity);
             entries.push(CaptureSource {
                 source_ref: source_ref.clone(),
                 kind: source.kind,
@@ -166,7 +180,6 @@ impl<H> Catalog<H> {
             return Err(CatalogError::TooLarge);
         }
         self.references = references;
-        self.identities = identities;
         Ok(entries)
     }
     /// Resolve the current native handle for a stable source reference. The
@@ -188,4 +201,31 @@ impl<H> Catalog<H> {
         }
         Ok(self.references.remove(source_ref).unwrap().handle)
     }
+}
+
+/// Load the component's stable reference salt from the instance state directory,
+/// creating it atomically when absent. The salt, not each window mapping, is the
+/// only persisted identity state. An invalid legacy file is replaced so a
+/// partially written or manually edited file cannot prevent startup.
+pub fn load_or_create_source_salt(state_dir: &Path) -> anyhow::Result<String> {
+    let path = state_dir.join(SOURCE_SALT_FILE);
+    if let Ok(bytes) = std::fs::read(&path) {
+        if let Ok(value) = std::str::from_utf8(&bytes) {
+            let value = value.trim();
+            if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Ok(value.to_ascii_lowercase());
+            }
+        }
+    }
+    let generated = secret();
+    controlled_instance_core::atomic::write_atomic(&path, generated.as_bytes(), Some(0o600))?;
+    // Read back the authoritative value in case another process won the create
+    // race between the initial read and the atomic replace.
+    let bytes = std::fs::read(&path)?;
+    let value = std::str::from_utf8(&bytes)?.trim();
+    anyhow::ensure!(
+        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "invalid remote desktop source salt"
+    );
+    Ok(value.to_ascii_lowercase())
 }

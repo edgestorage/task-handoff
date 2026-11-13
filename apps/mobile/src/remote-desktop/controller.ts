@@ -1,5 +1,6 @@
 import {
   DesktopFallbackFrameAssembler,
+  DesktopViewerSourcesSchema,
   REMOTE_DESKTOP_CHANNEL_VERSION,
   REMOTE_DESKTOP_MAX_MESSAGE_BYTES,
   REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL,
@@ -16,10 +17,15 @@ import {
   parseRemoteDesktopWebRTCReceiveSample,
   parseRemoteDesktopWebRTCStats,
   preferredRemoteDesktopVideoCodecs,
+  REMOTE_DESKTOP_DIAGNOSTICS_INTERVAL_MS,
   remoteDesktopInputResumeRetryDelayMs,
   REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS,
+  REMOTE_DESKTOP_RTT_INTERVAL_MS,
+  RemoteDesktopReceiveRateMeter,
+  RemoteDesktopRttProbe,
   type createControlPlaneRemoteDesktopApi,
-  type RemoteDesktopWebRTCStats,
+  type RemoteDesktopFallbackDiagnostics,
+  type RemoteDesktopTransportDiagnostics,
   type RemoteDesktopWebRTCReceiveSample,
 } from '@task-handoff/control-plane-client';
 import { RTCPeerConnection, RTCRtpReceiver } from 'react-native-webrtc';
@@ -66,7 +72,9 @@ const FALLBACK_UPGRADE_TIMEOUT_MS = 10_000;
 const STATS_INTERVAL_MS = 2_000;
 const INPUT_ALIVE_MS = 500;
 const SIGNAL_ALIVE_MS = 2_000;
-const MAX_DECODE_BACKLOG = 2;
+const SIGNAL_RESUME_WINDOW_MS = 30_000;
+const SIGNAL_RESUME_RETRY_BASE_MS = 300;
+const SIGNAL_RESUME_RETRY_MAX_MS = 4_000;
 
 type RemoteDesktopApi = ReturnType<typeof createControlPlaneRemoteDesktopApi>;
 type DataChannel = ReturnType<RTCPeerConnection['createDataChannel']>;
@@ -108,6 +116,15 @@ export class RemoteDesktopController {
   private fallbackFrameRate = 0;
   private fallbackConfigKey = '';
   private fallbackUpgradeStartedAt = 0;
+  private readonly fallbackRttProbe = new RemoteDesktopRttProbe();
+  private readonly fallbackReceiveRate = new RemoteDesktopReceiveRateMeter();
+  private fallbackDiagnosticsTimer?: ReturnType<typeof setInterval>;
+  private fallbackNextPingAt = 0;
+  private fallbackLastMetricsLogAt = 0;
+  private fallbackFramesReceived = 0;
+  private fallbackFramesDecoded = 0;
+  private fallbackDroppedFrames = 0;
+  private fallbackKeyframeRequests = 0;
   private epoch = 0;
   private seq = 0;
   private destroyed = false;
@@ -117,13 +134,19 @@ export class RemoteDesktopController {
   private stopping = false;
   private targetTransition?: Promise<void>;
   private pendingTarget?: PersistedCaptureTarget;
+  private sessionRecovery?: Promise<void>;
   private signalOpen = false;
   private inputEpoch = 0;
   private inputAliveTimer?: ReturnType<typeof setInterval>;
   private inputResumeAckTimer?: ReturnType<typeof setTimeout>;
   private inputResumeRetryTimer?: ReturnType<typeof setTimeout>;
   private inputResumeRetryCount = 0;
+  private inputResumeRefresh?: Promise<void>;
   private signalAliveTimer?: ReturnType<typeof setInterval>;
+  private signalResumeTimer?: ReturnType<typeof setTimeout>;
+  private signalResumeAttempt = 0;
+  private signalResumeDeadline = 0;
+  private signalResumeInFlight = false;
   private offerInFlight = false;
   private fallbackHeadStartTimer?: ReturnType<typeof setTimeout>;
   private startupTimer?: ReturnType<typeof setTimeout>;
@@ -132,6 +155,8 @@ export class RemoteDesktopController {
   private fallbackPairTimer?: ReturnType<typeof setTimeout>;
   private fallbackRetryTimer?: ReturnType<typeof setTimeout>;
   private fallbackUpgradeTimer?: ReturnType<typeof setTimeout>;
+  private fallbackPointerTimer?: ReturnType<typeof setTimeout>;
+  private fallbackPointer?: { x: number; y: number; inputEpoch: number };
   private statsTimer?: ReturnType<typeof setTimeout>;
   private statsPeer?: RTCPeerConnection;
   private webRTCReceiveSample?: RemoteDesktopWebRTCReceiveSample;
@@ -161,6 +186,7 @@ export class RemoteDesktopController {
       this.decoderErrorSubscription = subscribeRemoteDesktopDecoderErrors(() => {
         if (this.destroyed || this.fallbackState === 'idle') return;
         this.fallbackNeedsKeyframe = true;
+        this.fallbackDroppedFrames += 1;
         void resetRemoteDesktopDecoder().catch(() => undefined);
         this.requestFallbackKeyframe();
       });
@@ -400,7 +426,21 @@ export class RemoteDesktopController {
 
   sendPointer(x: number, y: number) {
     if (!this.inputReady()) return;
-    this.wire('pointer', 'pointer', { x: clamp01(x), y: clamp01(y), inputEpoch: this.inputEpoch });
+    const pointer = { x: clamp01(x), y: clamp01(y), inputEpoch: this.inputEpoch };
+    if (this.fallbackState === 'active') {
+      this.fallbackPointer = pointer;
+      if (this.fallbackPointerTimer) return;
+      // Pointer motion is latest-value-wins. One 60 Hz flush keeps it behind
+      // keyboard/clipboard only for a frame without flooding the control WS.
+      this.fallbackPointerTimer = setTimeout(() => {
+        this.fallbackPointerTimer = undefined;
+        const latest = this.fallbackPointer;
+        this.fallbackPointer = undefined;
+        if (latest && this.inputReady()) this.wire('pointer', 'pointer', latest);
+      }, 16);
+      return;
+    }
+    this.wire('pointer', 'pointer', pointer);
   }
 
   sendButton(x: number, y: number, button: number, down: boolean) {
@@ -447,6 +487,8 @@ export class RemoteDesktopController {
         onOpen: () => {
           if (!this.current(epoch)) return;
           this.signalOpen = true;
+          this.signalResumeAttempt = 0;
+          this.signalResumeDeadline = 0;
           diagnosticLog.info('remote.desktop.signal.open');
           this.startSignalAlive();
           this.sendSignalAlive();
@@ -669,6 +711,7 @@ export class RemoteDesktopController {
       isController: snapshot.isController,
       hasController: snapshot.hasController,
       viewerCount: snapshot.viewerCount,
+      viewerSources: Array.isArray(snapshot.viewerSources) ? snapshot.viewerSources : [],
     });
     if (this.active && this.snapshotValue.inputRequested) this.resumeWanted();
     if (snapshot.transport === 'webrtc' && this.fallbackState !== 'idle') this.commitTransportUpgrade();
@@ -701,6 +744,10 @@ export class RemoteDesktopController {
     } catch (cause) {
       if (this.destroyed || attempt !== this.fallbackAttempt) return;
       diagnosticLog.warn('remote.desktop.fallback.ticket.failed', { attempt, proactive, code: errorCode(cause), message: errorMessage(cause) });
+      if (isLostSessionError(cause)) {
+        await this.recoverLostSession(errorCode(cause), errorMessage(cause));
+        return;
+      }
       if (proactive) {
         if (remoteDesktopWebRTCProgress(Boolean(this.peer), this.peer?.iceConnectionState) === 'connected') {
           this.cancelFallbackAttempt();
@@ -778,6 +825,7 @@ export class RemoteDesktopController {
   }
 
   private handleFallbackMediaText(text: string, attempt: number) {
+    this.fallbackReceiveRate.add(utf8Length(text));
     let value: any;
     try { value = JSON.parse(text); } catch { this.handleFallbackTransportFailure(attempt, 'media-message-parse'); return; }
     if (value?.type === 'fallback.configure') {
@@ -818,6 +866,7 @@ export class RemoteDesktopController {
   }
 
   private handleFallbackBinary(data: ArrayBuffer, attempt: number) {
+    this.fallbackReceiveRate.add(data.byteLength);
     let frame;
     try { frame = decodeDesktopFallbackFrame(data); }
     catch (cause) {
@@ -847,6 +896,7 @@ export class RemoteDesktopController {
     try { assembled = this.fallbackAssembler.push(frame); }
     catch { this.handleFallbackTransportFailure(attempt, 'media-frame-assemble'); return; }
     if (assembled.type !== 'frame') return;
+    this.fallbackFramesReceived += 1;
     if (traceFallbackFrame) {
       diagnosticLog.info('remote.desktop.fallback.frame.ready', {
         attempt,
@@ -857,7 +907,10 @@ export class RemoteDesktopController {
         timestampUs: assembled.timestampUs,
       });
     }
-    if (assembled.skippedFrames) this.fallbackNeedsKeyframe = true;
+    if (assembled.skippedFrames) {
+      this.fallbackDroppedFrames += 1;
+      this.fallbackNeedsKeyframe = true;
+    }
     if (!this.fallbackCodec) return;
     if (!assembled.keyframe && (this.fallbackNeedsKeyframe || !this.fallbackFirstFrame)) {
       this.requestFallbackKeyframe();
@@ -865,11 +918,6 @@ export class RemoteDesktopController {
     }
     const timestampUs = Number(assembled.timestampUs);
     if (!Number.isFinite(timestampUs)) return;
-    if (this.decodeBacklog >= MAX_DECODE_BACKLOG && !assembled.keyframe) {
-      this.fallbackNeedsKeyframe = true;
-      this.requestFallbackKeyframe();
-      return;
-    }
     this.decodeBacklog += 1;
     const generation = this.epoch;
     if (traceFallbackFrame) {
@@ -899,6 +947,7 @@ export class RemoteDesktopController {
         return;
       }
       await decodeRemoteDesktopFrame(assembled.payload, assembled.keyframe, timestampUs);
+      this.fallbackFramesDecoded += 1;
       if (assembled.keyframe) this.fallbackNeedsKeyframe = false;
       if (!this.fallbackFirstFrame) {
         this.fallbackFirstFrame = true;
@@ -924,6 +973,14 @@ export class RemoteDesktopController {
 
   private handleFallbackControlMessage(value: any, attempt: number) {
     if (attempt !== this.fallbackAttempt || !this.fallbackSession) return;
+    if (value?.type === 'fallback.rtt.pong') {
+      const requestId = value.payload?.requestId;
+      if (typeof requestId === 'string') {
+        this.fallbackRttProbe.complete(requestId);
+        this.publishFallbackDiagnostics();
+      }
+      return;
+    }
     if (value?.type === 'fallback.ready') {
       if (value.payload?.fallbackGeneration && value.payload.fallbackGeneration !== this.fallbackSession.fallbackGeneration) return;
       this.markFallbackReady();
@@ -953,12 +1010,80 @@ export class RemoteDesktopController {
     this.fallbackFirstFrame = false;
     this.update({ phase: this.snapshotValue.paused ? 'paused' : 'connected', streamURL: undefined, error: undefined });
     this.applyPath('websocket');
+    this.startFallbackDiagnostics();
     this.sendVisibility();
     this.applyStreamResolution();
     this.requestFallbackKeyframe();
     if (this.active && this.snapshotValue.inputRequested) this.resumeWanted();
     if (this.peer && (this.peer.connectionState === 'connected' || this.peer.iceConnectionState === 'connected' || this.peer.iceConnectionState === 'completed')) {
       this.requestTransportUpgrade();
+    }
+  }
+
+  private startFallbackDiagnostics() {
+    this.stopFallbackDiagnostics();
+    this.probeFallbackRtt();
+    this.fallbackNextPingAt = Date.now() + REMOTE_DESKTOP_RTT_INTERVAL_MS;
+    this.publishFallbackDiagnostics();
+    this.fallbackDiagnosticsTimer = setInterval(() => {
+      if (this.destroyed || this.fallbackState !== 'active') return;
+      const now = Date.now();
+      if (now >= this.fallbackNextPingAt) {
+        this.fallbackNextPingAt = now + REMOTE_DESKTOP_RTT_INTERVAL_MS;
+        this.probeFallbackRtt();
+      }
+      this.publishFallbackDiagnostics();
+    }, REMOTE_DESKTOP_DIAGNOSTICS_INTERVAL_MS);
+  }
+
+  private probeFallbackRtt() {
+    const request = this.fallbackRttProbe.begin();
+    if (request && !this.wire('control', 'fallback.rtt.ping', { requestId: request.requestId })) {
+      this.fallbackRttProbe.cancel(request.requestId);
+    }
+  }
+
+  private stopFallbackDiagnostics() {
+    if (this.fallbackDiagnosticsTimer) clearInterval(this.fallbackDiagnosticsTimer);
+    this.fallbackDiagnosticsTimer = undefined;
+    this.fallbackNextPingAt = 0;
+    this.fallbackLastMetricsLogAt = 0;
+    this.fallbackFramesReceived = 0;
+    this.fallbackFramesDecoded = 0;
+    this.fallbackDroppedFrames = 0;
+    this.fallbackKeyframeRequests = 0;
+    this.fallbackRttProbe.reset();
+    this.fallbackReceiveRate.reset();
+    if (this.snapshotValue.transportDiagnostics?.path === 'websocket') {
+      this.update({ transportDiagnostics: undefined });
+    }
+  }
+
+  private publishFallbackDiagnostics() {
+    if (this.fallbackState !== 'active') return;
+    const latency = this.fallbackRttProbe.snapshot();
+    const bandwidth = this.fallbackReceiveRate.sample();
+    const diagnostics: RemoteDesktopFallbackDiagnostics = {
+      path: 'websocket',
+      latencyStatus: latency.status,
+      bandwidthStatus: bandwidth.status,
+      ...(latency.latencyMs === undefined ? {} : { latencyMs: latency.latencyMs }),
+      ...(bandwidth.mbps === undefined ? {} : { bandwidthMbps: bandwidth.mbps }),
+    };
+    this.applyPath('websocket', diagnostics);
+    const now = Date.now();
+    if (now - this.fallbackLastMetricsLogAt >= 900) {
+      const metrics = {
+        receiveMbps: bandwidth.mbps,
+        decodeQueueSize: this.decodeBacklog,
+        rttMs: latency.latencyMs,
+        droppedFrames: this.fallbackDroppedFrames,
+        receivedFrames: this.fallbackFramesReceived,
+        decodedFrames: this.fallbackFramesDecoded,
+        keyframeRequests: this.fallbackKeyframeRequests,
+      };
+      diagnosticLog.info('remote.desktop.fallback.metrics', { attempt: this.fallbackAttempt, ...metrics });
+      this.fallbackLastMetricsLogAt = now;
     }
   }
 
@@ -1061,6 +1186,7 @@ export class RemoteDesktopController {
     const now = Date.now();
     if (now - this.fallbackLastKeyframeAt < 500) return;
     this.fallbackLastKeyframeAt = now;
+    this.fallbackKeyframeRequests += 1;
     try { media.send(JSON.stringify({ type: 'fallback.keyframe-request' })); } catch { /* reconnect owns the failure */ }
   }
 
@@ -1085,7 +1211,6 @@ export class RemoteDesktopController {
         ? payload.sessionRevision
         : undefined;
       const shouldResume = payload.recoverable === true
-        && payload.cause === 'REMOTE_DESKTOP_GEOMETRY_CHANGED'
         && sessionRevision !== undefined
         && this.snapshotValue.inputRequested
         && this.snapshotValue.isController
@@ -1108,11 +1233,13 @@ export class RemoteDesktopController {
       if (shouldResume) this.resumeWanted();
     } else if (value?.type === 'control.changed') {
       const isController = value.payload?.isController === true;
+      const viewerSources = DesktopViewerSourcesSchema.safeParse(value.payload?.viewerSources).data;
       this.update({
         isController,
         controlRequestPending: false,
         hasController: true,
         viewerCount: Number.isInteger(value.payload?.viewerCount) ? value.payload.viewerCount : this.snapshotValue.viewerCount,
+        viewerSources: viewerSources ?? this.snapshotValue.viewerSources,
         ...(value.payload?.controlRevision !== undefined ? { session: this.snapshotValue.session ? { ...this.snapshotValue.session, controlRevision: Number(value.payload.controlRevision) || 0, isController } : undefined } : {}),
       });
       if (!isController) {
@@ -1127,18 +1254,19 @@ export class RemoteDesktopController {
         diagnosticLog.info('remote.desktop.input.late-error.ignored', { code });
         return;
       }
-      const retryingInput = (
-        this.snapshotValue.inputPending
-        || this.inputResumeRetryTimer !== undefined
-        || this.inputResumeRetryCount > 0
-      ) && isRecoverableRemoteDesktopInputResumeError(code);
+      const retryingInput = isRecoverableRemoteDesktopInputResumeError(code)
+        && this.snapshotValue.inputRequested
+        && this.snapshotValue.isController
+        && this.active
+        && !this.snapshotValue.paused;
       this.releaseInputState(!retryingInput);
       if (retryingInput) {
         diagnosticLog.warn('remote.desktop.input.resume.error', {
           code,
           sessionRevision: this.snapshotValue.session?.sessionRevision,
         });
-        this.scheduleInputResumeRetry(code);
+        if (code === 'REMOTE_DESKTOP_STALE_EPOCH') void this.refreshInputResumeSnapshot(code);
+        else this.scheduleInputResumeRetry(code);
         return;
       }
       this.update({ controlRequestPending: false, error: { code, message: code } });
@@ -1194,6 +1322,34 @@ export class RemoteDesktopController {
       this.inputResumeRetryTimer = undefined;
       this.resumeWanted();
     }, delayMs);
+  }
+
+  private refreshInputResumeSnapshot(reason: string) {
+    if (this.inputResumeRefresh) return this.inputResumeRefresh;
+    const session = this.session;
+    if (!session || this.destroyed) return Promise.resolve();
+    diagnosticLog.info('remote.desktop.input.resume.refresh', {
+      sessionRevision: session.snapshot.sessionRevision,
+    });
+    const refresh = Promise.resolve()
+      .then(() => this.input.api.snapshot(this.input.instanceId, session.snapshot.viewerSessionId))
+      .then(async (snapshot) => {
+        if (this.destroyed || this.session?.snapshot.viewerSessionId !== session.snapshot.viewerSessionId) return;
+        await this.applySnapshot(snapshot);
+      })
+      .catch((cause) => {
+        if (this.destroyed || this.session?.snapshot.viewerSessionId !== session.snapshot.viewerSessionId) return;
+        diagnosticLog.warn('remote.desktop.input.resume.refresh.failed', {
+          code: errorCode(cause),
+          message: errorMessage(cause),
+        });
+        this.scheduleInputResumeRetry(reason);
+      })
+      .finally(() => {
+        if (this.inputResumeRefresh === refresh) this.inputResumeRefresh = undefined;
+      });
+    this.inputResumeRefresh = refresh;
+    return refresh;
   }
 
   private suspendInput() {
@@ -1322,12 +1478,133 @@ export class RemoteDesktopController {
 
   private considerFallbackAfterSignalFailure(code: string) {
     if (this.destroyed || !this.session || this.fallbackState !== 'idle') return;
-    if (!this.snapshotValue.signalingReady) {
-      void this.fail(code, 'Remote desktop session initialization failed.');
+    const progress = remoteDesktopWebRTCProgress(Boolean(this.peer), this.peer?.iceConnectionState);
+    // A Relay outage tears down the signaling tunnel, not the WebRTC media
+    // path. Keep a connected peer alive and replace only the signaling tunnel;
+    // switching a live P2P stream to the fallback transport here would turn a
+    // control-plane reconnect into an unnecessary media downgrade.
+    if (progress === 'connected' || !this.snapshotValue.signalingReady) {
+      diagnosticLog.warn('remote.desktop.signal.recover', { code, progress, signalingReady: this.snapshotValue.signalingReady });
+      this.scheduleSignalResume(code, true);
       return;
     }
     if (this.snapshotValue.transportAvailability.websocket) void this.beginFallback('ice-failed', code, false);
-    else void this.fail(code, 'Remote desktop signaling failed.');
+    else this.scheduleSignalResume(code, true);
+  }
+
+  private scheduleSignalResume(code: string, immediate = false) {
+    if (this.destroyed || !this.session || this.fallbackState !== 'idle' || this.signalResumeTimer || this.signalResumeInFlight) return;
+    if (!this.signalResumeDeadline) this.signalResumeDeadline = Date.now() + SIGNAL_RESUME_WINDOW_MS;
+    if (Date.now() >= this.signalResumeDeadline) {
+      this.finishSignalResumeFailure(code);
+      return;
+    }
+    const delay = immediate
+      ? 0
+      : Math.min(SIGNAL_RESUME_RETRY_MAX_MS, SIGNAL_RESUME_RETRY_BASE_MS * 2 ** Math.max(0, this.signalResumeAttempt - 1));
+    this.signalResumeTimer = setTimeout(() => {
+      this.signalResumeTimer = undefined;
+      void this.resumeSignal(code);
+    }, delay);
+  }
+
+  private async resumeSignal(code: string) {
+    const session = this.session;
+    if (this.destroyed || !session || this.fallbackState !== 'idle' || this.signalResumeInFlight) return;
+    if (Date.now() >= this.signalResumeDeadline) {
+      this.finishSignalResumeFailure(code);
+      return;
+    }
+    const epoch = this.epoch;
+    this.signalResumeInFlight = true;
+    this.signalResumeAttempt += 1;
+    let retry = false;
+    diagnosticLog.info('remote.desktop.signal.resume.begin', { attempt: this.signalResumeAttempt, code });
+    try {
+      const ticket = await this.input.api.resumeSignal(this.input.instanceId, session.snapshot.viewerSessionId);
+      if (!this.current(epoch) || this.session !== session || this.stopping) return;
+      this.session = { ...session, signalUrl: ticket.signalUrl, ticketExpiresAt: ticket.ticketExpiresAt };
+      this.openSignal(this.session);
+      diagnosticLog.info('remote.desktop.signal.resume.ticket', { attempt: this.signalResumeAttempt });
+    } catch (cause) {
+      if (!this.current(epoch) || this.session !== session) return;
+      diagnosticLog.warn('remote.desktop.signal.resume.failed', {
+        attempt: this.signalResumeAttempt,
+        code: errorCode(cause),
+        retryable: isRetryableTransportError(cause),
+      });
+      if (isLostSessionError(cause)) {
+        await this.recoverLostSession(errorCode(cause), errorMessage(cause));
+      } else if (isRetryableTransportError(cause) && Date.now() < this.signalResumeDeadline) {
+        retry = true;
+      } else {
+        this.finishSignalResumeFailure(errorCode(cause));
+      }
+    } finally {
+      this.signalResumeInFlight = false;
+      if (retry) this.scheduleSignalResume(code);
+    }
+  }
+
+  private finishSignalResumeFailure(code: string) {
+    this.stopSignalResume();
+    if (this.snapshotValue.signalingReady && this.snapshotValue.transportAvailability.websocket) {
+      void this.beginFallback('ice-failed', code || 'REMOTE_DESKTOP_SIGNAL_RECOVERY_FAILED', false);
+      return;
+    }
+    void this.fail(code || 'REMOTE_DESKTOP_SIGNAL_RECOVERY_FAILED', 'Remote desktop signaling could not be restored.');
+  }
+
+  private recoverLostSession(code: string, message: string) {
+    if (this.destroyed) return Promise.resolve();
+    if (this.stopping || this.targetTransition) return Promise.resolve();
+    if (!this.active) return this.fail(code, message);
+    if (this.sessionRecovery) return this.sessionRecovery;
+    diagnosticLog.info('remote.desktop.session.recreate', {
+      code,
+      target: this.snapshotValue.target.kind,
+      targetRef: this.snapshotValue.target.sourceRef,
+    });
+    const recovery = this.recoverLostSessionNow();
+    this.sessionRecovery = recovery;
+    void recovery.then(
+      () => { if (this.sessionRecovery === recovery) this.sessionRecovery = undefined; },
+      () => { if (this.sessionRecovery === recovery) this.sessionRecovery = undefined; },
+    );
+    return recovery;
+  }
+
+  private async recoverLostSessionNow() {
+    // A Relay reconnect can outlive the viewer reservation. In that case the
+    // old signaling and fallback endpoints return 404 forever, so resuming it
+    // cannot recover; release the dead reservation and create a fresh session
+    // for the same capture target.
+    await this.stopCurrentSession(true);
+    if (this.destroyed) return;
+    const starting = this.startingTask;
+    if (starting) await starting.catch(() => undefined);
+    if (this.destroyed) return;
+    this.update({
+      phase: 'connecting',
+      error: undefined,
+      streamURL: undefined,
+      path: undefined,
+      signalingReady: false,
+      inputRequested: this.interactive,
+      transportDiagnostics: undefined,
+      videoWidth: 0,
+      videoHeight: 0,
+      videoCodec: undefined,
+      videoFrameRate: undefined,
+    });
+    await this.beginStart();
+  }
+
+  private stopSignalResume() {
+    if (this.signalResumeTimer) clearTimeout(this.signalResumeTimer);
+    this.signalResumeTimer = undefined;
+    this.signalResumeDeadline = 0;
+    this.signalResumeAttempt = 0;
   }
 
   private startStatsWatch(peer: RTCPeerConnection) {
@@ -1363,16 +1640,17 @@ export class RemoteDesktopController {
     }
   }
 
-  private applyPath(path?: RemoteDesktopPath, diagnostics?: RemoteDesktopWebRTCStats) {
+  private applyPath(path?: RemoteDesktopPath, diagnostics?: RemoteDesktopTransportDiagnostics) {
     const availability = this.snapshotValue.transportAvailability;
     const states: Record<RemoteDesktopTransportKey, RemoteDesktopTransportState> = {
       p2p: availability.p2p ? (path === 'p2p' ? 'active' : 'pending') : 'idle',
       turn: availability.turn ? (path === 'turn' ? 'active' : 'pending') : 'idle',
       websocket: this.fallbackState === 'active' ? 'active' : this.fallbackState === 'switching' || this.fallbackState === 'reconnecting' ? 'pending' : this.fallbackState === 'failed' ? 'failed' : 'idle',
     };
-    const nextDiagnostics = path === 'p2p' || path === 'turn' ? diagnostics : undefined;
-    const nextCodec = nextDiagnostics?.codec;
-    const nextFrameRate = nextDiagnostics?.frameRate;
+    const webRTCDiagnostics = path === 'p2p' || path === 'turn' ? diagnostics : undefined;
+    const nextDiagnostics = path === 'websocket' || path === 'p2p' || path === 'turn' ? diagnostics : undefined;
+    const nextCodec = webRTCDiagnostics?.codec;
+    const nextFrameRate = webRTCDiagnostics?.frameRate;
     if (this.snapshotValue.path === path
       && sameTransportStates(this.snapshotValue.transportStates, states)
       && sameTransportDiagnostics(this.snapshotValue.transportDiagnostics, nextDiagnostics)
@@ -1454,6 +1732,8 @@ export class RemoteDesktopController {
     const control = this.fallbackControl;
     this.fallbackMedia = undefined;
     this.fallbackControl = undefined;
+    this.stopFallbackDiagnostics();
+    this.clearFallbackPointer();
     if (media || control) diagnosticLog.info('remote.desktop.fallback.sockets.close', { reason, hasMedia: Boolean(media), hasControl: Boolean(control), state: this.fallbackState, attempt: this.fallbackAttempt });
     try { media?.close(); } catch { /* best effort */ }
     try { control?.close(); } catch { /* best effort */ }
@@ -1472,6 +1752,11 @@ export class RemoteDesktopController {
   private clearFallbackPairTimer() { if (this.fallbackPairTimer) clearTimeout(this.fallbackPairTimer); this.fallbackPairTimer = undefined; }
   private clearFallbackRetry() { if (this.fallbackRetryTimer) clearTimeout(this.fallbackRetryTimer); this.fallbackRetryTimer = undefined; }
   private clearFallbackUpgrade() { if (this.fallbackUpgradeTimer) clearTimeout(this.fallbackUpgradeTimer); this.fallbackUpgradeTimer = undefined; }
+  private clearFallbackPointer() {
+    if (this.fallbackPointerTimer) clearTimeout(this.fallbackPointerTimer);
+    this.fallbackPointerTimer = undefined;
+    this.fallbackPointer = undefined;
+  }
   private stopStatsWatch() {
     if (this.statsTimer) clearTimeout(this.statsTimer);
     this.statsTimer = undefined;
@@ -1484,6 +1769,8 @@ export class RemoteDesktopController {
     this.clearFallbackPairTimer();
     this.clearFallbackRetry();
     this.clearFallbackUpgrade();
+    this.clearFallbackPointer();
+    this.stopSignalResume();
     this.stopStatsWatch();
     this.clearInputResumeTimers();
     if (this.availabilityTimer) clearTimeout(this.availabilityTimer);
@@ -1576,14 +1863,16 @@ function sameTransportStates(
   return left.p2p === right.p2p && left.turn === right.turn && left.websocket === right.websocket;
 }
 
-function sameTransportDiagnostics(left?: RemoteDesktopWebRTCStats, right?: RemoteDesktopWebRTCStats) {
+function sameTransportDiagnostics(left?: RemoteDesktopTransportDiagnostics, right?: RemoteDesktopTransportDiagnostics) {
   if (!left || !right) return left === right;
   return left.path === right.path
     && left.protocol === right.protocol
     && left.localCandidateType === right.localCandidateType
     && left.remoteCandidateType === right.remoteCandidateType
     && left.latencyMs === right.latencyMs
+    && left.latencyStatus === right.latencyStatus
     && left.bandwidthMbps === right.bandwidthMbps
+    && left.bandwidthStatus === right.bandwidthStatus
     && left.codec === right.codec
     && left.frameRate === right.frameRate;
 }
@@ -1603,4 +1892,18 @@ function errorMessage(cause: unknown) {
 }
 function isRetryableTransportError(cause: unknown) {
   return Boolean(cause && typeof cause === 'object' && 'retryable' in cause && (cause as { retryable?: unknown }).retryable === true);
+}
+
+const LOST_SESSION_ERROR_CODES = new Set([
+  'REMOTE_DESKTOP_NOT_FOUND',
+  'REMOTE_DESKTOP_STALE_BOOT',
+  'REMOTE_DESKTOP_DEADLINE_EXCEEDED',
+  'REMOTE_DESKTOP_SESSION_CLOSED',
+]);
+
+function isLostSessionError(cause: unknown) {
+  const status = cause && typeof cause === 'object' && 'status' in cause
+    ? Number((cause as { status?: unknown }).status)
+    : undefined;
+  return status === 404 || LOST_SESSION_ERROR_CODES.has(errorCode(cause));
 }

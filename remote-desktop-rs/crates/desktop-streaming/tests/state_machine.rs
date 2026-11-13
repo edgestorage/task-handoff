@@ -135,20 +135,73 @@ fn lost_reservation_and_unfinished_negotiation_release_slot_after_bounded_drain(
             r.snapshot(&s.viewer_session_id, &owner()).unwrap().phase,
             Phase::Draining
         );
-        assert_eq!(
-            r.reserve("blocked", owner(), display(), deadline)
-                .unwrap_err(),
-            Error::Busy
-        );
+        // Draining sessions no longer hold a viewer slot. For a lost reservation,
+        // all four Starting sessions expire together, while an unfinished
+        // negotiation leaves the other three slots live.
+        r.reserve("replacement", owner(), display(), deadline)
+            .unwrap();
+        let blocked = r.reserve("blocked", owner(), display(), deadline);
+        if attach {
+            assert_eq!(blocked.unwrap_err(), Error::Busy);
+        } else {
+            assert!(blocked.is_ok());
+        }
         r.tick(deadline + DRAINING);
         assert_eq!(
             r.snapshot(&s.viewer_session_id, &owner()).unwrap().phase,
             Phase::Failed
         );
-        assert!(r
-            .reserve("replacement", owner(), display(), deadline + DRAINING)
-            .is_ok());
+        let after_drain = r.reserve("after-drain", owner(), display(), deadline + DRAINING);
+        if attach {
+            assert_eq!(after_drain.unwrap_err(), Error::Busy);
+        } else {
+            assert!(after_drain.is_ok());
+        }
     }
+}
+
+#[test]
+fn expired_reservations_do_not_consume_viewer_slots_before_tick() {
+    let now = Instant::now();
+    let mut r = Registry::new();
+    for index in 1..=MAX_VIEWERS {
+        r.reserve(&format!("viewer-{index}"), owner(), display(), now)
+            .unwrap();
+    }
+    assert_eq!(
+        r.reserve(
+            "still-full",
+            owner(),
+            display(),
+            now + STARTING - Duration::from_millis(1),
+        )
+        .unwrap_err(),
+        Error::Busy
+    );
+    assert!(r
+        .reserve("after-expiry", owner(), display(), now + STARTING)
+        .is_ok());
+}
+
+#[test]
+fn draining_sessions_are_not_reported_as_viewers() {
+    let now = Instant::now();
+    let mut r = Registry::new();
+    let first = active(&mut r, now);
+    let second = active_viewer(&mut r, "second", now);
+    assert_eq!(
+        r.snapshot(&first.viewer_session_id, &owner())
+            .unwrap()
+            .viewer_count,
+        2
+    );
+    r.stop(&second.viewer_session_id, &owner(), now).unwrap();
+    assert_eq!(
+        r.snapshot(&first.viewer_session_id, &owner())
+            .unwrap()
+            .viewer_count,
+        1
+    );
 }
 #[test]
 fn negotiating_deadline_is_not_extended_by_healthy_signaling() {
@@ -600,8 +653,19 @@ fn different_sources_stream_concurrently_with_one_control_lease() {
     let window_snapshot = r.snapshot(&window.viewer_session_id, &owner()).unwrap();
     assert_eq!(display_snapshot.phase, Phase::Active);
     assert_eq!(window_snapshot.phase, Phase::Active);
-    assert_eq!(display_snapshot.viewer_count, 1);
-    assert_eq!(window_snapshot.viewer_count, 1);
+    // Viewer totals are instance-wide, while the per-source breakdown keeps the
+    // two capture targets distinguishable for the connection UI.
+    assert_eq!(display_snapshot.viewer_count, 2);
+    assert_eq!(window_snapshot.viewer_count, 2);
+    assert_eq!(display_snapshot.viewer_sources.len(), 2);
+    assert!(display_snapshot
+        .viewer_sources
+        .iter()
+        .any(|source| source.source_ref == "display" && source.viewer_count == 1));
+    assert!(display_snapshot
+        .viewer_sources
+        .iter()
+        .any(|source| source.source_ref == "window-channel" && source.viewer_count == 1));
     assert!(display_snapshot.is_controller);
     assert!(!window_snapshot.is_controller);
 

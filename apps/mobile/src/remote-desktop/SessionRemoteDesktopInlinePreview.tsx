@@ -60,12 +60,10 @@ export function SessionRemoteDesktopInlinePreview({
     ? t('remoteDesktop.error')
     : remote.snapshot.phase === 'stopped'
       ? t('remoteDesktop.stopped')
-      : remote.snapshot.phase === 'connected'
-        ? t('remoteDesktop.connected')
-        : t('remoteDesktop.connecting');
+      : t('remoteDesktop.connecting');
   const statusColor = remote.snapshot.phase === 'error' || remote.snapshot.phase === 'stopped'
     ? colors.error
-    : remote.snapshot.phase === 'connected' ? '#34c759' : '#ffb340';
+    : '#ffb340';
   const previewHeight = inlinePreviewHeight(hostWidth, mediaAspectRatio);
 
   return <Pressable
@@ -95,10 +93,10 @@ export function SessionRemoteDesktopInlinePreview({
       <Icon color="rgba(255,255,255,0.72)" name="desktop-outline" size={24} />
       {remote.ready ? <ActivityIndicator color="rgba(255,255,255,0.78)" size="small" /> : null}
     </View> : null}
-    <View pointerEvents="none" style={styles.status}>
+    {remote.snapshot.phase !== 'connected' ? <View pointerEvents="none" style={styles.status} testID="session-remote-desktop-inline-status">
       <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
       <Text numberOfLines={1} style={styles.statusText}>{connectionText}</Text>
-    </View>
+    </View> : null}
   </Pressable>;
 }
 

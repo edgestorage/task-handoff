@@ -128,6 +128,11 @@ function setup(
       }],
     })),
     createSession: jest.fn(async () => createdSession()),
+    resumeSignal: jest.fn(async () => ({
+      signalUrl: '/api/remote-desktop/signal?ticket=resumed-ticket',
+      ticketExpiresAt: Date.now() + 15_000,
+      protocolVersion: '2026-11-11',
+    })),
     fallback: jest.fn(async () => fallbackSession()),
     stop: jest.fn(async () => ({ stopped: true })),
   } as unknown as RemoteDesktopApi;
@@ -189,8 +194,9 @@ async function flushMicrotasks() {
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
 }
 
-function fallbackMediaFrame(keyframe = true) {
-  const payload = new Uint8Array([0, 0, 0, 1, 0x65]);
+function fallbackMediaFrame(keyframe = true, payloadBytes = 5, frameId = 1, timestampUs = 1n) {
+  const payload = new Uint8Array(payloadBytes);
+  payload.set([0, 0, 0, 1, 0x65]);
   const frame = new Uint8Array(25 + payload.length);
   frame[0] = 0x52;
   frame[1] = 0x44;
@@ -198,8 +204,8 @@ function fallbackMediaFrame(keyframe = true) {
   frame[3] = 1;
   frame[4] = keyframe ? 1 : 0;
   const view = new DataView(frame.buffer);
-  view.setUint32(5, 1);
-  view.setBigUint64(9, 1n);
+  view.setUint32(5, frameId);
+  view.setBigUint64(9, timestampUs);
   view.setUint16(17, 0);
   view.setUint16(19, 1);
   view.setUint32(21, payload.length);
@@ -253,6 +259,106 @@ test('WebSocket-only startup attaches signaling before requesting fallback', asy
   expect(RTCPeerConnection).not.toHaveBeenCalled();
   expect(controller.getSnapshot().signalingReady).toBe(true);
   await controller.close();
+});
+
+test('a signaling tunnel loss resumes the same P2P session instead of switching to fallback', async () => {
+  const { peer } = installFakePeerConnection();
+  const { api, controller, sockets } = setup({ p2p: true, turn: true, websocket: true });
+
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+  peer.iceConnectionState = 'connected';
+
+  sockets[0].handlers.onClose?.({ code: 1006, reason: 'relay socket reset' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await flushMicrotasks();
+
+  expect(api.resumeSignal).toHaveBeenCalledWith('instance_1', 'rdv_1');
+  expect(api.fallback).not.toHaveBeenCalled();
+  expect(sockets).toHaveLength(2);
+  expect(sockets[1].options.path).toBe('/api/remote-desktop/signal?ticket=resumed-ticket');
+  expect(peer.close).not.toHaveBeenCalled();
+
+  sockets[1].handlers.onOpen?.();
+  sockets[1].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().signalingReady).toBe(true);
+  await controller.close();
+});
+
+test('a retryable signaling resume failure is retried after the backoff delay', async () => {
+  jest.useFakeTimers();
+  try {
+    const { peer } = installFakePeerConnection();
+    const { api, controller, sockets } = setup({ p2p: true, turn: true, websocket: true });
+    (api.resumeSignal as jest.Mock).mockRejectedValueOnce(new MobileControlPlaneTransportError(
+      'RELAY_ATTEMPT_CANCELLED',
+      'Relay transport revalidated during resume.',
+      true,
+    ));
+
+    await controller.start();
+    sockets[0].handlers.onOpen?.();
+    sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+    await flushMicrotasks();
+    peer.iceConnectionState = 'connected';
+
+    sockets[0].handlers.onClose?.({ code: 1006, reason: 'relay socket reset' });
+    await jest.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+    expect(api.resumeSignal).toHaveBeenCalledTimes(1);
+    expect(sockets).toHaveLength(1);
+
+    await jest.advanceTimersByTimeAsync(300);
+    await flushMicrotasks();
+    expect(api.resumeSignal).toHaveBeenCalledTimes(2);
+    expect(sockets).toHaveLength(2);
+    expect(api.fallback).not.toHaveBeenCalled();
+
+    await controller.close();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('a 404 signaling resume recreates the expired viewer session', async () => {
+  jest.useFakeTimers();
+  try {
+    const { peer } = installFakePeerConnection();
+    const { api, controller, sockets } = setup({ p2p: true, turn: true, websocket: true });
+    (api.createSession as jest.Mock)
+      .mockResolvedValueOnce(createdSession())
+      .mockResolvedValueOnce(createdSession('rdv_2'));
+    (api.resumeSignal as jest.Mock).mockRejectedValueOnce(new MobileControlPlaneTransportError(
+      'RELAY_CONTROL_PLANE_RESPONSE_FAILED',
+      'Control Plane request failed with HTTP 404.',
+      false,
+      404,
+    ));
+
+    await controller.start();
+    sockets[0].handlers.onOpen?.();
+    sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+    await flushMicrotasks();
+    peer.iceConnectionState = 'connected';
+
+    sockets[0].handlers.onClose?.({ code: 1006, reason: 'relay socket reset' });
+    await jest.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
+
+    expect(api.resumeSignal).toHaveBeenCalledWith('instance_1', 'rdv_1');
+    expect(api.stop).toHaveBeenCalledWith('instance_1', 'rdv_1');
+    expect(api.createSession).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot().error).toBeUndefined();
+    expect(sockets).toHaveLength(2);
+    expect(sockets[1].options.path).toBe(createdSession().signalUrl);
+
+    await controller.close();
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 test('switching capture targets while stopping starts only the latest target', async () => {
@@ -316,15 +422,17 @@ test('releases a stale session created after a newer target supersedes it', asyn
   await controller.close();
 });
 
-test('signaling failure before attach does not request a fallback ticket', async () => {
+test('signaling failure before ready resumes the same session instead of requesting fallback', async () => {
   const { api, controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
 
   await controller.start();
   sockets[0].handlers.onError?.(new MobileControlPlaneTransportError('REMOTE_DESKTOP_SIGNAL_SOCKET_ERROR', 'socket failed'));
+  await new Promise((resolve) => setTimeout(resolve, 10));
   await flushMicrotasks();
 
   expect(api.fallback).not.toHaveBeenCalled();
-  expect(controller.getSnapshot().phase).toBe('error');
+  expect(api.resumeSignal).toHaveBeenCalledWith('instance_1', 'rdv_1');
+  expect(sockets).toHaveLength(2);
   await controller.close();
 });
 
@@ -375,7 +483,7 @@ test('fallback ticket request retries after a temporary transport outage', async
   jest.useRealTimers();
 });
 
-test('a terminal fallback failure ends a stuck proactive fallback attempt with an error', async () => {
+test('a session-not-found fallback failure recreates the expired viewer session', async () => {
   jest.useFakeTimers();
   installFakePeerConnection();
   const { api, controller, sockets } = setup({ p2p: true, turn: false, websocket: true });
@@ -396,10 +504,14 @@ test('a terminal fallback failure ends a stuck proactive fallback attempt with a
 
   jest.advanceTimersByTime(3_000);
   await flushMicrotasks();
+  await jest.advanceTimersByTimeAsync(0);
+  for (let index = 0; index < 30; index += 1) await Promise.resolve();
 
   expect(fallback).toHaveBeenCalledTimes(2);
-  expect(controller.getSnapshot().phase).toBe('error');
-  expect(controller.getSnapshot().error?.code).toBe('REMOTE_DESKTOP_NOT_FOUND');
+  expect(api.stop).toHaveBeenCalledWith('instance_1', 'rdv_1');
+  expect(api.createSession).toHaveBeenCalledTimes(2);
+  expect(controller.getSnapshot().phase).toBe('connecting');
+  expect(controller.getSnapshot().error).toBeUndefined();
 
   await controller.close();
   jest.useRealTimers();
@@ -457,7 +569,10 @@ test('fallback configuration keeps the decoder alive for the first keyframe', as
   await controller.close();
 });
 
-test('geometry suspension renews input against the suspension revision', async () => {
+test.each([
+  'REMOTE_DESKTOP_GEOMETRY_CHANGED',
+  'REMOTE_DESKTOP_WINDOW_FOCUS_REQUIRED',
+])('recoverable suspension renews input against the suspension revision (%s)', async (cause) => {
   const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
   await controller.start();
   sockets[0].handlers.onOpen?.();
@@ -478,7 +593,7 @@ test('geometry suspension renews input against the suspension revision', async (
   control.handlers.onMessage(JSON.stringify({
     type: 'input.suspended',
     payload: {
-      cause: 'REMOTE_DESKTOP_GEOMETRY_CHANGED',
+      cause,
       recoverable: true,
       sessionRevision: 9,
     },
@@ -515,12 +630,24 @@ test('an inactive channel does not steal control and preserves explicit input in
   controller.setActive(false);
   control.handlers.onMessage(JSON.stringify({
     type: 'control.changed',
-    payload: { isController: false, viewerCount: 2, controlRevision: 2 },
+    payload: {
+      isController: false,
+      viewerCount: 2,
+      viewerSources: [
+        { sourceRef: 'display-primary', viewerCount: 1 },
+        { sourceRef: 'window-secondary', viewerCount: 1 },
+      ],
+      controlRevision: 2,
+    },
   }));
   await flushMicrotasks();
   expect(controller.getSnapshot().paused).toBe(true);
   expect(controller.getSnapshot().inputEnabled).toBe(false);
   expect(controller.getSnapshot().inputRequested).toBe(true);
+  expect(controller.getSnapshot().viewerSources).toEqual([
+    { sourceRef: 'display-primary', viewerCount: 1 },
+    { sourceRef: 'window-secondary', viewerCount: 1 },
+  ]);
 
   control.send.mockClear();
   controller.setActive(true);
@@ -632,6 +759,124 @@ test('retries input resume with the latest revision after a recoverable rejectio
   await flushMicrotasks();
   expect(controller.getSnapshot().inputEnabled).toBe(true);
   expect(controller.getSnapshot().error).toBeUndefined();
+
+  await controller.close();
+  jest.useRealTimers();
+});
+
+test('automatically recovers input after a focus loss once input was enabled', async () => {
+  jest.useFakeTimers();
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
+
+  controller.enableInput();
+  await flushMicrotasks();
+  control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 5 } }));
+  expect(controller.getSnapshot().inputEnabled).toBe(true);
+  control.send.mockClear();
+
+  control.handlers.onMessage(JSON.stringify({
+    type: 'error',
+    payload: { code: 'REMOTE_DESKTOP_WINDOW_FOCUS_REQUIRED' },
+  }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputEnabled).toBe(false);
+  expect(controller.getSnapshot().error).toBeUndefined();
+
+  jest.advanceTimersByTime(250);
+  await flushMicrotasks();
+  const resumes = control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .filter((message) => message.type === 'input.resume');
+  expect(resumes).toHaveLength(1);
+  expect(resumes[0]?.payload).toEqual({ sessionRevision: 1 });
+
+  control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 6 } }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputEnabled).toBe(true);
+  expect(controller.getSnapshot().inputPending).toBe(false);
+  expect(controller.getSnapshot().error).toBeUndefined();
+
+  await controller.close();
+  jest.useRealTimers();
+});
+
+test('does not auto-recover input after the user explicitly disables it', async () => {
+  jest.useFakeTimers();
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
+
+  controller.enableInput();
+  await flushMicrotasks();
+  control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 5 } }));
+  controller.disableInput();
+  control.send.mockClear();
+
+  control.handlers.onMessage(JSON.stringify({
+    type: 'error',
+    payload: { code: 'REMOTE_DESKTOP_WINDOW_FOCUS_REQUIRED' },
+  }));
+  await flushMicrotasks();
+  jest.advanceTimersByTime(5_000);
+  await flushMicrotasks();
+
+  expect(controller.getSnapshot().inputRequested).toBe(false);
+  expect(controller.getSnapshot().inputEnabled).toBe(false);
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .some((message) => message.type === 'input.resume')).toBe(false);
+
+  await controller.close();
+  jest.useRealTimers();
+});
+
+test('keeps non-recoverable input errors terminal', async () => {
+  jest.useFakeTimers();
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = sockets[2];
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
+
+  controller.enableInput();
+  await flushMicrotasks();
+  control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 5 } }));
+  control.send.mockClear();
+
+  control.handlers.onMessage(JSON.stringify({
+    type: 'error',
+    payload: { code: 'REMOTE_DESKTOP_FORBIDDEN' },
+  }));
+  await flushMicrotasks();
+  jest.advanceTimersByTime(5_000);
+  await flushMicrotasks();
+
+  expect(controller.getSnapshot().inputEnabled).toBe(false);
+  expect(controller.getSnapshot().error?.code).toBe('REMOTE_DESKTOP_FORBIDDEN');
+  expect(control.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .some((message) => message.type === 'input.resume')).toBe(false);
 
   await controller.close();
   jest.useRealTimers();
@@ -777,4 +1022,116 @@ test('manual input disable stays disabled when control becomes available', async
     .some((message) => message.type === 'control.request')).toBe(false);
 
   await controller.close();
+});
+
+test('websocket fallback publishes control RTT from the application pong', async () => {
+  jest.useFakeTimers();
+  try {
+    const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+    await controller.start();
+    sockets[0].handlers.onOpen?.();
+    sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+    await flushMicrotasks();
+
+    const control = sockets[2];
+    control.handlers.onOpen?.();
+    control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+    await flushMicrotasks();
+
+    const ping = control.send.mock.calls
+      .map(([data]) => JSON.parse(String(data)))
+      .find((message) => message.type === 'fallback.rtt.ping');
+    expect(ping?.payload?.requestId).toEqual(expect.any(String));
+
+    control.handlers.onMessage(JSON.stringify({
+      type: 'fallback.rtt.pong',
+      payload: { requestId: ping.payload.requestId },
+    }));
+    await flushMicrotasks();
+
+    const diagnostics = controller.getSnapshot().transportDiagnostics;
+    expect(diagnostics?.path).toBe('websocket');
+    expect(diagnostics?.latencyStatus).toBe('active');
+    expect(diagnostics?.latencyMs).toBeGreaterThanOrEqual(0);
+
+    await controller.close();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('websocket fallback tracks media throughput without control-channel reports', async () => {
+  jest.useFakeTimers();
+  try {
+    const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+    await controller.start();
+    sockets[0].handlers.onOpen?.();
+    sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+    await flushMicrotasks();
+
+    const media = sockets[1];
+    const control = sockets[2];
+    media.handlers.onOpen?.();
+    control.handlers.onOpen?.();
+    control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+    await flushMicrotasks();
+
+    media.handlers.onMessage(JSON.stringify({
+      type: 'fallback.configure',
+      payload: { width: 1280, height: 720, fps: 30, bitrate: 4_000_000, codec: 'avc1.42E01E' },
+    }));
+    media.handlers.onMessage(fallbackMediaFrame(true, 200_000));
+    await jest.advanceTimersByTimeAsync(1_100);
+    await flushMicrotasks();
+
+    const diagnostics = controller.getSnapshot().transportDiagnostics;
+    expect(diagnostics?.path).toBe('websocket');
+    expect(diagnostics?.bandwidthStatus).toBe('active');
+    expect(diagnostics?.bandwidthMbps).toBeGreaterThan(0);
+    const reports = control.send.mock.calls
+      .map(([data]) => JSON.parse(String(data)))
+      .filter((message) => message.type === 'fallback.media-report');
+    expect(reports).toEqual([]);
+
+    await controller.close();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('websocket fallback coalesces pointer motion to the latest position at 60 Hz', async () => {
+  jest.useFakeTimers();
+  try {
+    const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+    await controller.start();
+    sockets[0].handlers.onOpen?.();
+    sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+    await flushMicrotasks();
+
+    const control = sockets[2];
+    control.handlers.onOpen?.();
+    control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+    await flushMicrotasks();
+    controller.enableInput();
+    await flushMicrotasks();
+    control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 4 } }));
+    await flushMicrotasks();
+
+    control.send.mockClear();
+    controller.sendPointer(0.1, 0.2);
+    controller.sendPointer(0.3, 0.4);
+    expect(control.send.mock.calls
+      .map(([data]) => JSON.parse(String(data)))
+      .filter((message) => message.type === 'pointer')).toHaveLength(0);
+
+    await jest.advanceTimersByTimeAsync(16);
+    const pointers = control.send.mock.calls
+      .map(([data]) => JSON.parse(String(data)))
+      .filter((message) => message.type === 'pointer');
+    expect(pointers).toHaveLength(1);
+    expect(pointers[0].payload).toEqual({ x: 0.3, y: 0.4, inputEpoch: 4 });
+    await controller.close();
+  } finally {
+    jest.useRealTimers();
+  }
 });

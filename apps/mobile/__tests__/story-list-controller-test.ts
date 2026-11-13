@@ -122,6 +122,14 @@ test('a failed shared snapshot is not silently retried by each consumer; explici
   h.controller.stop();
 });
 
+test('reader cancellation does not require AbortSignal.throwIfAborted', async () => {
+  const h = harness();
+  const signal = { aborted: false } as AbortSignal;
+
+  expect(await h.controller.read(signal)).toEqual(snapshot);
+  h.controller.stop();
+});
+
 test('client lifetimes have isolated snapshot ownership', () => {
   const h = harness();
   expect(mobileStoryListFor(h.api)).toBe(h.controller);

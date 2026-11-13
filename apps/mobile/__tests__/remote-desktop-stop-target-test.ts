@@ -51,7 +51,8 @@ jest.mock('../src/remote-desktop/controller-registry', () => {
       mockSnapshot = { ...emptySnapshot, target: input.target };
       return mockController;
     }),
-    markRemoteDesktopControllerActive: jest.fn(),
+    releaseRemoteDesktopControllerConsumer: jest.fn(),
+    updateRemoteDesktopControllerConsumer: jest.fn(),
   };
 });
 

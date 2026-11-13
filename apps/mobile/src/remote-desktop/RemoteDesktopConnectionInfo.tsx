@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ArrowDownToLine, Gauge, Maximize2, MousePointer2, Users, Video, X } from 'lucide-react-native';
 import { remoteDesktopVideoCodecLabel } from '@task-handoff/control-plane-client';
+import type { DesktopSource } from '@task-handoff/protocol/remote-desktop';
 
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
@@ -12,32 +13,45 @@ import type { RemoteDesktopSnapshot } from './types';
 type Props = {
   onClose(): void;
   snapshot: RemoteDesktopSnapshot;
+  sources: DesktopSource[];
   visible: boolean;
 };
 
 const transports: readonly RemoteDesktopTransportKey[] = ['p2p', 'websocket', 'turn'];
 
-export function RemoteDesktopConnectionInfo({ onClose, snapshot, visible }: Props) {
+export function RemoteDesktopConnectionInfo({ onClose, snapshot, sources, visible }: Props) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const activeTransport = snapshot.path ?? transports.find((key) => snapshot.transportStates[key] === 'active');
   const diagnostics = snapshot.transportDiagnostics;
-  const latency = activeTransport === 'websocket'
-    ? t('remoteDesktop.latencyNotReported')
+  const websocket = activeTransport === 'websocket' || diagnostics?.path === 'websocket';
+  const latency = websocket
+    ? diagnostics?.latencyMs !== undefined
+      ? t('remoteDesktop.latencyValue', { value: diagnostics.latencyMs })
+      : diagnostics?.latencyStatus === 'unavailable'
+        ? t('remoteDesktop.latencyNotReported')
+        : t('remoteDesktop.latencyMeasuring')
     : diagnostics?.latencyMs !== undefined
       ? t('remoteDesktop.latencyValue', { value: diagnostics.latencyMs })
       : t('remoteDesktop.latencyMeasuring');
-  const bandwidth = activeTransport === 'websocket' || !diagnostics
-    ? t('remoteDesktop.latencyNotReported')
-    : diagnostics.bandwidthMbps === undefined
-      ? t('remoteDesktop.latencyMeasuring')
-      : t('remoteDesktop.bandwidthValue', { value: formatBandwidth(diagnostics.bandwidthMbps) });
+  const bandwidth = websocket
+    ? diagnostics?.bandwidthMbps !== undefined
+      ? t('remoteDesktop.bandwidthValue', { value: formatBandwidth(diagnostics.bandwidthMbps) })
+      : diagnostics?.bandwidthStatus === 'unavailable'
+        ? t('remoteDesktop.latencyNotReported')
+        : t('remoteDesktop.latencyMeasuring')
+    : !diagnostics
+      ? t('remoteDesktop.latencyNotReported')
+      : diagnostics.bandwidthMbps === undefined
+        ? t('remoteDesktop.latencyMeasuring')
+        : t('remoteDesktop.bandwidthValue', { value: formatBandwidth(diagnostics.bandwidthMbps) });
   const candidate = diagnostics && (diagnostics.protocol || diagnostics.localCandidateType || diagnostics.remoteCandidateType)
     ? [
       diagnostics.protocol?.toUpperCase(),
       [candidateTypeLabel(diagnostics.localCandidateType, t), candidateTypeLabel(diagnostics.remoteCandidateType, t)].join(' ↔ '),
     ].filter(Boolean).join(' · ')
     : t('remoteDesktop.candidateUnknown');
+  const pathDetails = websocket ? t('remoteDesktop.websocketPathDetail') : candidate;
   const resolution = snapshot.videoWidth > 0 && snapshot.videoHeight > 0
     ? `${snapshot.videoWidth} × ${snapshot.videoHeight}`
     : t('remoteDesktop.candidateUnknown');
@@ -55,6 +69,20 @@ export function RemoteDesktopConnectionInfo({ onClose, snapshot, visible }: Prop
         : snapshot.hasController && !snapshot.isController
           ? t('remoteDesktop.anotherViewerControls')
           : t('remoteDesktop.inputStarting');
+  const viewerSources = (snapshot.viewerSources ?? []).map((group) => {
+    const source = sources.find((item) => item.sourceRef === group.sourceRef);
+    return {
+      current: group.sourceRef === snapshot.target.sourceRef,
+      count: group.viewerCount,
+      key: group.sourceRef,
+      subtitle: source?.subtitle?.trim() || undefined,
+      title: source?.title?.trim() || t('remoteDesktop.unknownViewerSource'),
+    };
+  }).sort((left, right) => Number(right.current) - Number(left.current)
+    || right.count - left.count
+    || left.title.localeCompare(right.title));
+  const showViewerSources = viewerSources.length > 0
+    && (viewerSources.length > 1 || viewerSources[0].count > 1);
 
   return <Modal animationType="fade" navigationBarTranslucent onRequestClose={onClose} statusBarTranslucent transparent visible={visible}>
     <Pressable accessibilityLabel={t('remoteDesktop.closeConnectionInfo')} onPress={onClose} style={styles.backdrop}>
@@ -66,6 +94,7 @@ export function RemoteDesktopConnectionInfo({ onClose, snapshot, visible }: Prop
           </Pressable>
         </View>
 
+        <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false} style={styles.scroll}>
         {activeTransport ? <View style={[styles.route, { backgroundColor: colors.surfaceInset }]}>
           <View style={[styles.routeIcon, { backgroundColor: colors.primarySoft }]}>
             {(() => {
@@ -80,17 +109,30 @@ export function RemoteDesktopConnectionInfo({ onClose, snapshot, visible }: Prop
         </View> : null}
 
         <View style={styles.metrics}>
-          <Metric icon={<Gauge color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.latency')} value={latency} />
-          <Metric icon={<ArrowDownToLine color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.bandwidth')} value={bandwidth} />
+          <Metric icon={<Gauge color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t(websocket ? 'remoteDesktop.controlLatency' : 'remoteDesktop.latency')} value={latency} />
+          <Metric icon={<ArrowDownToLine color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t(websocket ? 'remoteDesktop.receiveRate' : 'remoteDesktop.bandwidth')} value={bandwidth} />
           <Metric icon={<Users color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.viewersLabel')} value={t('remoteDesktop.viewers', { count: snapshot.viewerCount })} />
           <Metric icon={<Maximize2 color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.resolution')} value={resolution} />
           <Metric icon={<Video color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.encoding')} value={encoding} />
           <Metric icon={<MousePointer2 color={colors.textMuted} size={16} strokeWidth={1.9} />} label={t('remoteDesktop.input')} value={inputState} />
         </View>
 
+        {showViewerSources ? <View style={[styles.section, { borderTopColor: colors.border }]} testID="remote-desktop-viewer-sources">
+          <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>{t('remoteDesktop.viewerSourcesTitle')}</Text>
+          {viewerSources.map((source) => <View key={source.key} style={styles.viewerSourceRow} testID={`remote-desktop-viewer-source-${source.key}`}>
+            <View style={styles.viewerSourceCopy}>
+              <Text numberOfLines={1} style={[styles.viewerSourceTitle, { color: colors.text }]}>{source.title}</Text>
+              {source.subtitle || source.current ? <Text numberOfLines={1} style={[styles.viewerSourceDetail, { color: colors.textMuted }]}>
+                {[source.current ? t('remoteDesktop.viewerSourceCurrent') : undefined, source.subtitle].filter(Boolean).join(' · ')}
+              </Text> : null}
+            </View>
+            <Text style={[styles.viewerSourceCount, { color: source.current ? colors.primary : colors.textMuted }]}>{t('remoteDesktop.viewers', { count: source.count })}</Text>
+          </View>)}
+        </View> : null}
+
         <View style={[styles.section, { borderTopColor: colors.border }]}>
           <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>{t('remoteDesktop.pathDetails')}</Text>
-          <Text style={[styles.detail, { color: colors.text }]}>{candidate}</Text>
+          <Text style={[styles.detail, { color: colors.text }]}>{pathDetails}</Text>
         </View>
 
         <View style={[styles.section, { borderTopColor: colors.border }]}>
@@ -106,6 +148,7 @@ export function RemoteDesktopConnectionInfo({ onClose, snapshot, visible }: Prop
             </View>;
           })}
         </View>
+        </ScrollView>
       </Pressable>
     </Pressable>
   </Modal>;
@@ -125,7 +168,9 @@ function Metric({ icon, label, value }: { icon: ReactNode; label: string; value:
 
 const styles = StyleSheet.create({
   backdrop: { alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.56)', flex: 1, justifyContent: 'center', padding: 18 },
-  sheet: { borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, maxWidth: 440, padding: 16, width: '100%' },
+  sheet: { borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, maxHeight: '90%', maxWidth: 440, padding: 16, width: '100%' },
+  scroll: { flexShrink: 1 },
+  body: { paddingBottom: 2 },
   header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
   title: { fontSize: 17, fontWeight: '500', lineHeight: 22 },
   close: { alignItems: 'center', borderRadius: 18, height: 36, justifyContent: 'center', width: 36 },
@@ -142,6 +187,11 @@ const styles = StyleSheet.create({
   section: { borderTopWidth: StyleSheet.hairlineWidth, gap: 8, marginTop: 14, paddingTop: 12 },
   sectionTitle: { fontSize: 12, lineHeight: 16 },
   detail: { fontSize: 13, lineHeight: 18 },
+  viewerSourceRow: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 32 },
+  viewerSourceCopy: { flex: 1, gap: 1, minWidth: 0 },
+  viewerSourceTitle: { fontSize: 13, lineHeight: 18 },
+  viewerSourceDetail: { fontSize: 12, lineHeight: 16 },
+  viewerSourceCount: { fontSize: 12, lineHeight: 16 },
   methodRow: { alignItems: 'center', flexDirection: 'row', gap: 9, minHeight: 32 },
   methodIcon: { alignItems: 'center', borderRadius: 8, height: 28, justifyContent: 'center', width: 28 },
   methodLabel: { flex: 1, fontSize: 13, lineHeight: 18 },

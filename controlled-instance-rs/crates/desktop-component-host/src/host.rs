@@ -38,18 +38,36 @@ impl ComponentHost {
                 CaptureMode::Virtual => "--virtual",
             }],
             false,
+            None,
+        )
+        .await
+    }
+    pub async fn spawn_with_state_dir(
+        binary: &Path,
+        mode: CaptureMode,
+        state_dir: &Path,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_arguments_with_cursor(
+            binary,
+            &[match mode {
+                CaptureMode::Local => "--native",
+                CaptureMode::Virtual => "--virtual",
+            }],
+            false,
+            Some(state_dir),
         )
         .await
     }
     /// Arguments are chosen inside the instance, never from an API input. Empty
     /// arguments run control-only mode for the shared adapter contract.
     pub async fn spawn_arguments(binary: &Path, arguments: &[&str]) -> anyhow::Result<Self> {
-        Self::spawn_arguments_with_cursor(binary, arguments, true).await
+        Self::spawn_arguments_with_cursor(binary, arguments, true, None).await
     }
     async fn spawn_arguments_with_cursor(
         binary: &Path,
         arguments: &[&str],
         show_cursor: bool,
+        state_dir: Option<&Path>,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(!cfg!(windows), "REMOTE_DESKTOP_PLATFORM_UNSUPPORTED");
         anyhow::ensure!(binary.is_absolute(), "REMOTE_DESKTOP_PACKAGE_INVALID");
@@ -65,6 +83,11 @@ impl ComponentHost {
         command.args(arguments).arg("--ipc").arg(endpoint.path());
         if !show_cursor {
             command.arg("--system-cursor");
+        }
+        if let Some(state_dir) = state_dir {
+            // Environment-based so a newer host can run an older component
+            // during a rolling update; older components ignore unknown env.
+            command.env("TASK_HANDOFF_DESKTOP_STATE_DIR", state_dir);
         }
         let mut child = command
             .stdin(Stdio::piped())

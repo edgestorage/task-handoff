@@ -6,6 +6,7 @@ export * from "./app-profiles.ts";
 export * from "./browser.ts";
 export * from "./remote-desktop.ts";
 export * from "./remote-desktop-stats.ts";
+export * from "./remote-desktop-transport.ts";
 export * from "./remote-desktop-codecs.ts";
 export * from "./remote-desktop-input-resume.ts";
 export * from "./remote-desktop-source-state.ts";

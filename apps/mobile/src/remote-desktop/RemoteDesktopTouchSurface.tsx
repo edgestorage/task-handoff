@@ -381,7 +381,12 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     }
     if (!inputReadyRef.current) {
       gestureRef.current = 'none';
-      showControlHint();
+      const current = snapshotRef.current;
+      if (current.inputRequested && current.isController && !current.paused) {
+        controllerRef.current?.enableInput();
+      } else {
+        showControlHint();
+      }
       return;
     }
     const touch = touches[0];

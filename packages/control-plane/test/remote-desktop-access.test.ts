@@ -83,6 +83,52 @@ test("signal liveness before the first component snapshot is accepted and forwar
   assert.equal(upstreamMessages.some((value) => String(value).includes("alive_b")), true);
 });
 
+test("a resumed signal ticket replaces the browser tunnel without re-attaching the component", async () => {
+  let attaches = 0;
+  let upstream: FakeSocket | undefined;
+  const upstreamMessages: unknown[] = [];
+  const access = new DesktopAccess({
+    async request(_instanceId, operation) {
+      if (operation === "reserve") return { type: "reserved", attachToken: "attach_a", attachExpiresAt: Date.now() + 30_000, snapshot };
+      if (operation === "stop") return { type: "stopped" };
+      throw new Error(`unexpected ${operation}`);
+    },
+    async attach(_instanceId, socket) {
+      attaches += 1;
+      upstream = socket as unknown as FakeSocket;
+      socket.on("message", (data: unknown) => upstreamMessages.push(data));
+    },
+    async renewAuthorization() { return true; },
+    issueIce() { return { iceServers: [], iceCredentialsExpiresAt: null }; },
+  });
+
+  const created = await access.create(principal, "inst_a", "node_a", "request_a", { sourceRef: "display-primary" });
+  const firstEntry = access.consume(principal, "inst_a", created.snapshot.viewerSessionId, created.ticket);
+  const first = new FakeSocket();
+  await access.connect(firstEntry, first as never);
+  assert.equal(attaches, 1);
+
+  upstream!.send(JSON.stringify({ type: "snapshot", snapshot }));
+  const configure = first.sent.map((value) => JSON.parse(String(value))).find((value) => value.type === "configureIce");
+  assert.ok(configure?.requestId);
+  upstream!.send(JSON.stringify({ type: "acknowledged", requestId: configure.requestId }));
+  assert.equal(first.sent.some((value) => String(value).includes("\"type\":\"ready\"")), true);
+
+  const issued = access.issueSignalTicket(principal, "inst_a", created.snapshot.viewerSessionId);
+  const resumedEntry = access.consume(principal, "inst_a", created.snapshot.viewerSessionId, issued.ticket);
+  const resumed = new FakeSocket();
+  await access.connect(resumedEntry, resumed as never);
+
+  assert.equal(attaches, 1, "signal resume must not attach a second component viewer");
+  assert.equal(first.closeCode, 1000);
+  const replayed = resumed.sent.map((value) => JSON.parse(String(value)));
+  assert.equal(replayed.some((value) => value.type === "snapshot"), true);
+  assert.equal(replayed.some((value) => value.type === "ready"), true);
+
+  resumed.emit("message", Buffer.from(JSON.stringify({ type: "signalAlive", requestId: "resumed_alive" })), false);
+  assert.equal(upstreamMessages.some((value) => String(value).includes("resumed_alive")), true);
+});
+
 test("signaling loss keeps the reservation long enough for fallback to take over", async () => {
   const requests: string[] = [];
   const access = new DesktopAccess({

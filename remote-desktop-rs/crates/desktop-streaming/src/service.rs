@@ -79,6 +79,7 @@ struct Service {
     input_guard_backend: Option<crate::input_guard::Backend>,
     mode: crate::capture::Mode,
     show_cursor: bool,
+    source_salt: String,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     catalog: Option<crate::platform::window::WindowCatalog>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -131,8 +132,13 @@ impl Service {
             );
             #[cfg(target_os = "macos")]
             {
-                self.catalog = Some(Default::default());
-                self.display_catalog = Some(crate::platform::display::DisplayCatalog::new());
+                self.catalog = Some(crate::platform::window::WindowCatalog::with_source_salt(
+                    self.source_salt.clone(),
+                ));
+                self.display_catalog =
+                    Some(crate::platform::display::DisplayCatalog::with_source_salt(
+                        self.source_salt.clone(),
+                    ));
             }
             #[cfg(target_os = "linux")]
             {
@@ -144,9 +150,16 @@ impl Service {
                 };
                 config.include_cursor = self.show_cursor;
                 self.catalog = Some(crate::platform::window::WindowCatalog::Linux(
-                    crate::platform::linux::WindowCatalog::new(config.clone()),
+                    crate::platform::linux::WindowCatalog::with_source_salt(
+                        config.clone(),
+                        self.source_salt.clone(),
+                    ),
                 ));
-                self.display_catalog = Some(crate::platform::display::DisplayCatalog::new(config));
+                self.display_catalog =
+                    Some(crate::platform::display::DisplayCatalog::with_source_salt(
+                        config,
+                        self.source_salt.clone(),
+                    ));
             }
         } else if self.display_catalog.is_none() {
             anyhow::bail!(crate::error::BackendError::DesktopUnavailable);
@@ -226,6 +239,11 @@ impl Service {
             if let Some(live) = self.live.remove(id) {
                 live.control.input.lock().unwrap().release_all();
                 live.peer.close().await;
+                let _ = self.registry.drained(id);
+            } else {
+                // Starting or negotiating sessions may not have a peer yet. Once
+                // their reservation is closed there is nothing to drain, so do
+                // not leave a Draining record occupying a viewer slot.
                 let _ = self.registry.drained(id);
             }
             if self.live.is_empty() {
@@ -1417,7 +1435,8 @@ impl Service {
                                     "payload": {
                                         "isController": snapshot.is_controller,
                                         "controlRevision": snapshot.control_revision,
-                                        "viewerCount": snapshot.viewer_count
+                                        "viewerCount": snapshot.viewer_count,
+                                        "viewerSources": snapshot.viewer_sources
                                     }
                                 }),
                                 Err(error) => serde_json::json!({
@@ -1801,9 +1820,17 @@ pub async fn serve_mode(stream: LocalIpcStream, mode: crate::capture::Mode) -> a
     serve_mode_with_cursor(stream, mode, true).await
 }
 pub async fn serve_mode_with_cursor(
+    stream: LocalIpcStream,
+    mode: crate::capture::Mode,
+    show_cursor: bool,
+) -> anyhow::Result<()> {
+    serve_mode_with_cursor_and_source_salt(stream, mode, show_cursor, None).await
+}
+pub async fn serve_mode_with_cursor_and_source_salt(
     mut stream: LocalIpcStream,
     mode: crate::capture::Mode,
     show_cursor: bool,
+    source_salt: Option<String>,
 ) -> anyhow::Result<()> {
     let (events, mut peer_events) = mpsc::channel(32);
     let mut fallback = if mode == crate::capture::Mode::Control {
@@ -1822,6 +1849,7 @@ pub async fn serve_mode_with_cursor(
         input_guard_backend: None,
         mode,
         show_cursor,
+        source_salt: source_salt.unwrap_or_else(crate::session::secret),
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         catalog: None,
         #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -2099,6 +2127,7 @@ mod tests {
             input_guard_backend: None,
             mode: crate::capture::Mode::Control,
             show_cursor: true,
+            source_salt: crate::session::secret(),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             catalog: None,
             display_catalog: None,
@@ -2151,6 +2180,7 @@ mod tests {
             input_guard_backend: None,
             mode: crate::capture::Mode::Control,
             show_cursor: true,
+            source_salt: crate::session::secret(),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             catalog: None,
             display_catalog: None,
@@ -2234,6 +2264,7 @@ mod tests {
             input_guard_backend: None,
             mode: crate::capture::Mode::Synthetic,
             show_cursor: true,
+            source_salt: crate::session::secret(),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             catalog: None,
             display_catalog: None,

@@ -18,6 +18,7 @@ import {
 } from '../components/adaptive-layout';
 import { activeMobileStreamingMessage, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
+import { diagnosticLog } from '../observability/diagnostic-logs';
 import { useMobileTheme } from '../components/theme';
 import { AnimatedSegmentedControl } from '../components/AnimatedSegmentedControl';
 import { ToolActivityText } from './ToolActivityText';
@@ -164,6 +165,9 @@ export function SessionDetail({
   const scrollFrame = useRef<number | undefined>(undefined);
   const userDragging = useRef(false);
   const scrollMetrics = useRef({ contentHeight: 0, offsetY: 0, viewportHeight: 0 });
+  const remoteDesktopExpansionLayout = useRef<{ contentHeight: number; viewportHeight: number } | null>(null);
+  const remoteDesktopExpansionFollow = useRef(false);
+  const remoteDesktopExpansionFollowLogged = useRef(false);
   const followingRef = useRef(true);
   const [scrollPosition, setScrollPosition] = useState({ sessionId: session?.id, atBottom: true });
   const [canScroll, setCanScroll] = useState(false);
@@ -209,6 +213,17 @@ export function SessionDetail({
       listRef.current?.scrollToEnd({ animated });
     });
   }, [selectedMode]);
+  const scheduleScrollToOffset = useCallback((offset: number, animated = true) => {
+    if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = undefined;
+      if (selectedMode === 'conversation') {
+        void conversationListRef.current?.scrollToOffset({ animated, offset });
+        return;
+      }
+      listRef.current?.scrollToOffset({ animated, offset });
+    });
+  }, [selectedMode]);
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     scrollMetrics.current = {
@@ -224,7 +239,19 @@ export function SessionDetail({
   const handleContentSizeChange = useCallback((_width: number, height: number) => {
     scrollMetrics.current.contentHeight = height;
     setCanScroll(height > scrollMetrics.current.viewportHeight + SCROLL_BOTTOM_THRESHOLD);
-  }, []);
+    if (!remoteDesktopExpansionFollow.current || !followingRef.current || userDragging.current) return;
+    const viewportHeight = scrollMetrics.current.viewportHeight;
+    if (viewportHeight <= 0) return;
+    if (!remoteDesktopExpansionFollowLogged.current) {
+      remoteDesktopExpansionFollowLogged.current = true;
+      diagnosticLog.info('remote.desktop.inline.expand.follow', {
+        contentHeight: height,
+        offsetY: scrollMetrics.current.offsetY,
+        viewportHeight,
+      });
+    }
+    scheduleScrollToOffset(Math.max(0, height - viewportHeight), false);
+  }, [scheduleScrollToOffset]);
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
     scrollMetrics.current.viewportHeight = event.nativeEvent.layout.height;
     setCanScroll(scrollMetrics.current.contentHeight > event.nativeEvent.layout.height + SCROLL_BOTTOM_THRESHOLD);
@@ -233,6 +260,26 @@ export function SessionDetail({
     setFollowing(true);
     scheduleScrollToBottom(true);
   }, [scheduleScrollToBottom, setFollowing]);
+  const followRemoteDesktopExpansion = useCallback((previewHeight: number) => {
+    const expansion = remoteDesktopExpansionLayout.current;
+    if (!expansion || previewHeight <= 0) return;
+    remoteDesktopExpansionLayout.current = null;
+    diagnosticLog.info('remote.desktop.inline.expand.measure', {
+      contentHeight: expansion.contentHeight,
+      previewHeight,
+      viewportHeight: expansion.viewportHeight,
+    });
+  }, []);
+  const settleRemoteDesktopExpansion = useCallback((expanded: boolean) => {
+    remoteDesktopExpansionFollow.current = false;
+    remoteDesktopExpansionFollowLogged.current = false;
+    if (!expanded || !followingRef.current || userDragging.current) return;
+    const { contentHeight, offsetY, viewportHeight } = scrollMetrics.current;
+    diagnosticLog.info('remote.desktop.inline.expand.settle', { contentHeight, offsetY, viewportHeight });
+    if (contentHeight > 0 && viewportHeight > 0) {
+      scheduleScrollToOffset(Math.max(0, contentHeight - viewportHeight), true);
+    }
+  }, [scheduleScrollToOffset]);
   const finishProgrammaticScroll = useCallback(() => {
     userDragging.current = false;
     if (followingRef.current && !isSessionScrollNearBottom(scrollMetrics.current)) scheduleScrollToBottom(false);
@@ -336,12 +383,36 @@ export function SessionDetail({
       expanded={remoteDesktopExpanded}
       onOpenDetail={onOpenRemoteDesktopDetail}
       onPress={() => {
-        if (canExpandRemoteDesktopInline) setRemoteDesktopExpansion({ expanded: !remoteDesktopExpanded, key: remoteDesktopExpansionKey });
+        if (canExpandRemoteDesktopInline) {
+          const nextExpanded = !remoteDesktopExpanded;
+          setRemoteDesktopExpansion({ expanded: nextExpanded, key: remoteDesktopExpansionKey });
+          if (nextExpanded) {
+            remoteDesktopExpansionLayout.current = {
+              contentHeight: scrollMetrics.current.contentHeight,
+              viewportHeight: scrollMetrics.current.viewportHeight,
+            };
+            remoteDesktopExpansionFollow.current = true;
+            remoteDesktopExpansionFollowLogged.current = false;
+            diagnosticLog.info('remote.desktop.inline.expand.start', {
+              contentHeight: scrollMetrics.current.contentHeight,
+              offsetY: scrollMetrics.current.offsetY,
+              sourceKind: remoteDesktopTarget.kind,
+              viewportHeight: scrollMetrics.current.viewportHeight,
+            });
+            setFollowing(true);
+          } else {
+            remoteDesktopExpansionLayout.current = null;
+            remoteDesktopExpansionFollow.current = false;
+            remoteDesktopExpansionFollowLogged.current = false;
+          }
+        }
         else onOpenRemoteDesktopPreview();
       }}
       onRemove={onRemoveRemoteDesktop}
+      onPreviewMeasured={followRemoteDesktopExpansion}
+      onPreviewSettled={settleRemoteDesktopExpansion}
       presentation={canExpandRemoteDesktopInline ? 'expanded' : 'floating'}
-      preview={remoteDesktopExpanded && instanceId && session
+      preview={canExpandRemoteDesktopInline && instanceId && session
         ? renderRemoteDesktopInlinePreview?.({
           instanceId,
           onOpenDetail: onOpenRemoteDesktopDetail ?? (() => undefined),
@@ -382,7 +453,7 @@ export function SessionDetail({
           onMomentumScrollBegin={() => { userDragging.current = true; }}
           onMomentumScrollEnd={finishProgrammaticScroll}
           onScroll={handleScroll}
-          onScrollBeginDrag={() => { userDragging.current = true; }}
+          onScrollBeginDrag={() => { userDragging.current = true; remoteDesktopExpansionFollow.current = false; }}
           onScrollEndDrag={() => { userDragging.current = false; }}
           recycleItems={false}
           renderItem={renderDetailItem}
@@ -408,7 +479,7 @@ export function SessionDetail({
           onMomentumScrollBegin={() => { userDragging.current = true; }}
           onMomentumScrollEnd={finishProgrammaticScroll}
           onScroll={handleScroll}
-          onScrollBeginDrag={() => { userDragging.current = true; }}
+          onScrollBeginDrag={() => { userDragging.current = true; remoteDesktopExpansionFollow.current = false; }}
           onScrollEndDrag={() => { userDragging.current = false; }}
           renderItem={renderDetailItem}
           scrollEventThrottle={16}
@@ -930,11 +1001,13 @@ function SubAgents({ agents, locale }: { agents: ControlPlaneAiSessionSummary['s
   );
 }
 
-function SessionRemoteDesktopEntry({ expanded, onOpenDetail, onPress, onRemove, presentation, preview, target }: {
+function SessionRemoteDesktopEntry({ expanded, onOpenDetail, onPress, onRemove, onPreviewMeasured, onPreviewSettled, presentation, preview, target }: {
   expanded: boolean;
   onOpenDetail?(): void;
   onPress(): void;
   onRemove?(): void;
+  onPreviewMeasured?(height: number): void;
+  onPreviewSettled?(expanded: boolean): void;
   presentation: 'floating' | 'expanded';
   preview?: ReactNode;
   target: PersistedCaptureTarget;
@@ -994,7 +1067,20 @@ function SessionRemoteDesktopEntry({ expanded, onOpenDetail, onPress, onRemove, 
       <Icon color={colors.textMuted} name="close-outline" size={19} />
     </Pressable> : null}
     </View>
-    {expanded ? preview : null}
+    {preview ? <AnimatedDisclosure
+      animateContent={false}
+      expanded={expanded}
+      onContentMeasured={onPreviewMeasured}
+      onSettled={onPreviewSettled}
+      testID="session-remote-desktop-expansion"
+    >
+      <View
+        style={[styles.remoteDesktopInlinePreview, { borderTopColor: colors.border }]}
+        testID="session-remote-desktop-inline-preview-divider"
+      >
+        {preview}
+      </View>
+    </AnimatedDisclosure> : null}
   </View>;
 }
 
@@ -1027,9 +1113,10 @@ const styles = StyleSheet.create({
   remoteDesktopPreview: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 12, minHeight: 64, minWidth: 0, paddingLeft: 14, paddingRight: 4 },
   remoteDesktopEntryPressed: { opacity: 0.72 },
   remoteDesktopIcon: { alignItems: 'center', borderRadius: 10, height: 38, justifyContent: 'center', width: 38 },
-  remoteDesktopCopy: { flex: 1, gap: 3, minWidth: 0 },
+  remoteDesktopCopy: { flex: 1, gap: 1, minWidth: 0 },
   remoteDesktopTitle: { fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
-  remoteDesktopDetail: { fontSize: mobileWebType.tiny, lineHeight: mobileWebType.timeLine },
+  remoteDesktopDetail: { fontSize: mobileWebType.tiny, lineHeight: mobileWebMetric(14) },
+  remoteDesktopInlinePreview: { borderTopWidth: StyleSheet.hairlineWidth },
   remoteDesktopAction: { alignItems: 'center', borderRadius: 9, height: 36, justifyContent: 'center', width: 36 },
   header: { gap: 12, marginBottom: 20 },
   itemSeparator: { height: mobileWebMetric(16) },

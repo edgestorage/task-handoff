@@ -213,10 +213,14 @@ impl Native {
         anyhow::ensure!(current.geometry == geometry, BackendError::GeometryChanged);
         Ok(geometry)
     }
-    fn focused(&self) -> anyhow::Result<()> {
+    fn frontmost(&self) -> anyhow::Result<()> {
         let app = objc2_app_kit::NSWorkspace::sharedWorkspace().frontmostApplication();
         let frontmost = app.is_some_and(|a| a.processIdentifier() == self.identity.pid);
         anyhow::ensure!(frontmost, BackendError::WindowFocusRequired);
+        Ok(())
+    }
+    fn focused(&self) -> anyhow::Result<()> {
+        self.frontmost()?;
         let focused = attribute(&self.app, "AXFocusedWindow")?
             .downcast::<AXUIElement>()
             .map_err(|_| anyhow::anyhow!(BackendError::WindowFocusRequired))?;
@@ -225,19 +229,26 @@ impl Native {
     }
     fn focus(&self) -> anyhow::Result<Geometry> {
         let geometry = self.geometry()?;
-        anyhow::ensure!(
-            unsafe { self.window.perform_action(&CFString::from_str("AXRaise")) }
-                == AXError::Success,
-            BackendError::WindowFocusRequired
-        );
         let yes = CFBoolean::new(true);
-        anyhow::ensure!(
-            unsafe {
-                self.app
-                    .set_attribute_value(&CFString::from_str("AXFrontmost"), yes.as_ref())
-            } == AXError::Success,
-            BackendError::WindowFocusRequired
-        );
+        // Device Hub's simulator windows reject AXRaise with
+        // kAXErrorAttributeUnsupported even though AXMain and AXFocused are
+        // settable. Request activation through both supported paths and let the
+        // observed frontmost/focused state below decide whether focus succeeded.
+        if unsafe { self.window.perform_action(&CFString::from_str("AXRaise")) } != AXError::Success
+        {
+            let _ = unsafe {
+                self.window
+                    .set_attribute_value(&CFString::from_str("AXMain"), yes.as_ref())
+            };
+            let _ = unsafe {
+                self.window
+                    .set_attribute_value(&CFString::from_str("AXFocused"), yes.as_ref())
+            };
+        }
+        let _ = unsafe {
+            self.app
+                .set_attribute_value(&CFString::from_str("AXFrontmost"), yes.as_ref())
+        };
         // AXRaise/AXFrontmost return before WindowServer and NSWorkspace publish
         // the new foreground application. Wait for the observed transition
         // instead of failing immediately and leaving the viewer in a retry
@@ -256,7 +267,11 @@ impl Native {
     fn validate(&self, expected: Geometry, point: Option<(i32, i32)>) -> anyhow::Result<Geometry> {
         let geometry = self.geometry()?;
         anyhow::ensure!(geometry == expected, BackendError::GeometryChanged);
-        self.focused()?;
+        // CGEvent is global, so the target application must remain frontmost.
+        // Its exact AX focused window may legitimately move to an app-owned
+        // menu, popover or dialog while the user interacts with that window;
+        // requiring the original window here would suspend control mid-action.
+        self.frontmost()?;
         if let Some((x, y)) = point {
             let hit = visible_windows()?.into_iter().find(|w| {
                 x as i64 >= w.geometry.x as i64
@@ -264,8 +279,7 @@ impl Native {
                     && (x as i64) < w.geometry.x as i64 + w.geometry.width as i64
                     && (y as i64) < w.geometry.y as i64 + w.geometry.height as i64
             });
-            let matches =
-                hit.is_some_and(|w| w.id == self.identity.window && w.pid == self.identity.pid);
+            let matches = hit.is_some_and(|w| pointer_hit_allowed(self.identity, &w));
             anyhow::ensure!(matches, BackendError::WindowFocusRequired);
         }
         Ok(geometry)
@@ -274,7 +288,16 @@ impl Native {
 struct Visible {
     id: u32,
     pid: i32,
+    layer: i64,
     geometry: Geometry,
+}
+fn pointer_hit_allowed(target: Identity, hit: &Visible) -> bool {
+    hit.pid == target.pid
+        && (hit.id == target.window
+            // Native menus, popovers and similar transient surfaces publish as
+            // higher-layer windows owned by the same process. They are part of
+            // the selected window's interaction and must not suspend input.
+            || hit.layer > 0)
 }
 fn dictionary_value(
     dictionary: &CFDictionary,
@@ -320,7 +343,10 @@ fn visible_windows() -> anyhow::Result<Vec<Visible>> {
         let cursor_level = objc2_core_graphics::CGWindowLevelForKey(
             objc2_core_graphics::CGWindowLevelKey::CursorWindowLevelKey,
         );
-        if number(unsafe { kCGWindowLayer }) == Some(i64::from(cursor_level)) {
+        let Some(layer) = number(unsafe { kCGWindowLayer }) else {
+            continue;
+        };
+        if layer == i64::from(cursor_level) {
             continue;
         }
         let Some(bounds) = dictionary_value(&dictionary, unsafe { kCGWindowBounds })
@@ -342,9 +368,75 @@ fn visible_windows() -> anyhow::Result<Vec<Visible>> {
         result.push(Visible {
             id: id as u32,
             pid: pid as i32,
+            layer,
             geometry,
         });
         anyhow::ensure!(result.len() <= 4096, BackendError::WindowUnavailable);
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pointer_hit_allowed, Identity, Visible};
+    use crate::traits::Geometry;
+
+    fn visible(id: u32, pid: i32, layer: i64) -> Visible {
+        Visible {
+            id,
+            pid,
+            layer,
+            geometry: Geometry {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+                scale: 1.0,
+            },
+        }
+    }
+
+    #[test]
+    fn pointer_accepts_target_window() {
+        assert!(pointer_hit_allowed(
+            Identity {
+                window: 10,
+                pid: 42
+            },
+            &visible(10, 42, 0)
+        ));
+    }
+
+    #[test]
+    fn pointer_accepts_same_process_transient_overlay() {
+        assert!(pointer_hit_allowed(
+            Identity {
+                window: 10,
+                pid: 42
+            },
+            &visible(11, 42, 101)
+        ));
+    }
+
+    #[test]
+    fn pointer_rejects_other_process_overlay() {
+        assert!(!pointer_hit_allowed(
+            Identity {
+                window: 10,
+                pid: 42
+            },
+            &visible(11, 7, 101)
+        ));
+    }
+
+    #[test]
+    fn pointer_rejects_unrelated_same_process_window() {
+        assert!(!pointer_hit_allowed(
+            Identity {
+                window: 10,
+                pid: 42
+            },
+            &visible(11, 42, 0)
+        ));
+    }
 }

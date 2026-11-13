@@ -15,6 +15,10 @@ impl Default for WindowCatalog {
 }
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 impl WindowCatalog {
+    #[cfg(target_os = "macos")]
+    pub fn with_source_salt(source_salt: String) -> Self {
+        Self::Macos(crate::platform::macos::WindowCatalog::new(source_salt))
+    }
     pub async fn enumerate(
         &mut self,
         owner: crate::session::Owner,

@@ -815,9 +815,12 @@ pub struct WindowCatalog {
 }
 impl WindowCatalog {
     pub fn new(config: Config) -> Self {
+        Self::with_source_salt(config, crate::session::secret())
+    }
+    pub fn with_source_salt(config: Config, source_salt: String) -> Self {
         Self {
             config,
-            references: Catalog::default(),
+            references: Catalog::with_salt(source_salt),
         }
     }
     pub async fn enumerate(

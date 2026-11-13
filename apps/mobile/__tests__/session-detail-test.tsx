@@ -115,6 +115,52 @@ test('expanded preview mode toggles an inline surface from the session card', as
   setSessionPreviewPresentation('floating');
 });
 
+test('expanding an inline remote desktop tracks the growing content height at the bottom', async () => {
+  setSessionPreviewPresentation('expanded');
+  const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+    setTimeout(() => callback(Date.now()), 0);
+    return 1;
+  });
+  const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
+  const screen = await render(<SessionDetail
+    instanceId="instance-1"
+    messages={[]}
+    mode="turn"
+    onOpenRemoteDesktopPreview={jest.fn()}
+    remoteDesktopTarget={{ kind: 'window', sourceRef: 'window_1', subtitle: 'Preview', title: 'Editor' }}
+    renderRemoteDesktopInlinePreview={() => <View testID="session-remote-desktop-inline-preview-stub" />}
+    session={ControlPlaneAiSessionSummarySchema.parse({ ...session, currentTool: undefined, phase: 'thinking', status: 'idle', subAgents: [] })}
+  />);
+  const list = screen.getByTestId('session-detail-scroll');
+  await fireEvent(list, 'layout', { nativeEvent: { layout: { height: 500, width: 390 } } });
+  await fireEvent(list, 'contentSizeChange', 390, 1_200);
+
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-entry'));
+
+  expect(scrollToOffset).not.toHaveBeenCalled();
+  await fireEvent(screen.getByTestId('session-remote-desktop-expansion-content'), 'layout', {
+    nativeEvent: { layout: { height: 200, width: 390 } },
+  });
+  expect(scrollToOffset).not.toHaveBeenCalled();
+  await fireEvent(list, 'contentSizeChange', 390, 1_300);
+  await fireEvent(list, 'contentSizeChange', 390, 1_400);
+  await waitFor(() => expect(scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 900 }));
+  expect(scrollToOffset).not.toHaveBeenCalledWith({ animated: true, offset: 900 });
+  const expansion = StyleSheet.flatten(screen.getByTestId('session-remote-desktop-expansion').props.style);
+  expect(expansion).not.toHaveProperty('opacity');
+  expect(expansion).not.toHaveProperty('transform');
+  const divider = StyleSheet.flatten(screen.getByTestId('session-remote-desktop-inline-preview-divider').props.style);
+  expect(divider.borderTopWidth).toBeGreaterThan(0);
+  expect(divider.borderTopColor).toBeTruthy();
+
+  await screen.unmount();
+  scrollToOffset.mockRestore();
+  frame.mockRestore();
+  cancelFrame.mockRestore();
+  setSessionPreviewPresentation('floating');
+});
+
 function setViewportWidth(width: number) {
   Dimensions.set({
     screen: { ...initialScreenMetrics, width },

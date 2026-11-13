@@ -223,6 +223,16 @@ async fn connection(hub: Hub, role: Role, mut socket: WebSocket) {
                         if text.len() > 64 * 1024 {
                             break;
                         }
+                        if let Some(request_id) = fallback_rtt_request_id(&text) {
+                            let pong = json!({
+                                "type": "fallback.rtt.pong",
+                                "payload": { "requestId": request_id }
+                            });
+                            if send(&mut socket, pong).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
                         if hub.events.send(FallbackEvent::ControlMessage {
                             generation: generation.clone(),
                             bytes: text.as_bytes().to_vec(),
@@ -265,4 +275,42 @@ async fn connection(hub: Hub, role: Role, mut socket: WebSocket) {
         .send(FallbackEvent::Detach { role, generation })
         .await;
     let _ = socket.close().await;
+}
+
+fn fallback_rtt_request_id(text: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("fallback.rtt.ping") {
+        return None;
+    }
+    let request_id = value.get("payload")?.get("requestId")?.as_str()?;
+    (!request_id.is_empty() && request_id.len() <= 128).then(|| request_id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fallback_rtt_request_id;
+
+    #[test]
+    fn rtt_probe_requires_a_bounded_request_id() {
+        assert_eq!(
+            fallback_rtt_request_id(
+                r#"{"type":"fallback.rtt.ping","payload":{"requestId":"rtt-1"}}"#
+            ),
+            Some("rtt-1".into())
+        );
+        assert_eq!(
+            fallback_rtt_request_id(r#"{"type":"fallback.rtt.ping","payload":{"requestId":""}}"#),
+            None
+        );
+        assert_eq!(
+            fallback_rtt_request_id(
+                r#"{"type":"fallback.rtt.ping","payload":{"requestId":"123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            fallback_rtt_request_id(r#"{"type":"fallback.ready"}"#),
+            None
+        );
+    }
 }

@@ -23,6 +23,15 @@ pub struct CaptureSelection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_region: Option<NormalizedRect>,
 }
+/// One capture source with the number of viewers currently attached to it.
+/// `Snapshot` carries this list so a viewer can see which other windows are
+/// being watched without exposing another viewer's session identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewerSource {
+    pub source_ref: String,
+    pub viewer_count: u64,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
@@ -51,9 +60,15 @@ pub struct Snapshot {
     /// is intentionally unclaimed until another viewer requests it.
     #[serde(default = "default_true")]
     pub has_controller: bool,
-    /// Number of non-terminal viewers currently attached to this desktop.
+    /// Number of non-terminal viewers currently attached to this desktop,
+    /// across all capture sources. Source-level totals live in
+    /// `viewer_sources`.
     #[serde(default = "default_viewer_count")]
     pub viewer_count: u64,
+    /// Per-source viewer totals. Sorted by `source_ref` so every viewer sees
+    /// the same order and a snapshot is deterministic.
+    #[serde(default)]
+    pub viewer_sources: Vec<ViewerSource>,
     /// Monotonic component-owned proof that a restarted ICE generation reached
     /// its connected/completed state. It is projected to the trusted CP/instance
     /// transport only; the browser signal boundary does not carry it.

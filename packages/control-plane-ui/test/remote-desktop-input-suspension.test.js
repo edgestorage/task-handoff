@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   parseInputSuspension,
   REMOTE_DESKTOP_GEOMETRY_CHANGED,
+  shouldResumeAfterInputError,
   shouldResumeAfterInputSuspension,
 } from "../src/apps/control-plane/instance-detail/remoteDesktopInputSuspension.ts";
 
@@ -28,6 +29,30 @@ test("geometry suspension carries the authoritative revision and recovers in pla
     sessionRevision: 42,
   });
   assert.equal(shouldResumeAfterInputSuspension(notice, ready), true);
+});
+
+test("any recoverable input suspension resumes while the viewer still owns input", () => {
+  const notice = parseInputSuspension({
+    type: "input.suspended",
+    payload: {
+      cause: "REMOTE_DESKTOP_WINDOW_FOCUS_REQUIRED",
+      recoverable: true,
+      sessionRevision: 43,
+    },
+  });
+  assert.equal(shouldResumeAfterInputSuspension(notice, ready), true);
+});
+
+test("recoverable asynchronous input errors resume only for an active controller", () => {
+  assert.equal(shouldResumeAfterInputError(true, ready), true);
+  assert.equal(shouldResumeAfterInputError(false, ready), false);
+  for (const state of [
+    { ...ready, inputRequested: false },
+    { ...ready, isController: false },
+    { ...ready, surfacePaused: true },
+  ]) {
+    assert.equal(shouldResumeAfterInputError(true, state), false);
+  }
 });
 
 test("manual suspension and unavailable recovery context stay released", () => {

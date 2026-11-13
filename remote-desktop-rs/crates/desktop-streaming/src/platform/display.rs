@@ -28,14 +28,22 @@ impl Default for DisplayCatalog {
 impl DisplayCatalog {
     #[cfg(target_os = "macos")]
     pub fn new() -> Self {
+        Self::with_source_salt(crate::session::secret())
+    }
+    #[cfg(target_os = "macos")]
+    pub fn with_source_salt(source_salt: String) -> Self {
         Self {
-            catalog: Catalog::default(),
+            catalog: Catalog::with_salt(source_salt),
         }
     }
     #[cfg(target_os = "linux")]
     pub fn new(config: crate::platform::linux::Config) -> Self {
+        Self::with_source_salt(config, crate::session::secret())
+    }
+    #[cfg(target_os = "linux")]
+    pub fn with_source_salt(config: crate::platform::linux::Config, source_salt: String) -> Self {
         Self {
-            catalog: Catalog::default(),
+            catalog: Catalog::with_salt(source_salt),
             config,
         }
     }

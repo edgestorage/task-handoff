@@ -3,7 +3,7 @@
 use controlled_instance_protocol::mint_entity_id;
 use rand::RngCore;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
@@ -25,7 +25,7 @@ pub fn secret() -> String {
 }
 
 pub use remote_desktop_protocol::model::{
-    CaptureGeometry, CaptureSelection, Owner, Phase, Snapshot,
+    CaptureGeometry, CaptureSelection, Owner, Phase, Snapshot, ViewerSource,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -140,16 +140,37 @@ impl Registry {
         matches!(phase, Phase::Stopped | Phase::Failed)
     }
 
-    fn viewer_count(&self, id: &str) -> u64 {
-        let Some(selection) = self.sessions.get(id).map(|s| &s.snapshot.capture_selection) else {
-            return 0;
-        };
-        self.sessions
+    fn viewer_slot_active(session: &Session, now: Instant) -> bool {
+        matches!(
+            session.snapshot.phase,
+            Phase::Starting | Phase::Negotiating | Phase::Active
+        ) && !Session::deadline_expired(session, now)
+    }
+
+    fn viewer_summary(&self) -> (u64, Vec<ViewerSource>) {
+        let now = Instant::now();
+        let mut sources = BTreeMap::<String, u64>::new();
+        let mut total = 0;
+        for session in self
+            .sessions
             .values()
-            .filter(|s| {
-                !Self::terminal(s.snapshot.phase) && &s.snapshot.capture_selection == selection
-            })
-            .count() as u64
+            .filter(|session| Self::viewer_slot_active(session, now))
+        {
+            total += 1;
+            *sources
+                .entry(session.snapshot.capture_selection.source_ref.clone())
+                .or_default() += 1;
+        }
+        (
+            total,
+            sources
+                .into_iter()
+                .map(|(source_ref, viewer_count)| ViewerSource {
+                    source_ref,
+                    viewer_count,
+                })
+                .collect(),
+        )
     }
 
     fn live_holder(&self) -> Option<String> {
@@ -170,7 +191,7 @@ impl Registry {
     fn publish(&mut self, id: &str) {
         let is_controller = self.is_holder(id);
         let has_controller = self.live_holder().is_some();
-        let viewer_count = self.viewer_count(id);
+        let (viewer_count, viewer_sources) = self.viewer_summary();
         let control_revision = self.control_revision;
         let Some(session) = self.sessions.get_mut(id) else {
             return;
@@ -180,6 +201,7 @@ impl Registry {
         session.snapshot.is_controller = is_controller;
         session.snapshot.has_controller = has_controller;
         session.snapshot.viewer_count = viewer_count;
+        session.snapshot.viewer_sources = viewer_sources;
         let snapshot = session.snapshot.clone();
         if self.events.len() == 128 {
             self.events.pop_front();
@@ -278,7 +300,7 @@ impl Registry {
         let active = self
             .sessions
             .values()
-            .filter(|session| !Self::terminal(session.snapshot.phase))
+            .filter(|session| Self::viewer_slot_active(session, now))
             .collect::<Vec<_>>();
         if active.len() >= MAX_VIEWERS {
             return Err(Error::Busy);
@@ -304,6 +326,7 @@ impl Registry {
                     is_controller: needs_holder,
                     has_controller: needs_holder,
                     viewer_count: 0,
+                    viewer_sources: Vec::new(),
                     transport_generation: 0,
                     transport: "webrtc".into(),
                     phase: Phase::Starting,
@@ -787,10 +810,10 @@ impl Registry {
         if released_control {
             self.control_holder = None;
             self.control_revision = self.control_revision.saturating_add(1);
-            self.changed_all();
-        } else {
-            self.changed(id);
         }
+        // Viewer count and has_controller are derived across sessions, so every
+        // drain must republish its peers, not only the session being closed.
+        self.changed_all();
         Effects {
             release_input: released_control || held_input,
             close_peer: true,

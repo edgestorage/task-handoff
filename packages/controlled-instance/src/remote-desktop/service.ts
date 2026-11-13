@@ -78,7 +78,7 @@ export class DesktopService extends EventEmitter {
     if (!this.settings.get().enabled) throw new Error("REMOTE_DESKTOP_DISABLED");
     if (this.disposed || !this.options.canStart()) throw new Error("REMOTE_DESKTOP_UPDATING");
     if (this.host && !this.host.closed) return this.host;
-    const host = await DesktopComponentHost.spawn(installed.binary,this.options.mode);
+    const host = await DesktopComponentHost.spawn(installed.binary,this.options.mode,this.options.dataDir);
     // An install operation may have entered its queue during the handshake.
     if (!this.options.canStart() || !this.settings.get().enabled) { await host.close(); throw new Error("REMOTE_DESKTOP_UPDATING"); }
     this.host = host;this.projected=host.capability;this.failure=undefined;

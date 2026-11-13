@@ -6,6 +6,7 @@ import {
   DesktopCreateSchema,
   DesktopFallbackRequestSchema,
   DesktopRequestIdSchema,
+  DesktopSignalResumeRequestSchema,
   DesktopSourcesSchema,
   REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL,
   REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL,
@@ -91,6 +92,21 @@ export function registerRemoteDesktopRoutes(options: {
   }
   app.post(`${base}/remote-desktop-sessions`, noStore, request => create(request));
   app.post(`${base}/remote-desktop-sessions/:sessionId/takeover`, noStore, request => create(request, true));
+  app.post(`${base}/remote-desktop-sessions/:sessionId/signal`, noStore, async request => {
+    const { instance, principal } = await authorize(request, false, false);
+    const input = DesktopSignalResumeRequestSchema.parse(request.body);
+    const id = (request.params as any).sessionId as string;
+    const data = await access.mutate(principal, instance.id, input.requestId, { type: "signal-resume", sessionId: id }, async () => {
+      const issued = access.issueSignalTicket(principal, instance.id, id);
+      return {
+        protocolVersion: REMOTE_DESKTOP_PROTOCOL_VERSION,
+        ...issued,
+        signalUrl: `/api/controlled-instances/${encodeURIComponent(instance.id)}/remote-desktop-sessions/${encodeURIComponent(id)}/signal?ticket=${encodeURIComponent(issued.ticket)}`,
+      };
+    }) as { ticket: string; [key: string]: unknown };
+    const { ticket: _ticket, ...publicData } = data;
+    return { data: publicData };
+  });
   app.get(`${base}/remote-desktop-sessions/:sessionId`, noStore, async request => {
     const { instance, principal } = await authorize(request, false, false);
     return { data: await access.snapshot(principal, instance.id, (request.params as any).sessionId) };
