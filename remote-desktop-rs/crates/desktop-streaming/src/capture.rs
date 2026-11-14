@@ -1,6 +1,6 @@
 //! Component-local platform choice. It is not a public capability document.
 use crate::{
-    traits::{CapturePrecision, Geometry},
+    traits::{CapturePrecision, Geometry, PointerMapping},
     video::Budget,
 };
 use openh264::formats::YUVBuffer;
@@ -139,6 +139,20 @@ impl Source {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             Self::Native(c) => c.geometry(),
         }
+    }
+    /// Viewport mapping for the latest native frame. Menu popovers can extend
+    /// the capture beyond the selected window and the encoded surface can
+    /// contain letterbox bars, so pointer input cannot use one `Geometry`.
+    #[cfg(target_os = "macos")]
+    pub fn pointer_mapping(&self) -> Option<PointerMapping> {
+        match self {
+            Self::Native(c) => Some(c.pointer_mapping()),
+            _ => None,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    pub fn pointer_mapping(&self) -> Option<PointerMapping> {
+        None
     }
     pub fn frame(
         &mut self,

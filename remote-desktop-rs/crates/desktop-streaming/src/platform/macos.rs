@@ -6,7 +6,7 @@ use super::frame_mailbox::FrameMailbox;
 use crate::{
     capture::resolve_capture_size,
     error::BackendError,
-    traits::{CapturePrecision, Geometry, RawFrame},
+    traits::{CapturePrecision, Geometry, NormalizedRect, PointerMapping, RawFrame},
 };
 use core_graphics::access::ScreenCaptureAccess;
 use screencapturekit::{cm::SCFrameStatus, cv::CVPixelBufferLockFlags, prelude::*};
@@ -20,6 +20,13 @@ pub enum Target {
 #[derive(Clone)]
 pub struct DisplayTarget {
     display: SCDisplay,
+}
+#[derive(Clone, Copy, PartialEq)]
+struct ContentKey {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
 }
 impl DisplayTarget {
     pub fn source(&self, show_cursor: bool) -> anyhow::Result<crate::capture::Source> {
@@ -79,6 +86,8 @@ pub struct Capture {
     filter: SCContentFilter,
     config: SCStreamConfiguration,
     geometry: Geometry,
+    pointer_mapping: PointerMapping,
+    content_key: Option<ContentKey>,
     capture_size: (u32, u32),
     precision: CapturePrecision,
     display_geometry: Option<super::display_geometry::DisplayGeometry>,
@@ -182,6 +191,8 @@ impl Capture {
             filter,
             config,
             geometry,
+            pointer_mapping: PointerMapping::from_geometry(geometry),
+            content_key: None,
             capture_size,
             precision,
             display_geometry,
@@ -226,7 +237,17 @@ impl Capture {
     }
     pub fn refresh_geometry(&mut self) -> anyhow::Result<Geometry> {
         if let Some(identity) = self.window {
-            let current = super::macos_window::geometry(identity)?;
+            let query_started = Instant::now();
+            let current = match super::macos_window::geometry(identity) {
+                Ok(current) => current,
+                Err(error) => {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.geometry_query.error elapsedMs={} error={error}",
+                        query_started.elapsed().as_millis()
+                    );
+                    return Err(error);
+                }
+            };
             anyhow::ensure!(
                 current.width <= 8192 && current.height <= 8192,
                 BackendError::InvalidGeometry
@@ -234,8 +255,28 @@ impl Capture {
             let next_capture_size =
                 capture_size_for(&self.target, current.width, current.height, self.precision)?;
             if current != self.geometry || next_capture_size != self.capture_size {
-                self.pause()?;
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.geometry_changed queryMs={} from={:?} to={current:?} captureFrom={:?} captureTo={next_capture_size:?}",
+                    query_started.elapsed().as_millis(),
+                    self.geometry,
+                    self.capture_size
+                );
+                let pause_started = Instant::now();
+                let pause_result = self.pause();
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pause elapsedMs={} result={}",
+                    pause_started.elapsed().as_millis(),
+                    if pause_result.is_ok() { "ok" } else { "error" }
+                );
+                if let Err(error) = &pause_result {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pause.error error={error}"
+                    );
+                }
+                pause_result?;
                 self.geometry = current;
+                self.pointer_mapping = PointerMapping::from_geometry(current);
+                self.content_key = None;
                 self.capture_size = next_capture_size;
                 self.pixel_size = (next_capture_size.0 as usize, next_capture_size.1 as usize);
                 self.config = self
@@ -255,26 +296,52 @@ impl Capture {
     pub fn geometry(&self) -> Geometry {
         self.geometry
     }
+    pub fn pointer_mapping(&self) -> PointerMapping {
+        self.pointer_mapping
+    }
     pub fn resume(&mut self) -> anyhow::Result<()> {
         if self.stream.is_some() {
             return Ok(());
         }
-        preflight()?;
-        // Fresh mailbox isolates late callbacks from an obsolete stream.
-        self.latest = FrameMailbox::default();
-        let mut stream =
-            SCStream::new_with_delegate(&self.filter, &self.config, Delegate(self.latest.clone()))
-                .map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))?;
-        stream
-            .add_output_handler(Output(self.latest.clone()), SCStreamOutputType::Screen)
+        let started = Instant::now();
+        eprintln!(
+            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.resume.start geometry={:?} captureSize={:?}",
+            self.geometry, self.capture_size
+        );
+        let result = (|| -> anyhow::Result<()> {
+            preflight()?;
+            // Fresh mailbox isolates late callbacks from an obsolete stream.
+            self.latest = FrameMailbox::default();
+            let mut stream = SCStream::new_with_delegate(
+                &self.filter,
+                &self.config,
+                Delegate(self.latest.clone()),
+            )
             .map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))?;
-        stream
-            .start_capture()
-            .map_err(|_| anyhow::anyhow!(BackendError::CaptureFailed))?;
-        self.stream = Some(stream);
-        Ok(())
+            stream
+                .add_output_handler(Output(self.latest.clone()), SCStreamOutputType::Screen)
+                .map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))?;
+            stream
+                .start_capture()
+                .map_err(|_| anyhow::anyhow!(BackendError::CaptureFailed))?;
+            self.stream = Some(stream);
+            Ok(())
+        })();
+        match &result {
+            Ok(()) => eprintln!(
+                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.resume.end elapsedMs={} result=ok",
+                started.elapsed().as_millis()
+            ),
+            Err(error) => eprintln!(
+                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.resume.end elapsedMs={} result=error error={error}",
+                started.elapsed().as_millis()
+            ),
+        }
+        result
     }
     pub fn pause(&mut self) -> anyhow::Result<()> {
+        let had_stream = self.stream.is_some();
+        let started = Instant::now();
         let result = if let Some(stream) = self.stream.take() {
             stream
                 .stop_capture()
@@ -283,6 +350,13 @@ impl Capture {
             Ok(())
         };
         self.latest = FrameMailbox::default();
+        if had_stream {
+            eprintln!(
+                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.stop elapsedMs={} result={}",
+                started.elapsed().as_millis(),
+                if result.is_ok() { "ok" } else { "error" }
+            );
+        }
         result
     }
     pub fn frame(&mut self, _force: bool) -> anyhow::Result<Option<RawFrame>> {
@@ -294,6 +368,53 @@ impl Capture {
         let Some((sample, captured_at)) = sample else {
             return Ok(None);
         };
+        if let Some(info) = sample.frame_info() {
+            if let Some(content) = info.content_rect {
+                let key = ContentKey {
+                    x: content.origin.x,
+                    y: content.origin.y,
+                    width: content.size.width,
+                    height: content.size.height,
+                };
+                if self.content_key != Some(key) {
+                    let screen = match self.window {
+                        Some(identity) => super::macos_window::capture_bounds(identity),
+                        None => Ok(self.geometry),
+                    };
+                    match (screen, normalized_content_rect(content, self.pixel_size)) {
+                        (Ok(screen), Some(content)) => match PointerMapping::new(screen, content) {
+                            Ok(mapping) if mapping != self.pointer_mapping => {
+                                eprintln!(
+                                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pointer_mapping window={:?} screen={screen:?} content={content:?} mapping={mapping:?}",
+                                        self.geometry
+                                    );
+                                self.pointer_mapping = mapping;
+                                self.content_key = Some(key);
+                            }
+                            Ok(_) => self.content_key = Some(key),
+                            Err(error) => {
+                                eprintln!(
+                                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pointer_mapping.error window={:?} error={error}",
+                                        self.geometry
+                                    );
+                            }
+                        },
+                        (Err(error), _) => {
+                            eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pointer_mapping.error window={:?} content={content:?} error={error}",
+                                self.geometry
+                            );
+                        }
+                        (_, None) => {
+                            eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pointer_mapping.error window={:?} content={content:?} error=invalid_content_rect",
+                                self.geometry
+                            );
+                        }
+                    }
+                }
+            }
+        }
         let buffer = sample
             .pixel_buffer()
             .ok_or_else(|| anyhow::anyhow!(BackendError::CaptureFailed))?;
@@ -330,6 +451,27 @@ impl Capture {
             captured_at,
         }))
     }
+}
+
+/// `contentRect` is expressed in output-frame coordinates. A fixed SCStream
+/// canvas can contain letterbox bars when menus enlarge the captured screen
+/// union, so the encoded frame and actual content do not share a rectangle.
+fn normalized_content_rect(
+    content: screencapturekit::cg::CGRect,
+    pixel_size: (usize, usize),
+) -> Option<NormalizedRect> {
+    let surface_width = pixel_size.0 as f64;
+    let surface_height = pixel_size.1 as f64;
+    if surface_width <= 0.0 || surface_height <= 0.0 {
+        return None;
+    }
+    NormalizedRect::new(
+        content.origin.x / surface_width,
+        content.origin.y / surface_height,
+        content.size.width / surface_width,
+        content.size.height / surface_height,
+    )
+    .ok()
 }
 
 fn backing_scale_for_display(display: core_graphics::display::CGDisplay) -> (f64, f64) {
@@ -403,6 +545,70 @@ fn capture_size_for(
 impl Drop for Capture {
     fn drop(&mut self) {
         let _ = self.pause();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized_content_rect;
+    use crate::traits::{Geometry, PointerMapping};
+    use screencapturekit::cg::CGRect;
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
+        CGRect::new(x, y, width, height)
+    }
+
+    fn popover_mapping() -> PointerMapping {
+        let surface = normalized_content_rect(rect(0.0, 0.0, 1386.0, 811.204), (1386, 1050))
+            .expect("content rect");
+        PointerMapping::new(
+            Geometry {
+                x: -149,
+                y: 30,
+                width: 1794,
+                height: 1050,
+                scale: 1.0,
+            },
+            surface,
+        )
+        .expect("mapping")
+    }
+
+    #[test]
+    fn letterboxed_surface_maps_its_visible_center_to_the_screen_union_center() {
+        let mapping = popover_mapping();
+        assert!((mapping.content.height - 0.772575).abs() < 0.000001);
+        assert_eq!(
+            mapping.map(0.5, mapping.content.height / 2.0).unwrap(),
+            (748, 555)
+        );
+    }
+
+    #[test]
+    fn letterboxed_surface_maps_the_far_popover_edge_to_the_screen_union_edge() {
+        let mapping = popover_mapping();
+        assert_eq!(
+            mapping.map(1.0, mapping.content.height).unwrap(),
+            (1644, 1079)
+        );
+    }
+
+    #[test]
+    fn larger_surface_keeps_content_rect_in_output_pixels() {
+        let content = normalized_content_rect(rect(0.0, 0.0, 1794.0, 1050.0), (2772, 2100))
+            .expect("content rect");
+        assert!((content.width - 1794.0 / 2772.0).abs() < 0.000001);
+        assert!((content.height - 0.5).abs() < 0.000001);
+    }
+
+    #[test]
+    fn content_offset_is_preserved_for_centered_letterboxing() {
+        let content =
+            normalized_content_rect(rect(100.0, 50.0, 800.0, 600.0), (1000, 700)).unwrap();
+        assert_eq!(content.x, 0.1);
+        assert_eq!(content.y, 50.0 / 700.0);
+        assert_eq!(content.width, 0.8);
+        assert_eq!(content.height, 600.0 / 700.0);
     }
 }
 

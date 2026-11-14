@@ -3,9 +3,33 @@ use desktop_streaming::{
     contract::{Hello, IPC_VERSION},
     framing,
 };
+use std::fs::OpenOptions;
 use std::io::Read;
 use std::{path::PathBuf, time::Duration};
 use subtle::ConstantTimeEq;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn dup2(oldfd: i32, newfd: i32) -> i32;
+}
+
+#[cfg(unix)]
+fn redirect_stderr_to_instance_log() {
+    use std::os::fd::AsRawFd;
+
+    let Some(log_dir) = std::env::var_os("TASK_HANDOFF_LOG_DIR") else {
+        return;
+    };
+    let path = PathBuf::from(log_dir).join("controlled-instance.err.log");
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    // Safety: dup2 replaces the process stderr descriptor. The input guard is
+    // spawned later and inherits the same append-only instance log.
+    unsafe {
+        dup2(file.as_raw_fd(), 2);
+    }
+}
 
 fn main() -> anyhow::Result<()> {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--version")) {
@@ -16,6 +40,8 @@ fn main() -> anyhow::Result<()> {
         println!("{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    #[cfg(unix)]
+    redirect_stderr_to_instance_log();
     #[cfg(target_os = "macos")]
     if std::env::args_os().nth(1).as_deref()
         == Some(std::ffi::OsStr::new("--request-input-permission"))

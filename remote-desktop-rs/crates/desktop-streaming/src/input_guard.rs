@@ -5,7 +5,7 @@ use crate::{
     channel::{Input, Pointer},
     input_driver::NativeInput,
     synthetic::SyntheticInput,
-    traits::Geometry,
+    traits::{Geometry, PointerMapping},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -111,12 +111,35 @@ pub enum Command {
     Arm { epoch: u64 },
     Rebind { backend: Backend },
     Geometry { geometry: Geometry },
+    PointerMapping { mapping: PointerMapping },
     Alive { epoch: u64 },
     Input { event: Input },
     Pointer { event: Pointer },
     Suspend,
     Probe,
     Shutdown,
+}
+fn command_label(command: &Command) -> &'static str {
+    match command {
+        Command::Arm { .. } => "arm",
+        Command::Rebind { .. } => "rebind",
+        Command::Geometry { .. } => "geometry",
+        Command::PointerMapping { .. } => "pointerMapping",
+        Command::Alive { .. } => "alive",
+        Command::Input { .. } => "input",
+        Command::Pointer { .. } => "pointer",
+        Command::Suspend => "suspend",
+        Command::Probe => "probe",
+        Command::Shutdown => "shutdown",
+    }
+}
+fn command_epoch(command: &Command) -> Option<u64> {
+    match command {
+        Command::Arm { epoch } | Command::Alive { epoch } => Some(*epoch),
+        Command::Input { event } => Some(event.epoch()),
+        Command::Pointer { event } => Some(event.input_epoch),
+        _ => None,
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -204,6 +227,13 @@ impl Actuator {
     fn geometry(&mut self, g: Geometry) -> anyhow::Result<()> {
         match self {
             Self::Native(n) => n.reconfigure(g),
+            Self::Synthetic(_) => Ok(()),
+        }
+    }
+
+    fn pointer_mapping(&mut self, mapping: PointerMapping) -> anyhow::Result<()> {
+        match self {
+            Self::Native(n) => n.set_pointer_mapping(mapping),
             Self::Synthetic(_) => Ok(()),
         }
     }
@@ -339,12 +369,22 @@ pub fn run() -> anyhow::Result<()> {
             let (at, command) = match received {
                 Ok(v) => v,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    eprintln!("REMOTE_DESKTOP_GEOMETRY_TRACE phase=guard.stdin_eof");
+                    break;
+                }
             };
             let Incoming::Command(command) = command? else {
                 anyhow::bail!("REMOTE_DESKTOP_GUARD_HANDSHAKE_FAILED");
             };
             if at.elapsed() > QUEUE_TTL {
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=guard.queue_rejected command={} queueMs={} queueLimitMs={} commandEpoch={:?} activeEpoch={epoch:?}",
+                    command_label(&command),
+                    at.elapsed().as_millis(),
+                    QUEUE_TTL.as_millis(),
+                    command_epoch(&command)
+                );
                 actuator.release()?;
                 epoch = None;
                 deadline = None;
@@ -403,12 +443,48 @@ pub fn run() -> anyhow::Result<()> {
                         actuator.pointer(&event)?;
                         actuator.state(epoch)
                     }
+                    Command::Pointer { event } => {
+                        eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=guard.pointer.rejected receivedEpoch={} activeEpoch={epoch:?}",
+                            event.input_epoch
+                        );
+                        Event::Rejected
+                    }
+                    Command::Input { event } => {
+                        eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=guard.input.rejected receivedEpoch={} activeEpoch={epoch:?}",
+                            event.epoch()
+                        );
+                        Event::Rejected
+                    }
                     Command::Geometry { geometry } => {
-                        actuator.release()?;
-                        epoch = None;
-                        deadline = None;
-                        actuator.geometry(geometry)?;
+                        let started = Instant::now();
+                        eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=guard.geometry.start queueMs={} geometry={geometry:?}",
+                            at.elapsed().as_millis()
+                        );
+                        let result = (|| -> anyhow::Result<()> {
+                            actuator.release()?;
+                            epoch = None;
+                            deadline = None;
+                            actuator.geometry(geometry)
+                        })();
+                        match &result {
+                            Ok(()) => eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=guard.geometry.end elapsedMs={} result=ok",
+                                started.elapsed().as_millis()
+                            ),
+                            Err(error) => eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=guard.geometry.end elapsedMs={} result=error error={error}",
+                                started.elapsed().as_millis()
+                            ),
+                        }
+                        result?;
                         Event::Released
+                    }
+                    Command::PointerMapping { mapping } => {
+                        actuator.pointer_mapping(mapping)?;
+                        actuator.state(epoch)
                     }
                     Command::Suspend => {
                         actuator.release()?;
@@ -513,7 +589,7 @@ impl Client {
             .arg("--input-guard")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
             .spawn()?;
         let mut stdin = child.stdin.take().unwrap();
         let mut stdout = child.stdout.take().unwrap();
@@ -546,6 +622,8 @@ impl Client {
         })
     }
     pub async fn call(&mut self, command: &Command) -> anyhow::Result<Event> {
+        let is_geometry = matches!(command, Command::Geometry { .. });
+        let started = Instant::now();
         let action = async {
             let stdin = self
                 .stdin
@@ -568,13 +646,65 @@ impl Client {
         } else {
             QUEUE_TTL
         };
+        if is_geometry {
+            eprintln!(
+                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=client.call.start budgetMs={}",
+                call_budget.as_millis()
+            );
+        }
         match tokio::time::timeout(call_budget, action).await {
             Ok(Ok(Event::Failed { cause })) => {
+                if is_geometry {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=client.call.failed elapsedMs={} cause={}",
+                        started.elapsed().as_millis(),
+                        cause
+                    );
+                }
                 self.stdin.take();
                 Err(cause.into())
             }
-            Ok(Ok(response)) => Ok(response),
-            _ => {
+            Ok(Ok(response)) => {
+                if is_geometry {
+                    let response = match &response {
+                        Event::Released => "released",
+                        Event::Suspended { .. } => "suspended",
+                        Event::Rejected => "rejected",
+                        Event::Stopped => "stopped",
+                        Event::Ready { .. } => "ready",
+                        Event::Unavailable { .. } => "unavailable",
+                        Event::State { .. } => "state",
+                        Event::Failed { .. } => "failed",
+                    };
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=client.call.end elapsedMs={} response={response}",
+                        started.elapsed().as_millis()
+                    );
+                }
+                Ok(response)
+            }
+            Ok(Err(error)) => {
+                if is_geometry {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=client.call.io_error elapsedMs={} error={error}",
+                        started.elapsed().as_millis()
+                    );
+                }
+                self.stdin.take();
+                // A pipe read/write failure means the guard process can no longer
+                // acknowledge this command. Preserve the input failure as a typed
+                // backend error so the service suspends control instead of keeping
+                // the lease armed against a dead process.
+                Err(crate::error::BackendError::InputGuardFailed.into())
+            }
+            Err(_) => {
+                if is_geometry {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=client.call.timeout elapsedMs={} budgetMs={}",
+                        started.elapsed().as_millis(),
+                        call_budget.as_millis()
+                    );
+                }
                 self.stdin.take();
                 Err(crate::error::BackendError::InputGuardFailed.into())
             }

@@ -2,7 +2,7 @@
 use crate::{
     channel::{Channel, MAX_CLIPBOARD_WIRE, MAX_MESSAGE},
     synthetic::SyntheticInput,
-    traits::CapturePrecision,
+    traits::{CapturePrecision, PointerMapping},
 };
 use async_trait::async_trait;
 use rtc::{
@@ -53,6 +53,10 @@ pub enum PeerEvent {
         session: String,
         geometry: crate::traits::Geometry,
         acknowledged: tokio::sync::oneshot::Sender<bool>,
+    },
+    PointerMapping {
+        session: String,
+        mapping: PointerMapping,
     },
     BackendFailed {
         session: String,
@@ -821,6 +825,7 @@ impl MediaPeer {
                 let process_start = Instant::now();
                 let mut fallback_frame_id = 0u32;
                 let mut geometry = source.geometry();
+                let mut pointer_mapping = source.pointer_mapping();
                 let mut capture_size = source.capture_dimensions();
                 let mut geometry_unstable = None;
                 let mut resolution = control.resolution_limit();
@@ -900,6 +905,9 @@ impl MediaPeer {
                         Err(error) => return Err(error),
                     };
                     if refreshed != geometry {
+                        eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=media.detected session={session} from={geometry:?} to={refreshed:?}"
+                        );
                         // Do not capture/encode the replacement geometry before
                         // the actor releases the old epoch and publishes authority.
                         let (acknowledged, wait) = tokio::sync::oneshot::channel();
@@ -910,7 +918,22 @@ impl MediaPeer {
                                 acknowledged,
                             })
                             .await?;
-                        if !tokio::time::timeout(Duration::from_secs(2), wait).await?? {
+                        let acknowledged = tokio::time::timeout(Duration::from_secs(2), wait).await;
+                        match &acknowledged {
+                            Ok(Ok(true)) => eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=media.ack session={session} acknowledged=true"
+                            ),
+                            Ok(Ok(false)) => eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=media.ack session={session} acknowledged=false"
+                            ),
+                            Ok(Err(error)) => eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=media.ack session={session} result=cancelled error={error}"
+                            ),
+                            Err(_) => eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=media.ack session={session} result=timeout"
+                            ),
+                        }
+                        if !acknowledged?? {
                             continue;
                         }
                         geometry = refreshed;
@@ -995,6 +1018,17 @@ impl MediaPeer {
                     encoder = next;
                     *control.encoder_name.lock().unwrap() = Some(encoder.name());
                     source = next_source;
+                    if let Some(next_pointer_mapping) = source.pointer_mapping() {
+                        if pointer_mapping != Some(next_pointer_mapping) {
+                            pointer_mapping = Some(next_pointer_mapping);
+                            events
+                                .send(PeerEvent::PointerMapping {
+                                    session: session.clone(),
+                                    mapping: next_pointer_mapping,
+                                })
+                                .await?;
+                        }
+                    }
                     let Some(mut frame) = frame? else {
                         if idr {
                             control.idr.store(true, Ordering::SeqCst);

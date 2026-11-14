@@ -11,7 +11,10 @@ use controlled_instance_core::local_ipc::LocalIpcStream;
 use remote_desktop_protocol::fallback::Role;
 use std::{
     collections::HashMap,
-    sync::{atomic::Ordering, Arc},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use tokio::{sync::mpsc, task::JoinSet};
@@ -25,10 +28,16 @@ struct FallbackRuntime {
     active: bool,
 }
 
+fn input_trace_sample(counter: &AtomicUsize) -> bool {
+    let count = counter.fetch_add(1, Ordering::Relaxed);
+    count < 5 || count % 120 == 0
+}
+
 struct LivePeer {
     id: String,
     owner: Owner,
     input_backend: Option<crate::input_guard::Backend>,
+    pointer_mapping: Option<crate::traits::PointerMapping>,
     peer: MediaPeer,
     control: Arc<MediaControl>,
     channels: HashMap<Channel, Arc<dyn DataChannel>>,
@@ -260,6 +269,9 @@ impl Service {
         }
     }
     async fn fail_backend(&mut self, id: &str, cause: crate::error::BackendError) {
+        eprintln!(
+            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.fail_backend session={id} cause={cause}"
+        );
         let had_live = self.live.contains_key(id);
         if let Ok(effects) = self.registry.backend_failed(id, cause, Instant::now()) {
             self.effects(id, effects).await;
@@ -880,6 +892,7 @@ impl Service {
                             id: viewer_session_id.clone(),
                             owner: owner.clone(),
                             input_backend,
+                            pointer_mapping: None,
                             peer,
                             control,
                             channels: HashMap::new(),
@@ -1089,6 +1102,7 @@ impl Service {
             PeerEvent::Channel { session, .. }
             | PeerEvent::Message { session, .. }
             | PeerEvent::BackendFailed { session, .. }
+            | PeerEvent::PointerMapping { session, .. }
             | PeerEvent::GeometryChanged { session, .. }
             | PeerEvent::GeometryUnstable { session, .. } => session,
         };
@@ -1182,14 +1196,9 @@ impl Service {
                 session,
                 acknowledged,
             } => {
-                if self
-                    .registry
-                    .snapshot(&session, &owner)?
-                    .input_epoch
-                    .is_some()
-                {
-                    let effects = self.registry.suspend_input(&session)?;
-                    self.effects(&session, effects).await;
+                if self.suspend_input_for_geometry(&session, &owner).await? {
+                    self.notify_geometry_input_suspended(&session, &owner)
+                        .await?;
                 }
                 let _ = acknowledged.send(());
             }
@@ -1198,13 +1207,15 @@ impl Service {
                 geometry,
                 acknowledged,
             } => {
-                let input_was_held = self
-                    .registry
-                    .snapshot(&session, &owner)?
-                    .input_epoch
-                    .is_some();
-                let effects = self.registry.suspend_input(&session)?;
-                self.effects(&session, effects).await;
+                let started = Instant::now();
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.received session={session} geometry={geometry:?}"
+                );
+                let input_was_held = self.suspend_input_for_geometry(&session, &owner).await?;
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.input_suspended session={session} inputWasHeld={input_was_held} elapsedMs={}",
+                    started.elapsed().as_millis()
+                );
                 let live_backend = self
                     .live
                     .get(&session)
@@ -1214,20 +1225,49 @@ impl Service {
                         .as_ref()
                         .is_some_and(|guard| guard.same_binding(backend))
                 });
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.guard_match session={session} matches={guard_matches} elapsedMs={}",
+                    started.elapsed().as_millis()
+                );
                 if guard_matches {
                     let guard = self
                         .input_guard
                         .as_mut()
                         .ok_or_else(|| anyhow::anyhow!("input guard closed"))?;
+                    let guard_started = Instant::now();
                     let reply = guard
                         .call(&crate::input_guard::Command::Geometry { geometry })
-                        .await?;
+                        .await;
+                    let reply = match reply {
+                        Ok(reply) => {
+                            eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.guard_call.end session={session} elapsedMs={}",
+                                guard_started.elapsed().as_millis()
+                            );
+                            reply
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.guard_call.error session={session} elapsedMs={} error={error}",
+                                guard_started.elapsed().as_millis()
+                            );
+                            return Err(error);
+                        }
+                    };
                     if matches!(
                         reply,
                         crate::input_guard::Event::Suspended {
                             cause: crate::error::BackendError::GeometryChanged
                         }
                     ) {
+                        eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.ack session={session} acknowledged=false reason=guard_geometry_changed elapsedMs={}",
+                            started.elapsed().as_millis()
+                        );
+                        if input_was_held {
+                            self.notify_geometry_input_suspended(&session, &owner)
+                                .await?;
+                        }
                         let _ = acknowledged.send(false);
                         return Ok(());
                     }
@@ -1249,23 +1289,52 @@ impl Service {
                     backend.set_geometry(geometry);
                 }
                 if input_was_held {
-                    let session_revision =
-                        self.registry.snapshot(&session, &owner)?.session_revision;
-                    self.live
-                        .get_mut(&session)
-                        .ok_or_else(|| anyhow::anyhow!("peer closed"))?
-                        .reply(
-                            Channel::Control,
-                            geometry_input_suspended_notice(session_revision),
-                        )
+                    self.notify_geometry_input_suspended(&session, &owner)
                         .await?;
                 }
                 // Snapshot enters the actor's ordered output before another input
                 // can arm. Old revision/epoch is invalid even for move-only changes.
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.ack session={session} acknowledged=true elapsedMs={}",
+                    started.elapsed().as_millis()
+                );
                 let _ = acknowledged.send(true);
             }
             PeerEvent::BackendFailed { session, cause } => {
                 self.fail_backend(&session, cause).await;
+            }
+            PeerEvent::PointerMapping { session, mapping } => {
+                let Some(live) = self.live.get_mut(&session) else {
+                    return Ok(());
+                };
+                if live.pointer_mapping == Some(mapping) {
+                    return Ok(());
+                }
+                live.pointer_mapping = Some(mapping);
+                let guard_matches = live.input_backend.as_ref().is_some_and(|backend| {
+                    self.input_guard_backend
+                        .as_ref()
+                        .is_some_and(|guard| guard.same_binding(backend))
+                });
+                if guard_matches {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.pointer_mapping session={session} mapping={mapping:?}"
+                    );
+                    let reply = self
+                        .input_guard
+                        .as_mut()
+                        .ok_or_else(|| anyhow::anyhow!("input guard closed"))?
+                        .call(&crate::input_guard::Command::PointerMapping { mapping })
+                        .await?;
+                    anyhow::ensure!(
+                        matches!(
+                            reply,
+                            crate::input_guard::Event::State { .. }
+                                | crate::input_guard::Event::Released
+                        ),
+                        "REMOTE_DESKTOP_INPUT_GUARD_FAILED"
+                    );
+                }
             }
             PeerEvent::Channel {
                 session,
@@ -1335,6 +1404,9 @@ impl Service {
     ) -> anyhow::Result<bool> {
         match reply {
             crate::input_guard::Event::Suspended { cause } => {
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.guard_state.suspended session={id} expectedEpoch={expected} cause={cause}"
+                );
                 let effects = self.registry.suspend_input(id)?;
                 self.effects(id, effects).await;
                 self.live
@@ -1351,10 +1423,22 @@ impl Service {
                 epoch: Some(current),
                 ..
             } if current == expected => Ok(true),
-            crate::input_guard::Event::State { epoch: None, .. }
-            | crate::input_guard::Event::Rejected => {
+            crate::input_guard::Event::State { epoch: None, .. } => {
                 // Lease/backlog expiry is an input state transition, not a peer
                 // crash. Reconcile the authority before publishing its snapshot.
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.guard_state.suspended session={id} expectedEpoch={expected} reply=state_none"
+                );
+                let effects = self.registry.suspend_input(id)?;
+                self.effects(id, effects).await;
+                Ok(false)
+            }
+            crate::input_guard::Event::Rejected => {
+                // Lease/backlog expiry is an input state transition, not a peer
+                // crash. Reconcile the authority before publishing its snapshot.
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.guard_state.suspended session={id} expectedEpoch={expected} reply=rejected"
+                );
                 let effects = self.registry.suspend_input(id)?;
                 self.effects(id, effects).await;
                 Ok(false)
@@ -1363,6 +1447,7 @@ impl Service {
         }
     }
     async fn bind_input_for_viewer(&mut self, id: &str) -> anyhow::Result<bool> {
+        let pointer_mapping = self.live.get(id).and_then(|live| live.pointer_mapping);
         let Some(backend) = self
             .live
             .get(id)
@@ -1384,6 +1469,22 @@ impl Service {
         match reply {
             crate::input_guard::Event::Released => {
                 self.input_guard_backend = Some(backend);
+                if let Some(mapping) = pointer_mapping {
+                    let reply = self
+                        .input_guard
+                        .as_mut()
+                        .ok_or_else(|| anyhow::anyhow!("input guard closed"))?
+                        .call(&crate::input_guard::Command::PointerMapping { mapping })
+                        .await?;
+                    anyhow::ensure!(
+                        matches!(
+                            reply,
+                            crate::input_guard::Event::State { .. }
+                                | crate::input_guard::Event::Released
+                        ),
+                        "REMOTE_DESKTOP_INPUT_GUARD_FAILED"
+                    );
+                }
                 Ok(true)
             }
             crate::input_guard::Event::Suspended { cause } => {
@@ -1402,6 +1503,43 @@ impl Service {
             _ => anyhow::bail!("REMOTE_DESKTOP_INPUT_GUARD_FAILED"),
         }
     }
+
+    /// Geometry changes invalidate the native input lease before capture is
+    /// allowed to continue. Return whether a lease existed so every
+    /// authoritative Some(epoch) -> None transition is observable by the
+    /// controller, including guard-rejected transitional geometry.
+    async fn suspend_input_for_geometry(
+        &mut self,
+        id: &str,
+        owner: &Owner,
+    ) -> anyhow::Result<bool> {
+        if self.registry.snapshot(id, owner)?.input_epoch.is_none() {
+            return Ok(false);
+        }
+        let effects = self.registry.suspend_input(id)?;
+        self.effects(id, effects).await;
+        Ok(true)
+    }
+
+    async fn notify_geometry_input_suspended(
+        &mut self,
+        id: &str,
+        owner: &Owner,
+    ) -> anyhow::Result<()> {
+        let session_revision = self.registry.snapshot(id, owner)?.session_revision;
+        eprintln!(
+            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.input_suspended.notice session={id} sessionRevision={session_revision}"
+        );
+        self.live
+            .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("peer closed"))?
+            .reply(
+                Channel::Control,
+                geometry_input_suspended_notice(session_revision),
+            )
+            .await
+    }
+
     async fn message(
         &mut self,
         id: String,
@@ -1458,6 +1596,12 @@ impl Service {
                 }
                 Control::Resume(resume) => {
                     let snapshot = self.registry.snapshot(&id, &owner)?;
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=control.resume session={id} requestedRevision={:?} snapshotRevision={} currentEpoch={:?}",
+                        resume.session_revision,
+                        snapshot.session_revision,
+                        self.registry.live_input_epoch(&id, now)
+                    );
                     let response = match self.registry.live_input_epoch(&id, now) {
                         Some(epoch) => {
                             serde_json::json!({"type":"input.resumed","payload":{"inputEpoch":epoch}})
@@ -1500,6 +1644,9 @@ impl Service {
                                             .await?;
                                         return Err(error.into());
                                     }
+                                    eprintln!(
+                                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=control.resume.armed session={id} epoch={epoch}"
+                                    );
                                     serde_json::json!({"type":"input.resumed","payload":{"inputEpoch":epoch}})
                                 }
                                 Err(e) => {
@@ -1515,6 +1662,10 @@ impl Service {
                         .await?;
                 }
                 Control::Suspend => {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=control.suspend session={id} currentEpoch={:?}",
+                        self.registry.live_input_epoch(&id, now)
+                    );
                     let effects = self.registry.suspend_input(&id)?;
                     self.effects(&id, effects).await;
                     self.live
@@ -1671,7 +1822,16 @@ impl Service {
                 }
             },
             Message::Input(input) => {
-                if self.registry.check_epoch(&id, input.epoch(), now).is_ok() {
+                let epoch = input.epoch();
+                if let Err(error) = self.registry.check_epoch(&id, epoch, now) {
+                    static INPUT_REJECTED: AtomicUsize = AtomicUsize::new(0);
+                    if input_trace_sample(&INPUT_REJECTED) {
+                        eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.input.rejected session={id} receivedEpoch={epoch} currentEpoch={:?} error={error}",
+                            self.registry.live_input_epoch(&id, now)
+                        );
+                    }
+                } else {
                     let reply = self
                         .input_guard
                         .as_mut()
@@ -1692,7 +1852,7 @@ impl Service {
                             eprintln!("desktop-input-trace rejected seq={seq}");
                         }
                     }
-                    if !self.guard_state(&id, input.epoch(), reply).await? {
+                    if !self.guard_state(&id, epoch, reply).await? {
                         return Ok(());
                     }
                     self.live
@@ -1713,11 +1873,23 @@ impl Service {
                 }
             }
             Message::Pointer(pointer) => {
-                if self
-                    .registry
-                    .check_epoch(&id, pointer.input_epoch, now)
-                    .is_ok()
-                {
+                static POINTER_RECEIVED: AtomicUsize = AtomicUsize::new(0);
+                if input_trace_sample(&POINTER_RECEIVED) {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.pointer.received session={id} epoch={} x={:.4} y={:.4}",
+                        pointer.input_epoch, pointer.x, pointer.y
+                    );
+                }
+                if let Err(error) = self.registry.check_epoch(&id, pointer.input_epoch, now) {
+                    static POINTER_REJECTED: AtomicUsize = AtomicUsize::new(0);
+                    if input_trace_sample(&POINTER_REJECTED) {
+                        eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.pointer.rejected session={id} receivedEpoch={} currentEpoch={:?} error={error}",
+                            pointer.input_epoch,
+                            self.registry.live_input_epoch(&id, now)
+                        );
+                    }
+                } else {
                     let reply = self
                         .input_guard
                         .as_mut()
@@ -2007,11 +2179,15 @@ pub async fn serve_mode_with_cursor_and_source_salt(
                         PeerEvent::Channel { session, .. }
                         | PeerEvent::Message { session, .. }
                         | PeerEvent::BackendFailed { session, .. }
+                        | PeerEvent::PointerMapping { session, .. }
                         | PeerEvent::GeometryChanged { session, .. }
                         | PeerEvent::GeometryUnstable { session, .. } => session.clone(),
                     };
                     if let Err(error) = service.event(event).await {
                         eprintln!("REMOTE_DESKTOP_CHANNEL_FAILED");
+                        eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.event_error session={id} error={error:?}"
+                        );
                         if let Some(cause) = error.downcast_ref::<crate::error::BackendError>() {
                             service.fail_backend(&id, *cause).await;
                         } else {
@@ -2020,6 +2196,7 @@ pub async fn serve_mode_with_cursor_and_source_salt(
                     }
                 }
                 Input::GuardDead => {
+                    eprintln!("REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.guard_dead");
                     let cause = match service.input_guard.as_mut() {
                         Some(guard) => guard.exited_cause().await,
                         None => continue,
@@ -2115,6 +2292,114 @@ mod tests {
         );
         assert_eq!(notice["payload"]["recoverable"], true);
         assert_eq!(notice["payload"]["sessionRevision"], 17);
+    }
+
+    #[tokio::test]
+    async fn geometry_suspension_notifies_client_when_input_lease_is_held() {
+        let (events, _events_rx) = mpsc::channel(16);
+        let mut service = Service {
+            registry: Registry::new(),
+            live: HashMap::new(),
+            input_guard: None,
+            input_guard_backend: None,
+            mode: crate::capture::Mode::Synthetic,
+            show_cursor: true,
+            source_salt: crate::session::secret(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            catalog: None,
+            display_catalog: None,
+            pending_source: HashMap::new(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            selected_source: HashMap::new(),
+            #[cfg(target_os = "linux")]
+            surface: None,
+            events: events.clone(),
+            fallbacks: HashMap::new(),
+        };
+        let owner = Owner {
+            actor_id: "fixture".into(),
+            device_session_id: "device".into(),
+        };
+        let target = crate::session::CaptureSelection {
+            source_ref: "display".into(),
+            stream_region: None,
+            control_region: None,
+        };
+        let now = Instant::now();
+        let (snapshot, token) = service
+            .registry
+            .reserve("geometry", owner.clone(), target.clone(), now)
+            .unwrap();
+        let viewer = snapshot.viewer_session_id;
+        service
+            .registry
+            .attach(&viewer, &owner, &target, &token, now)
+            .unwrap();
+        let peer = MediaPeer::new(viewer.clone(), events).await.unwrap();
+        let control = peer.control();
+        service.live.insert(
+            viewer.clone(),
+            LivePeer {
+                id: viewer.clone(),
+                owner: owner.clone(),
+                input_backend: None,
+                pointer_mapping: None,
+                peer,
+                control,
+                channels: HashMap::new(),
+                decoder: Decoder::default(),
+                reply_seq: 0,
+                clipboard_enabled: false,
+                clipboard: String::new(),
+                native_clipboard: None,
+                ice_expires_at: None,
+                pending_ice_expires_at: None,
+                ice_restart_pending: false,
+                fallback_generation: None,
+                fallback_active: false,
+                fallback_control: None,
+                webrtc_connected: false,
+            },
+        );
+        service.registry.fallback_activated(&viewer).unwrap();
+        service.registry.resume_input(&viewer, now).unwrap();
+        let (control_tx, mut control_rx) = mpsc::channel(4);
+        service.live.get_mut(&viewer).unwrap().fallback_control = Some(control_tx);
+
+        assert!(service
+            .suspend_input_for_geometry(&viewer, &owner)
+            .await
+            .unwrap());
+        assert!(service
+            .registry
+            .snapshot(&viewer, &owner)
+            .unwrap()
+            .input_epoch
+            .is_none());
+        let expected_revision = service
+            .registry
+            .snapshot(&viewer, &owner)
+            .unwrap()
+            .session_revision;
+        service
+            .notify_geometry_input_suspended(&viewer, &owner)
+            .await
+            .unwrap();
+        let message: serde_json::Value =
+            serde_json::from_str(&control_rx.try_recv().unwrap()).unwrap();
+        assert_eq!(message["type"], "input.suspended");
+        assert_eq!(
+            message["payload"]["cause"],
+            crate::error::BackendError::GeometryChanged.to_string()
+        );
+        assert_eq!(message["payload"]["recoverable"], true);
+        assert_eq!(message["payload"]["sessionRevision"], expected_revision);
+
+        assert!(!service
+            .suspend_input_for_geometry(&viewer, &owner)
+            .await
+            .unwrap());
+        assert!(control_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -2303,6 +2588,7 @@ mod tests {
                 id: viewer.clone(),
                 owner: owner.clone(),
                 input_backend: None,
+                pointer_mapping: None,
                 peer,
                 control: control.clone(),
                 channels: HashMap::new(),

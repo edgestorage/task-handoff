@@ -71,12 +71,29 @@ impl Lease {
                 return;
             };
             for request in rx {
+                let is_geometry = matches!(&request.operation, Operation::Geometry);
+                let started = Instant::now();
+                if is_geometry {
+                    eprintln!("REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.worker.start");
+                }
                 let result = match request.operation {
                     Operation::Geometry => native.geometry(),
                     Operation::Focus => native.focus(),
                     Operation::Validate(expected, point) => native.validate(expected, point),
                 }
                 .map_err(|e| BackendError::from_error(&e));
+                if is_geometry {
+                    match &result {
+                        Ok(geometry) => eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.worker.end elapsedMs={} result=ok geometry={geometry:?}",
+                            started.elapsed().as_millis()
+                        ),
+                        Err(error) => eprintln!(
+                            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.worker.end elapsedMs={} result=error error={error}",
+                            started.elapsed().as_millis()
+                        ),
+                    }
+                }
                 let _ = request.reply.send(result);
             }
         });
@@ -84,13 +101,39 @@ impl Lease {
         Ok(Self { tx })
     }
     fn call(&self, operation: Operation) -> anyhow::Result<Geometry> {
+        let is_geometry = matches!(&operation, Operation::Geometry);
+        let started = Instant::now();
+        if is_geometry {
+            eprintln!("REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.lease.start timeoutMs=300");
+        }
         let (reply, rx) = mpsc::sync_channel(1);
-        self.tx
-            .try_send(Request { operation, reply })
-            .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))?;
-        Ok(rx
-            .recv_timeout(Duration::from_millis(300))
-            .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))??)
+        if let Err(error) = self.tx.try_send(Request { operation, reply }) {
+            if is_geometry {
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.lease.send_error elapsedMs={} error={error}",
+                    started.elapsed().as_millis()
+                );
+            }
+            return Err(anyhow::anyhow!(BackendError::WindowUnavailable));
+        }
+        let received = rx.recv_timeout(Duration::from_millis(300));
+        if is_geometry {
+            match &received {
+                Ok(Ok(geometry)) => eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.lease.end elapsedMs={} result=ok geometry={geometry:?}",
+                    started.elapsed().as_millis()
+                ),
+                Ok(Err(error)) => eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.lease.end elapsedMs={} result=error error={error}",
+                    started.elapsed().as_millis()
+                ),
+                Err(error) => eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.lease.end elapsedMs={} result=timeout error={error}",
+                    started.elapsed().as_millis()
+                ),
+            }
+        }
+        Ok(received.map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))??)
     }
     pub fn geometry(&self) -> anyhow::Result<Geometry> {
         self.call(Operation::Geometry)
@@ -109,28 +152,90 @@ impl Lease {
 /// AX and CG together in the dedicated input worker.
 pub fn geometry(identity: Identity) -> anyhow::Result<Geometry> {
     anyhow::ensure!(identity.pid > 0, BackendError::WindowUnavailable);
-    let current = visible_windows()?
+    let windows = visible_windows()?;
+    let current = windows
         .into_iter()
         .find(|window| window.id == identity.window && window.pid == identity.pid)
-        .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?;
+        .ok_or_else(|| {
+            eprintln!(
+                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.visible_geometry.not_found window={} pid={}",
+                identity.window, identity.pid
+            );
+            anyhow::anyhow!(BackendError::WindowUnavailable)
+        })?;
     Ok(current.geometry)
 }
-fn attribute(element: &AXUIElement, key: &str) -> anyhow::Result<CFRetained<AxType>> {
+
+/// Screen-space union represented by a desktop-independent window capture.
+/// SCK includes same-process transient windows such as menus and popovers even
+/// though they are separate higher-layer CG windows.
+pub fn capture_bounds(identity: Identity) -> anyhow::Result<Geometry> {
+    capture_union(&visible_windows()?, identity)
+}
+
+fn capture_union(windows: &[Visible], identity: Identity) -> anyhow::Result<Geometry> {
+    let mut found_target = false;
+    let mut left = i64::MAX;
+    let mut top = i64::MAX;
+    let mut right = i64::MIN;
+    let mut bottom = i64::MIN;
+    for window in windows.iter().filter(|window| {
+        window.pid == identity.pid && (window.id == identity.window || window.layer > 0)
+    }) {
+        found_target |= window.id == identity.window;
+        let x = i64::from(window.geometry.x);
+        let y = i64::from(window.geometry.y);
+        left = left.min(x);
+        top = top.min(y);
+        right = right.max(x + i64::from(window.geometry.width));
+        bottom = bottom.max(y + i64::from(window.geometry.height));
+    }
+    anyhow::ensure!(found_target, BackendError::WindowUnavailable);
+    Geometry::from_actuator_rect(
+        left as f64,
+        top as f64,
+        right.saturating_sub(left) as f64,
+        bottom.saturating_sub(top) as f64,
+    )
+}
+fn transient_geometry_ax_error(error: AXError) -> bool {
+    matches!(error, AXError::CannotComplete | AXError::InvalidUIElement)
+}
+fn attribute(
+    element: &AXUIElement,
+    key: &str,
+    transient_as_geometry: bool,
+) -> anyhow::Result<CFRetained<AxType>> {
     let mut value: *const AxType = std::ptr::null();
     // Copy API returns a +1 CF value; the maintained retained wrapper owns it.
     let error = unsafe {
         element.copy_attribute_value(&CFString::from_str(key), NonNull::from(&mut value))
     };
-    anyhow::ensure!(error == AXError::Success, BackendError::WindowUnavailable);
-    let value = NonNull::new(value.cast_mut())
-        .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?;
+    if error != AXError::Success {
+        eprintln!(
+            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.attribute.error key={key} axError={error:?}"
+        );
+    }
+    if error != AXError::Success {
+        return Err(
+            if transient_as_geometry && transient_geometry_ax_error(error) {
+                BackendError::GeometryChanged.into()
+            } else {
+                BackendError::WindowUnavailable.into()
+            },
+        );
+    }
+    let value = NonNull::new(value.cast_mut()).ok_or_else(|| {
+        eprintln!("REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.attribute.null key={key}");
+        anyhow::anyhow!(BackendError::WindowUnavailable)
+    })?;
     Ok(unsafe { CFRetained::from_raw(value) })
 }
 fn ax_geometry(element: &AXUIElement) -> anyhow::Result<Geometry> {
-    let position = attribute(element, "AXPosition")?
+    let position = attribute(element, "AXPosition", true)?
         .downcast::<AXValue>()
         .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))?;
-    let size = attribute(element, "AXSize")?
+    let size = attribute(element, "AXSize", true)?
         .downcast::<AXValue>()
         .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))?;
     let mut point = CGPoint::ZERO;
@@ -156,7 +261,7 @@ impl Native {
         unsafe {
             app.set_messaging_timeout(0.05);
         }
-        let list = attribute(&app, "AXWindows")?
+        let list = attribute(&app, "AXWindows", true)?
             .downcast::<AxArray>()
             .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))?;
         // AXWindows is documented as a CFArray of CF objects; preserve runtime
@@ -191,27 +296,33 @@ impl Native {
         Ok(native)
     }
     fn geometry(&self) -> anyhow::Result<Geometry> {
-        let mut pid = 0;
-        anyhow::ensure!(
-            unsafe { self.window.pid(NonNull::from(&mut pid)) } == AXError::Success
-                && pid == self.identity.pid,
-            BackendError::WindowUnavailable
-        );
-        let minimized = attribute(&self.window, "AXMinimized")?
-            .downcast::<CFBoolean>()
-            .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))?;
-        anyhow::ensure!(!minimized.value(), BackendError::WindowUnavailable);
-        let geometry = ax_geometry(&self.window)?;
-        let windows = visible_windows()?;
-        let current = windows
-            .iter()
-            .find(|w| w.id == self.identity.window && w.pid == pid)
-            .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?;
-        // AX and WindowServer update independently during native moves/resizes.
-        // Preserve identity, suspend input and wait for coherent geometry instead
-        // of treating a transient coordinate mismatch as a closed window.
-        anyhow::ensure!(current.geometry == geometry, BackendError::GeometryChanged);
-        Ok(geometry)
+        (|| -> anyhow::Result<Geometry> {
+            let mut pid = 0;
+            let pid_result = unsafe { self.window.pid(NonNull::from(&mut pid)) };
+            if pid_result != AXError::Success {
+                return Err(if transient_geometry_ax_error(pid_result) {
+                    BackendError::GeometryChanged.into()
+                } else {
+                    BackendError::WindowUnavailable.into()
+                });
+            }
+            anyhow::ensure!(pid == self.identity.pid, BackendError::WindowUnavailable);
+            let minimized = attribute(&self.window, "AXMinimized", true)?
+                .downcast::<CFBoolean>()
+                .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))?;
+            anyhow::ensure!(!minimized.value(), BackendError::WindowUnavailable);
+            let geometry = ax_geometry(&self.window)?;
+            let windows = visible_windows()?;
+            let current = windows
+                .iter()
+                .find(|w| w.id == self.identity.window && w.pid == pid)
+                .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?;
+            // AX and WindowServer update independently during native moves/resizes.
+            // Preserve identity, suspend input and wait for coherent geometry instead
+            // of treating a transient coordinate mismatch as a closed window.
+            anyhow::ensure!(current.geometry == geometry, BackendError::GeometryChanged);
+            Ok(geometry)
+        })()
     }
     fn frontmost(&self) -> anyhow::Result<()> {
         let app = objc2_app_kit::NSWorkspace::sharedWorkspace().frontmostApplication();
@@ -221,7 +332,7 @@ impl Native {
     }
     fn focused(&self) -> anyhow::Result<()> {
         self.frontmost()?;
-        let focused = attribute(&self.app, "AXFocusedWindow")?
+        let focused = attribute(&self.app, "AXFocusedWindow", false)?
             .downcast::<AXUIElement>()
             .map_err(|_| anyhow::anyhow!(BackendError::WindowFocusRequired))?;
         anyhow::ensure!(focused == self.window, BackendError::WindowFocusRequired);
@@ -378,8 +489,11 @@ fn visible_windows() -> anyhow::Result<Vec<Visible>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pointer_hit_allowed, Identity, Visible};
+    use super::{
+        capture_union, pointer_hit_allowed, transient_geometry_ax_error, Identity, Visible,
+    };
     use crate::traits::Geometry;
+    use objc2_application_services::AXError;
 
     fn visible(id: u32, pid: i32, layer: i64) -> Visible {
         Visible {
@@ -394,6 +508,83 @@ mod tests {
                 scale: 1.0,
             },
         }
+    }
+
+    fn positioned(
+        id: u32,
+        pid: i32,
+        layer: i64,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> Visible {
+        Visible {
+            id,
+            pid,
+            layer,
+            geometry: Geometry {
+                x,
+                y,
+                width,
+                height,
+                scale: 1.0,
+            },
+        }
+    }
+
+    #[test]
+    fn capture_union_includes_same_process_popovers_beyond_the_window() {
+        let identity = Identity {
+            window: 10,
+            pid: 42,
+        };
+        let windows = vec![
+            positioned(10, 42, 0, -149, 30, 1386, 1050),
+            positioned(11, 42, 101, 827, 106, 327, 656),
+            positioned(12, 42, 101, 1444, 442, 201, 192),
+            positioned(13, 7, 101, 0, 0, 4000, 4000),
+        ];
+        assert_eq!(
+            capture_union(&windows, identity).unwrap(),
+            Geometry {
+                x: -149,
+                y: 30,
+                width: 1794,
+                height: 1050,
+                scale: 1.0,
+            }
+        );
+    }
+
+    #[test]
+    fn capture_union_ignores_unrelated_same_process_normal_windows() {
+        let identity = Identity {
+            window: 10,
+            pid: 42,
+        };
+        let windows = vec![
+            positioned(10, 42, 0, 100, 80, 800, 600),
+            positioned(11, 42, 0, 1200, 800, 400, 300),
+        ];
+        assert_eq!(
+            capture_union(&windows, identity).unwrap(),
+            Geometry {
+                x: 100,
+                y: 80,
+                width: 800,
+                height: 600,
+                scale: 1.0,
+            }
+        );
+    }
+
+    #[test]
+    fn transient_geometry_ax_errors_do_not_mean_window_closed() {
+        assert!(transient_geometry_ax_error(AXError::CannotComplete));
+        assert!(transient_geometry_ax_error(AXError::InvalidUIElement));
+        assert!(!transient_geometry_ax_error(AXError::AttributeUnsupported));
+        assert!(!transient_geometry_ax_error(AXError::Success));
     }
 
     #[test]

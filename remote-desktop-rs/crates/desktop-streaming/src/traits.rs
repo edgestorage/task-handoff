@@ -51,6 +51,103 @@ impl Geometry {
         })
     }
 }
+
+/// A rectangle expressed as fractions of the encoded video surface. SCK may
+/// letterbox a window plus its transient popovers into a fixed output canvas;
+/// the content rectangle tells pointer input where the real pixels live.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalizedRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl NormalizedRect {
+    pub const FULL: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+
+    pub fn new(x: f64, y: f64, width: f64, height: f64) -> Result<Self> {
+        anyhow::ensure!(
+            [x, y, width, height].iter().all(|value| value.is_finite())
+                && width > 0.0
+                && height > 0.0,
+            crate::error::BackendError::InvalidGeometry
+        );
+        let x = x.clamp(0.0, 1.0);
+        let y = y.clamp(0.0, 1.0);
+        let width = width.min(1.0 - x);
+        let height = height.min(1.0 - y);
+        anyhow::ensure!(
+            width > 0.0 && height > 0.0,
+            crate::error::BackendError::InvalidGeometry
+        );
+        Ok(Self {
+            x,
+            y,
+            width,
+            height,
+        })
+    }
+}
+
+/// Maps normalized coordinates in the encoded video surface to the native
+/// screen rectangle represented by that surface. The video can contain
+/// letterbox bars, so a single `Geometry` is not sufficient.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PointerMapping {
+    pub screen: Geometry,
+    pub content: NormalizedRect,
+}
+
+impl PointerMapping {
+    pub fn new(screen: Geometry, content: NormalizedRect) -> Result<Self> {
+        anyhow::ensure!(
+            screen.width > 0 && screen.height > 0 && screen.scale.is_finite() && screen.scale > 0.0,
+            crate::error::BackendError::InvalidGeometry
+        );
+        Ok(Self { screen, content })
+    }
+
+    pub fn from_geometry(screen: Geometry) -> Self {
+        Self {
+            screen,
+            content: NormalizedRect::FULL,
+        }
+    }
+
+    /// Convert a point normalized over the full video surface into the native
+    /// actuator rectangle. Coordinates in letterbox bars are clamped to the
+    /// nearest content edge so they cannot move the host pointer into a region
+    /// that is not represented by the video.
+    pub fn map(self, x: f64, y: f64) -> Result<(i32, i32)> {
+        anyhow::ensure!(
+            x.is_finite() && y.is_finite() && (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y),
+            "REMOTE_DESKTOP_INVALID_COORDINATES"
+        );
+        anyhow::ensure!(
+            self.content.width > 0.0
+                && self.content.height > 0.0
+                && self.content.width.is_finite()
+                && self.content.height.is_finite(),
+            "REMOTE_DESKTOP_INVALID_GEOMETRY"
+        );
+        let content_x = (x - self.content.x) / self.content.width;
+        let content_y = (y - self.content.y) / self.content.height;
+        crate::input_driver::map_point(
+            self.screen,
+            content_x.clamp(0.0, 1.0),
+            content_y.clamp(0.0, 1.0),
+        )
+    }
+}
+
 pub struct RawFrame {
     pub bgra: Vec<u8>,
     pub stride: usize,

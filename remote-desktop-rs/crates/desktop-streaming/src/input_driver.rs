@@ -1,6 +1,9 @@
 //! Native actuator boundary. Physical key translation comes from Chromium's
 //! maintained keycode map; Enigo owns XTest/CGEvent/SendInput, not shell commands.
-use crate::{channel::Input, traits::Geometry};
+use crate::{
+    channel::Input,
+    traits::{Geometry, PointerMapping},
+};
 #[cfg(not(target_os = "macos"))]
 use enigo::{Axis, Button, Coordinate, Mouse};
 use enigo::{Direction, Enigo, Keyboard, Settings};
@@ -10,6 +13,7 @@ pub struct NativeInput {
     #[cfg(target_os = "macos")]
     mouse: crate::platform::macos_mouse::Mouse,
     geometry: Geometry,
+    pointer_mapping: PointerMapping,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     display_geometry: Option<crate::platform::display_geometry::DisplayGeometry>,
     #[cfg(target_os = "macos")]
@@ -97,6 +101,7 @@ impl NativeInput {
             #[cfg(target_os = "macos")]
             mouse: crate::platform::macos_mouse::Mouse::new()?,
             geometry,
+            pointer_mapping: PointerMapping::from_geometry(geometry),
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             display_geometry,
             #[cfg(target_os = "macos")]
@@ -145,25 +150,35 @@ impl NativeInput {
                 crate::error::BackendError::GeometryChanged
             );
             self.geometry = geometry;
+            self.pointer_mapping = PointerMapping::from_geometry(geometry);
             return Ok(());
         }
         #[cfg(target_os = "linux")]
         if let Some(window) = &mut self.window {
             window.reconfigure(geometry)?;
             self.geometry = geometry;
+            self.pointer_mapping = PointerMapping::from_geometry(geometry);
             return Ok(());
         }
         anyhow::ensure!(
             self.geometry == geometry,
             crate::error::BackendError::GeometryChanged
         );
+        self.pointer_mapping = PointerMapping::from_geometry(geometry);
+        Ok(())
+    }
+    /// The encoded surface can contain letterbox bars around the captured
+    /// window and its transient popovers. Keep that viewport separate from the
+    /// native window geometry used for focus and hit validation.
+    pub fn set_pointer_mapping(&mut self, mapping: PointerMapping) -> anyhow::Result<()> {
+        self.pointer_mapping = mapping;
         Ok(())
     }
     pub fn pointer(&mut self, x: f64, y: f64) -> anyhow::Result<()> {
         self.validate(None)?;
         #[cfg(target_os = "windows")]
         crate::platform::windows_access::check()?;
-        let (x, y) = map_point(self.geometry, x, y)?;
+        let (x, y) = self.pointer_mapping.map(x, y)?;
         #[cfg(target_os = "macos")]
         {
             self.mouse.pointer((x, y), &self.buttons)?;
@@ -232,7 +247,7 @@ impl NativeInput {
                 #[cfg(target_os = "macos")]
                 let result = self
                     .mouse
-                    .button(map_point(self.geometry, b.x, b.y)?, b.button, b.down)
+                    .button(self.pointer_mapping.map(b.x, b.y)?, b.button, b.down)
                     .map_err(|_| enigo::InputError::Simulate("native mouse event failed"));
                 #[cfg(not(target_os = "macos"))]
                 let result = self.enigo.button(
@@ -259,7 +274,7 @@ impl NativeInput {
                     } else {
                         self.mouse
                             .wheel(
-                                map_point(self.geometry, w.x, w.y)?,
+                                self.pointer_mapping.map(w.x, w.y)?,
                                 steps_x as f64 * WHEEL_STEP_DELTA,
                                 steps_y as f64 * WHEEL_STEP_DELTA,
                             )
@@ -376,7 +391,8 @@ pub fn map_point(g: Geometry, x: f64, y: f64) -> anyhow::Result<(i32, i32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::take_wheel_steps;
+    use super::{map_point, take_wheel_steps};
+    use crate::traits::{Geometry, NormalizedRect, PointerMapping};
 
     #[test]
     fn wheel_remainder_accumulates_sub_notches() {
@@ -399,5 +415,36 @@ mod tests {
         assert_eq!(take_wheel_steps(&mut remainder, -10.0), 0);
         assert_eq!(take_wheel_steps(&mut remainder, -30.0), -1);
         assert_eq!(remainder, 0.0);
+    }
+
+    #[test]
+    fn captured_content_rect_maps_normalized_pointer_into_screen_space() {
+        let content = Geometry {
+            x: 400,
+            y: 120,
+            width: 801,
+            height: 601,
+            scale: 1.0,
+        };
+        assert_eq!(map_point(content, 0.0, 0.0).unwrap(), (400, 120));
+        assert_eq!(map_point(content, 0.5, 0.5).unwrap(), (800, 420));
+        assert_eq!(map_point(content, 1.0, 1.0).unwrap(), (1200, 720));
+    }
+
+    #[test]
+    fn letterboxed_pointer_mapping_uses_the_content_viewport() {
+        let mapping = PointerMapping::new(
+            Geometry {
+                x: -149,
+                y: 30,
+                width: 1794,
+                height: 1050,
+                scale: 1.0,
+            },
+            NormalizedRect::new(0.0, 0.0, 1.0, 811.204 / 1050.0).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mapping.map(0.5, 811.204 / 2100.0).unwrap(), (748, 555));
+        assert_eq!(mapping.map(0.5, 1.0).unwrap(), (748, 1079));
     }
 }

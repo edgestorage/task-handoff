@@ -2,7 +2,7 @@ use desktop_streaming::{
     channel::{Input, Key},
     input_driver::map_point,
     input_guard::{Backend, Client, Command, Event},
-    traits::Geometry,
+    traits::{Geometry, PointerMapping},
 };
 use std::{
     path::Path,
@@ -122,6 +122,39 @@ async fn rebinding_the_guard_releases_the_old_epoch_before_arming_the_new_source
     assert!(matches!(
         guard.call(&Command::Arm { epoch: 2 }).await.unwrap(),
         Event::State { epoch: Some(2), .. }
+    ));
+    guard.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn pointer_mapping_updates_without_releasing_the_input_epoch() {
+    let mut guard = Client::spawn(binary(), Backend::Synthetic).await.unwrap();
+    assert!(matches!(
+        guard.call(&Command::Arm { epoch: 7 }).await.unwrap(),
+        Event::State { epoch: Some(7), .. }
+    ));
+    assert!(matches!(
+        guard
+            .call(&Command::PointerMapping {
+                mapping: PointerMapping::from_geometry(Geometry {
+                    x: 120,
+                    y: 80,
+                    width: 640,
+                    height: 360,
+                    scale: 1.0,
+                }),
+            })
+            .await
+            .unwrap(),
+        Event::State { epoch: Some(7), .. }
+    ));
+    assert!(matches!(
+        guard.call(&key(7, true)).await.unwrap(),
+        Event::State {
+            epoch: Some(7),
+            pressed: 1,
+            ..
+        }
     ));
     guard.close().await.unwrap();
 }
