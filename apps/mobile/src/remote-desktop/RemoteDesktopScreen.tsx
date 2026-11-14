@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Easing, Keyboard, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Easing, Keyboard, type LayoutChangeEvent, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,6 +15,12 @@ import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { subscribeToKeyboardState, type MobileKeyboardState } from '../platform/keyboard';
 import { isRemoteDesktopSourceEndedError, remoteDesktopErrorMessage } from './errors';
+import {
+  DEFAULT_REMOTE_DESKTOP_KEYBOARD_DURATION_MS,
+  REMOTE_DESKTOP_KEYBOARD_BAR_HEIGHT,
+  remoteDesktopKeyboardObstruction,
+  remoteDesktopNativeKeyboardReplacesVirtualSurface,
+} from './keyboard-layout';
 import { RemoteDesktopConnectionInfo } from './RemoteDesktopConnectionInfo';
 import { RemoteDesktopKeyboardBar, RemoteDesktopVirtualKeyboard } from './RemoteDesktopVirtualKeyboard';
 import { RemoteDesktopSettingsMenu } from './RemoteDesktopSettingsMenu';
@@ -30,8 +36,7 @@ import type { RemoteDesktopKeyboardMode } from './virtual-keyboard';
 import { rememberSessionRemoteDesktopLink, removeSessionRemoteDesktopLink } from './session-links';
 
 const KEYBOARD_INPUT_ID = 'remote-desktop-keyboard-input';
-const KEYBOARD_BAR_HEIGHT = 44;
-const INITIAL_KEYBOARD_STATE: MobileKeyboardState = { visible: false, height: 0, duration: 250, easing: 'keyboard' };
+const INITIAL_KEYBOARD_STATE: MobileKeyboardState = { visible: false, height: 0, duration: DEFAULT_REMOTE_DESKTOP_KEYBOARD_DURATION_MS, easing: 'keyboard' };
 
 function keyboardAnimationEasing(easing: MobileKeyboardState['easing']) {
   switch (easing) {
@@ -54,11 +59,16 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   const [keyboard, setKeyboard] = useState<MobileKeyboardState>(INITIAL_KEYBOARD_STATE);
   const [keyboardMode, setKeyboardMode] = useState<RemoteDesktopKeyboardMode>('system');
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [virtualKeyboardHeight, setVirtualKeyboardHeight] = useState(0);
+  const [virtualKeyboardSurfaceVisible, setVirtualKeyboardSurfaceVisible] = useState(false);
   const softwareKeyboardVisible = keyboard.visible && keyboard.height > 0;
   const systemKeyboardVisible = keyboardOpen && keyboardMode === 'system' && softwareKeyboardVisible;
-  const virtualKeyboardVisible = keyboardOpen && keyboardMode === 'virtual';
-  const keyboardVisible = systemKeyboardVisible || virtualKeyboardVisible;
+  const virtualKeyboardInteractive = keyboardOpen && keyboardMode === 'virtual';
+  const keyboardVisible = keyboardOpen && (systemKeyboardVisible || virtualKeyboardSurfaceVisible);
   const [keyboardInset] = useState(() => new Animated.Value(0));
+  const [virtualKeyboardOpacity] = useState(() => new Animated.Value(0));
+  const keyboardAnimationGeneration = useRef(0);
+  const keyboardModeRef = useRef<RemoteDesktopKeyboardMode>('system');
   const keyboardInput = useRef<TextInput>(null);
   const pendingRemoteText = useRef('');
   const nativeTextInputActive = useRef(false);
@@ -96,16 +106,44 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
     snapshotRef.current = snapshot;
     controllerRef.current = remote.controller;
   }, [remote.controller, snapshot]);
-  useEffect(() => subscribeToKeyboardState(setKeyboard), []);
+  useEffect(() => subscribeToKeyboardState((state) => {
+    setKeyboard(state);
+    if (remoteDesktopNativeKeyboardReplacesVirtualSurface(keyboardModeRef.current, state.height, state.visible)) {
+      setVirtualKeyboardSurfaceVisible(false);
+    }
+  }), []);
+
+  const keyboardObstructionTarget = remoteDesktopKeyboardObstruction({
+    mode: keyboardMode,
+    nativeKeyboardHeight: keyboard.height,
+    open: keyboardOpen,
+    virtualKeyboardHeight,
+    virtualKeyboardSurfaceVisible,
+  });
+
   useEffect(() => {
-    const target = Platform.OS === 'ios' && systemKeyboardVisible ? keyboard.height + KEYBOARD_BAR_HEIGHT : 0;
+    if (Platform.OS !== 'ios') return;
+    const generation = keyboardAnimationGeneration.current + 1;
+    keyboardAnimationGeneration.current = generation;
     Animated.timing(keyboardInset, {
       duration: keyboard.duration,
       easing: keyboardAnimationEasing(keyboard.easing),
-      toValue: target,
+      toValue: keyboardObstructionTarget,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (!finished || keyboardAnimationGeneration.current !== generation) return;
+      if (!keyboardOpen) setVirtualKeyboardSurfaceVisible(false);
+    });
+  }, [keyboard.duration, keyboard.easing, keyboardInset, keyboardObstructionTarget, keyboardOpen]);
+
+  useEffect(() => {
+    Animated.timing(virtualKeyboardOpacity, {
+      duration: Math.min(keyboard.duration, 180),
+      easing: keyboardAnimationEasing(keyboard.easing),
+      toValue: virtualKeyboardSurfaceVisible ? 1 : 0,
       useNativeDriver: false,
     }).start();
-  }, [keyboard.duration, keyboard.easing, keyboard.height, keyboardInset, systemKeyboardVisible]);
+  }, [keyboard.duration, keyboard.easing, virtualKeyboardOpacity, virtualKeyboardSurfaceVisible]);
   useEffect(() => {
     const subscription = subscribeRemoteDesktopTextInput(({ composing, text }) => {
       composingText.current = composing;
@@ -134,24 +172,31 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
     resetTextInput();
     keyboardInput.current?.blur();
     Keyboard.dismiss();
-    setKeyboard((current) => ({ ...current, visible: false, height: 0 }));
   }, [resetTextInput]);
   const showKeyboard = useCallback(() => {
     setKeyboardOpen(true);
     if (keyboardMode === 'system') keyboardInput.current?.focus();
+    else setVirtualKeyboardSurfaceVisible(true);
   }, [keyboardMode]);
   const switchKeyboardMode = useCallback((mode: RemoteDesktopKeyboardMode) => {
+    keyboardModeRef.current = mode;
     setKeyboardMode(mode);
     setKeyboardOpen(true);
     if (mode === 'system') {
       keyboardInput.current?.focus();
       return;
     }
+    setVirtualKeyboardSurfaceVisible(true);
     resetTextInput();
     keyboardInput.current?.blur();
     Keyboard.dismiss();
-    setKeyboard((current) => ({ ...current, visible: false, height: 0 }));
   }, [resetTextInput]);
+
+  const measureVirtualKeyboard = useCallback((event: LayoutChangeEvent) => {
+    const height = Math.round(event.nativeEvent.layout.height);
+    if (height <= 0) return;
+    setVirtualKeyboardHeight((current) => current === height ? current : height);
+  }, []);
 
   useEffect(() => {
     if (snapshot.inputEnabled) return;
@@ -335,7 +380,7 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
 
     {systemKeyboardVisible ? (
       Platform.OS === 'ios'
-        ? <Animated.View style={[styles.keyboardDock, styles.keyboardDockAbsolute, { bottom: Animated.subtract(keyboardInset, KEYBOARD_BAR_HEIGHT) }]}>
+        ? <Animated.View style={[styles.keyboardDock, styles.keyboardDockAbsolute, { bottom: Animated.subtract(keyboardInset, REMOTE_DESKTOP_KEYBOARD_BAR_HEIGHT) }]}>
             <RemoteDesktopKeyboardBar mode={keyboardMode} onCollapse={hideKeyboard} onMode={switchKeyboardMode} />
           </Animated.View>
         : <View style={[styles.keyboardDock, styles.keyboardDockFlow]}>
@@ -343,9 +388,26 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
           </View>
     ) : null}
 
-    {virtualKeyboardVisible ? <RemoteDesktopVirtualKeyboard
+    {Platform.OS === 'ios' ? <Animated.View
+      onLayout={measureVirtualKeyboard}
+      pointerEvents={virtualKeyboardInteractive ? 'auto' : 'none'}
+      style={[styles.virtualKeyboardDock, {
+        opacity: virtualKeyboardOpacity,
+        transform: [{ translateY: Animated.subtract(virtualKeyboardHeight, keyboardInset) }],
+      }]}
+    >
+      <RemoteDesktopVirtualKeyboard
+        bottomInset={insets.bottom}
+        enabled={virtualKeyboardInteractive && snapshot.inputEnabled && snapshot.isController && !snapshot.paused}
+        mode={keyboardMode}
+        onCollapse={hideKeyboard}
+        onMode={switchKeyboardMode}
+        sendKey={(code, down, modifiers, repeat) => remote.controller?.sendKey(code, down, modifiers, repeat)}
+      />
+    </Animated.View> : virtualKeyboardInteractive ? <RemoteDesktopVirtualKeyboard
       bottomInset={insets.bottom}
       enabled={snapshot.inputEnabled && snapshot.isController && !snapshot.paused}
+      mode={keyboardMode}
       onCollapse={hideKeyboard}
       onMode={switchKeyboardMode}
       sendKey={(code, down, modifiers, repeat) => remote.controller?.sendKey(code, down, modifiers, repeat)}
@@ -426,6 +488,7 @@ const styles = StyleSheet.create({
   keyboardDock: { backgroundColor: 'rgba(20,21,25,0.98)', borderTopColor: 'rgba(255,255,255,0.12)', borderTopWidth: StyleSheet.hairlineWidth, zIndex: 4 },
   keyboardDockAbsolute: { left: 0, position: 'absolute', right: 0 },
   keyboardDockFlow: { flexShrink: 0 },
+  virtualKeyboardDock: { bottom: 0, left: 0, position: 'absolute', right: 0, zIndex: 4 },
   waiting: { alignItems: 'center', alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 14, flexDirection: 'row', gap: 8, paddingHorizontal: 13, paddingVertical: 9, position: 'absolute', top: '45%' },
   waitingText: { color: '#fff', fontSize: 13, lineHeight: 18 },
   hiddenInput: { height: 1, opacity: 0.01, position: 'absolute', width: 1 },

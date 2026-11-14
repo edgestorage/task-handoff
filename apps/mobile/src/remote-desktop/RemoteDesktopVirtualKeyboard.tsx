@@ -70,6 +70,7 @@ export function RemoteDesktopKeyboardBar({ mode, onCollapse, onMode }: KeyboardB
 type VirtualKeyboardProps = {
   bottomInset: number;
   enabled: boolean;
+  mode?: RemoteDesktopKeyboardMode;
   onCollapse(): void;
   onMode(mode: RemoteDesktopKeyboardMode): void;
   sendKey: SendKey;
@@ -151,7 +152,7 @@ export function RemoteDesktopVirtualKeyboard(props: VirtualKeyboardProps) {
     ?? REMOTE_DESKTOP_VIRTUAL_KEYBOARD_PAGES[0];
 
   return <View style={[styles.dock, { paddingBottom: Math.max(4, props.bottomInset) }]} testID="remote-desktop-virtual-keyboard">
-    <RemoteDesktopKeyboardBar mode="virtual" onCollapse={props.onCollapse} onMode={props.onMode} />
+    <RemoteDesktopKeyboardBar mode={props.mode ?? 'virtual'} onCollapse={props.onCollapse} onMode={props.onMode} />
     <View accessibilityRole="tablist" style={styles.pages}>
       {REMOTE_DESKTOP_VIRTUAL_KEYBOARD_PAGES.map((candidate) => <Pressable
         accessibilityRole="tab"
