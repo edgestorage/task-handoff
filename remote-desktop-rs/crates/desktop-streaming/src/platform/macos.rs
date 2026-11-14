@@ -27,6 +27,7 @@ struct ContentKey {
     y: f64,
     width: f64,
     height: f64,
+    scale: f64,
 }
 impl DisplayTarget {
     pub fn source(&self, show_cursor: bool) -> anyhow::Result<crate::capture::Source> {
@@ -86,6 +87,7 @@ pub struct Capture {
     filter: SCContentFilter,
     config: SCStreamConfiguration,
     geometry: Geometry,
+    capture_bounds: Geometry,
     pointer_mapping: PointerMapping,
     content_key: Option<ContentKey>,
     capture_size: (u32, u32),
@@ -169,12 +171,21 @@ impl Capture {
         let display_geometry = display_target
             .then(|| super::display_geometry::DisplayGeometry::bind(geometry))
             .transpose()?;
+        let capture_bounds = match window_identity {
+            Some(identity) => super::macos_window::capture_bounds(identity).unwrap_or_else(|error| {
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.bounds_query.error window={geometry:?} error={error}"
+                );
+                geometry
+            }),
+            None => geometry,
+        };
         anyhow::ensure!(
             width > 0 && height > 0 && width <= 8192 && height <= 8192,
             BackendError::InvalidGeometry
         );
         let precision = CapturePrecision::Auto;
-        let capture_size = capture_size_for(&retained_target, width, height, precision)?;
+        let capture_size = capture_size_for(&retained_target, capture_bounds, precision)?;
         let config = SCStreamConfiguration::new()
             .with_width(capture_size.0)
             .with_height(capture_size.1)
@@ -191,7 +202,8 @@ impl Capture {
             filter,
             config,
             geometry,
-            pointer_mapping: PointerMapping::from_geometry(geometry),
+            capture_bounds,
+            pointer_mapping: PointerMapping::from_geometry(capture_bounds),
             content_key: None,
             capture_size,
             precision,
@@ -220,16 +232,12 @@ impl Capture {
         self.capture_size
     }
     fn reconfigure_capture_size(&mut self) -> anyhow::Result<()> {
-        let next = capture_size_for(
-            &self.target,
-            self.geometry.width,
-            self.geometry.height,
-            self.precision,
-        )?;
+        let next = capture_size_for(&self.target, self.capture_bounds, self.precision)?;
         if next == self.capture_size {
             return Ok(());
         }
         self.pause()?;
+        self.content_key = None;
         self.capture_size = next;
         self.pixel_size = (next.0 as usize, next.1 as usize);
         self.config = self.config.clone().with_width(next.0).with_height(next.1);
@@ -238,8 +246,8 @@ impl Capture {
     pub fn refresh_geometry(&mut self) -> anyhow::Result<Geometry> {
         if let Some(identity) = self.window {
             let query_started = Instant::now();
-            let current = match super::macos_window::geometry(identity) {
-                Ok(current) => current,
+            let layout = match super::macos_window::capture_layout(identity) {
+                Ok(layout) => layout,
                 Err(error) => {
                     eprintln!(
                         "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.geometry_query.error elapsedMs={} error={error}",
@@ -248,17 +256,22 @@ impl Capture {
                     return Err(error);
                 }
             };
+            let current = layout.geometry;
+            let bounds = layout.capture_bounds;
             anyhow::ensure!(
                 current.width <= 8192 && current.height <= 8192,
                 BackendError::InvalidGeometry
             );
-            let next_capture_size =
-                capture_size_for(&self.target, current.width, current.height, self.precision)?;
-            if current != self.geometry || next_capture_size != self.capture_size {
+            let next_capture_size = capture_size_for(&self.target, bounds, self.precision)?;
+            let window_changed = current != self.geometry;
+            let bounds_changed = bounds != self.capture_bounds;
+            let size_changed = next_capture_size != self.capture_size;
+            if window_changed || bounds_changed || size_changed {
                 eprintln!(
-                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.geometry_changed queryMs={} from={:?} to={current:?} captureFrom={:?} captureTo={next_capture_size:?}",
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.geometry_changed queryMs={} windowFrom={:?} windowTo={current:?} boundsFrom={:?} boundsTo={bounds:?} captureFrom={:?} captureTo={next_capture_size:?} windowChanged={window_changed} boundsChanged={bounds_changed}",
                     query_started.elapsed().as_millis(),
                     self.geometry,
+                    self.capture_bounds,
                     self.capture_size
                 );
                 let pause_started = Instant::now();
@@ -275,15 +288,20 @@ impl Capture {
                 }
                 pause_result?;
                 self.geometry = current;
-                self.pointer_mapping = PointerMapping::from_geometry(current);
-                self.content_key = None;
-                self.capture_size = next_capture_size;
-                self.pixel_size = (next_capture_size.0 as usize, next_capture_size.1 as usize);
-                self.config = self
-                    .config
-                    .clone()
-                    .with_width(next_capture_size.0)
-                    .with_height(next_capture_size.1);
+                self.capture_bounds = bounds;
+                if window_changed || bounds_changed {
+                    self.pointer_mapping = PointerMapping::from_geometry(bounds);
+                    self.content_key = None;
+                }
+                if size_changed {
+                    self.capture_size = next_capture_size;
+                    self.pixel_size = (next_capture_size.0 as usize, next_capture_size.1 as usize);
+                    self.config = self
+                        .config
+                        .clone()
+                        .with_width(next_capture_size.0)
+                        .with_height(next_capture_size.1);
+                }
             }
         } else if let Some(display) = &self.display_geometry {
             display.validate()?;
@@ -369,25 +387,27 @@ impl Capture {
             return Ok(None);
         };
         if let Some(info) = sample.frame_info() {
-            if let Some(content) = info.content_rect {
+            if let Some(content_rect) = info.content_rect {
+                let scale = info
+                    .scale_factor
+                    .filter(|scale| scale.is_finite() && *scale > 0.0)
+                    .unwrap_or(1.0);
                 let key = ContentKey {
-                    x: content.origin.x,
-                    y: content.origin.y,
-                    width: content.size.width,
-                    height: content.size.height,
+                    x: content_rect.origin.x,
+                    y: content_rect.origin.y,
+                    width: content_rect.size.width,
+                    height: content_rect.size.height,
+                    scale,
                 };
                 if self.content_key != Some(key) {
-                    let screen = match self.window {
-                        Some(identity) => super::macos_window::capture_bounds(identity),
-                        None => Ok(self.geometry),
-                    };
-                    match (screen, normalized_content_rect(content, self.pixel_size)) {
-                        (Ok(screen), Some(content)) => match PointerMapping::new(screen, content) {
+                    let screen = self.capture_bounds;
+                    match normalized_content_rect(content_rect, self.pixel_size, scale) {
+                        Some(content) => match PointerMapping::new(screen, content) {
                             Ok(mapping) if mapping != self.pointer_mapping => {
                                 eprintln!(
-                                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pointer_mapping window={:?} screen={screen:?} content={content:?} mapping={mapping:?}",
-                                        self.geometry
-                                    );
+                                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pointer_mapping window={:?} screen={screen:?} rawContent={content_rect:?} pixelSize={:?} scale={scale} content={content:?} mapping={mapping:?}",
+                                    self.geometry, self.pixel_size
+                                );
                                 self.pointer_mapping = mapping;
                                 self.content_key = Some(key);
                             }
@@ -399,16 +419,10 @@ impl Capture {
                                     );
                             }
                         },
-                        (Err(error), _) => {
+                        None => {
                             eprintln!(
-                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pointer_mapping.error window={:?} content={content:?} error={error}",
-                                self.geometry
-                            );
-                        }
-                        (_, None) => {
-                            eprintln!(
-                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pointer_mapping.error window={:?} content={content:?} error=invalid_content_rect",
-                                self.geometry
+                                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.pointer_mapping.error window={:?} content={content_rect:?} pixelSize={:?} scale={scale} error=invalid_content_rect",
+                                self.geometry, self.pixel_size,
                             );
                         }
                     }
@@ -453,23 +467,28 @@ impl Capture {
     }
 }
 
-/// `contentRect` is expressed in output-frame coordinates. A fixed SCStream
-/// canvas can contain letterbox bars when menus enlarge the captured screen
-/// union, so the encoded frame and actual content do not share a rectangle.
+/// `contentRect` is expressed in surface points, while the pixel buffer uses
+/// output pixels. A fixed SCStream canvas can also contain letterbox bars when
+/// menus enlarge the captured screen union, so both scale and offset matter.
 fn normalized_content_rect(
     content: screencapturekit::cg::CGRect,
     pixel_size: (usize, usize),
+    scale_factor: f64,
 ) -> Option<NormalizedRect> {
     let surface_width = pixel_size.0 as f64;
     let surface_height = pixel_size.1 as f64;
-    if surface_width <= 0.0 || surface_height <= 0.0 {
+    if surface_width <= 0.0
+        || surface_height <= 0.0
+        || !scale_factor.is_finite()
+        || scale_factor <= 0.0
+    {
         return None;
     }
     NormalizedRect::new(
-        content.origin.x / surface_width,
-        content.origin.y / surface_height,
-        content.size.width / surface_width,
-        content.size.height / surface_height,
+        content.origin.x * scale_factor / surface_width,
+        content.origin.y * scale_factor / surface_height,
+        content.size.width * scale_factor / surface_width,
+        content.size.height * scale_factor / surface_height,
     )
     .ok()
 }
@@ -509,26 +528,32 @@ fn backing_scale_for_window(origin_x: f64, origin_y: f64, width: f64, height: f6
 
 fn capture_size_for(
     target: &Target,
-    logical_width: u32,
-    logical_height: u32,
+    bounds: Geometry,
     precision: CapturePrecision,
 ) -> anyhow::Result<(u32, u32)> {
     let (scale_x, scale_y) = match target {
         Target::Display(display) => {
             backing_scale_for_display(core_graphics::display::CGDisplay::new(display.display_id()))
         }
-        Target::Window(window) => {
-            let rect = window.frame();
-            backing_scale_for_window(
-                rect.origin.x,
-                rect.origin.y,
-                rect.size.width,
-                rect.size.height,
-            )
-        }
+        Target::Window(_) => backing_scale_for_window(
+            f64::from(bounds.x),
+            f64::from(bounds.y),
+            f64::from(bounds.width),
+            f64::from(bounds.height),
+        ),
     };
-    let native_width = (logical_width as f64 * scale_x).round().max(1.0);
-    let native_height = (logical_height as f64 * scale_y).round().max(1.0);
+    capture_size_for_scaled_bounds(bounds.width, bounds.height, precision, scale_x, scale_y)
+}
+
+fn capture_size_for_scaled_bounds(
+    logical_width: u32,
+    logical_height: u32,
+    precision: CapturePrecision,
+    scale_x: f64,
+    scale_y: f64,
+) -> anyhow::Result<(u32, u32)> {
+    let native_width = (f64::from(logical_width) * scale_x).round().max(1.0);
+    let native_height = (f64::from(logical_height) * scale_y).round().max(1.0);
     anyhow::ensure!(
         native_width <= u32::MAX as f64 && native_height <= u32::MAX as f64,
         crate::error::BackendError::InvalidGeometry
@@ -550,8 +575,8 @@ impl Drop for Capture {
 
 #[cfg(test)]
 mod tests {
-    use super::normalized_content_rect;
-    use crate::traits::{Geometry, PointerMapping};
+    use super::{capture_size_for_scaled_bounds, normalized_content_rect};
+    use crate::traits::{CapturePrecision, Geometry, PointerMapping};
     use screencapturekit::cg::CGRect;
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
@@ -559,7 +584,7 @@ mod tests {
     }
 
     fn popover_mapping() -> PointerMapping {
-        let surface = normalized_content_rect(rect(0.0, 0.0, 1386.0, 811.204), (1386, 1050))
+        let surface = normalized_content_rect(rect(0.0, 0.0, 1386.0, 811.204), (1386, 1050), 1.0)
             .expect("content rect");
         PointerMapping::new(
             Geometry {
@@ -594,17 +619,43 @@ mod tests {
     }
 
     #[test]
-    fn larger_surface_keeps_content_rect_in_output_pixels() {
-        let content = normalized_content_rect(rect(0.0, 0.0, 1794.0, 1050.0), (2772, 2100))
+    fn surface_points_are_scaled_to_the_output_pixel_buffer() {
+        let content = normalized_content_rect(rect(0.0, 0.0, 1794.0, 1050.0), (2772, 2100), 1.0)
             .expect("content rect");
         assert!((content.width - 1794.0 / 2772.0).abs() < 0.000001);
         assert!((content.height - 0.5).abs() < 0.000001);
     }
 
     #[test]
+    fn retina_content_rect_fills_its_native_pixel_canvas() {
+        let content = normalized_content_rect(rect(0.0, 0.0, 1794.0, 1050.0), (3588, 2100), 2.0)
+            .expect("content rect");
+        assert_eq!(content.x, 0.0);
+        assert_eq!(content.y, 0.0);
+        assert_eq!(content.width, 1.0);
+        assert_eq!(content.height, 1.0);
+    }
+
+    #[test]
+    fn expanded_popover_bounds_drive_the_capture_canvas_size() {
+        assert_eq!(
+            capture_size_for_scaled_bounds(1386, 1050, CapturePrecision::Auto, 1.0, 1.0).unwrap(),
+            (1386, 1050)
+        );
+        assert_eq!(
+            capture_size_for_scaled_bounds(1794, 1050, CapturePrecision::Auto, 1.0, 1.0).unwrap(),
+            (1794, 1050)
+        );
+        assert_eq!(
+            capture_size_for_scaled_bounds(1794, 1050, CapturePrecision::Auto, 2.0, 2.0).unwrap(),
+            (3588, 2100)
+        );
+    }
+
+    #[test]
     fn content_offset_is_preserved_for_centered_letterboxing() {
         let content =
-            normalized_content_rect(rect(100.0, 50.0, 800.0, 600.0), (1000, 700)).unwrap();
+            normalized_content_rect(rect(100.0, 50.0, 800.0, 600.0), (1000, 700), 1.0).unwrap();
         assert_eq!(content.x, 0.1);
         assert_eq!(content.y, 50.0 / 700.0);
         assert_eq!(content.width, 0.8);

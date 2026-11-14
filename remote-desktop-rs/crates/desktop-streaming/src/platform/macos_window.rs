@@ -14,6 +14,8 @@ use objc2_core_foundation::{
     CFArray as AxArray, CFBoolean, CFRetained, CFString, CFType as AxType, CGPoint, CGSize,
 };
 use std::{
+    cell::RefCell,
+    collections::HashMap,
     ptr::NonNull,
     sync::mpsc,
     thread,
@@ -24,11 +26,22 @@ const FOCUS_ACTIVATION_TIMEOUT: Duration = Duration::from_millis(600);
 const FOCUS_ACTIVATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const WINDOW_BIND_TIMEOUT: Duration = Duration::from_millis(600);
 const WINDOW_BIND_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const FOCUSED_WINDOW_ANCESTOR_LIMIT: usize = 4;
+const COVERING_WINDOW_SCAN_LIMIT: usize = 256;
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Identity {
     pub window: u32,
     pub pid: i32,
+}
+
+/// The selected window and the screen-space union SCK actually captures for
+/// it. Native menus and popovers are separate higher-layer windows, so capture
+/// layout must not be derived from the target window geometry alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CaptureLayout {
+    pub geometry: Geometry,
+    pub capture_bounds: Geometry,
 }
 #[derive(Clone)]
 pub struct Lease {
@@ -38,6 +51,24 @@ enum Operation {
     Geometry,
     Focus,
     Validate(Geometry, Option<(i32, i32)>),
+}
+impl Operation {
+    fn timeout(&self) -> Duration {
+        match self {
+            // focus() deliberately waits up to FOCUS_ACTIVATION_TIMEOUT for
+            // AX/WindowServer to publish the activation. The lease budget must
+            // outlive that wait, otherwise a slow but successful activation is
+            // reported as a dead window.
+            Self::Focus => FOCUS_ACTIVATION_TIMEOUT + Duration::from_millis(400),
+            Self::Geometry | Self::Validate(..) => Duration::from_millis(300),
+        }
+    }
+    fn timeout_error(&self) -> BackendError {
+        match self {
+            Self::Focus => BackendError::WindowFocusRequired,
+            Self::Geometry | Self::Validate(..) => BackendError::GeometryChanged,
+        }
+    }
 }
 struct Request {
     operation: Operation,
@@ -102,9 +133,14 @@ impl Lease {
     }
     fn call(&self, operation: Operation) -> anyhow::Result<Geometry> {
         let is_geometry = matches!(&operation, Operation::Geometry);
+        let timeout = operation.timeout();
+        let timeout_error = operation.timeout_error();
         let started = Instant::now();
         if is_geometry {
-            eprintln!("REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.lease.start timeoutMs=300");
+            eprintln!(
+                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.lease.start timeoutMs={}",
+                timeout.as_millis()
+            );
         }
         let (reply, rx) = mpsc::sync_channel(1);
         if let Err(error) = self.tx.try_send(Request { operation, reply }) {
@@ -114,9 +150,9 @@ impl Lease {
                     started.elapsed().as_millis()
                 );
             }
-            return Err(anyhow::anyhow!(BackendError::WindowUnavailable));
+            return Err(anyhow::anyhow!(timeout_error));
         }
-        let received = rx.recv_timeout(Duration::from_millis(300));
+        let received = rx.recv_timeout(timeout);
         if is_geometry {
             match &received {
                 Ok(Ok(geometry)) => eprintln!(
@@ -133,7 +169,7 @@ impl Lease {
                 ),
             }
         }
-        Ok(received.map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))??)
+        Ok(received.map_err(|_| anyhow::anyhow!(timeout_error))??)
     }
     pub fn geometry(&self) -> anyhow::Result<Geometry> {
         self.call(Operation::Geometry)
@@ -151,30 +187,26 @@ impl Lease {
 /// must not make the capture source unavailable. Input binding still validates
 /// AX and CG together in the dedicated input worker.
 pub fn geometry(identity: Identity) -> anyhow::Result<Geometry> {
-    anyhow::ensure!(identity.pid > 0, BackendError::WindowUnavailable);
-    let windows = visible_windows()?;
-    let current = windows
-        .into_iter()
-        .find(|window| window.id == identity.window && window.pid == identity.pid)
-        .ok_or_else(|| {
-            eprintln!(
-                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.visible_geometry.not_found window={} pid={}",
-                identity.window, identity.pid
-            );
-            anyhow::anyhow!(BackendError::WindowUnavailable)
-        })?;
-    Ok(current.geometry)
+    Ok(capture_layout(identity)?.geometry)
 }
 
 /// Screen-space union represented by a desktop-independent window capture.
 /// SCK includes same-process transient windows such as menus and popovers even
 /// though they are separate higher-layer CG windows.
 pub fn capture_bounds(identity: Identity) -> anyhow::Result<Geometry> {
-    capture_union(&visible_windows()?, identity)
+    Ok(capture_layout(identity)?.capture_bounds)
 }
 
-fn capture_union(windows: &[Visible], identity: Identity) -> anyhow::Result<Geometry> {
-    let mut found_target = false;
+pub fn capture_layout(identity: Identity) -> anyhow::Result<CaptureLayout> {
+    capture_layout_from_windows(&visible_windows()?, identity)
+}
+
+fn capture_layout_from_windows(
+    windows: &[Visible],
+    identity: Identity,
+) -> anyhow::Result<CaptureLayout> {
+    anyhow::ensure!(identity.pid > 0, BackendError::WindowUnavailable);
+    let mut geometry = None;
     let mut left = i64::MAX;
     let mut top = i64::MAX;
     let mut right = i64::MIN;
@@ -182,7 +214,9 @@ fn capture_union(windows: &[Visible], identity: Identity) -> anyhow::Result<Geom
     for window in windows.iter().filter(|window| {
         window.pid == identity.pid && (window.id == identity.window || window.layer > 0)
     }) {
-        found_target |= window.id == identity.window;
+        if window.id == identity.window {
+            geometry = Some(window.geometry);
+        }
         let x = i64::from(window.geometry.x);
         let y = i64::from(window.geometry.y);
         left = left.min(x);
@@ -190,13 +224,28 @@ fn capture_union(windows: &[Visible], identity: Identity) -> anyhow::Result<Geom
         right = right.max(x + i64::from(window.geometry.width));
         bottom = bottom.max(y + i64::from(window.geometry.height));
     }
-    anyhow::ensure!(found_target, BackendError::WindowUnavailable);
-    Geometry::from_actuator_rect(
+    let geometry = geometry.ok_or_else(|| {
+        eprintln!(
+            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.visible_geometry.not_found window={} pid={}",
+            identity.window, identity.pid
+        );
+        anyhow::anyhow!(BackendError::WindowUnavailable)
+    })?;
+    let capture_bounds = Geometry::from_actuator_rect(
         left as f64,
         top as f64,
         right.saturating_sub(left) as f64,
         bottom.saturating_sub(top) as f64,
-    )
+    )?;
+    Ok(CaptureLayout {
+        geometry,
+        capture_bounds,
+    })
+}
+
+#[cfg(test)]
+fn capture_union(windows: &[Visible], identity: Identity) -> anyhow::Result<Geometry> {
+    Ok(capture_layout_from_windows(windows, identity)?.capture_bounds)
 }
 fn transient_geometry_ax_error(error: AXError) -> bool {
     matches!(error, AXError::CannotComplete | AXError::InvalidUIElement)
@@ -231,6 +280,80 @@ fn attribute(
     })?;
     Ok(unsafe { CFRetained::from_raw(value) })
 }
+fn optional_element_attribute(element: &AXUIElement, key: &str) -> Option<CFRetained<AXUIElement>> {
+    let mut value: *const AxType = std::ptr::null();
+    let error = unsafe {
+        element.copy_attribute_value(&CFString::from_str(key), NonNull::from(&mut value))
+    };
+    if error != AXError::Success {
+        return None;
+    }
+    let value = NonNull::new(value.cast_mut())?;
+    let value = unsafe { CFRetained::from_raw(value) };
+    value.downcast::<AXUIElement>().ok()
+}
+fn focused_window_matches<T, Pid, Parent>(
+    target: &T,
+    focused: &T,
+    expected_pid: i32,
+    pid: Pid,
+    parent: Parent,
+) -> bool
+where
+    T: Clone + PartialEq,
+    Pid: Fn(&T) -> Option<i32>,
+    Parent: Fn(&T) -> Option<T>,
+{
+    if focused == target {
+        return true;
+    }
+    let mut current = focused.clone();
+    for _ in 0..FOCUSED_WINDOW_ANCESTOR_LIMIT {
+        if pid(&current) != Some(expected_pid) {
+            return false;
+        }
+        let Some(next) = parent(&current) else {
+            return false;
+        };
+        if &next == &current {
+            return false;
+        }
+        if &next == target {
+            return true;
+        }
+        current = next;
+    }
+    false
+}
+fn geometry_contains(outer: Geometry, inner: Geometry) -> bool {
+    let outer_right = i64::from(outer.x) + i64::from(outer.width);
+    let outer_bottom = i64::from(outer.y) + i64::from(outer.height);
+    let inner_right = i64::from(inner.x) + i64::from(inner.width);
+    let inner_bottom = i64::from(inner.y) + i64::from(inner.height);
+    i64::from(inner.x) >= i64::from(outer.x)
+        && i64::from(inner.y) >= i64::from(outer.y)
+        && inner_right <= outer_right
+        && inner_bottom <= outer_bottom
+}
+fn owned_layer_zero_window_matches(
+    target_pid: i32,
+    hit: &Visible,
+    candidate_pid: i32,
+    candidate_role: &str,
+    candidate_subrole: &str,
+    candidate_geometry: Geometry,
+    target_geometry: Geometry,
+) -> bool {
+    candidate_pid == target_pid
+        && candidate_pid == hit.pid
+        && candidate_role == "AXWindow"
+        && matches!(
+            candidate_subrole,
+            "AXUnknown" | "AXDialog" | "AXFloatingWindow"
+        )
+        && candidate_geometry == hit.geometry
+        && geometry_contains(target_geometry, hit.geometry)
+}
 fn ax_geometry(element: &AXUIElement) -> anyhow::Result<Geometry> {
     let position = attribute(element, "AXPosition", true)?
         .downcast::<AXValue>()
@@ -253,6 +376,10 @@ struct Native {
     identity: Identity,
     app: CFRetained<AXUIElement>,
     window: CFRetained<AXUIElement>,
+    /// AX-verified, same-process layer-0 child windows such as sheets. CG
+    /// reports these separately from the selected window at layer 0, so the
+    /// layer-only transient rule cannot identify them.
+    owned_transients: RefCell<HashMap<u32, Geometry>>,
 }
 impl Native {
     fn bind(identity: Identity, geometry: Geometry) -> anyhow::Result<Self> {
@@ -288,6 +415,7 @@ impl Native {
             identity,
             app,
             window: matched.ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?,
+            owned_transients: RefCell::new(HashMap::new()),
         };
         anyhow::ensure!(
             native.geometry()? == geometry,
@@ -330,13 +458,165 @@ impl Native {
         anyhow::ensure!(frontmost, BackendError::WindowFocusRequired);
         Ok(())
     }
-    fn focused(&self) -> anyhow::Result<()> {
-        self.frontmost()?;
-        let focused = attribute(&self.app, "AXFocusedWindow", false)?
+    fn focused_element(&self) -> anyhow::Result<CFRetained<AXUIElement>> {
+        let focused = attribute(&self.app, "AXFocusedWindow", false)
+            .map_err(|_| anyhow::anyhow!(BackendError::WindowFocusRequired))?
             .downcast::<AXUIElement>()
             .map_err(|_| anyhow::anyhow!(BackendError::WindowFocusRequired))?;
-        anyhow::ensure!(focused == self.window, BackendError::WindowFocusRequired);
+        unsafe {
+            focused.set_messaging_timeout(0.05);
+        }
+        Ok(focused)
+    }
+    fn focused_matches(&self, focused: &CFRetained<AXUIElement>) -> bool {
+        focused_window_matches(
+            &self.window,
+            focused,
+            self.identity.pid,
+            |element: &CFRetained<AXUIElement>| {
+                let mut pid = 0;
+                (unsafe { element.pid(NonNull::from(&mut pid)) } == AXError::Success).then_some(pid)
+            },
+            |element: &CFRetained<AXUIElement>| {
+                optional_element_attribute(element.as_ref(), "AXParent")
+                    .or_else(|| optional_element_attribute(element.as_ref(), "AXWindow"))
+            },
+        )
+    }
+    fn focused(&self) -> anyhow::Result<()> {
+        self.frontmost()?;
+        // AXFocusedWindow is a focus observation, not a geometry query. A
+        // transient AX error (for example kAXErrorCannotComplete while a sheet
+        // is being installed) must suspend input and be retried, never be
+        // reported as WindowUnavailable and kill the input guard.
+        let focused = self.focused_element()?;
+        if focused == self.window {
+            // Closing a sheet restores the target as AXFocusedWindow. Drop the
+            // verified child cache so WindowServer ID reuse cannot grant input
+            // to a later unrelated layer-0 window.
+            self.owned_transients.borrow_mut().clear();
+        }
+        // A native sheet becomes AXFocusedWindow while its parent remains the
+        // selected AXWindow. Accept only focus elements whose bounded AXParent/
+        // AXWindow chain reaches the selected window; unrelated app windows
+        // still fail closed.
+        let matches = self.focused_matches(&focused);
+        anyhow::ensure!(matches, BackendError::WindowFocusRequired);
         Ok(())
+    }
+    fn owned_layer_zero_transient(&self, hit: &Visible) -> bool {
+        if hit.pid != self.identity.pid || hit.id == self.identity.window || hit.layer != 0 {
+            return false;
+        }
+        if let Some(geometry) = self.owned_transients.borrow().get(&hit.id) {
+            return *geometry == hit.geometry;
+        }
+        if let Ok(focused) = self.focused_element() {
+            if focused == self.window {
+                // Closing a sheet restores the target as AXFocusedWindow. Drop
+                // the verified child cache so WindowServer ID reuse cannot
+                // grant input to a later unrelated layer-0 window.
+                self.owned_transients.borrow_mut().clear();
+            } else if self.focused_matches(&focused)
+                && ax_geometry(&focused).is_ok_and(|geometry| geometry == hit.geometry)
+            {
+                self.remember_owned_transient(hit);
+                return true;
+            }
+        }
+        // Some browsers expose a toolbar/popover as a separate layer-0 AXWindow
+        // whose AXParent is the application. Its stable public signals are the
+        // nonstandard window subrole and geometry fully covered by the selected
+        // window, so require both instead of accepting every same-process
+        // layer-0 window.
+        self.owned_layer_zero_ax_window(hit)
+    }
+    fn owned_layer_zero_ax_window(&self, hit: &Visible) -> bool {
+        let Ok(target_geometry) = ax_geometry(&self.window) else {
+            return false;
+        };
+        let Ok(windows) = attribute(&self.app, "AXWindows", false).and_then(|value| {
+            value
+                .downcast::<AxArray>()
+                .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))
+        }) else {
+            eprintln!(
+                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.pointer.covering_scan window={} hitWindow={} result=windows_unavailable",
+                self.identity.window, hit.id
+            );
+            return false;
+        };
+        let windows = unsafe { CFRetained::cast_unchecked::<AxArray<AxType>>(windows) };
+        let count = windows.len();
+        let mut inspected = 0usize;
+        for item in windows.iter().take(COVERING_WINDOW_SCAN_LIMIT) {
+            let Ok(window) = item.downcast::<AXUIElement>() else {
+                continue;
+            };
+            inspected += 1;
+            unsafe {
+                window.set_messaging_timeout(0.05);
+            }
+            let mut pid = 0;
+            if unsafe { window.pid(NonNull::from(&mut pid)) } != AXError::Success {
+                continue;
+            }
+            let Ok(role) = attribute(&window, "AXRole", true).and_then(|value| {
+                value
+                    .downcast::<CFString>()
+                    .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))
+            }) else {
+                continue;
+            };
+            let subrole = attribute(&window, "AXSubrole", true)
+                .and_then(|value| {
+                    value
+                        .downcast::<CFString>()
+                        .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))
+                })
+                .map_or_else(|_| String::new(), |value| value.to_string());
+            let Ok(geometry) = ax_geometry(&window) else {
+                continue;
+            };
+            if inspected <= 8 {
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.pointer.covering_candidate window={} hitWindow={} candidatePid={} role={} subrole={} geometry={geometry:?}",
+                    self.identity.window, hit.id, pid, role, subrole
+                );
+            }
+            if owned_layer_zero_window_matches(
+                self.identity.pid,
+                hit,
+                pid,
+                &role.to_string(),
+                &subrole,
+                geometry,
+                target_geometry,
+            ) {
+                self.remember_owned_transient(hit);
+                return true;
+            }
+        }
+        eprintln!(
+            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.pointer.covering_scan window={} hitWindow={} result=no_match windows={count} inspected={inspected}",
+            self.identity.window, hit.id
+        );
+        false
+    }
+    fn remember_owned_transient(&self, hit: &Visible) {
+        self.owned_transients
+            .borrow_mut()
+            .insert(hit.id, hit.geometry);
+        eprintln!(
+            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.pointer.owned_transient window={} pid={} hitWindow={} geometry={geometry:?}",
+            self.identity.window,
+            self.identity.pid,
+            hit.id,
+            geometry = hit.geometry
+        );
+    }
+    fn pointer_allowed(&self, hit: &Visible) -> bool {
+        pointer_hit_allowed(self.identity, hit) || self.owned_layer_zero_transient(hit)
     }
     fn focus(&self) -> anyhow::Result<Geometry> {
         let geometry = self.geometry()?;
@@ -382,7 +662,12 @@ impl Native {
         // Its exact AX focused window may legitimately move to an app-owned
         // menu, popover or dialog while the user interacts with that window;
         // requiring the original window here would suspend control mid-action.
-        self.frontmost()?;
+        self.frontmost().inspect_err(|_| {
+            eprintln!(
+                "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.validate.frontmost_rejected window={} pid={}",
+                self.identity.window, self.identity.pid
+            );
+        })?;
         if let Some((x, y)) = point {
             let hit = visible_windows()?.into_iter().find(|w| {
                 x as i64 >= w.geometry.x as i64
@@ -390,7 +675,24 @@ impl Native {
                     && (x as i64) < w.geometry.x as i64 + w.geometry.width as i64
                     && (y as i64) < w.geometry.y as i64 + w.geometry.height as i64
             });
-            let matches = hit.is_some_and(|w| pointer_hit_allowed(self.identity, &w));
+            let matches = hit.as_ref().is_some_and(|w| self.pointer_allowed(w));
+            if !matches {
+                match &hit {
+                    Some(hit) => eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.validate.hit_rejected window={} pid={} point=({x},{y}) hitWindow={} hitPid={} hitLayer={} hitGeometry={:?}",
+                        self.identity.window,
+                        self.identity.pid,
+                        hit.id,
+                        hit.pid,
+                        hit.layer,
+                        hit.geometry
+                    ),
+                    None => eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=macos_window.validate.hit_rejected window={} pid={} point=({x},{y}) hitWindow=none",
+                        self.identity.window, self.identity.pid
+                    ),
+                }
+            }
             anyhow::ensure!(matches, BackendError::WindowFocusRequired);
         }
         Ok(geometry)
@@ -490,7 +792,9 @@ fn visible_windows() -> anyhow::Result<Vec<Visible>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        capture_union, pointer_hit_allowed, transient_geometry_ax_error, Identity, Visible,
+        capture_layout_from_windows, capture_union, focused_window_matches, geometry_contains,
+        owned_layer_zero_window_matches, pointer_hit_allowed, transient_geometry_ax_error,
+        Identity, Visible,
     };
     use crate::traits::Geometry;
     use objc2_application_services::AXError;
@@ -580,11 +884,114 @@ mod tests {
     }
 
     #[test]
+    fn capture_layout_tracks_popover_open_and_close_without_changing_window_geometry() {
+        let identity = Identity {
+            window: 10,
+            pid: 42,
+        };
+        let window = Geometry {
+            x: -149,
+            y: 30,
+            width: 1386,
+            height: 1050,
+            scale: 1.0,
+        };
+        let open = vec![
+            positioned(10, 42, 0, -149, 30, 1386, 1050),
+            positioned(11, 42, 101, 827, 106, 327, 656),
+            positioned(12, 42, 101, 1444, 442, 201, 192),
+        ];
+        let opened = capture_layout_from_windows(&open, identity).unwrap();
+        assert_eq!(opened.geometry, window);
+        assert_eq!(
+            opened.capture_bounds,
+            Geometry {
+                x: -149,
+                y: 30,
+                width: 1794,
+                height: 1050,
+                scale: 1.0,
+            }
+        );
+
+        let closed = vec![positioned(10, 42, 0, -149, 30, 1386, 1050)];
+        let reopened = capture_layout_from_windows(&closed, identity).unwrap();
+        assert_eq!(reopened.geometry, window);
+        assert_eq!(reopened.capture_bounds, window);
+    }
+
+    #[test]
     fn transient_geometry_ax_errors_do_not_mean_window_closed() {
         assert!(transient_geometry_ax_error(AXError::CannotComplete));
         assert!(transient_geometry_ax_error(AXError::InvalidUIElement));
         assert!(!transient_geometry_ax_error(AXError::AttributeUnsupported));
         assert!(!transient_geometry_ax_error(AXError::Success));
+    }
+
+    #[derive(Clone, PartialEq)]
+    struct FocusNode {
+        id: u32,
+        pid: i32,
+        parent: Option<u32>,
+    }
+
+    fn focus_node(id: u32, pid: i32, parent: Option<u32>) -> FocusNode {
+        FocusNode { id, pid, parent }
+    }
+
+    #[test]
+    fn focused_window_accepts_owned_sheet_and_rejects_unrelated_window() {
+        let target = focus_node(10, 42, None);
+        let sheet = focus_node(11, 42, Some(10));
+        let unrelated = focus_node(12, 42, None);
+        let pid = |node: &FocusNode| Some(node.pid);
+        let parent = |node: &FocusNode| match node.parent {
+            Some(id) => Some(focus_node(id, node.pid, None)),
+            None => None,
+        };
+        assert!(focused_window_matches(&target, &target, 42, pid, parent));
+        assert!(focused_window_matches(&target, &sheet, 42, pid, parent));
+        assert!(!focused_window_matches(
+            &target, &unrelated, 42, pid, parent
+        ));
+        let same_id_other_process = focus_node(11, 7, Some(10));
+        assert!(!focused_window_matches(
+            &target,
+            &same_id_other_process,
+            42,
+            pid,
+            parent
+        ));
+    }
+
+    #[test]
+    fn focused_window_bounds_parent_traversal_and_cycles() {
+        let target = focus_node(10, 42, None);
+        let cycle = focus_node(11, 42, Some(11));
+        let too_deep = focus_node(15, 42, Some(14));
+        let pid = |node: &FocusNode| Some(node.pid);
+        assert!(!focused_window_matches(
+            &target,
+            &cycle,
+            42,
+            pid,
+            |node| match node.parent {
+                Some(id) => Some(focus_node(id, node.pid, Some(id))),
+                None => None,
+            }
+        ));
+        assert!(!focused_window_matches(
+            &target,
+            &too_deep,
+            42,
+            pid,
+            |node| match node.id {
+                15 => Some(focus_node(14, node.pid, Some(13))),
+                14 => Some(focus_node(13, node.pid, Some(12))),
+                13 => Some(focus_node(12, node.pid, None)),
+                _ => None,
+            }
+        ));
     }
 
     #[test]
@@ -629,5 +1036,88 @@ mod tests {
             },
             &visible(11, 42, 0)
         ));
+    }
+
+    #[test]
+    fn owned_layer_zero_window_accepts_only_covered_nonstandard_ax_window() {
+        let target = Identity {
+            window: 10,
+            pid: 42,
+        };
+        let hit = positioned(11, 42, 0, -85, 70, 1102, 239);
+        let target_geometry = positioned(10, 42, 0, -149, 30, 1386, 1050).geometry;
+        assert!(owned_layer_zero_window_matches(
+            42,
+            &hit,
+            42,
+            "AXWindow",
+            "AXUnknown",
+            hit.geometry,
+            target_geometry,
+        ));
+        assert!(owned_layer_zero_window_matches(
+            42,
+            &hit,
+            42,
+            "AXWindow",
+            "AXDialog",
+            hit.geometry,
+            target_geometry,
+        ));
+        assert!(!owned_layer_zero_window_matches(
+            42,
+            &hit,
+            7,
+            "AXWindow",
+            "AXUnknown",
+            hit.geometry,
+            target_geometry,
+        ));
+        assert!(!owned_layer_zero_window_matches(
+            42,
+            &hit,
+            42,
+            "AXGroup",
+            "AXUnknown",
+            hit.geometry,
+            target_geometry,
+        ));
+        assert!(!owned_layer_zero_window_matches(
+            42,
+            &hit,
+            42,
+            "AXWindow",
+            "AXStandardWindow",
+            hit.geometry,
+            target_geometry,
+        ));
+        let outside = positioned(11, 42, 0, 1300, 70, 1102, 239);
+        assert!(!owned_layer_zero_window_matches(
+            42,
+            &outside,
+            42,
+            "AXWindow",
+            "AXUnknown",
+            outside.geometry,
+            target_geometry,
+        ));
+        assert!(!owned_layer_zero_window_matches(
+            42,
+            &hit,
+            42,
+            "AXWindow",
+            "AXUnknown",
+            Geometry {
+                x: -84,
+                y: 70,
+                width: 100,
+                height: 100,
+                scale: 1.0,
+            },
+            target_geometry,
+        ));
+        assert!(geometry_contains(target_geometry, hit.geometry));
+        assert!(!geometry_contains(target_geometry, outside.geometry));
+        assert!(!pointer_hit_allowed(target, &hit));
     }
 }

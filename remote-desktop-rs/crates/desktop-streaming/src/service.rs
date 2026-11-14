@@ -1455,6 +1455,17 @@ impl Service {
         else {
             return Ok(true);
         };
+        if self.input_guard.is_none() {
+            // A guard can exit after a native backend failure. The viewer
+            // session and capture source may still be alive, so the next
+            // resume must be able to spawn a fresh guard for the same binding
+            // instead of permanently reusing a dead child process.
+            let guard =
+                crate::input_guard::Client::spawn(&component_executable()?, backend.clone())
+                    .await?;
+            self.input_guard = Some(guard);
+            self.input_guard_backend = Some(backend.clone());
+        }
         if self.input_guard_backend.as_ref() == Some(&backend) {
             return Ok(true);
         }
@@ -1502,6 +1513,73 @@ impl Service {
             }
             _ => anyhow::bail!("REMOTE_DESKTOP_INPUT_GUARD_FAILED"),
         }
+    }
+
+    async fn resume_input(
+        &mut self,
+        id: &str,
+        epoch: u64,
+    ) -> anyhow::Result<Option<serde_json::Value>> {
+        if !self.bind_input_for_viewer(id).await? {
+            return Ok(None);
+        }
+        let reply = self
+            .input_guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("input guard closed"))?
+            .call(&crate::input_guard::Command::Arm { epoch })
+            .await?;
+        if !self.guard_state(id, epoch, reply).await? {
+            return Ok(None);
+        }
+        if let Err(error) = self.registry.commit_input(id, epoch, Instant::now()) {
+            self.input_guard
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("input guard closed"))?
+                .call(&crate::input_guard::Command::Suspend)
+                .await?;
+            return Err(error.into());
+        }
+        eprintln!(
+            "REMOTE_DESKTOP_GEOMETRY_TRACE phase=control.resume.armed session={id} epoch={epoch}"
+        );
+        Ok(Some(
+            serde_json::json!({"type":"input.resumed","payload":{"inputEpoch":epoch}}),
+        ))
+    }
+
+    async fn discard_input_guard(&mut self) {
+        if let Some(mut guard) = self.input_guard.take() {
+            // The child is normally already reaped when GuardDead was selected.
+            // Closing stdin also makes an unexpectedly live-but-unresponsive
+            // guard release native keys and exit. Never let cleanup block the
+            // authority actor indefinitely.
+            guard.close_pipe();
+            let _ = tokio::time::timeout(Duration::from_millis(500), guard.child.wait()).await;
+        }
+        self.input_guard_backend = None;
+    }
+
+    /// Reconcile an input failure after the guard process is gone. The dead
+    /// guard cannot acknowledge Suspend or release the local mirror, so update
+    /// the registry and reply state directly without calling it again.
+    async fn suspend_input_after_guard_failure(
+        &mut self,
+        id: &str,
+        cause: crate::error::BackendError,
+    ) -> anyhow::Result<serde_json::Value> {
+        let owner = self
+            .live
+            .get(id)
+            .map(|live| live.owner.clone())
+            .ok_or_else(|| anyhow::anyhow!("peer closed"))?;
+        let _ = self.registry.suspend_input(id)?;
+        self.effects(id, Effects::default()).await;
+        if let Some(live) = self.live.get_mut(id) {
+            live.control.input.lock().unwrap().release_all();
+        }
+        let session_revision = self.registry.snapshot(id, &owner)?.session_revision;
+        Ok(input_suspended_notice(cause, session_revision))
     }
 
     /// Geometry changes invalidate the native input lease before capture is
@@ -1622,32 +1700,36 @@ impl Service {
                                 Err(crate::session::Error::StaleEpoch)
                             } {
                                 Ok(epoch) => {
-                                    if !self.bind_input_for_viewer(&id).await? {
-                                        return Ok(());
+                                    match self.resume_input(&id, epoch).await {
+                                        Ok(Some(response)) => response,
+                                        Ok(None) => return Ok(()),
+                                        Err(error) => {
+                                            let Some(cause) = error
+                                                .downcast_ref::<crate::error::BackendError>()
+                                                .copied()
+                                            else {
+                                                return Err(error);
+                                            };
+                                            // A dead guard is restartable while the
+                                            // selected source is still alive. Publish
+                                            // the authoritative suspension so the
+                                            // controller retries with a fresh guard
+                                            // instead of waiting for an ACK that can
+                                            // never arrive.
+                                            if cause == crate::error::BackendError::InputGuardFailed
+                                                || cause.is_recoverable_input_suspension()
+                                            {
+                                                eprintln!(
+                                                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=control.resume.recoverable session={id} cause={cause}"
+                                                );
+                                                self.discard_input_guard().await;
+                                                self.suspend_input_after_guard_failure(&id, cause)
+                                                    .await?
+                                            } else {
+                                                return Err(error);
+                                            }
+                                        }
                                     }
-                                    let reply = self
-                                        .input_guard
-                                        .as_mut()
-                                        .ok_or_else(|| anyhow::anyhow!("input guard closed"))?
-                                        .call(&crate::input_guard::Command::Arm { epoch })
-                                        .await?;
-                                    if !self.guard_state(&id, epoch, reply).await? {
-                                        return Ok(());
-                                    }
-                                    if let Err(error) =
-                                        self.registry.commit_input(&id, epoch, Instant::now())
-                                    {
-                                        self.input_guard
-                                            .as_mut()
-                                            .ok_or_else(|| anyhow::anyhow!("input guard closed"))?
-                                            .call(&crate::input_guard::Command::Suspend)
-                                            .await?;
-                                        return Err(error.into());
-                                    }
-                                    eprintln!(
-                                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=control.resume.armed session={id} epoch={epoch}"
-                                    );
-                                    serde_json::json!({"type":"input.resumed","payload":{"inputEpoch":epoch}})
                                 }
                                 Err(e) => {
                                     serde_json::json!({"type":"error","payload":{"code":e.to_string()}})
@@ -2201,9 +2283,27 @@ pub async fn serve_mode_with_cursor_and_source_salt(
                         Some(guard) => guard.exited_cause().await,
                         None => continue,
                     };
+                    // The child is already reaped by the select arm. Invalidate
+                    // the service-owned handle before notifying sessions so the
+                    // next reservation can spawn a guard for the same source.
+                    service.discard_input_guard().await;
                     let ids = service.live.keys().cloned().collect::<Vec<_>>();
-                    for id in ids {
-                        service.fail_backend(&id, cause).await;
+                    if cause.is_recoverable_input_suspension() {
+                        for id in ids {
+                            let notice = service
+                                .suspend_input_after_guard_failure(&id, cause)
+                                .await?;
+                            service
+                                .live
+                                .get_mut(&id)
+                                .ok_or_else(|| anyhow::anyhow!("peer closed"))?
+                                .reply(Channel::Control, notice)
+                                .await?;
+                        }
+                    } else {
+                        for id in ids {
+                            service.fail_backend(&id, cause).await;
+                        }
                     }
                 }
                 #[cfg(target_os = "linux")]
@@ -2268,15 +2368,25 @@ fn component_executable() -> anyhow::Result<std::path::PathBuf> {
     }
 }
 
-fn geometry_input_suspended_notice(session_revision: u64) -> serde_json::Value {
+fn input_suspended_notice(
+    cause: crate::error::BackendError,
+    session_revision: u64,
+) -> serde_json::Value {
     serde_json::json!({
         "type": "input.suspended",
         "payload": {
-            "cause": crate::error::BackendError::GeometryChanged.to_string(),
+            "cause": cause.to_string(),
             "recoverable": true,
             "sessionRevision": session_revision,
         }
     })
+}
+
+fn geometry_input_suspended_notice(session_revision: u64) -> serde_json::Value {
+    input_suspended_notice(
+        crate::error::BackendError::GeometryChanged,
+        session_revision,
+    )
 }
 
 #[cfg(test)]
@@ -2292,6 +2402,18 @@ mod tests {
         );
         assert_eq!(notice["payload"]["recoverable"], true);
         assert_eq!(notice["payload"]["sessionRevision"], 17);
+    }
+
+    #[test]
+    fn guard_failure_suspension_is_recoverable_with_authoritative_revision() {
+        let notice = input_suspended_notice(crate::error::BackendError::InputGuardFailed, 21);
+        assert_eq!(notice["type"], "input.suspended");
+        assert_eq!(
+            notice["payload"]["cause"],
+            "REMOTE_DESKTOP_INPUT_GUARD_FAILED"
+        );
+        assert_eq!(notice["payload"]["recoverable"], true);
+        assert_eq!(notice["payload"]["sessionRevision"], 21);
     }
 
     #[tokio::test]

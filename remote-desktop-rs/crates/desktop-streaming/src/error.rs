@@ -60,4 +60,13 @@ impl BackendError {
             .copied()
             .unwrap_or(Self::CaptureUnavailable)
     }
+    /// Input validity can change while the application remains the selected
+    /// capture source. These failures release the current lease and wait for a
+    /// new resume instead of terminating the guard or the viewer session.
+    pub fn is_recoverable_input_suspension(self) -> bool {
+        matches!(
+            self,
+            Self::WindowFocusRequired | Self::PointerTargetMismatch | Self::GeometryChanged
+        )
+    }
 }

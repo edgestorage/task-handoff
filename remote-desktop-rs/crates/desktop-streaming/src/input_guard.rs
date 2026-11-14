@@ -19,6 +19,10 @@ use std::{
 const INPUT_TTL: Duration = Duration::from_millis(1500);
 const QUEUE_TTL: Duration = Duration::from_millis(100);
 const LIMIT: usize = 64 * 1024;
+const VALIDATE_CALL_BUDGET: Duration = Duration::from_millis(600);
+const ARM_CALL_BUDGET: Duration = Duration::from_millis(1_200);
+const REBIND_CALL_BUDGET: Duration = Duration::from_millis(2_500);
+const GEOMETRY_CALL_BUDGET: Duration = Duration::from_millis(700);
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Backend {
@@ -139,6 +143,22 @@ fn command_epoch(command: &Command) -> Option<u64> {
         Command::Input { event } => Some(event.epoch()),
         Command::Pointer { event } => Some(event.input_epoch),
         _ => None,
+    }
+}
+fn command_call_budget(command: &Command) -> Duration {
+    match command {
+        // Arm performs native window activation. macOS focus() waits up to
+        // 600ms for AX/WindowServer to publish the transition, so the IPC
+        // budget must exceed that wait instead of treating it as a dead guard.
+        Command::Arm { .. } => ARM_CALL_BUDGET,
+        // Rebind can build a new native window lease, whose bind wait is 600ms
+        // and whose lease worker handshake is itself bounded to 2s.
+        Command::Rebind { .. } => REBIND_CALL_BUDGET,
+        Command::Geometry { .. } => GEOMETRY_CALL_BUDGET,
+        Command::Input {
+            event: Input::Text(_),
+        } => INPUT_TTL + QUEUE_TTL,
+        _ => VALIDATE_CALL_BUDGET,
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -501,14 +521,7 @@ pub fn run() -> anyhow::Result<()> {
                 Ok(r) => r,
                 Err(error) => {
                     let cause = error.downcast_ref::<crate::error::BackendError>().copied();
-                    if matches!(
-                        cause,
-                        Some(
-                            crate::error::BackendError::WindowFocusRequired
-                                | crate::error::BackendError::PointerTargetMismatch
-                                | crate::error::BackendError::GeometryChanged
-                        )
-                    ) {
+                    if cause.is_some_and(|cause| cause.is_recoverable_input_suspension()) {
                         actuator.release()?;
                         epoch = None;
                         deadline = None;
@@ -634,18 +647,10 @@ impl Client {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_GUARD_CLOSED"))
         };
-        // Queue age stays100ms. Native text execution is separately bounded by
-        // the independent input lease; do not confuse queue delay with batch time.
-        let call_budget = if matches!(
-            command,
-            Command::Input {
-                event: Input::Text(_)
-            }
-        ) {
-            INPUT_TTL + QUEUE_TTL
-        } else {
-            QUEUE_TTL
-        };
+        // Queue age stays 100ms inside the guard. This budget is the time the
+        // service waits for the command's authoritative response, including
+        // native focus/bind waits that are intentionally longer than the queue.
+        let call_budget = command_call_budget(command);
         if is_geometry {
             eprintln!(
                 "REMOTE_DESKTOP_GEOMETRY_TRACE phase=client.call.start budgetMs={}",
@@ -739,5 +744,31 @@ impl Client {
         exited?;
         released?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_activation_commands_outlive_focus_and_bind_waits() {
+        assert!(command_call_budget(&Command::Arm { epoch: 1 }) > Duration::from_millis(600));
+        assert!(
+            command_call_budget(&Command::Rebind {
+                backend: Backend::Synthetic,
+            }) > Duration::from_secs(2)
+        );
+        assert!(
+            command_call_budget(&Command::Geometry {
+                geometry: Geometry {
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: 100,
+                    scale: 1.0,
+                },
+            }) > Duration::from_millis(300)
+        );
     }
 }
