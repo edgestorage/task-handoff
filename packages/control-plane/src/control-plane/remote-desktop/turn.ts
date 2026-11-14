@@ -3,9 +3,20 @@ import fs from "node:fs";
 import { z } from "zod";
 import type { DesktopIceConfig } from "@task-handoff/protocol/remote-desktop";
 
-const Region = z.object({ urls: z.array(z.string().url()).min(1).max(16) }).strict();
-const Config = z.object({ region: z.string().min(1), regions: z.record(z.string(), Region), secretFile: z.string().optional(), clockHealthFile: z.string(), maxClockSkewMs: z.number().positive().max(30_000).default(5000) }).strict();
+const Region = z.object({ urls: z.array(z.string().url()).min(1).max(16) }).strip();
+const Config = z.object({ region: z.string().min(1), regions: z.record(z.string(), Region), secretFile: z.string().optional(), clockHealthFile: z.string(), maxClockSkewMs: z.number().positive().max(30_000).default(5000) }).strip();
 const Clock = z.object({ measuredAt: z.number(), offsetMs: z.number(), synchronized: z.boolean() }).strip();
+// Compatibility for v0.0.51: read only for the one-time DB import. Do not
+// expose deployment paths or shared secrets through the settings API.
+export function readLegacyDesktopTurn() {
+  const file = process.env.TASK_HANDOFF_DESKTOP_TURN_CONFIG;
+  if (!file) return undefined;
+  const config = Config.parse(JSON.parse(fs.readFileSync(file, "utf8")));
+  const urls = config.regions[config.region]?.urls;
+  const secret = process.env.TASK_HANDOFF_DESKTOP_TURN_SECRET ?? (config.secretFile ? fs.readFileSync(config.secretFile, "utf8").trim() : "");
+  if (!urls?.length || !secret) throw new Error("REMOTE_DESKTOP_TURN_IMPORT_INVALID");
+  return { urls, secret, clock: { file: config.clockHealthFile, maxSkewMs: config.maxClockSkewMs } };
+}
 /** Deployment-owned configuration and health evidence, never a business record.
  * Health is measured by the deployment's CP/coturn clock monitor, not a browser.
  * No stored/session credentials and no default public relay. */

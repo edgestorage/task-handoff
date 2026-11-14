@@ -1,3 +1,4 @@
+import type { DesktopConnectionOptions } from '@task-handoff/protocol/control-plane-desktop';
 import type { DesktopSessionSnapshot, DesktopViewerSource } from '@task-handoff/protocol/remote-desktop';
 import type { RemoteDesktopTransportDiagnostics } from '@task-handoff/control-plane-client';
 
@@ -41,11 +42,13 @@ export type RemoteDesktopSnapshot = {
   resolution: RemoteDesktopResolution;
   frameRate: RemoteDesktopFrameRate;
   capturePrecision: RemoteDesktopCapturePrecision;
+  connectionOptions?: DesktopConnectionOptions;
   transportAvailability: RemoteDesktopTransportAvailability;
   transportStates: Record<RemoteDesktopTransportKey, RemoteDesktopTransportState>;
 };
 
 export const emptyRemoteDesktopSnapshot: RemoteDesktopSnapshot = {
+  connectionOptions: undefined,
   phase: 'idle',
   videoWidth: 0,
   videoHeight: 0,

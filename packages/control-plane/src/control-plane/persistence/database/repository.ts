@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { DesktopTurnRepository } from "../../remote-desktop/turn-record.ts";
 import { databaseStartupError } from "./migrations.ts";
 import {
   p0RecordSchemas,
@@ -126,6 +127,7 @@ export type ControlPlaneDatabaseRepository = {
   readonly gitProvisioningIntents: ControlPlaneGitProvisioningCollection;
   readonly gitAudit: ControlPlaneGitAuditCollection;
   readonly cloudDeviceTrust: ControlPlaneCloudDeviceTrustRepository;
+  readonly desktopTurn: DesktopTurnRepository;
   metadata(): Promise<ControlPlaneUserStoreMetadata>;
   putMetadata(metadata: ControlPlaneUserStoreMetadata): Promise<void>;
   migration(id: string): Promise<ControlPlaneMigrationLedgerRecord | undefined>;

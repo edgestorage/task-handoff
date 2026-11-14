@@ -11,6 +11,8 @@ import { controlPlaneEventDomains } from "../src/apps/control-plane/eventInvalid
 const key = (value) => JSON.stringify(value);
 
 const expectedDomains = {
+  desktopTurn: [controlPlaneQueryKeys.desktopTurn],
+  desktopConnectionOptions: [controlPlaneQueryKeys.desktopConnectionOptions()],
   projects: [
     controlPlaneQueryKeys.projects,
     controlPlaneQueryKeys.instanceBoard,
@@ -139,4 +141,10 @@ test("node joined events invalidate authoritative topology", () => {
     controlPlaneDomainQueryKeys(controlPlaneEventDomains([{ type: "node.joined", topic: "nodes" }])),
     expectedDomains.nodeTopology,
   );
+});
+
+
+test("TURN configuration and account events recover their own authoritative snapshots", () => {
+  assert.deepEqual(controlPlaneEventDomains([{ type: "desktop-turn.updated", topic: "system" }]), ["desktopTurn"]);
+  assert.deepEqual(controlPlaneEventDomains([{ type: "desktop-connection-options.changed", topic: "desktop-connection-options" }]), ["desktopConnectionOptions"]);
 });

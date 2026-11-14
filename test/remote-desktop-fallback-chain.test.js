@@ -64,8 +64,9 @@ class CapturingUpstreamWebSocket extends EventEmitter {
     this.sent = [];
     this.closed = [];
   }
-  send(data, options) {
+  send(data, options, callback) {
     this.sent.push({ data, options });
+    callback?.();
   }
   close(code, reason) {
     this.closed.push({ code, reason });
@@ -125,7 +126,7 @@ test("node agent proxies one fallback role through the instance credential and r
     captureSelection: { sourceRef: "display-primary" },
   });
   assert.deepEqual(upstream.sent[1].data, Buffer.from([1, 2, 3]));
-  assert.deepEqual(upstream.sent[1].options, { binary: true });
+  assert.deepEqual(upstream.sent[1].options, { binary: true, compress: false });
   client.terminate();
 });
 

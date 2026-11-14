@@ -237,6 +237,9 @@
                         <small>{{ method.detail }}</small>
                       </span>
                     </DropdownMenuCheckboxItem>
+                    <DropdownMenuCheckboxItem v-if="connectionOptions.cloudTurn.signedIn" :model-value="false" disabled>
+                      <span class="remote-desktop-connection-option"><span>{{ t("instances.remoteDesktop.cloudTurn") }}</span><small>{{ t("instances.remoteDesktop.cloudTurnUnavailable") }}</small></span>
+                    </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem :disabled="!transportPolicyDirty || transportPolicyReconnecting" @select="applyConnectionMethods">
                       <RefreshCw :class="{ 'remote-desktop-spin': transportPolicyReconnecting }" :size="14" aria-hidden="true" />
@@ -465,8 +468,15 @@
                 <small>{{ method.detail }}</small>
               </span>
             </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem v-if="connectionOptions.cloudTurn.signedIn" :model-value="false" disabled>
+              <span class="remote-desktop-connection-option"><span>{{ t("instances.remoteDesktop.cloudTurn") }}</span><small>{{ t("instances.remoteDesktop.cloudTurnUnavailable") }}</small></span>
+            </DropdownMenuCheckboxItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <div v-if="connectionOptionsQuery.isError.value" class="remote-desktop-error" role="alert">
+          <span>{{ t("instances.remoteDesktop.connectionOptionsFailed") }}</span>
+          <Button variant="ghost" size="sm" @click="connectionOptionsQuery.refetch()">{{ t("common.actions.retry") }}</Button>
+        </div>
         <div class="remote-desktop-connect-footer">
           <p v-if="!target.sourceRef" class="remote-desktop-connect-hint">{{ t("instances.remoteDesktop.selectSource") }}</p>
           <Button
@@ -512,7 +522,7 @@
         @blur="surfaceBlur"
         @focus="surfaceFocus"
       >
-        <video v-show="!fallbackActive" ref="video" autoplay playsinline @loadedmetadata="updateResolution" @resize="updateResolution"></video>
+        <video v-show="!fallbackActive" ref="video" autoplay playsinline @loadedmetadata="updateResolution" @resize="updateResolution" @timeupdate="emitVideoFrame"></video>
         <canvas v-show="fallbackActive" ref="fallbackCanvas" class="remote-desktop-canvas" :aria-label="t('instances.remoteDesktop.fallbackActive')"></canvas>
         <div v-if="!streamReady" class="remote-desktop-overlay" role="status">
           <LoaderCircle class="remote-desktop-spin" :size="22" aria-hidden="true" />
@@ -544,6 +554,10 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useQuery } from "@tanstack/vue-query";
+import { controlPlaneQueryKeys } from "../../../api/queryKeys";
+import { getDesktopConnectionOptions } from "../../../api/remoteDesktop";
+import { unavailableDesktopConnectionOptions } from "@task-handoff/protocol/control-plane-desktop";
 import { useI18n } from "vue-i18n";
 import {
   isRecoverableRemoteDesktopInputResumeError,
@@ -632,7 +646,7 @@ import { remoteDesktopCapabilities } from "../remoteDesktopCapability";
 
 const { t } = useI18n();
 const controlPlaneSettings = useControlPlaneSettingsQuery();
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   instanceId: string;
   capabilities?: Record<string, unknown>;
   canManage?: boolean;
@@ -641,11 +655,12 @@ const props = defineProps<{
   autoConnect?: boolean;
   initialTarget?: SessionRemoteDesktopTarget;
   preview?: boolean;
-}>();
+}>(), { active: true });
 const emit = defineEmits<{
   selectionChange: [target: SessionRemoteDesktopTarget];
   stopped: [];
   streamSize: [size: { width: number; height: number }];
+  frame: [frame: { source: HTMLVideoElement | HTMLCanvasElement; width: number; height: number }];
 }>();
 
 const remote = computed(() => remoteDesktopCapabilities({ capabilities: props.capabilities ?? {} } as any));
@@ -944,13 +959,19 @@ const FALLBACK_UPGRADE_TIMEOUT_MS = 5_000;
 
 const fallbackActive = computed(() => fallbackState.value === "active");
 const fallbackSwitching = computed(() => fallbackState.value === "switching" || fallbackState.value === "reconnecting" || transportUpgrading.value);
-const enabledTransportCount = computed(() => CONNECTION_METHOD_KEYS.filter((key) => transportAvailability.value[key]).length);
+const connectionOptionsQuery = useQuery({
+  queryKey: computed(() => controlPlaneQueryKeys.desktopConnectionOptions(props.instanceId)),
+  queryFn: ({ signal }) => getDesktopConnectionOptions(props.instanceId, signal),
+});
+const connectionOptions = computed(() => connectionOptionsQuery.data.value ?? unavailableDesktopConnectionOptions);
+const effectiveTransportAvailability = computed(() => ({ ...transportAvailability.value, turn: transportAvailability.value.turn && connectionOptions.value.customTurn.configured }));
+const enabledTransportCount = computed(() => CONNECTION_METHOD_KEYS.filter((key) => effectiveTransportAvailability.value[key]).length);
 const webRTCTransportEnabled = computed(() => activeTransportAvailability.value.p2p || activeTransportAvailability.value.turn);
 const websocketTransportEnabled = computed(() => activeTransportAvailability.value.websocket);
-const transportPolicyDirty = computed(() => CONNECTION_METHOD_KEYS.some((key) => transportAvailability.value[key] !== activeTransportAvailability.value[key]));
+const transportPolicyDirty = computed(() => CONNECTION_METHOD_KEYS.some((key) => effectiveTransportAvailability.value[key] !== activeTransportAvailability.value[key]));
 const connectionMethodsSummary = computed(() => t("instances.remoteDesktop.connectionMethodsSummary", {
   enabled: enabledTransportCount.value,
-  total: CONNECTION_METHOD_KEYS.length,
+  total: 2 + Number(connectionOptions.value.customTurn.configured) + Number(connectionOptions.value.cloudTurn.signedIn),
 }));
 const connectionMethodOptions = computed(() => {
   const options: { key: ConnectionMethodKey; label: string; activeDetail: string }[] = [
@@ -966,12 +987,12 @@ const connectionMethodOptions = computed(() => {
     },
     {
       key: "turn",
-      label: t("instances.remoteDesktop.transportRelay"),
+      label: t("instances.remoteDesktop.customTurn"),
       activeDetail: t("instances.remoteDesktop.connectionMethodTurnDetail"),
     },
   ];
-  return options.map((option) => {
-    const enabled = transportAvailability.value[option.key];
+  return options.filter(option => option.key !== "turn" || connectionOptions.value.customTurn.configured).map((option) => {
+    const enabled = effectiveTransportAvailability.value[option.key];
     const onlyRemaining = enabled && enabledTransportCount.value === 1;
     return {
       ...option,
@@ -1110,7 +1131,7 @@ const transportIndicators = computed(() => {
     },
     {
       key: "relay",
-      label: t("instances.remoteDesktop.transportRelay"),
+      label: t("instances.remoteDesktop.customTurn"),
       icon: Waypoints,
       state: relayState,
       status: transportStateLabel(relayState),
@@ -1261,10 +1282,11 @@ const transportQualityLabel = computed(() => `${transportResolutionLabel.value} 
 const selectedCaptureSelection = computed<DesktopCaptureSelection | undefined>(() => {
   return target.value.sourceRef ? { sourceRef: target.value.sourceRef } : undefined;
 });
-const canConnect = computed(() => Boolean(selectedCaptureSelection.value));
+const canConnect = computed(() => Boolean(selectedCaptureSelection.value) && connectionOptionsQuery.isSuccess.value && enabledTransportCount.value > 0);
+let disposed = false;
 const autoConnectPending = ref(props.autoConnect === true);
 function connectIfAutoConnectReady() {
-  if (!autoConnectPending.value || !canConnect.value || sourcesLoading.value || connecting.value || session.value) return;
+  if (props.active === false || !autoConnectPending.value || !canConnect.value || sourcesLoading.value || connecting.value || session.value) return;
   autoConnectPending.value = false;
   void connect();
 }
@@ -1501,8 +1523,8 @@ async function connect() {
     error.value = t("instances.remoteDesktop.secureTransportHint");
     return;
   }
-  if (!canConnect.value || connecting.value) return;
-  activeTransportAvailability.value = { ...transportAvailability.value };
+  if (disposed || props.active === false || !canConnect.value || connecting.value) return;
+  activeTransportAvailability.value = { ...effectiveTransportAvailability.value };
   connecting.value = true;
   error.value = "";
   sourceEndedNotice.value = "";
@@ -1515,7 +1537,7 @@ async function connect() {
   clipboardStatus.value = "";
   streamReady.value = false;
   signalingReady.value = false;
-  inputRequested.value = true;
+  inputRequested.value = !props.preview;
   inputResumeGeneration += 1;
   inputResumePending = false;
   clearInputResumeTimers();
@@ -1528,7 +1550,11 @@ async function connect() {
     if (!sources.value.length) await loadSources();
     const captureSelection = selectedCaptureSelection.value;
     if (!captureSelection) return;
-    const created = await createRemoteDesktopSession(props.instanceId, captureSelection);
+    const created = await createRemoteDesktopSession(props.instanceId, captureSelection, connectionOptionsQuery.data.value ? (activeTransportAvailability.value.turn ? "custom" : "none") : undefined);
+    if (disposed) {
+      await stopRemoteDesktopSession(props.instanceId, created.snapshot.viewerSessionId).catch(() => undefined);
+      return;
+    }
     session.value = created;
     const socket = new WebSocket(new URL(created.signalUrl, window.location.href), REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL);
     ws = socket;
@@ -1778,6 +1804,14 @@ async function setupPeer() {
     const element = video.value;
     if (!element) return;
     element.srcObject = event.streams[0];
+    if (element.requestVideoFrameCallback) {
+      const frame = () => {
+        if (pc !== peer || video.value !== element) return;
+        if (!fallbackActive.value && element.videoWidth && element.videoHeight) emit("frame", { source: element, width: element.videoWidth, height: element.videoHeight });
+        element.requestVideoFrameCallback(frame);
+      };
+      element.requestVideoFrameCallback(frame);
+    }
     void element.play().catch(() => undefined);
   };
   peer.oniceconnectionstatechange = () => {
@@ -2556,6 +2590,7 @@ function drawFallbackFrame(frame: VideoFrame) {
   const context = canvas.getContext("2d", { alpha: false });
   if (!context) return;
   context.drawImage(frame, 0, 0, width, height);
+  emit("frame", { source: canvas, width, height });
   fallbackSize.value = { width, height };
   resolution.value = `${width} × ${height}`;
   fallbackFirstFrame = true;
@@ -2616,6 +2651,12 @@ function handleControlValue(value: any, channel = "control") {
   rememberRemoteDesktopFrame({ direction: "receive", channel, type, sequence: inboundSequence, bytes: new TextEncoder().encode(JSON.stringify(value)).byteLength });
   recordRemoteDesktopDiagnostic("control.message", { channel, controlType: type, inboundSequence });
   if (value.type === "input.resumed") {
+    if (props.preview || surfacePaused()) {
+      const control = controlChannel();
+      if (control) wire(control, "input.suspend");
+      releaseInputState();
+      return;
+    }
     epoch = value.payload.inputEpoch;
     const attempt = inputResumeRetryCount + 1;
     inputEnabled.value = true;
@@ -2850,6 +2891,7 @@ function stopWheelPump() {
 }
 
 async function resume() {
+  if (props.preview || surfacePaused()) return;
   if (!isController.value) {
     requestControl();
     return;
@@ -2972,6 +3014,7 @@ function toggleInputEnabled() {
 }
 
 function requestControl() {
+  if (props.preview || surfacePaused()) return;
   inputRequested.value = true;
   if (!signalingReady.value || fallbackSwitching.value || controlRequestPending.value || isController.value) return;
   const control = controlChannel();
@@ -3052,7 +3095,7 @@ function surfaceBlur(event: FocusEvent) {
 }
 
 function resumeWanted() {
-  if (!inputRequested.value || surfacePaused() || visibilityResumePending || snapshot.value?.phase !== "active") return;
+  if (props.preview || !inputRequested.value || surfacePaused() || visibilityResumePending || snapshot.value?.phase !== "active") return;
   if (!isController.value) {
     if (!hasController.value) requestControl();
     return;
@@ -3086,6 +3129,11 @@ function syncFullscreen() {
   isFullscreen.value = Boolean(viewer.value && document.fullscreenElement === viewer.value);
 }
 
+function emitVideoFrame() {
+  const element = video.value;
+  if (!fallbackActive.value && element?.videoWidth && element.videoHeight) emit("frame", { source: element, width: element.videoWidth, height: element.videoHeight });
+}
+
 function updateResolution() {
   if (fallbackActive.value && fallbackSize.value) {
     resolution.value = `${fallbackSize.value.width} × ${fallbackSize.value.height}`;
@@ -3106,7 +3154,7 @@ function visibility() {
 }
 
 function surfacePaused() {
-  return documentVisible.value === false || (!props.preview && props.active === false);
+  return documentVisible.value === false || props.active === false;
 }
 
 function sendVisibility() {
@@ -3167,6 +3215,7 @@ function requestClipboardEnabled(enabled: boolean, automatic = false) {
 }
 
 function enableClipboardByDefault() {
+  if (props.preview || surfacePaused()) return;
   if (clipboardAutoEnableAttempted || !clipboardSupported.value) return;
   if (!signalingReady.value || clipboard.value || clipboardBusy.value) return;
   if (!controlChannel()) return;
@@ -3359,7 +3408,27 @@ function syncSourceProviders() {
   if (providers.some(provider => provider.available)) void loadSources();
 }
 
-watch(() => props.active, () => syncVisibility());
+watch(() => props.active, () => {
+  if (props.active && props.autoConnect) autoConnectPending.value = true;
+  connectIfAutoConnectReady();
+  syncVisibility();
+});
+let detailResolution: TransportResolutionValue = viewerPreferences?.transportResolution ?? "auto";
+watch(() => props.preview, preview => {
+  if (preview) {
+    detailResolution = transportResolution.value;
+    inputRequested.value = false;
+    suspend();
+    if (clipboard.value) requestClipboardEnabled(false);
+    transportResolution.value = "540p";
+  } else {
+    transportResolution.value = detailResolution;
+    inputRequested.value = true;
+    resumeWanted();
+    enableClipboardByDefault();
+  }
+  applyTransportResolution();
+});
 watch(() => hasSourceProvider.value, available => {
   if (available) syncSourceProviders();
 }, { immediate: true });
@@ -3374,6 +3443,7 @@ onMounted(() => {
   window.addEventListener("blur", windowBlur);
 });
 onBeforeUnmount(() => {
+  disposed = true;
   const current = session.value;
   if (current) void stopRemoteDesktopSession(props.instanceId, current.snapshot.viewerSessionId).catch(() => undefined);
   suspend();

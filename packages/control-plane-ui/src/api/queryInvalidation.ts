@@ -2,6 +2,8 @@ import type { QueryClient } from "@tanstack/vue-query";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 
 export type ControlPlaneQueryDomain =
+  | "desktopTurn"
+  | "desktopConnectionOptions"
   | "manual"
   | "projects"
   | "images"
@@ -23,6 +25,8 @@ type QueryInvalidator = Pick<QueryClient, "invalidateQueries">;
 type QueryKey = readonly unknown[];
 
 const domainQueryKeys: Record<Exclude<ControlPlaneQueryDomain, "manual">, () => QueryKey[]> = {
+  desktopTurn: () => [controlPlaneQueryKeys.desktopTurn],
+  desktopConnectionOptions: () => [controlPlaneQueryKeys.desktopConnectionOptions()],
   projects: () => [
     controlPlaneQueryKeys.projects,
     controlPlaneQueryKeys.instanceBoard,

@@ -1,3 +1,4 @@
+import { managedWebSocketBridgeOptions } from "@task-handoff/runtime-shared/remote-desktop-managed";
 import type { Node } from "@task-handoff/protocol/control-plane";
 import { bridgeWebSockets, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import { WebSocket as WsClient } from "ws";
@@ -177,6 +178,7 @@ export function createDirectNodeAgentTransport(fetchImpl: FetchImpl = fetch, opt
         upstream.send(frame);
       });
       bridgeWebSockets(socket, upstream, {
+      ...managedWebSocketBridgeOptions(route),
         upstreamOpenTimeoutMs: websocketOpenTimeoutMs,
         onUpstreamError: () => socket.close(1011, "Instance websocket proxy failed."),
         onUpstreamErrorBeforeOpen: () => true,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DesktopConnectionOptionsSchema } from "@task-handoff/protocol/control-plane-desktop";
 import {
   CONTROL_PLANE_CAPABILITY_HEADER,
   CONTROL_PLANE_IDENTITY_EXTENSIONS_CAPABILITY,
@@ -20,7 +21,7 @@ import {
 } from "@task-handoff/protocol/remote-desktop";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 
-const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
+const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strip();
 const RemoteDesktopSourcesResponseSchema = z.object({ sources: DesktopSourcesSchema }).strict();
 const RemoteDesktopSettingsSchema = z.object({ enabled: z.boolean() }).strip();
 const RemoteDesktopStoppedSchema = z.object({ stopped: z.boolean() }).strip();
@@ -51,14 +52,23 @@ export function createControlPlaneRemoteDesktopApi(transport: ControlPlaneClient
     (await transport.request(path, DataSchema(schema), init)).data
   );
   return {
+    async connectionOptions(instanceId: string, signal?: AbortSignal) {
+      try {
+        return await requestData(`${base(instanceId)}/remote-desktop/connection-options`, DesktopConnectionOptionsSchema, { signal });
+      } catch (error) {
+        // Compatibility for v0.0.51: additive options do not block P2P/WS.
+        if ((error as { status?: number })?.status === 404) return null;
+        throw error;
+      }
+    },
     sources(instanceId: string, signal?: AbortSignal): Promise<{ sources: RemoteDesktopSource[] }> {
       return requestData(`${base(instanceId)}/remote-desktop/sources`, RemoteDesktopSourcesResponseSchema, { signal });
     },
-    createSession(instanceId: string, selection: DesktopCaptureSelection, requestId = remoteDesktopRequestId()) {
+    createSession(instanceId: string, selection: DesktopCaptureSelection, requestId = remoteDesktopRequestId(), turnSource?: "none" | "custom") {
       return requestData(
         `${base(instanceId)}/remote-desktop-sessions`,
         DesktopCreatedSchema,
-        jsonPost({ requestId, selection }),
+        jsonPost({ requestId, selection, ...(turnSource ? { turnSource } : {}) }),
       );
     },
     takeoverSession(instanceId: string, sessionId: string, selection: DesktopCaptureSelection, requestId = remoteDesktopRequestId()) {

@@ -874,6 +874,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-tungstenite",
  "videotoolbox",
  "webrtc",
  "windows-sys 0.61.2",

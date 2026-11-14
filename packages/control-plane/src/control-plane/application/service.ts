@@ -1,3 +1,4 @@
+import { DesktopTurnSettingsService } from "../remote-desktop/turn-settings.ts";
 import type { DesktopManagedOperation } from "@task-handoff/runtime-shared/remote-desktop-managed";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
@@ -284,6 +285,7 @@ export class ControlPlaneService {
   private readonly marketCatalogService: MarketCatalogService;
   private readonly marketCatalogRemote: RemoteMarketCatalogProvider | undefined;
   private marketCatalogRefreshTimer: NodeJS.Timeout | undefined;
+  readonly desktopTurn: DesktopTurnSettingsService;
   readonly gitCredentials: ControlPlaneGitCredentialService;
   private readonly chatBridgeService: ChatBridgeService;
   private readonly chatSessionService: ChatSessionService;
@@ -293,6 +295,7 @@ export class ControlPlaneService {
 
   constructor(paths: ControlPlaneStorePaths, options: ControlPlaneServiceOptions = {}) {
     if (!options.database || !options.secrets) throw new Error("Control Plane database and secret envelope service are required.");
+    this.desktopTurn = new DesktopTurnSettingsService(options.database.desktopTurn, options.secrets);
     this.paths = paths;
     this.fetchImpl = options.fetchImpl || fetch;
     this.dockerCommandRunner = options.dockerCommandRunner;
@@ -777,6 +780,7 @@ export class ControlPlaneService {
     await this.chatStore.init();
     this.triggers.init();
     await this.gitCredentials.init();
+    await this.desktopTurn.init();
     this.proxyPrivateStore.init();
     this.proxyPrivateStore.gcNodeCredentials((credential) => {
       const node = this.nodes.get(credential.nodeId);

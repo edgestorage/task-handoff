@@ -1,3 +1,4 @@
+import { managedWebSocketBridgeOptions } from "@task-handoff/runtime-shared/remote-desktop-managed";
 import WebSocket from "ws";
 import { decodeNodeTunnelRequestBody } from "@task-handoff/protocol/control-plane";
 import {
@@ -469,6 +470,7 @@ export class NodeTunnelSessionServer {
           this.sendMain({ type: "node-agent.websocket.open", streamId, protocol: upstream.protocol });
         });
         bridgeWebSockets(socket, upstream, {
+          ...managedWebSocketBridgeOptions(route),
           pendingFrameLimit: 256,
           upstreamOpenTimeoutMs: 10_000,
           onClientClose: () => {

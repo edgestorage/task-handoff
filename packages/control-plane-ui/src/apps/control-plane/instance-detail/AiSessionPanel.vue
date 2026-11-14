@@ -1085,6 +1085,7 @@
             v-if="remoteDesktopInlineExpanded && sessionRemoteDesktopPreviewPresentation === 'expanded' && selectedSessionRemoteDesktopLink && remoteDesktopAvailableForInstance"
             :capabilities="instance.capabilities"
             :instance-id="instance.id"
+            :session-id="selectedSession.id"
             :target="selectedSessionRemoteDesktopLink.target"
             @open-details="openSelectedSessionRemoteDesktopDetails"
             @selection-change="updateSelectedSessionRemoteDesktopTarget"
@@ -1471,7 +1472,6 @@ import { requestCloseSessionRemoteDesktop, requestOpenSessionRemoteDesktop } fro
 import {
   removeSessionRemoteDesktopLink,
   rememberSessionRemoteDesktopLink,
-  sanitizeSessionRemoteDesktopTarget,
   sessionRemoteDesktopLinkFor,
   touchSessionRemoteDesktopLink,
   type SessionRemoteDesktopTarget,
@@ -1814,6 +1814,9 @@ const remoteDesktopPreviewOpen = computed(() => remoteDesktopPreviewRequested.va
 const remoteDesktopInlineExpanded = ref(false);
 watch([() => props.instance.id, () => selectedSession.value?.id, sessionRemoteDesktopPreviewPresentation], () => {
   remoteDesktopPreviewRequested.value = false;
+  remoteDesktopInlineExpanded.value = false;
+});
+watch(() => selectedSessionRemoteDesktopLink.value?.target.sourceRef, () => {
   remoteDesktopInlineExpanded.value = false;
 });
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
@@ -4151,17 +4154,8 @@ function openSessionTerminal(session: AiSessionSummary) {
 function openSelectedSessionRemoteDesktop() {
   const session = selectedSession.value;
   if (!session || !remoteDesktopAvailableForInstance.value) return;
-  let link = selectedSessionRemoteDesktopLink.value;
-  if (!link) {
-    rememberSessionRemoteDesktopLink({
-      instanceId: props.instance.id,
-      sessionId: session.id,
-      target: sanitizeSessionRemoteDesktopTarget({ kind: "display", title: t("instances.remoteDesktop.entireDesktop") }),
-    });
-    link = selectedSessionRemoteDesktopLink.value;
-  } else {
-    touchSessionRemoteDesktopLink(props.instance.id, session.id);
-  }
+  const link = selectedSessionRemoteDesktopLink.value;
+  if (link) touchSessionRemoteDesktopLink(props.instance.id, session.id);
   closeSessionRemoteDesktopPreview();
   requestOpenSessionRemoteDesktop({
     instanceId: props.instance.id,

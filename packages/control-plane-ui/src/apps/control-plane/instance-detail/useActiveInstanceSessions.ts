@@ -28,7 +28,6 @@ import { CLOSE_SESSION_REMOTE_DESKTOP_EVENT, OPEN_SESSION_REMOTE_DESKTOP_EVENT, 
 import {
   removeSessionRemoteDesktopLink,
   rememberSessionRemoteDesktopLink,
-  sanitizeSessionRemoteDesktopTarget,
   sessionRemoteDesktopLinkFor,
   touchSessionRemoteDesktopLink,
 } from "./sessionRemoteDesktopLinks";
@@ -89,6 +88,7 @@ function persistRemoteDesktopSessionTabs(tabs: Record<string, SessionTab[]>) {
 
 type UseActiveInstanceSessionsInput = {
   activeInstance: ComputedRef<InstanceWithAiSessions | undefined>;
+  routeSessionRemoteDesktop?: (detail: OpenSessionRemoteDesktopDetail) => boolean;
   boardSessionKeys: Record<string, string>;
   canInteractRemoteDesktop: Ref<boolean>;
   closeFloatingLayers: (except?: "instance" | "session" | "app") => void;
@@ -111,6 +111,7 @@ export function useActiveInstanceSessions({
   focusAppSession,
   notifyError,
   refresh,
+  routeSessionRemoteDesktop,
   sessionMenuOpen,
   t,
 }: UseActiveInstanceSessionsInput) {
@@ -531,8 +532,7 @@ export function useActiveInstanceSessions({
       return;
     }
     if (session.kind === "remote-desktop") {
-      const aiSessionId = typeof session.source?.aiSessionId === "string" ? session.source.aiSessionId : "";
-      if (aiSessionId) removeSessionRemoteDesktopLink(instance.id, aiSessionId);
+      // Closing a presentation keeps the last capture target, as on mobile.
       remoteDesktopSessionTabs[instance.id] = (remoteDesktopSessionTabs[instance.id] || []).filter((tab) => tab.key !== session.key);
       if (selectedSessionKeys[instance.id] === session.key) delete selectedSessionKeys[instance.id];
       if (rightSelectedSessionKeys[instance.id] === session.key) delete rightSelectedSessionKeys[instance.id];
@@ -729,17 +729,13 @@ export function useActiveInstanceSessions({
 
   function handleOpenRemoteDesktopRequest(event: Event) {
     const detail = (event as CustomEvent<OpenSessionRemoteDesktopDetail>).detail;
-    if (!detail?.instanceId || !detail.sessionId || detail.instanceId !== activeInstance.value?.id) return;
+    if (!detail?.instanceId || !detail.sessionId) return;
+    if (routeSessionRemoteDesktop?.(detail)) return;
+    if (detail.instanceId !== activeInstance.value?.id) return;
     const current = sessionRemoteDesktopLinkFor(detail.instanceId, detail.sessionId);
     if (detail.target) {
       rememberSessionRemoteDesktopLink({ instanceId: detail.instanceId, sessionId: detail.sessionId, target: detail.target });
-    } else if (!current) {
-      rememberSessionRemoteDesktopLink({
-        instanceId: detail.instanceId,
-        sessionId: detail.sessionId,
-        target: sanitizeSessionRemoteDesktopTarget({ kind: "display", title: t("instances.remoteDesktop.entireDesktop") }),
-      });
-    } else {
+    } else if (current) {
       touchSessionRemoteDesktopLink(detail.instanceId, detail.sessionId);
     }
     openRemoteDesktopTab(detail.instanceId, detail.sessionId);

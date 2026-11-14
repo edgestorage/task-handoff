@@ -1,3 +1,4 @@
+import { managedWebSocketBridgeOptions } from "@task-handoff/runtime-shared/remote-desktop-managed";
 import { z } from "zod";
 import { PassThrough, Readable } from "node:stream";
 import {
@@ -125,7 +126,7 @@ type ReverseTunnelConnection = {
   socket: ReverseTunnelSocket;
   runtimeGeneration?: number;
   pending: Map<string, ReversePendingRequest>;
-  streams: Map<string, { downstream: WebSocketLike; upstream?: WebSocketLike; pendingFrames: Array<{ data: unknown; isBinary: boolean }> }>;
+  streams: Map<string, { route: string; downstream: WebSocketLike; upstream?: WebSocketLike; pendingFrames: Array<{ data: unknown; isBinary: boolean }> }>;
   httpStreams: Map<string, ReverseHttpStreamEntry>;
   pendingChannels: Map<string, PendingNodeTunnelChannel>;
   supervisor?: WebSocketConnectionSupervisor;
@@ -746,7 +747,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
         downstream.close(1011, "Reverse tunnel send failed.");
       }
     };
-    const entry = { downstream, pendingFrames: [] as Array<{ data: unknown; isBinary: boolean }> };
+    const entry = { route, downstream, pendingFrames: [] as Array<{ data: unknown; isBinary: boolean }> };
     current.streams.set(streamId, entry);
     this.registerPendingChannel(current, {
       id: streamId,
@@ -836,10 +837,9 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       return false;
     }
     stream.upstream = upstream;
-    for (const frame of stream.pendingFrames.splice(0)) {
-      upstream.send(frame.data, { binary: frame.isBinary });
-    }
     bridgeWebSockets(stream.downstream, upstream, {
+      ...managedWebSocketBridgeOptions(stream.route),
+      initialClientFrames: stream.pendingFrames.splice(0),
       pendingFrameLimit: 256,
       onClientClose: () => {
         this.removePendingChannel(current, streamId);

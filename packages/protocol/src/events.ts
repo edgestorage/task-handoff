@@ -106,6 +106,7 @@ export type SessionStreamDescriptor = z.infer<typeof SessionStreamDescriptorSche
 export type SessionStreamsHello = z.infer<typeof SessionStreamsHelloSchema>;
 
 export function eventTopic(type: string) {
+  if (type === "desktop-connection-options.changed") return "desktop-connection-options";
   if (type.startsWith("ai-session.") || type.startsWith("ai.session.")) {
     return "ai.sessions";
   }

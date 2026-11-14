@@ -310,3 +310,48 @@ test("browser resources survive AI Session switches and remain session scoped", 
   scope.stop();
   delete globalThis.window;
 });
+
+test("remote desktop is one session-scoped tab, repeated open focuses it and close only removes presentation", async () => {
+  const storage = localStorageWindow();
+  globalThis.window = storage.window;
+  const scope = effectScope(), sessionId = ref("ai-a");
+  const sidebar = scope.run(() => useStoryResourceSidebar({
+    aiSessionId: computed(() => sessionId.value),
+    instanceId: computed(() => "instance-a"),
+    instances: computed(() => [instance("instance-a")]),
+  }));
+  const first = { kind: "remote-desktop", instanceId: "instance-a", aiSessionId: "ai-a" };
+  assert.deepEqual(parseStoryResourceKey(storyResourceKey(first)), first);
+  sidebar.openRemoteDesktop("instance-a", "ai-a");
+  sidebar.openRemoteDesktop("instance-a", "ai-a");
+  await nextTick();
+  assert.deepEqual(sidebar.resources.value, [first]);
+  assert.equal(sidebar.activeKey.value, storyResourceKey(first));
+  assert.equal(sidebar.visible.value, true);
+  sessionId.value = "ai-b";
+  await nextTick();
+  assert.deepEqual(sidebar.resources.value, []);
+  sidebar.openRemoteDesktop("instance-b", "ai-b");
+  sidebar.openRemoteDesktop("instance-a", "ai-a");
+  assert.deepEqual(sidebar.resources.value, []);
+  sidebar.openRemoteDesktop("instance-a", "ai-b");
+  await nextTick();
+  assert.equal(sidebar.resources.value[0].aiSessionId, "ai-b");
+  const calls = [];
+  await closeStoryResourceTarget(sidebar.resources.value[0], {
+    stopAppSession: () => assert.fail("closing a desktop tab must not stop an app"),
+    closeRemoteDesktop: resource => { calls.push(resource.aiSessionId); sidebar.removeRemoteDesktop(resource); },
+  });
+  await nextTick();
+  assert.deepEqual(calls, ["ai-b"]);
+  assert.deepEqual(sidebar.resources.value, []);
+  sessionId.value = "ai-a";
+  await nextTick();
+  assert.deepEqual(sidebar.resources.value, [first]);
+  sidebar.visible.value = false;
+  await nextTick();
+  assert.deepEqual(sidebar.resources.value, [first]);
+  assert.equal(sidebar.allRemoteDesktopResources.value.length, 1);
+  scope.stop();
+  delete globalThis.window;
+});

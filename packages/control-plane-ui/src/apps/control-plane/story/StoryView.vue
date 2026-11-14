@@ -184,6 +184,7 @@
           <InstanceSessionPanel
             class="story-session-creator"
             :active-session="storySessionTab"
+            :can-interact-remote-desktop="canInteractRemoteDesktop"
             :choose-project-folder="projectFolderChooserFor(selectedSessionInstance)"
             detail-only
             :instance="selectedSessionInstance"
@@ -593,6 +594,7 @@ import type { HeaderDensity } from "../useWorkbenchLayoutPreferences";
 
 const props = withDefaults(defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
+  canInteractRemoteDesktop?: boolean;
   canExportConfig?: (instance: InstanceBoardItem) => boolean;
   chooseProjectFolder?: NativeNodeFolderPicker;
   headerDensity?: HeaderDensity;

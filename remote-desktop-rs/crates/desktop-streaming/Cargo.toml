@@ -32,6 +32,7 @@ arboard = { version = "=3.6.1", default-features = false }
 
 [dev-dependencies]
 desktop-component-host = { path = "../../../controlled-instance-rs/crates/desktop-component-host" }
+tokio-tungstenite.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "=0.14.0", features = ["shm", "damage", "xfixes", "xtest", "randr", "composite", "allow-unsafe-code"] }

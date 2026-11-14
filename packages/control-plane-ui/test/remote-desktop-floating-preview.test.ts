@@ -6,10 +6,13 @@ import {
   SESSION_REMOTE_DESKTOP_PREVIEW_FOOTER_HEIGHT,
   SESSION_REMOTE_DESKTOP_PREVIEW_MAX_MEDIA_ASPECT_RATIO,
   SESSION_REMOTE_DESKTOP_PREVIEW_MIN_MEDIA_ASPECT_RATIO,
+  SESSION_REMOTE_DESKTOP_PREVIEW_TOP_MARGIN,
+  clampSessionRemoteDesktopPreviewFrame,
   resizeSessionRemoteDesktopPreviewFrame,
   sessionRemoteDesktopPreviewAspectRatio,
   sessionRemoteDesktopPreviewLayout,
   sessionRemoteDesktopPreviewPreferenceForFrame,
+  sessionRemoteDesktopPreviewPreferenceForCollapse,
 } from "../src/apps/control-plane/instance-detail/remoteDesktopFloatingPreview.ts";
 
 const viewport = { width: 1280, height: 800 };
@@ -52,4 +55,54 @@ test("collapsed preview persists its expanded width for restoration", () => {
   assert.equal(collapsed.height, SESSION_REMOTE_DESKTOP_PREVIEW_COLLAPSED_HEIGHT);
   const restored = sessionRemoteDesktopPreviewLayout(viewport, { ...preference, collapsed: false });
   assert.equal(restored.width, 480);
+});
+
+test("expanded and collapsed previews stay below the titlebar when restored, dragged and resized", () => {
+  for (const topInset of [42, 44, 56]) {
+    const bounds = { ...viewport, topInset };
+    const minY = topInset + SESSION_REMOTE_DESKTOP_PREVIEW_TOP_MARGIN;
+    for (const collapsed of [false, true]) {
+      const preference = { ...DEFAULT_SESSION_REMOTE_DESKTOP_PREVIEW_PREFERENCE, collapsed, yRatio: 0 };
+      const restored = sessionRemoteDesktopPreviewLayout(bounds, preference);
+      assert.equal(restored.y, minY);
+      const dragged = clampSessionRemoteDesktopPreviewFrame({ ...restored, y: -100 }, bounds);
+      assert.equal(dragged.y, minY);
+      const saved = sessionRemoteDesktopPreviewPreferenceForFrame({ collapsed, frame: dragged, viewport: bounds });
+      assert.equal(saved.yRatio, 0);
+      assert.equal(sessionRemoteDesktopPreviewLayout(bounds, saved).y, minY);
+      if (!collapsed) {
+        const resized = resizeSessionRemoteDesktopPreviewFrame({ dx: 40, edge: "right", frame: dragged, mediaAspectRatio: 9 / 16, viewport: bounds });
+        assert.equal(resized.y, minY);
+      }
+    }
+    const tall = sessionRemoteDesktopPreviewLayout(bounds, DEFAULT_SESSION_REMOTE_DESKTOP_PREVIEW_PREFERENCE, 2);
+    assert.ok(tall.y >= minY);
+    assert.ok(tall.y + tall.height <= bounds.height - 24);
+  }
+});
+
+test("collapse moves down to the same bottom edge and expansion restores the frame", () => {
+  const bounds = { ...viewport, topInset: 56 };
+  for (const yRatio of [0, 0.4, 1]) {
+    const preference = { ...DEFAULT_SESSION_REMOTE_DESKTOP_PREVIEW_PREFERENCE, xRatio: 0.7, yRatio };
+    const frame = sessionRemoteDesktopPreviewLayout(bounds, preference);
+    const collapsedPreference = sessionRemoteDesktopPreviewPreferenceForCollapse({ collapsed: true, frame, preference, viewport: bounds, mediaAspectRatio: 9 / 16 });
+    const collapsed = sessionRemoteDesktopPreviewLayout(bounds, collapsedPreference);
+    assert.equal(collapsed.y + collapsed.height, frame.y + frame.height);
+    assert.ok(collapsed.y > frame.y);
+    const expandedPreference = sessionRemoteDesktopPreviewPreferenceForCollapse({ collapsed: false, frame: collapsed, preference: collapsedPreference, viewport: bounds, mediaAspectRatio: 9 / 16 });
+    const expanded = sessionRemoteDesktopPreviewLayout(bounds, expandedPreference);
+    for (const key of ["x", "y", "width", "height"] as const) assert.ok(Math.abs(expanded[key] - frame[key]) < 0.001);
+  }
+});
+
+test("both lower corners follow diagonal and vertical movement while retaining aspect ratio", () => {
+  const frame = { x: 300, y: 100, width: 320, height: 234 };
+  for (const edge of ["left", "right"] as const) {
+    const resized = resizeSessionRemoteDesktopPreviewFrame({ dx: edge === "left" ? -64 : 64, dy: 36, edge, frame, mediaAspectRatio: 9 / 16, viewport });
+    assert.equal(resized.width, 384);
+    assert.equal(resized.height, 270);
+    assert.equal(edge === "left" ? resized.x + resized.width : resized.x, edge === "left" ? frame.x + frame.width : frame.x);
+    assert.ok(resizeSessionRemoteDesktopPreviewFrame({ dx: 0, dy: 64, edge, frame, mediaAspectRatio: 9 / 16, viewport }).width > frame.width);
+  }
 });

@@ -169,6 +169,10 @@
     "./remote-desktop": {
       "types": "./src/remote-desktop.ts",
       "default": "./src/remote-desktop.ts"
+    },
+    "./control-plane-desktop": {
+      "types": "./src/control-plane-desktop.ts",
+      "default": "./src/control-plane-desktop.ts"
     }
   },
   "scripts": {

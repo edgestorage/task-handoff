@@ -184,12 +184,18 @@ export function resistedFloatingPreviewDrag(value: number, min: number, max: num
 
 export function resizeFloatingPreviewFrame(input: {
   dx: number;
+  dy?: number;
   edge: 'left' | 'right';
   mediaAspectRatio?: number;
   start: FloatingPreviewFrame;
   viewport: FloatingPreviewViewport;
 }): FloatingPreviewFrame {
   const { dx, edge, mediaAspectRatio = FLOATING_PREVIEW_MEDIA_ASPECT_RATIO, start, viewport } = input;
+  const ratio = normalizeFloatingPreviewMediaAspectRatio(mediaAspectRatio);
+  const horizontal = edge === 'left' ? -dx : dx;
+  // Project the corner gesture onto the fixed aspect ratio, so vertical and
+  // diagonal movement resize the same frame as horizontal movement.
+  const widthDelta = input.dy === undefined ? horizontal : (horizontal + ratio * input.dy) / (1 + ratio * ratio);
   const bounds = floatingPreviewBounds(viewport, start.width, false, mediaAspectRatio);
   const minWidth = Math.min(FLOATING_PREVIEW_MIN_WIDTH, Math.max(0, bounds.maxRight - bounds.minX));
   const maxWidthByHeight = Math.floor(
@@ -208,10 +214,10 @@ export function resizeFloatingPreviewFrame(input: {
     };
   };
   if (edge === 'left') {
-    const width = clampFloatingPreview(start.width - dx, minWidth, Math.min(maxWidth, start.x + start.width - bounds.minX));
+    const width = clampFloatingPreview(start.width + widthDelta, minWidth, Math.min(maxWidth, start.x + start.width - bounds.minX));
     return frameForWidth(width, start.x + start.width - width);
   }
-  const width = clampFloatingPreview(start.width + dx, minWidth, Math.max(minWidth, Math.min(maxWidth, bounds.maxRight - start.x)));
+  const width = clampFloatingPreview(start.width + widthDelta, minWidth, Math.max(minWidth, Math.min(maxWidth, bounds.maxRight - start.x)));
   return frameForWidth(width, start.x);
 }
 
@@ -231,4 +237,21 @@ export function floatingPreviewPreferenceForFrame(input: {
     xRatio: bounds.maxX > bounds.minX ? clampFloatingPreview((frame.x - bounds.minX) / (bounds.maxX - bounds.minX), 0, 1) : 1,
     yRatio: bounds.maxY > bounds.minY ? clampFloatingPreview((frame.y - bounds.minY) / (bounds.maxY - bounds.minY), 0, 1) : 1,
   };
+}
+
+export function floatingPreviewPreferenceForCollapse(input: {
+  collapsed: boolean;
+  frame: FloatingPreviewFrame;
+  preference: FloatingPreviewPreference;
+  viewport: FloatingPreviewViewport;
+  mediaAspectRatio: number;
+}): FloatingPreviewPreference {
+  const expandedWidth = input.preference.collapsed ? input.preference.width : input.frame.width;
+  const next = floatingPreviewLayout(input.viewport, { ...input.preference, collapsed: input.collapsed, width: expandedWidth }, input.mediaAspectRatio).frame;
+  const frame = clampFloatingPreviewFrame({
+    ...next,
+    x: input.frame.x + (input.frame.width - next.width) * clampFloatingPreview(input.preference.xRatio, 0, 1),
+    y: input.frame.y + input.frame.height - next.height,
+  }, input.viewport, input.mediaAspectRatio);
+  return floatingPreviewPreferenceForFrame({ collapsed: input.collapsed, expandedWidth, frame, viewport: input.viewport, mediaAspectRatio: input.mediaAspectRatio });
 }

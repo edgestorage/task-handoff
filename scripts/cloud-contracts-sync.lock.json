@@ -13,6 +13,7 @@
     "relay",
     "relay-frame",
     "relay-session",
+    "turn",
     "versions"
   ],
   "versions": "e49e700620524c270ab66e7448ee35f4571dd49b134d9b2a420fc8ec241c2b87",
@@ -279,6 +280,7 @@
         "UpdateControlPlaneAvailableRolesSchema",
         "capabilityHeaderIncludes",
         "outboundConnectionRegistrationSigningInput",
+        "relayHasCapability",
         "validateControlPlaneAccessFields",
         "validateNodeAccessFields"
       ],
@@ -356,6 +358,19 @@
         "relaySessionCapabilitiesFromHeader",
         "relaySessionCapabilitiesSatisfy",
         "relaySessionRenewalAt"
+      ],
+      "turn": [
+        "RELAY_TURN_CAPABILITY",
+        "TURN_GRANT_PROTOCOL_VERSION",
+        "TurnGrant",
+        "TurnGrantCreate",
+        "TurnGrantCreateSchema",
+        "TurnGrantReleaseSchema",
+        "TurnGrantReleasedSchema",
+        "TurnGrantRenewSchema",
+        "TurnGrantSchema",
+        "TurnUrlSchema",
+        "sanitizeTurnGrant"
       ],
       "versions": [
         "CONTROL_PLANE_BINDING_PROTOCOL_VERSION",
@@ -637,6 +652,7 @@
         "UpdateControlPlaneAvailableRolesSchema",
         "capabilityHeaderIncludes",
         "outboundConnectionRegistrationSigningInput",
+        "relayHasCapability",
         "validateControlPlaneAccessFields",
         "validateNodeAccessFields"
       ],
@@ -714,6 +730,19 @@
         "relaySessionCapabilitiesFromHeader",
         "relaySessionCapabilitiesSatisfy",
         "relaySessionRenewalAt"
+      ],
+      "turn": [
+        "RELAY_TURN_CAPABILITY",
+        "TURN_GRANT_PROTOCOL_VERSION",
+        "TurnGrant",
+        "TurnGrantCreate",
+        "TurnGrantCreateSchema",
+        "TurnGrantReleaseSchema",
+        "TurnGrantReleasedSchema",
+        "TurnGrantRenewSchema",
+        "TurnGrantSchema",
+        "TurnUrlSchema",
+        "sanitizeTurnGrant"
       ],
       "versions": [
         "CONTROL_PLANE_BINDING_PROTOCOL_VERSION",

@@ -1,6 +1,8 @@
+import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
 import {
+  DESKTOP_FALLBACK_BRIDGE_OPTIONS,
   DESKTOP_FALLBACK_ACTOR_HEADER,
   DESKTOP_FALLBACK_DEVICE_HEADER,
   DESKTOP_FALLBACK_GENERATION_HEADER,
@@ -97,7 +99,7 @@ export function registerManagedDesktopRoutes(app: FastifyInstance, options: {
     })().catch(() => socket.close(1011, "REMOTE_DESKTOP_UPSTREAM_UNAVAILABLE"));
   });
   /** One role-parameterized route owns both fallback sockets. Media and control
-   * remain separate TCP connections; they share this proxy chain and context
+   * use separate sockets here (Relay may multiplex them); they share context
    * injection so no second browser -> instance transport exists. */
   app.get("/api/node-agent/instances/:id/remote-desktop/fallback/:role", { ...boundary, websocket: true }, (socket, request) => {
     let upstream: WebSocket | undefined;
@@ -145,22 +147,19 @@ export function registerManagedDesktopRoutes(app: FastifyInstance, options: {
       socket.close(1008, "REMOTE_DESKTOP_FALLBACK_CONTEXT_INVALID");
       return;
     }
-    socket.on("message", (data, binary) => {
+    const capture = (data: WebSocket.RawData, binary: boolean) => {
       if (closed) return;
       const size = Array.isArray(data) ? data.reduce((sum, chunk) => sum + chunk.byteLength, 0) : data.byteLength;
-      if (size > 64 * 1024) { socket.close(1009, "REMOTE_DESKTOP_FALLBACK_FRAME_TOO_LARGE"); end(); return; }
-      if (upstream?.readyState === WebSocket.OPEN) {
-        upstream.send(data, { binary });
-        return;
-      }
       pendingBytes += size;
+      if (size > 64 * 1024) { socket.close(1009, "REMOTE_DESKTOP_FALLBACK_FRAME_TOO_LARGE"); end(); return; }
       if (pending.length >= 64 || pendingBytes > 256 * 1024) {
         socket.close(1013, "REMOTE_DESKTOP_FALLBACK_PENDING_LIMIT");
         end();
         return;
       }
       pending.push({ data, binary });
-    });
+    };
+    socket.on("message", capture);
     void (async () => {
       const { id } = request.params as { id: string };
       const base = await options.instanceBase(id);
@@ -172,29 +171,26 @@ export function registerManagedDesktopRoutes(app: FastifyInstance, options: {
         maxPayload: 128 * 1024,
         headers: { authorization: `Bearer ${options.instanceCredential(id)}` },
       });
-      upstream.on("open", () => {
-        if (closed || !upstream) { upstream?.close(); return; }
-        opened = true;
-        upstream.send(JSON.stringify(attach));
-        for (const frame of pending.splice(0)) upstream.send(frame.data, { binary: frame.binary });
-        pendingBytes = 0;
+      socket.off("message", capture);
+      bridgeWebSockets(socket, upstream, {
+        ...DESKTOP_FALLBACK_BRIDGE_OPTIONS,
+        maxClientFrameBytes: 64 * 1024,
+        pendingFrameLimit: 64,
+        upstreamOpenTimeoutMs: 10_000,
+        initialClientFrames: pending.splice(0).map(frame => ({ data: frame.data, isBinary: frame.binary })),
+        onUpstreamOpen: () => {
+          opened = true;
+          upstream!.send(JSON.stringify(attach), { compress: false });
+        },
+        onUpstreamCloseBeforeOpen: () => {
+          socket.close(1011, "REMOTE_DESKTOP_FALLBACK_UPSTREAM_UNAVAILABLE");
+          return true;
+        },
+        onUpstreamError: () => {
+          if (!opened) socket.close(1011, "REMOTE_DESKTOP_FALLBACK_UPSTREAM_UNAVAILABLE");
+        },
       });
-      upstream.on("message", (data, binary) => {
-        if (closed) return;
-        if (socket.bufferedAmount > 256 * 1024) {
-          socket.close(1013, "REMOTE_DESKTOP_FALLBACK_BACKPRESSURE");
-          end();
-          return;
-        }
-        socket.send(data, { binary });
-      });
-      upstream.on("close", () => {
-        if (!opened) socket.close(1011, "REMOTE_DESKTOP_FALLBACK_UPSTREAM_UNAVAILABLE");
-        else socket.close(1000, "Remote desktop fallback ended.");
-      });
-      upstream.on("error", () => {
-        if (!opened) socket.close(1011, "REMOTE_DESKTOP_FALLBACK_UPSTREAM_UNAVAILABLE");
-      });
+      pendingBytes = 0;
     })().catch(() => socket.close(1011, "REMOTE_DESKTOP_FALLBACK_UPSTREAM_UNAVAILABLE"));
   });
 }

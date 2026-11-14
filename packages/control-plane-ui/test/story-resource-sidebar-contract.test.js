@@ -206,7 +206,7 @@ test("resource menu exposes Apps, Files, Review Changes, and Worktrees", () => {
 
 test("empty Story resource sidebar offers the same quick open actions", () => {
   assert.match(sidebar, /<div v-if="!activeResource" class="story-resource-empty">[\s\S]*class="story-resource-empty-actions"[\s\S]*v-for="option in openOptions"/);
-  assert.match(sidebar, /const openOptions = computed<StoryResourceOpenOption\[\]>\(\(\) => \[\.\.\.appOpenOptions\.value, \.\.\.repositoryOpenOptions\.value\]\)/);
+  assert.match(sidebar, /const openOptions = computed<StoryResourceOpenOption\[\]>\(\(\) => \[[\s\S]*?\.\.\.appOpenOptions\.value,[\s\S]*?\.\.\.repositoryOpenOptions\.value,?\s*\]\)/);
   assert.match(sidebar, /launchableApps\(instance\)\.map\(\(app\) => \(\{ key: `app:\$\{app\.id\}`, kind: "app", app, label: app\.label \}\)\)/);
   assert.match(sidebar, /<AppLaunchIcon v-if="option\.kind === 'app'" :app="option\.app" :size="16"/);
   assert.match(sidebar, /:disabled="optionDisabled\(option\)"[\s\S]*@click="runOpenOption\(option\)"/);

@@ -1,4 +1,27 @@
 export const settings = {
+  desktopTurn: {
+    "navigation": "Remote desktop",
+    "title": "Custom TURN",
+    "description": "Configure TURN for remote desktop sessions opened through this Control Plane.",
+    "enabled": "Enable custom TURN",
+    "urls": "TURN URLs",
+    "urlsHint": "One URL per line. Use turn: for UDP/TCP or turns: for TLS.",
+    "authentication": "Authentication",
+    "passwordAuth": "Username and password",
+    "sharedSecretAuth": "Shared secret (coturn REST)",
+    "username": "Username",
+    "password": "Password",
+    "sharedSecret": "Shared secret",
+    "keepSecret": "Configured · leave empty to keep",
+    "secretHint": "Credentials are encrypted in storage and shared only with session participants.",
+    "sharedSecretHint": "The shared secret stays on this Control Plane. Temporary credentials require synchronized clocks on this host and the TURN server.",
+    "loadFailed": "Unable to load TURN settings. Update the Control Plane if this feature is unavailable.",
+    "invalid": "Check TURN URLs and enter the required credentials.",
+    "saved": "Saved. New connections and credential renewals use these settings.",
+    "saveFailed": "Unable to save TURN settings.",
+    "conflict": "Settings changed elsewhere. Cancel to reload the latest settings before saving."
+},
+
   title: "Settings",
   appearance: {
     title: "Appearance",

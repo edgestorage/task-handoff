@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { createBrowserChannelSocket } from "./browser-channel-socket.ts";
 import { supportsBrowserTunnel } from "@task-handoff/protocol/control-plane";
 import type { BrowserChannel, BrowserChannelHandlers } from "@task-handoff/protocol/relay-browser-channel";
 import { browserChannelError } from "@task-handoff/protocol/relay-browser-channel";
@@ -52,37 +52,11 @@ export class BrowserRelayService {
     const generation = this.generations.get(instanceId) ?? 0;
     await this.authorize(actor, instanceId);
     if ((this.generations.get(instanceId) ?? 0) !== generation) throw browserChannelError("BROWSER_CHANNEL_INSTANCE_CHANGED");
-    const socket = new RelayBrowserSocket(handlers);
+    const { socket, channel } = createBrowserChannelSocket(handlers);
     try {
       await this.attach(instanceId, socket);
       if (socket.readyState !== 1) throw browserChannelError("BROWSER_CHANNEL_CLOSED");
-      return { send: async (message) => {
-        if (socket.readyState !== 1) throw browserChannelError("BROWSER_CHANNEL_CLOSED");
-        socket.emit("message", Buffer.from(message.bytes), message.binary);
-      }, close: () => socket.close() };
+      return channel;
     } catch (error) { socket.close(); throw error; }
-  }
-}
-
-class RelayBrowserSocket extends EventEmitter implements NodeAgentWebSocket {
-  readyState = 1;
-  bufferedAmount = 0;
-  private readonly handlers: BrowserChannelHandlers;
-  constructor(handlers: BrowserChannelHandlers) { super(); this.handlers = handlers; }
-  // bridgeWebSockets awaits this method and pauses its source, including the
-  // multiplexed node-relay source, until browser credit becomes available.
-  async sendAsync(raw: unknown, options?: { binary?: boolean }) {
-    const bytes = typeof raw === "string" ? Buffer.from(raw) : Buffer.isBuffer(raw) ? raw : Buffer.from(raw as Uint8Array);
-    if (this.readyState !== 1) throw browserChannelError("BROWSER_CHANNEL_CLOSED");
-    this.bufferedAmount += bytes.byteLength;
-    try { await this.handlers.onMessage({ bytes, binary: options?.binary ?? typeof raw !== "string" }); }
-    finally { this.bufferedAmount -= bytes.byteLength; }
-  }
-  send(raw: unknown, options?: { binary?: boolean }) { void this.sendAsync(raw, options).catch(() => this.close(1011)); }
-  close(code = 1000, reason = "Browser channel closed.") {
-    if (this.readyState === 3) return;
-    this.readyState = 3;
-    this.emit("close", code, reason);
-    this.handlers.onClose();
   }
 }

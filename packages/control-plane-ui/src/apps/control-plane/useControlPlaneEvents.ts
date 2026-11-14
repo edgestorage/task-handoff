@@ -114,6 +114,7 @@ export function useControlPlaneEvents(input: {
   let closing = false;
   const reconnectBackoff = new StandardReconnectBackoff();
   const authoritativeRecoveries = ([
+    ["desktopTurn", ["desktopTurn", "desktopConnectionOptions"]],
     ["nodes", ["nodeState"]],
     ["nodeTrust", ["nodeTrust"]],
     ["cloudNodeRelay", ["cloudNodeRelay"]],

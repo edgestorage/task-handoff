@@ -1,9 +1,9 @@
+import { ControlPlaneDesktopCreateSchema, CustomTurnUpdateSchema } from "@task-handoff/protocol/control-plane-desktop";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { controlledInstanceRemoteDesktopCapabilities } from "@task-handoff/protocol/control-plane";
 import {
-  DesktopCreateSchema,
   DesktopFallbackRequestSchema,
   DesktopRequestIdSchema,
   DesktopSignalResumeRequestSchema,
@@ -30,9 +30,10 @@ export function registerRemoteDesktopRoutes(options: {
   principal(request: FastifyRequest): Promise<DesktopPrincipal>;
   renewAuthorization(principal: DesktopPrincipal): Promise<boolean>;
   turn?: DesktopTurnIssuer;
+  cloudSignedIn?: () => boolean;
 }) {
   const { app, service } = options;
-  const turn = options.turn ?? DesktopTurnIssuer.fromEnvironment();
+  const turn = options.turn ?? service.desktopTurn;
   const allowInsecurePrivateNetwork = ["1", "true", "yes", "on"].includes(String(process.env.TASK_HANDOFF_DESKTOP_ALLOW_INSECURE_PRIVATE_NETWORK || "").trim().toLowerCase());
   const fallbackCapacity = {
     maxSessions: positiveInteger(process.env.TASK_HANDOFF_DESKTOP_FALLBACK_MAX_SESSIONS, 8),
@@ -64,6 +65,31 @@ export function registerRemoteDesktopRoutes(options: {
     if (available && !capability.available) throw failure("REMOTE_DESKTOP_UNSUPPORTED");
     return { instance, principal, capability };
   }
+  function settingsActor(request: FastifyRequest) {
+    const actor = controlPlaneRequestActor(request);
+    if (!actor) throw failure("REMOTE_DESKTOP_UNAUTHORIZED", 401);
+    assertCan(actor, "manage-settings", { type: "control-plane-settings" });
+  }
+  app.get("/api/control-plane/desktop-turn", noStore, async request => {
+    settingsActor(request);
+    return { data: service.desktopTurn.snapshot() };
+  });
+  app.put("/api/control-plane/desktop-turn", { ...noStore, bodyLimit: 64 * 1024 }, async request => {
+    settingsActor(request);
+    const data = await service.desktopTurn.update(CustomTurnUpdateSchema.parse(request.body));
+    options.events.publish("desktop-turn.updated", { revision: data.revision });
+    options.events.publish("desktop-connection-options.changed", { revision: data.revision });
+    return { data };
+  });
+  app.get(`${base}/remote-desktop/connection-options`, noStore, async request => {
+    await authorize(request, false, false);
+    return { data: {
+      customTurn: { configured: service.desktopTurn.snapshot().configured },
+      // Cloud allocation is a separate Coordinator grant, not the WS relay.
+      // Enable only when that service is implemented and grants can be issued.
+      cloudTurn: { signedIn: options.cloudSignedIn?.() ?? false, available: false },
+    } };
+  });
   app.get(`${base}/remote-desktop/sources`, noStore, async request => {
     const { instance, principal, capability } = await authorize(request);
     if (!capability.sourceProviders.some(provider => provider.available)) throw failure("REMOTE_DESKTOP_SOURCE_UNSUPPORTED");
@@ -72,16 +98,17 @@ export function registerRemoteDesktopRoutes(options: {
   });
   async function create(request: FastifyRequest, takeover = false) {
     const { instance, principal, capability } = await authorize(request);
-    const input = DesktopCreateSchema.parse(request.body);
+    const input = ControlPlaneDesktopCreateSchema.parse(request.body);
     // Docker bridge has no browser-reachable UDP publication. Never quietly
     // launch a Docker viewer with an empty/unhealthy TURN configuration.
-    const ice = turn.issue();
+    const issueIce = () => input.turnSource === "none" ? { iceServers: [], iceCredentialsExpiresAt: null } : turn.issue();
+    const ice = issueIce();
     // Docker normally needs TURN, but an explicit WS fallback is a safe relay
     // path when the component advertises it. WebRTC is still attempted first.
     if (capability.runtimeKind === "docker" && !ice.iceServers.length && !capability.fallback.available) throw failure("REMOTE_DESKTOP_TURN_REQUIRED");
     const viewer = takeover ? String((request.params as any).sessionId) : undefined;
     const data = await access.mutate(principal, instance.id, input.requestId, { type: takeover ? "takeover" : "create", ...input, viewer }, async () => {
-      const created = await access.create(principal, instance.id, instance.nodeId, input.requestId, input.selection, viewer, ice);
+      const created = await access.create(principal, instance.id, instance.nodeId, input.requestId, input.selection, viewer, ice, issueIce);
       const { ticket, ...publicResult } = created;
       // Relative URL preserves the authenticated reverse-proxy origin; tickets
       // never become route segments or independently returned credential fields.

@@ -44,7 +44,7 @@ test('remote desktop keeps its session mounted across tabs and instances', () =>
   assert.match(viewer, /active\?: boolean/);
   assert.match(viewer, /function surfacePaused\(\)/);
   assert.match(viewer, /props\.active === false/);
-  assert.match(viewer, /watch\(\(\) => props\.active, \(\) => syncVisibility\(\)\)/);
+  assert.match(viewer, /watch\(\(\) => props\.active, \(\) => \{[\s\S]*?syncVisibility\(\);\s*\}\)/);
   assert.match(viewer, /function sendVisibility\(\)/);
   assert.match(viewer, /wire\(control, "visibility", \{ hidden \}\)/);
 });
@@ -172,7 +172,7 @@ test('remote desktop connection methods can disable any two paths but never the 
   assert.match(viewer, /connectionMethodsAtLeastOne/);
   assert.match(viewer, /transportPolicyDirty/);
   assert.match(viewer, /applyConnectionMethods/);
-  assert.match(viewer, /activeTransportAvailability\.value = \{ \.\.\.transportAvailability\.value \}/);
+  assert.match(viewer, /activeTransportAvailability\.value = \{ \.\.\.effectiveTransportAvailability\.value \}/);
 });
 
 test('remote desktop connection methods remain configurable before a session starts', () => {
@@ -315,7 +315,7 @@ test('remote desktop preserves the reactive input intent across focus loss', () 
   assert.match(viewer, /const inputRequested = ref\(true\)/);
   assert.match(viewer, /let inputResumeGeneration = 0/);
   assert.match(viewer, /function resumeWanted\(\)/);
-  assert.match(viewer, /if \(!inputRequested\.value \|\| surfacePaused\(\) \|\| visibilityResumePending[\s\S]*?return/);
+  assert.match(viewer, /if \((?:props\.preview \|\| )?!inputRequested\.value \|\| surfacePaused\(\) \|\| visibilityResumePending[\s\S]*?return/);
   assert.match(viewer, /inputRequested\.value = false/);
   assert.match(viewer, /@focus="surfaceFocus"/);
   assert.match(viewer, /window\.addEventListener\("focus", windowFocus\)/);
@@ -354,7 +354,7 @@ test('remote desktop waits for the foreground visibility snapshot before resumin
   assert.match(viewer, /visibilityResumeRevision = snapshot\.value\?\.sessionRevision/);
   assert.match(viewer, /visibilityResumePending = true/);
   assert.match(viewer, /visibilityResumePending\n\s*&& next\.phase === "active"\n\s*&& !next\.mediaPaused\n\s*&& \(visibilityResumeRevision === undefined \|\| next\.sessionRevision > visibilityResumeRevision\)[\s\S]*?resumeWanted\(\)/);
-  assert.match(viewer, /if \(!inputRequested\.value \|\| surfacePaused\(\) \|\| visibilityResumePending[\s\S]*?return/);
+  assert.match(viewer, /if \((?:props\.preview \|\| )?!inputRequested\.value \|\| surfacePaused\(\) \|\| visibilityResumePending[\s\S]*?return/);
 });
 
 test('remote desktop viewers share one transferable control lease', () => {
@@ -374,7 +374,7 @@ test('remote desktop viewers share one transferable control lease', () => {
 test('remote desktop prompts surface taps when another viewer owns control', () => {
   assert.match(viewer, /function showControlHint\(\)/);
   assert.match(viewer, /if \(inputEnabled\.value \|\| isController\.value\) return/);
-  assert.match(viewer, /if \(!inputEnabled\.value\) \{\n\s+if \(down\) showControlHint\(\);/);
+  assert.match(viewer, /function pointerButton[\s\S]*?if \(!inputEnabled\.value\) \{\n\s+if \(down\) \{[\s\S]*?else showControlHint\(\);/);
   assert.match(viewer, /class="remote-desktop-interaction-hint"/);
   assert.match(viewer, /@pointerdown\.stop @click\.stop="requestControl"/);
 });

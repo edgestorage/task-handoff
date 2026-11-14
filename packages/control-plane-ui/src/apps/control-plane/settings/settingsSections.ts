@@ -1,6 +1,6 @@
 import { isFeatureEnabled } from "../../../lib/featureFlags";
 
-export type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "users" | "cloud-connectivity";
+export type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "users" | "cloud-connectivity" | "remote-desktop";
 
 type SettingsSectionAccess = {
   manageSecrets: boolean;
@@ -23,6 +23,7 @@ export function buildSettingsSections(t: Translate, access: SettingsSectionAcces
     { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
     ...(access.manageUsers ? [{ id: "users" as const, label: t("settings.userAccess.navigation") }] : []),
     ...(access.manageSettings && isFeatureEnabled("officialAccount") ? [{ id: "cloud-connectivity" as const, label: t("settings.cloud.navigation") }] : []),
+    ...(access.manageSettings ? [{ id: "remote-desktop" as const, label: t("settings.desktopTurn.navigation") }] : []),
     { id: "basic", label: t("settings.basic") },
   ];
 }

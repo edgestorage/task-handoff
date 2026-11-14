@@ -1,3 +1,4 @@
+import { DesktopTurnRecordSchema } from "../../remote-desktop/turn-record.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -505,6 +506,16 @@ function repositoryFor(
     gitProvisioningIntents: gitProvisioningCollection(db, mutate),
     gitAudit: gitAuditCollection(db, mutate),
     cloudDeviceTrust: cloudDeviceTrustRepository(db, mutate),
+    desktopTurn: {
+      async get() {
+        const rows = await db.select().from(schema.metadata).where(eq(schema.metadata.key, "desktop_turn")).limit(1);
+        return rows[0] ? DesktopTurnRecordSchema.parse(rows[0].value) : undefined;
+      },
+      async put(record) {
+        const value = DesktopTurnRecordSchema.parse(record);
+        await mutate(() => db.insert(schema.metadata).values({ key: "desktop_turn", value }).onConflictDoUpdate({ target: schema.metadata.key, set: { value } }));
+      },
+    },
     async metadata() {
       const rows = await db.select().from(schema.metadata).where(eq(schema.metadata.key, "user_store")).limit(1);
       return (rows[0]?.value || { schemaVersion: 1 }) as ControlPlaneUserStoreMetadata;

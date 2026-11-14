@@ -31,12 +31,14 @@ internal object RemoteDesktopDecoderEngine {
   private var inputDrops: Long = 0
   private var parameterSetFailures: Long = 0
   private var surfaceWarnings: Int = 0
+  private var needsKeyframe = true
   var onError: ((code: String, message: String?) -> Unit)? = null
 
   @Synchronized
   fun attach(value: Surface) {
     if (surface === value) return
     releaseCodec()
+    needsKeyframe = true
     surface = value
     surfaceWarnings = 0
     ensureCodec()
@@ -46,6 +48,7 @@ internal object RemoteDesktopDecoderEngine {
   fun detach(value: Surface) {
     if (surface !== value) return
     releaseCodec()
+    needsKeyframe = true
     surface = null
   }
 
@@ -53,6 +56,7 @@ internal object RemoteDesktopDecoderEngine {
   fun configure(value: RemoteDesktopCodecConfig) {
     config = value
     releaseCodec()
+    needsKeyframe = true
     parameterSets = null
     lastTimestampUs = 0
     queuedFrames = 0
@@ -65,6 +69,7 @@ internal object RemoteDesktopDecoderEngine {
   @Synchronized
   fun reset() {
     releaseCodec()
+    needsKeyframe = true
     parameterSets = null
     lastTimestampUs = 0
     ensureCodec()
@@ -73,6 +78,7 @@ internal object RemoteDesktopDecoderEngine {
   @Synchronized
   fun close() {
     releaseCodec()
+    needsKeyframe = true
     surface = null
     config = null
     parameterSets = null
@@ -87,7 +93,7 @@ internal object RemoteDesktopDecoderEngine {
       return
     }
     if (data.isEmpty()) return
-    if (!keyframe && parameterSets == null) return
+    if (!keyframe && (needsKeyframe || parameterSets == null)) return
 
     if (keyframe) {
       val nals = annexBNals(data)
@@ -103,6 +109,7 @@ internal object RemoteDesktopDecoderEngine {
       }
       if (!parsed.contentEquals(parameterSets)) {
         releaseCodec()
+        needsKeyframe = true
         parameterSets = parsed
         ensureCodec()
       }
@@ -112,15 +119,19 @@ internal object RemoteDesktopDecoderEngine {
     val ptsUs = maxOf(timestampUs.toLong(), lastTimestampUs + 1)
     lastTimestampUs = ptsUs
     try {
-      val inputIndex = active.dequeueInputBuffer(10_000)
+      drain(active)
+      val inputIndex = active.dequeueInputBuffer(0)
       if (inputIndex >= 0) {
         val input = active.getInputBuffer(inputIndex) ?: return
         input.clear()
         input.put(data)
         active.queueInputBuffer(inputIndex, 0, data.size, ptsUs, 0)
+        if (keyframe) needsKeyframe = false
         queuedFrames += 1
         if (queuedFrames <= 3) Log.i(TAG, "input queued=$queuedFrames key=$keyframe bytes=${data.size}")
       } else {
+        needsKeyframe = true
+        report("REMOTE_DESKTOP_DECODER_BACKPRESSURE", null)
         inputDrops += 1
         if (inputDrops <= 3) Log.w(TAG, "input unavailable index=$inputIndex")
       }
@@ -129,6 +140,7 @@ internal object RemoteDesktopDecoderEngine {
       Log.e(TAG, "decode failed", cause)
       report("REMOTE_DESKTOP_DECODER_FAILED", cause.message)
       releaseCodec()
+      needsKeyframe = true
       parameterSets = null
     }
   }
@@ -164,6 +176,7 @@ internal object RemoteDesktopDecoderEngine {
       Log.e(TAG, "decoder configure failed codec=${current.codec}", cause)
       report("REMOTE_DESKTOP_DECODER_CONFIGURE_FAILED", cause.message)
       releaseCodec()
+      needsKeyframe = true
       parameterSets = null
     }
   }

@@ -21,22 +21,30 @@ final class RemoteDesktopDecoderEngine {
   private var formatDescription: CMVideoFormatDescription?
   private var parameterSets: Data?
   private var lastTimestampUs: Int64 = 0
+  private var generation: UInt64 = 0
+  private var needsKeyframe = true
   var onError: ((String, String?) -> Void)?
 
   func attach(_ value: AVSampleBufferDisplayLayer) {
     lock.lock(); defer { lock.unlock() }
     if layer === value { return }
+    generation &+= 1
+    needsKeyframe = true
     layer = value
   }
 
   func detach(_ value: AVSampleBufferDisplayLayer) {
     lock.lock(); defer { lock.unlock() }
     if layer !== value { return }
+    generation &+= 1
+    needsKeyframe = true
     layer = nil
   }
 
   func configure(_ value: RemoteDesktopCodecConfig) {
     lock.lock(); defer { lock.unlock() }
+    generation &+= 1
+    needsKeyframe = true
     config = value
     formatDescription = nil
     parameterSets = nil
@@ -46,6 +54,8 @@ final class RemoteDesktopDecoderEngine {
 
   func reset() {
     lock.lock(); defer { lock.unlock() }
+    generation &+= 1
+    needsKeyframe = true
     formatDescription = nil
     parameterSets = nil
     lastTimestampUs = 0
@@ -54,6 +64,8 @@ final class RemoteDesktopDecoderEngine {
 
   func close() {
     lock.lock(); defer { lock.unlock() }
+    generation &+= 1
+    needsKeyframe = true
     layer = nil
     config = nil
     formatDescription = nil
@@ -62,25 +74,58 @@ final class RemoteDesktopDecoderEngine {
   }
 
   func decode(_ data: Data, keyframe: Bool, timestampUs: Double) {
-    lock.lock(); defer { lock.unlock() }
-    guard let config else { return }
-    guard !data.isEmpty else { return }
-    if !keyframe && formatDescription == nil { return }
+    lock.lock()
+    let submission = prepare(data, keyframe: keyframe, timestampUs: timestampUs)
+    lock.unlock()
+    guard let (sample, targetLayer, revision) = submission else { return }
+    // The native promise completes after this bounded main-thread submission,
+    // not after scheduling another unbounded main.async closure. No lock is
+    // held while waiting on main (attach/detach also take the lock).
+    let submit = { [self] in
+      lock.lock(); defer { lock.unlock() }
+      guard generation == revision, let activeLayer = layer, activeLayer === targetLayer else { return }
+      if activeLayer.status == .failed {
+        activeLayer.flushAndRemoveImage()
+        needsKeyframe = true
+        report("REMOTE_DESKTOP_DECODER_FAILED", activeLayer.error?.localizedDescription)
+        return
+      }
+      if activeLayer.requiresFlushToResumeDecoding {
+        activeLayer.flushAndRemoveImage()
+        needsKeyframe = true
+      }
+      guard (!needsKeyframe || keyframe), activeLayer.isReadyForMoreMediaData else {
+        needsKeyframe = true
+        report("REMOTE_DESKTOP_DECODER_BACKPRESSURE", nil)
+        return
+      }
+      activeLayer.enqueue(sample)
+      if keyframe { needsKeyframe = false }
+    }
+    if Thread.isMainThread { submit() }
+    else { DispatchQueue.main.sync(execute: submit) }
+  }
+
+  private func prepare(_ data: Data, keyframe: Bool, timestampUs: Double)
+    -> (CMSampleBuffer, AVSampleBufferDisplayLayer, UInt64)? {
+    guard let config else { return nil }
+    guard !data.isEmpty else { return nil }
+    if !keyframe && (needsKeyframe || formatDescription == nil) { return nil }
 
     if keyframe {
       let nals = Self.annexBNals(data)
       guard let sets = Self.parameterSets(codec: config.codec, nals: nals),
             let description = Self.makeFormatDescription(codec: config.codec, sets: sets) else {
-        return
+        return nil
       }
       if parameterSets != sets || formatDescription == nil {
         parameterSets = sets
         formatDescription = description
       }
     }
-    guard let formatDescription, let layer else { return }
+    guard let formatDescription, let layer else { return nil }
     let nals = Self.annexBNals(data)
-    guard !nals.isEmpty else { return }
+    guard !nals.isEmpty else { return nil }
     var avcc = Data()
     for nal in nals {
       var length = UInt32(nal.count).bigEndian
@@ -90,28 +135,18 @@ final class RemoteDesktopDecoderEngine {
     let timestamp = max(Int64(timestampUs.rounded()), lastTimestampUs + 1)
     lastTimestampUs = timestamp
     guard let sample = Self.makeSampleBuffer(avcc, formatDescription: formatDescription, timestampUs: timestamp, keyframe: keyframe) else {
-      return
+      return nil
     }
-    DispatchQueue.main.async { [weak self] in
-      guard let self else { return }
-      self.lock.lock()
-      defer { self.lock.unlock() }
-      guard let activeLayer = self.layer, activeLayer === layer else { return }
-      if activeLayer.status == .failed {
-        activeLayer.flushAndRemoveImage()
-        self.report("REMOTE_DESKTOP_DECODER_FAILED", activeLayer.error?.localizedDescription)
-        return
-      }
-      if activeLayer.requiresFlushToResumeDecoding {
-        activeLayer.flushAndRemoveImage()
-      }
-      activeLayer.enqueue(sample)
-    }
+    return (sample, layer, generation)
   }
 
   private func flushLayer() {
     guard let layer else { return }
-    DispatchQueue.main.async {
+    let revision = generation
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.lock.lock(); defer { self.lock.unlock() }
+      guard self.generation == revision, self.layer === layer else { return }
       layer.flushAndRemoveImage()
     }
   }

@@ -8,11 +8,11 @@
     @keydown.enter.prevent="$emit('openDetails')"
     @keydown.space.prevent="$emit('openDetails')"
   >
-    <InstanceRemoteDesktopViewer
+    <SessionRemoteDesktopSurface
       :capabilities="capabilities"
       :initial-target="target"
       :instance-id="instanceId"
-      auto-connect
+      :session-id="sessionId"
       preview
       @selection-change="$emit('selectionChange', $event)"
       @stream-size="setStreamSize"
@@ -28,12 +28,13 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { ExternalLink } from "@lucide/vue";
-import InstanceRemoteDesktopViewer from "../../apps/control-plane/instance-detail/InstanceRemoteDesktopViewer.vue";
+import SessionRemoteDesktopSurface from "./SessionRemoteDesktopSurface.vue";
 import type { SessionRemoteDesktopTarget } from "../../apps/control-plane/instance-detail/sessionRemoteDesktopLinks.ts";
 
 const props = defineProps<{
   capabilities?: Record<string, unknown>;
   instanceId: string;
+  sessionId: string;
   target: SessionRemoteDesktopTarget;
 }>();
 
@@ -90,7 +91,7 @@ function setStreamSize(size: { width: number; height: number }) {
   border-radius: 999px;
   background: rgb(0 0 0 / 58%);
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;

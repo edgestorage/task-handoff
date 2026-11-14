@@ -569,6 +569,41 @@ test('fallback configuration keeps the decoder alive for the first keyframe', as
   await controller.close();
 });
 
+test('decoder overload resumes at a fresh keyframe without replaying queued deltas or reconnecting', async () => {
+  const decode = decodeRemoteDesktopFrame as jest.Mock;
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+  const media = sockets[1];
+  media.handlers.onOpen?.();
+  media.handlers.onMessage(JSON.stringify({
+    type: 'fallback.configure',
+    payload: { width: 1280, height: 720, fps: 30, bitrate: 8_000_000, codec: 'avc1.42E028' },
+  }));
+  media.handlers.onMessage(fallbackMediaFrame(true, 5, 1, 1n));
+  await flushMicrotasks();
+  const blocked = deferred<void>();
+  decode.mockImplementationOnce(() => blocked.promise);
+  media.handlers.onMessage(fallbackMediaFrame(false, 5, 2, 2n));
+  for (let id = 3; id <= 10; id++) media.handlers.onMessage(fallbackMediaFrame(false, 5, id, BigInt(id)));
+  expect(decode).toHaveBeenCalledTimes(2);
+  blocked.resolve();
+  await flushMicrotasks();
+  media.handlers.onMessage(fallbackMediaFrame(false, 5, 11, 11n));
+  await flushMicrotasks();
+  expect(decode).toHaveBeenCalledTimes(2);
+  expect(media.send).toHaveBeenCalledWith(JSON.stringify({ type: 'fallback.keyframe-request' }));
+  media.handlers.onMessage(fallbackMediaFrame(true, 5, 12, 12n));
+  await flushMicrotasks();
+  media.handlers.onMessage(fallbackMediaFrame(false, 5, 13, 13n));
+  await flushMicrotasks();
+  expect(decode).toHaveBeenCalledTimes(4);
+  expect(sockets).toHaveLength(3);
+  await controller.close();
+});
+
 test.each([
   'REMOTE_DESKTOP_GEOMETRY_CHANGED',
   'REMOTE_DESKTOP_WINDOW_FOCUS_REQUIRED',
@@ -1133,5 +1168,19 @@ test('websocket fallback coalesces pointer motion to the latest position at 60 H
     await controller.close();
   } finally {
     jest.useRealTimers();
+  }
+});
+
+test('explicit TURN policy reaches the Control Plane, while N-1 retains the old request shape', async () => {
+  for (const configured of [false, true, null]) {
+    const availability = { p2p: true, websocket: true, turn: configured === true };
+    const { api, controller } = setup(availability);
+    controller.setConnectionOptions(configured === null ? null : {
+      customTurn: { configured }, cloudTurn: { signedIn: true, available: false },
+    });
+    await controller.start();
+    expect(api.createSession).toHaveBeenCalledWith('instance_1', { sourceRef: 'display-primary' }, undefined,
+      configured === null ? undefined : configured ? 'custom' : 'none');
+    await controller.close();
   }
 });

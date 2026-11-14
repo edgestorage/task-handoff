@@ -1,3 +1,4 @@
+import { bridgeWebSockets, STREAMING_WEBSOCKET_BRIDGE_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 /** Trusted instance boundary only. The general proxy rejects this endpoint
  * family; G4's dedicated node-agent operations will supply resolved principals.
  * Never mount an unrestricted IPC command endpoint or forward media here. */
@@ -116,47 +117,51 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
       }).catch(()=>{socket.close(1008,"Remote desktop signaling failed.");}).finally(()=>{queued--;});
     });
   });
-  app.get("/api/internal/remote-desktop/fallback/:role",{...boundary,websocket:true},(socket,request)=>{
-    const role=z.enum(["media","control"]).safeParse((request.params as {role?:string}).role);
-    const expected=role.success?(role.data==="media"?REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL:REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL):"";
-    const protocol=String(request.headers["sec-websocket-protocol"]??"").trim();
-    if(!role.success||protocol!==expected){socket.close(1008,"REMOTE_DESKTOP_FALLBACK_PROTOCOL");return;}
-    let upstream:WebSocket|undefined;
-    let opening:ReturnType<typeof setTimeout>|undefined;
-    let closed=false;
-    const pending:Array<{data:WebSocket.RawData;binary:boolean}>=[];let pendingBytes=0;
-    const limit=role.data==="media"?64*1024:128*1024;
-    const end=()=>{if(closed)return;closed=true;if(opening!==undefined)clearTimeout(opening);pending.length=0;upstream?.close();};
-    socket.on("close",end);socket.on("error",end);
-    socket.on("message",(data,binary)=>{
-      if(closed)return;
-      const size=Array.isArray(data)?data.reduce((total,chunk)=>total+chunk.byteLength,0):data.byteLength;
-      if(size>limit){socket.close(1009,"Remote desktop fallback frame too large.");end();return;}
-      if(upstream?.readyState===WebSocket.OPEN){upstream.send(data,{binary});return;}
-      pendingBytes+=size;
-      if(pending.length>=64||pendingBytes>256*1024){socket.close(1013,"Remote desktop fallback backlog exceeded.");end();return;}
-      pending.push({data,binary});
-    });
-    void (async()=>{
-      const endpoint=await service.fallbackEndpoint();
-      if(closed)return;
-      if(!endpoint){socket.close(1011,"REMOTE_DESKTOP_FALLBACK_UNAVAILABLE");return;}
-      const url=new URL(`/fallback/${role.data}?token=${encodeURIComponent(endpoint.token)}`,endpoint.url);
-      upstream=new WebSocket(url,expected,{perMessageDeflate:false,maxPayload:limit});
-      opening=setTimeout(()=>{if(closed)return;socket.close(1011,"REMOTE_DESKTOP_FALLBACK_UPSTREAM_UNAVAILABLE");end();},10_000);
-      upstream.on("open",()=>{
-        if(opening!==undefined)clearTimeout(opening);opening=undefined;
-        if(closed||!upstream){upstream?.close();return;}
-        for(const frame of pending.splice(0))upstream.send(frame.data,{binary:frame.binary});
-        pendingBytes=0;
+  app.get("/api/internal/remote-desktop/fallback/:role", { ...boundary, websocket: true }, (socket, request) => {
+    const role = z.enum(["media", "control"]).safeParse((request.params as { role?: string }).role);
+    const expected = role.success ? (role.data === "media"
+      ? REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL : REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL) : "";
+    const protocol = String(request.headers["sec-websocket-protocol"] ?? "").trim();
+    if (!role.success || protocol !== expected) { socket.close(1008, "REMOTE_DESKTOP_FALLBACK_PROTOCOL"); return; }
+    let upstream: WebSocket | undefined;
+    let closed = false;
+    const pending: Array<{ data: WebSocket.RawData; binary: boolean }> = [];
+    let pendingBytes = 0;
+    const limit = role.data === "media" ? 64 * 1024 : 128 * 1024;
+    const end = () => {
+      if (closed) return;
+      closed = true;
+      pending.length = 0;
+      upstream?.close();
+    };
+    socket.on("close", end);
+    socket.on("error", end);
+    const capture = (data: WebSocket.RawData, binary: boolean) => {
+      if (closed) return;
+      const size = Array.isArray(data) ? data.reduce((total, chunk) => total + chunk.byteLength, 0) : data.byteLength;
+      if (size > limit) { socket.close(1009, "Remote desktop fallback frame too large."); end(); return; }
+      pendingBytes += size;
+      if (pending.length >= 64 || pendingBytes > 256 * 1024) {
+        socket.close(1013, "Remote desktop fallback backlog exceeded."); end(); return;
+      }
+      pending.push({ data, binary });
+    };
+    socket.on("message", capture);
+    void (async () => {
+      const endpoint = await service.fallbackEndpoint();
+      if (closed) return;
+      if (!endpoint) { socket.close(1011, "REMOTE_DESKTOP_FALLBACK_UNAVAILABLE"); return; }
+      const url = new URL(`/fallback/${role.data}?token=${encodeURIComponent(endpoint.token)}`, endpoint.url);
+      upstream = new WebSocket(url, expected, { perMessageDeflate: false, maxPayload: limit });
+      socket.off("message", capture);
+      bridgeWebSockets(socket, upstream, {
+        ...STREAMING_WEBSOCKET_BRIDGE_OPTIONS,
+        maxFrameBytes: limit,
+        pendingFrameLimit: 64,
+        upstreamOpenTimeoutMs: 10_000,
+        initialClientFrames: pending.splice(0).map(frame => ({ data: frame.data, isBinary: frame.binary })),
       });
-      upstream.on("message",(data,binary)=>{
-        if(closed)return;
-        if(socket.bufferedAmount>256*1024){socket.close(1013,"Remote desktop fallback backpressure.");end();return;}
-        socket.send(data,{binary});
-      });
-      upstream.on("close",()=>{if(!closed)socket.close(1000,"Remote desktop fallback ended.");});
-      upstream.on("error",()=>{if(!closed){socket.close(1011,"REMOTE_DESKTOP_FALLBACK_UPSTREAM_UNAVAILABLE");end();}});
-    })().catch(()=>{socket.close(1011,"REMOTE_DESKTOP_FALLBACK_UPSTREAM_UNAVAILABLE");end();});
+      pendingBytes = 0;
+    })().catch(() => { socket.close(1011, "REMOTE_DESKTOP_FALLBACK_UPSTREAM_UNAVAILABLE"); end(); });
   });
 }

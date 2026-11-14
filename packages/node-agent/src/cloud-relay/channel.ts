@@ -66,9 +66,34 @@ export class NodeRelayChannelSocket {
     this.channel.sendChannelData(this.streamId, data, binary);
   }
 
+  /** Bridges await stream credit and channel capacity before accepting more
+   * payload. This is transport capacity, not a remote decoder acknowledgement. */
+  async sendAsync(data: string | Buffer, options?: { binary?: boolean }) {
+    if (this.readyState !== 1) throw nodeRelaySessionError("NODE_RELAY_CHANNEL_CLOSED");
+    let onClose: () => void;
+    const closed = new Promise<never>((_, reject) => {
+      onClose = () => reject(nodeRelaySessionError("NODE_RELAY_CHANNEL_CLOSED"));
+      this.on("close", onClose);
+    });
+    try {
+      await Promise.race([closed, (async () => {
+        await this.waitForWritable();
+        this.send(data, options);
+        await this.waitForWritable();
+      })()]);
+    } finally {
+      this.off("close", onClose!);
+    }
+  }
+
   close(code = 1000, reason = "normal") {
     if (this.readyState === NodeRelayChannelSocket.CLOSED) return;
     this.readyState = NodeRelayChannelSocket.CLOSED;
+    this.queued.length = 0;
+    this.queuedBytes = 0;
+    this.outbound.length = 0;
+    this.outboundBytes = 0;
+    for (const resolve of this.writableWaiters.splice(0)) resolve();
     this.channel.emitChannelClose(this.channelId, code, reason);
     this.emit("close", code, reason);
   }

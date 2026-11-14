@@ -37,15 +37,19 @@ export function RemoteDesktopSettingsMenu(props: Props) {
   const { t } = useI18n();
   const { snapshot } = props;
   const capturePrecisionSupported = props.capturePrecisionSupported === true;
-  const transportActions: MenuAction[] = transports.map((key) => {
+  const transportActions: MenuAction[] = transports.filter(key => key !== 'turn' || snapshot.connectionOptions?.customTurn.configured).map((key) => {
     const enabled = snapshot.transportAvailability[key];
     return {
       id: `transport:${key}`,
-      title: `${transportLabel(key, t)} · ${transportStateLabel(key, snapshot, t)}`,
+      title: `${key === 'turn' ? t('remoteDesktop.customTurn') : transportLabel(key, t)} · ${transportStateLabel(key, snapshot, t)}`,
       image: transportSFSymbol(key),
       state: enabled ? 'on' : 'off',
       attributes: { disabled: enabled && !canDisableTransport(snapshot.transportAvailability, key) },
     };
+  });
+  if (snapshot.connectionOptions?.cloudTurn.signedIn) transportActions.push({
+    id: 'cloud-turn', title: `${t('remoteDesktop.cloudTurn')} · ${t('remoteDesktop.cloudTurnUnavailable')}`,
+    image: 'cloud.fill', state: 'off', attributes: { disabled: true },
   });
   const actions: MenuAction[] = [
     {

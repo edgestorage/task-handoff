@@ -1,3 +1,4 @@
+import { DesktopTurnRecordSchema } from "../../remote-desktop/turn-record.ts";
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -443,6 +444,16 @@ function repositoryFor(db: any, close: () => Promise<void>, inTransaction = fals
     gitProvisioningIntents: gitProvisioningCollection(db),
     gitAudit: gitAuditCollection(db),
     cloudDeviceTrust: cloudDeviceTrustRepository(db),
+    desktopTurn: {
+      async get() {
+        const rows = await db.select().from(schema.metadata).where(eq(schema.metadata.key, "desktop_turn")).limit(1);
+        return rows[0] ? DesktopTurnRecordSchema.parse(rows[0].value) : undefined;
+      },
+      async put(record) {
+        const value = DesktopTurnRecordSchema.parse(record);
+        await db.insert(schema.metadata).values({ key: "desktop_turn", value }).onConflictDoUpdate({ target: schema.metadata.key, set: { value } });
+      },
+    },
     async metadata() {
       const rows = await db.select().from(schema.metadata).where(eq(schema.metadata.key, "user_store")).limit(1);
       return (rows[0]?.value || { schemaVersion: 1 }) as ControlPlaneUserStoreMetadata;

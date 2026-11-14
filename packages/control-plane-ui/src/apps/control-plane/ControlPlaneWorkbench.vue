@@ -446,6 +446,7 @@
           v-model:selection="storySelection"
           :active-action-label="activeActionLabel"
           :can-export-config="canExportConfig"
+          :can-interact-remote-desktop="canInteractRemoteDesktop"
           :choose-project-folder="desktopBridge?.chooseProjectFolder"
           :header-density="effectiveHeaderDensity"
           :is-closing-all-sessions="isClosingAllInstanceSessions"
@@ -487,6 +488,7 @@
             v-if="storyResourceSidebar.visible.value"
             class="story-resource-panel"
           :resources="storyResourceSidebar.resources.value"
+          :can-interact-remote-desktop="canInteractRemoteDesktop"
           :active-key="storyResourceSidebar.activeKey.value"
           :instances="boardInstancesWithAiSessions"
           :target-instance="storyResourceTargetInstance"
@@ -497,6 +499,7 @@
             :rename-resource="renameStoryResource"
             @select="storyResourceSidebar.activeKey.value = $event"
             @close="closeStoryResource"
+            @open-remote-desktop="(instanceId, sessionId) => routeStoryRemoteDesktop({ instanceId, sessionId })"
             @reorder="storyResourceSidebar.reorder"
             @launch-app="launchStoryResourceApp"
             @focus-app-session="(instanceId, sessionId) => storyResourceSidebar.focusApp(instanceId, sessionId)"
@@ -617,13 +620,14 @@
         @update-browser-tab="updateCombinedBrowserTab"
       />
       <RemoteDesktopSurfaceLayer
-        :active-instance-id="activeInstanceId"
+        :active-instance-id="storyMode || settingsMode || agentMode || boardMode ? '' : activeInstanceId"
         :can-interact="canInteractRemoteDesktop"
         :can-manage="canManageRemoteDesktop"
         :instance-capabilities="remoteDesktopSurfaceCapabilities"
         :session-tabs="remoteDesktopSessionTabs"
         :surface-state="browserSurfaceState"
       />
+      <SessionRemoteDesktopSurfaceHost v-if="canInteractRemoteDesktop" :surfaces="sessionDesktopSurfaces" :can-manage="canManageRemoteDesktop" />
     </main>
 
     <Transition name="workbench-loading">
@@ -690,7 +694,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, provide, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { formatTime } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
@@ -742,6 +746,11 @@ import { allNodesVisible, nodeIsVisible, nodeIsSelected, normalizeNodeVisibility
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
+import SessionRemoteDesktopSurfaceHost from "../../components/remote-desktop/SessionRemoteDesktopSurfaceHost.vue";
+import { createSessionRemoteDesktopSurfaces, sessionRemoteDesktopSurfacesKey } from "./instance-detail/sessionRemoteDesktopSurfaces";
+import { CLOSE_SESSION_REMOTE_DESKTOP_EVENT, type CloseSessionRemoteDesktopDetail, type OpenSessionRemoteDesktopDetail } from "./instance-detail/sessionRemoteDesktopEvents";
+import { rememberSessionRemoteDesktopLink, sessionRemoteDesktopLinks } from "./instance-detail/sessionRemoteDesktopLinks";
+import { remoteDesktopAvailable } from "./remoteDesktopCapability";
 import RemoteDesktopSurfaceLayer from "./instance-detail/RemoteDesktopSurfaceLayer.vue";
 import InstanceList from "./instance-list/InstanceList.vue";
 import ConfigSyncDialog from "./instance-list/ConfigSyncDialog.vue";
@@ -867,6 +876,8 @@ function storedSessionPreviewExpanded() {
 
 const queryClient = useQueryClient();
 const { locale, t } = useI18n();
+const sessionDesktopSurfaces = createSessionRemoteDesktopSurfaces();
+provide(sessionRemoteDesktopSurfacesKey, sessionDesktopSurfaces);
 const authSession = useAuthSessionQuery();
 const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.authenticated)));
 const canManageUsers = computed(() => currentAccess.data.value?.permissionIds.includes("users:manage") === true);
@@ -1774,6 +1785,7 @@ const {
   updateBrowserTab,
 } = useActiveInstanceSessions({
   activeInstance: activeInstanceWithAiSessions,
+  routeSessionRemoteDesktop: routeStoryRemoteDesktop,
   appLaunchMenuOpen,
   boardSessionKeys,
   canInteractRemoteDesktop,
@@ -2479,6 +2491,33 @@ function openStoryAiSessionResource(instance: InstanceBoardItemWithAppSessions, 
   if (session?.appSessionId) storyResourceSidebar.focusApp(instance.id, session.appSessionId);
 }
 
+function routeStoryRemoteDesktop(detail: OpenSessionRemoteDesktopDetail) {
+  if (!storyMode.value || settingsMode.value) return false;
+  // Story owns its own destination. Never fall through into the AI workbench.
+  const instance = storyResourceTargetInstance.value;
+  if (!canInteractRemoteDesktop.value || !instance || !remoteDesktopAvailable(instance)
+    || detail.instanceId !== instance.id || detail.sessionId !== storyResourceTargetAiSessionId.value) return true;
+  if (detail.target) rememberSessionRemoteDesktopLink({ instanceId: detail.instanceId, sessionId: detail.sessionId, target: detail.target });
+  storyResourceSidebar.openRemoteDesktop(detail.instanceId, detail.sessionId);
+  return true;
+}
+function closeStoryRemoteDesktop(event: Event) {
+  const detail = (event as CustomEvent<CloseSessionRemoteDesktopDetail>).detail;
+  if (!detail?.instanceId || !detail.sessionId) return;
+  storyResourceSidebar.removeRemoteDesktop({ kind: "remote-desktop", instanceId: detail.instanceId, aiSessionId: detail.sessionId });
+  sessionDesktopSurfaces.forget(detail.instanceId, detail.sessionId);
+}
+watch(sessionRemoteDesktopLinks, (next, previous) => {
+  for (const key of Object.keys(previous.bySession)) {
+    if (next.bySession[key]) continue;
+    const [instanceId, sessionId] = JSON.parse(key) as [string, string];
+    storyResourceSidebar.removeRemoteDesktop({ kind: "remote-desktop", instanceId, aiSessionId: sessionId });
+    sessionDesktopSurfaces.forget(instanceId, sessionId);
+  }
+});
+onMounted(() => window.addEventListener(CLOSE_SESSION_REMOTE_DESKTOP_EVENT, closeStoryRemoteDesktop));
+onBeforeUnmount(() => window.removeEventListener(CLOSE_SESSION_REMOTE_DESKTOP_EVENT, closeStoryRemoteDesktop));
+
 function openStoryEmbeddedBrowser(instanceId: string, url: string) {
   if (!storyResourceTargetAiSessionId.value || storyResourceTargetInstanceId.value !== instanceId) return;
   storyResourceSidebar.openBrowser(instanceId, url);
@@ -2519,6 +2558,7 @@ async function closeStoryResource(key: string) {
       },
       closeRepository: storyResourceSidebar.removeRepository,
       closeEmbeddedBrowser: storyResourceSidebar.removeBrowser,
+      closeRemoteDesktop: storyResourceSidebar.removeRemoteDesktop,
     });
   } catch (error) {
     showToast(errorText(error), storyResourceErrorToast);

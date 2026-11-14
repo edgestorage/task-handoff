@@ -81,10 +81,8 @@ const mainLabel = computed(() => props.presentation === "expanded"
   text-align: left;
 }
 
-.session-remote-desktop-card-main:hover,
-.session-remote-desktop-card-main:focus-visible,
-.session-remote-desktop-card-action:hover,
-.session-remote-desktop-card-action:focus-visible {
+.session-remote-desktop-card:hover,
+.session-remote-desktop-card:focus-within {
   background: var(--surface-hover);
 }
 

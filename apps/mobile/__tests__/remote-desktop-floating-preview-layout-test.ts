@@ -11,6 +11,7 @@ import {
   floatingPreviewHeight,
   floatingPreviewLayout,
   floatingPreviewPreferenceForFrame,
+  floatingPreviewPreferenceForCollapse,
   resizeFloatingPreviewFrame,
   resistedFloatingPreviewDrag,
   type FloatingPreviewViewport,
@@ -146,4 +147,29 @@ test('resizing keeps the live stream aspect ratio', () => {
 
   expect(wider.height).toBe(floatingPreviewHeight(wider.width, false, mediaAspectRatio));
   expect(wider.y + wider.height).toBe(718);
+});
+
+test('collapse preserves the bottom edge at every position and expansion returns to the original frame', () => {
+  for (const yRatio of [0, 0.4, 1]) {
+    const preference = { ...DEFAULT_FLOATING_PREVIEW_PREFERENCE, xRatio: 0.6, yRatio };
+    const frame = floatingPreviewLayout(headerPortrait, preference).frame;
+    const collapsedPreference = floatingPreviewPreferenceForCollapse({ collapsed: true, frame, preference, viewport: headerPortrait, mediaAspectRatio: FLOATING_PREVIEW_MEDIA_ASPECT_RATIO });
+    const collapsed = floatingPreviewLayout(headerPortrait, collapsedPreference).frame;
+    expect(collapsed.y + collapsed.height).toBeCloseTo(frame.y + frame.height);
+    expect(collapsed.y).toBeGreaterThan(frame.y);
+    const expandedPreference = floatingPreviewPreferenceForCollapse({ collapsed: false, frame: collapsed, preference: collapsedPreference, viewport: headerPortrait, mediaAspectRatio: FLOATING_PREVIEW_MEDIA_ASPECT_RATIO });
+    const expanded = floatingPreviewLayout(headerPortrait, expandedPreference).frame;
+    for (const key of ['x', 'y', 'width', 'height'] as const) expect(expanded[key]).toBeCloseTo(frame[key]);
+  }
+});
+
+test('lower corner resizing responds to diagonal and vertical gestures', () => {
+  const start = { x: 80, y: 120, width: 200, height: floatingPreviewHeight(200, false) };
+  for (const edge of ['left', 'right'] as const) {
+    const resized = resizeFloatingPreviewFrame({ dx: edge === 'left' ? -32 : 32, dy: 18, edge, start, viewport: portrait });
+    expect(resized.width).toBeCloseTo(232);
+    expect(resized.height).toBe(floatingPreviewHeight(resized.width, false));
+    expect(edge === 'left' ? resized.x + resized.width : resized.x).toBe(edge === 'left' ? start.x + start.width : start.x);
+    expect(resizeFloatingPreviewFrame({ dx: 0, dy: 32, edge, start, viewport: portrait }).width).toBeGreaterThan(start.width);
+  }
 });

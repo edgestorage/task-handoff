@@ -29,6 +29,7 @@
           >
             <template #icon>
               <Terminal v-if="item.kind === 'terminal'" :size="14" class="session-tab-icon" />
+              <Monitor v-else-if="item.kind === 'remote-desktop'" :size="14" class="session-tab-icon" />
               <Globe2 v-else-if="item.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
               <AppWindow v-else-if="item.kind === 'app'" :size="14" class="session-tab-icon" />
               <FolderTree v-else-if="item.kind === 'files'" :size="14" class="session-tab-icon" />
@@ -90,7 +91,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, type ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
-import { AppWindow, FileDiff, FolderTree, GitBranch, Globe2, Pencil, Terminal, X } from "@lucide/vue";
+import { AppWindow, FileDiff, FolderTree, GitBranch, Globe2, Monitor, Pencil, Terminal, X } from "@lucide/vue";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { translateApiError } from "../../../i18n/apiError";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -106,7 +107,7 @@ export type StoryResourceTabItem = {
   instanceLabel: string;
   description: string;
   closeLabel: string;
-  kind: "terminal" | "app" | "embedded-browser" | "files" | "changes-review" | "worktrees";
+  kind: "terminal" | "app" | "remote-desktop" | "embedded-browser" | "files" | "changes-review" | "worktrees";
   status?: string;
   closing?: boolean;
   rename?: "enabled" | "unavailable";
@@ -302,6 +303,7 @@ const pointerOverlayStyle = computed(() => pointerDrag.value ? {
 const dragIcon = computed(() => {
   const kind = pointerDrag.value?.item.kind;
   if (kind === "terminal") return Terminal;
+  if (kind === "remote-desktop") return Monitor;
   if (kind === "embedded-browser") return Globe2;
   if (kind === "app") return AppWindow;
   if (kind === "files") return FolderTree;

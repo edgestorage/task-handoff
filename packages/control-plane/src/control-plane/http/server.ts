@@ -643,7 +643,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     },
   );
   const cloudConnectivity = new CloudConnectivityService({ statePath: paths.cloudConnectivityPath, identity, serviceOrigin: cloudServiceOrigin });
-  const cloudAccountSession = new CloudAccountSessionService({ statePath: paths.cloudAccountSessionPath, serviceOrigin: cloudServiceOrigin });
+  const cloudAccountSession = new CloudAccountSessionService({ statePath: paths.cloudAccountSessionPath, serviceOrigin: cloudServiceOrigin,
+    onSignedInChanged: () => events.publish("desktop-connection-options.changed", {}),
+  });
   const cloudRelayActors = new Map<string, ControlPlaneActor>();
   const browserRelay = new BrowserRelayService(service, events);
   const cloudRelayBridge = {
@@ -1875,6 +1877,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   registerInstanceShellRoutes({ app, service, authorizationConnections, events });
   desktopAccess = registerRemoteDesktopRoutes({
     app, service, authorizationConnections, events,
+    cloudSignedIn: () => cloudAccountSession.snapshot().signedIn,
     async principal(request) {
       const actor = controlPlaneRequestActor(request);
       if (!actor || (actor.type !== "user" && actor.type !== "cloud-account")) throw Object.assign(new Error("Desktop authentication is required."), { statusCode: 401 });

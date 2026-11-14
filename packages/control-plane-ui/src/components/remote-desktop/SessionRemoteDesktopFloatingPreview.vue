@@ -1,76 +1,70 @@
 <template>
   <Teleport to="body">
     <aside
-      v-if="present && !preference.collapsed"
+      v-if="present"
       class="session-remote-desktop-preview"
-      :class="[presenceClass, { 'is-interacting': dragging || resizing }]"
+      :class="[presenceClass, { 'is-interacting': dragging || resizing, 'is-collapsed': preference.collapsed }]"
       :style="frameStyle"
       :aria-label="t('instances.remoteDesktop.preview')"
       @pointermove="moveDrag"
       @pointerup="endDrag"
       @pointercancel="endDrag"
     >
-      <div class="session-remote-desktop-preview-resize is-left" @pointerdown.stop.prevent="startResize('left', $event)" />
-      <div class="session-remote-desktop-preview-resize is-right" @pointerdown.stop.prevent="startResize('right', $event)" />
-      <div class="session-remote-desktop-preview-media" @click="openDetails">
-        <InstanceRemoteDesktopViewer
-          :capabilities="capabilities"
-          :initial-target="target"
-          :instance-id="instanceId"
-          auto-connect
-          preview
-          @selection-change="$emit('selectionChange', $event)"
-          @stream-size="setStreamSize"
-        />
-        <span class="session-remote-desktop-preview-badge">
-          <MousePointerClick :size="12" aria-hidden="true" />
-          {{ t("instances.remoteDesktop.previewHint") }}
-        </span>
-        <button type="button" class="session-remote-desktop-preview-close" :title="t('common.actions.close')" :aria-label="t('common.actions.close')" @pointerdown.stop @click.stop="$emit('close')">
-          <X :size="16" />
-        </button>
-      </div>
-      <footer class="session-remote-desktop-preview-foot" @pointerdown="startDrag($event)">
-        <span class="session-remote-desktop-preview-copy">
-          <Monitor :size="15" aria-hidden="true" />
-          <span>
-            <strong>{{ target.title || t("instances.remoteDesktop.title") }}</strong>
-            <small>{{ target.subtitle || t("instances.remoteDesktop.lastOpened") }}</small>
+      <template v-if="!preference.collapsed">
+        <div class="session-remote-desktop-preview-resize is-left" @pointerdown.stop.prevent="startResize('left', $event)" />
+        <div class="session-remote-desktop-preview-resize is-right" @pointerdown.stop.prevent="startResize('right', $event)" />
+        <div class="session-remote-desktop-preview-media" @click="openDetails">
+          <SessionRemoteDesktopSurface
+            :capabilities="capabilities"
+            :initial-target="target"
+            :instance-id="instanceId"
+            :session-id="sessionId"
+            :active="visible && !preference.collapsed"
+            preview
+            @selection-change="$emit('selectionChange', $event)"
+            @stream-size="setStreamSize"
+          />
+          <button type="button" class="session-remote-desktop-preview-close" :title="t('common.actions.close')" :aria-label="t('common.actions.close')" @pointerdown.stop @click.stop="$emit('close')">
+            <X :size="16" />
+          </button>
+        </div>
+        <footer class="session-remote-desktop-preview-foot" @pointerdown="startDrag($event)">
+          <span class="session-remote-desktop-preview-copy">
+            <Monitor :size="15" aria-hidden="true" />
+            <span>
+              <strong>{{ target.title || t("instances.remoteDesktop.title") }}</strong>
+              <small>{{ target.subtitle || t("instances.remoteDesktop.lastOpened") }}</small>
+            </span>
           </span>
-        </span>
-        <button type="button" :title="t('instances.remoteDesktop.collapsePreview')" :aria-label="t('instances.remoteDesktop.collapsePreview')" @pointerdown.stop @click.stop="collapse">
-          <ChevronDown :size="15" />
-        </button>
-        <button type="button" :title="t('instances.remoteDesktop.openDetails')" :aria-label="t('instances.remoteDesktop.openDetails')" @pointerdown.stop @click.stop="openDetails">
-          <ExternalLink :size="15" />
-        </button>
-      </footer>
+          <button type="button" :title="t('instances.remoteDesktop.collapsePreview')" :aria-label="t('instances.remoteDesktop.collapsePreview')" @pointerdown.stop @click.stop="collapse">
+            <ChevronDown :size="15" />
+          </button>
+          <button type="button" :title="t('instances.remoteDesktop.openDetails')" :aria-label="t('instances.remoteDesktop.openDetails')" @pointerdown.stop @click.stop="openDetails">
+            <ExternalLink :size="15" />
+          </button>
+        </footer>
+      </template>
+      <button
+        v-else
+        type="button"
+        class="session-remote-desktop-preview-pill"
+        :title="t('instances.remoteDesktop.expandPreview')"
+        @pointerdown="startDrag($event)"
+        @click="expandFromPill"
+      >
+        <Monitor :size="15" aria-hidden="true" />
+        <span>{{ target.title || t("instances.remoteDesktop.title") }}</span>
+        <ChevronUp :size="15" aria-hidden="true" />
+      </button>
     </aside>
-    <button
-      v-else-if="present"
-      type="button"
-      class="session-remote-desktop-preview-pill"
-      :class="[presenceClass, { 'is-interacting': dragging }]"
-      :style="frameStyle"
-      :title="t('instances.remoteDesktop.expandPreview')"
-      @pointerdown="startDrag($event)"
-      @pointermove="moveDrag"
-      @pointerup="endDrag"
-      @pointercancel="endDrag"
-      @click="expandFromPill"
-    >
-      <Monitor :size="15" aria-hidden="true" />
-      <span>{{ target.title || t("instances.remoteDesktop.title") }}</span>
-      <ChevronUp :size="15" aria-hidden="true" />
-    </button>
   </Teleport>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronDown, ChevronUp, ExternalLink, Monitor, MousePointerClick, X } from "@lucide/vue";
-import InstanceRemoteDesktopViewer from "../../apps/control-plane/instance-detail/InstanceRemoteDesktopViewer.vue";
+import { ChevronDown, ChevronUp, ExternalLink, Monitor, X } from "@lucide/vue";
+import SessionRemoteDesktopSurface from "./SessionRemoteDesktopSurface.vue";
 import {
   clampSessionRemoteDesktopPreviewFrame,
   DEFAULT_SESSION_REMOTE_DESKTOP_PREVIEW_PREFERENCE,
@@ -78,11 +72,7 @@ import {
   sessionRemoteDesktopPreviewAspectRatio,
   sessionRemoteDesktopPreviewLayout,
   sessionRemoteDesktopPreviewPreferenceForFrame,
-  SESSION_REMOTE_DESKTOP_PREVIEW_COLLAPSED_HEIGHT,
-  SESSION_REMOTE_DESKTOP_PREVIEW_COLLAPSED_WIDTH,
-  SESSION_REMOTE_DESKTOP_PREVIEW_FOOTER_HEIGHT,
-  SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN,
-  SESSION_REMOTE_DESKTOP_PREVIEW_TOP_MARGIN,
+  sessionRemoteDesktopPreviewPreferenceForCollapse,
   type SessionRemoteDesktopPreviewFrame,
   type SessionRemoteDesktopPreviewPreference,
   type SessionRemoteDesktopPreviewViewport,
@@ -119,11 +109,12 @@ const presenceClass = computed(() => presencePhase.value === "entering"
   ? "is-presence-entering"
   : presencePhase.value === "exiting" ? "is-presence-exiting" : "");
 let dragStart: { x: number; y: number; frame: SessionRemoteDesktopPreviewFrame } | undefined;
-let resizeStart: { x: number; edge: "left" | "right"; frame: SessionRemoteDesktopPreviewFrame } | undefined;
+let resizeStart: { x: number; y: number; edge: "left" | "right"; frame: SessionRemoteDesktopPreviewFrame } | undefined;
 let clickSuppressedUntil = 0;
 let dragMoved = false;
 let enterFrame: number | undefined;
 let exitTimer: number | undefined;
+let titlebarObserver: ResizeObserver | undefined;
 
 const PRESENCE_EXIT_DURATION_MS = 140;
 
@@ -145,7 +136,10 @@ watch(() => props.target, target => {
 
 function currentViewport(): SessionRemoteDesktopPreviewViewport {
   if (typeof window === "undefined") return { width: 1280, height: 800 };
-  return { width: window.innerWidth, height: window.innerHeight };
+  // This surface is teleported to body; keep its drag/restore bounds below the
+  // actual workbench titlebar, including native and compact header layouts.
+  const titlebar = document.querySelector(".control-plane-topbar");
+  return { width: window.innerWidth, height: window.innerHeight, topInset: titlebar?.getBoundingClientRect().bottom ?? 0 };
 }
 
 function updateViewport() {
@@ -153,7 +147,9 @@ function updateViewport() {
 }
 
 function startDrag(event: PointerEvent) {
-  if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+  if (event.button !== 0) return;
+  const button = (event.target as HTMLElement).closest("button");
+  if (button && button !== event.currentTarget) return;
   event.preventDefault();
   dragStart = { x: event.clientX, y: event.clientY, frame: { ...frame.value } };
   dragMoved = false;
@@ -196,7 +192,7 @@ function endDrag(event?: PointerEvent) {
 function startResize(edge: "left" | "right", event: PointerEvent) {
   if (preference.value.collapsed) return;
   event.preventDefault();
-  resizeStart = { x: event.clientX, edge, frame: { ...frame.value } };
+  resizeStart = { x: event.clientX, y: event.clientY, edge, frame: { ...frame.value } };
   resizing.value = true;
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
 }
@@ -205,6 +201,7 @@ function moveResize(event: PointerEvent) {
   if (!resizeStart || !resizing.value) return;
   frame.value = resizeSessionRemoteDesktopPreviewFrame({
     dx: event.clientX - resizeStart.x,
+    dy: event.clientY - resizeStart.y,
     edge: resizeStart.edge,
     frame: resizeStart.frame,
     mediaAspectRatio: mediaAspectRatio.value,
@@ -239,22 +236,25 @@ function openDetails() {
   emit("openDetails");
 }
 
-function collapse() {
-  preference.value = sessionRemoteDesktopPreviewPreferenceForFrame({
-    collapsed: true,
-    expandedWidth: frame.value.width,
+function setCollapsed(collapsed: boolean) {
+  preference.value = sessionRemoteDesktopPreviewPreferenceForCollapse({
+    collapsed,
     frame: frame.value,
+    preference: preference.value,
     viewport: viewport.value,
+    mediaAspectRatio: mediaAspectRatio.value,
   });
   frame.value = sessionRemoteDesktopPreviewLayout(viewport.value, preference.value, mediaAspectRatio.value);
   savePreference(props.instanceId, props.sessionId, preference.value);
 }
 
+function collapse() {
+  setCollapsed(true);
+}
+
 function expandFromPill() {
   if (suppressClick.value || Date.now() < clickSuppressedUntil) return;
-  preference.value = { ...preference.value, collapsed: false };
-  frame.value = sessionRemoteDesktopPreviewLayout(viewport.value, preference.value, mediaAspectRatio.value);
-  savePreference(props.instanceId, props.sessionId, preference.value);
+  setCollapsed(false);
 }
 
 function clearPresenceTimers() {
@@ -299,6 +299,12 @@ watch(() => props.visible, visible => {
 });
 
 onMounted(() => {
+  updateViewport();
+  const titlebar = document.querySelector(".control-plane-topbar");
+  if (titlebar && typeof ResizeObserver !== "undefined") {
+    titlebarObserver = new ResizeObserver(updateViewport);
+    titlebarObserver.observe(titlebar);
+  }
   if (props.visible) enterPresence();
   window.addEventListener("resize", updateViewport);
   window.addEventListener("pointermove", moveResize);
@@ -307,6 +313,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  titlebarObserver?.disconnect();
   clearPresenceTimers();
   window.removeEventListener("resize", updateViewport);
   window.removeEventListener("pointermove", moveResize);
@@ -344,8 +351,7 @@ function preferenceKey(instanceId: string, sessionId: string) {
 </script>
 
 <style scoped>
-.session-remote-desktop-preview,
-.session-remote-desktop-preview-pill {
+.session-remote-desktop-preview {
   position: fixed;
   z-index: 90;
   box-sizing: border-box;
@@ -363,20 +369,17 @@ function preferenceKey(instanceId: string, sessionId: string) {
   will-change: opacity, transform;
 }
 
-.session-remote-desktop-preview.is-interacting,
-.session-remote-desktop-preview-pill.is-interacting {
+.session-remote-desktop-preview.is-interacting {
   transition: none;
 }
 
-.session-remote-desktop-preview.is-presence-entering,
-.session-remote-desktop-preview-pill.is-presence-entering {
+.session-remote-desktop-preview.is-presence-entering {
   opacity: 0;
   pointer-events: none;
   transform: translateY(8px) scale(0.96);
 }
 
-.session-remote-desktop-preview.is-presence-exiting,
-.session-remote-desktop-preview-pill.is-presence-exiting {
+.session-remote-desktop-preview.is-presence-exiting {
   opacity: 0;
   pointer-events: none;
   transform: translateY(8px) scale(0.96);
@@ -412,22 +415,6 @@ function preferenceKey(instanceId: string, sessionId: string) {
   pointer-events: none;
 }
 
-.session-remote-desktop-preview-badge {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 7px;
-  border-radius: 999px;
-  background: rgb(0 0 0 / 62%);
-  color: rgb(255 255 255 / 86%);
-  font-size: 11px;
-  font-weight: 500;
-  pointer-events: none;
-}
-
 .session-remote-desktop-preview-close {
   position: absolute;
   top: 8px;
@@ -454,7 +441,7 @@ function preferenceKey(instanceId: string, sessionId: string) {
   flex: 0 0 54px;
   align-items: center;
   gap: 5px;
-  padding: 7px 8px 7px 12px;
+  padding: 7px 24px;
   border-top: 1px solid var(--line-subtle);
   background: var(--surface-raised);
   cursor: grab;
@@ -492,7 +479,7 @@ function preferenceKey(instanceId: string, sessionId: string) {
 
 .session-remote-desktop-preview-copy small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   line-height: 14px;
 }
@@ -519,34 +506,65 @@ function preferenceKey(instanceId: string, sessionId: string) {
 .session-remote-desktop-preview-resize {
   position: absolute;
   z-index: 3;
-  top: 0;
-  bottom: 54px;
-  width: 9px;
-  cursor: ew-resize;
+  bottom: 0;
+  width: 20px;
+  height: 20px;
 }
 
 .session-remote-desktop-preview-resize.is-left {
   left: 0;
+  cursor: nesw-resize;
 }
 
 .session-remote-desktop-preview-resize.is-right {
   right: 0;
+  cursor: nwse-resize;
 }
 
-.session-remote-desktop-preview-resize:hover {
-  background: color-mix(in srgb, var(--brand-accent) 24%, transparent);
+.session-remote-desktop-preview-resize::after {
+  content: "";
+  position: absolute;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  border-bottom: 1.5px solid var(--text-muted);
+  opacity: 0.55;
+  transition: opacity 120ms ease, border-color 120ms ease;
+}
+
+.session-remote-desktop-preview-resize.is-left::after {
+  left: 4px;
+  border-left: 1.5px solid var(--text-muted);
+  border-bottom-left-radius: 10px;
+}
+
+.session-remote-desktop-preview-resize.is-right::after {
+  right: 4px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom-right-radius: 10px;
+}
+
+.session-remote-desktop-preview-resize:hover::after {
+  border-color: var(--text);
+  opacity: 1;
+}
+
+.session-remote-desktop-preview.is-collapsed {
+  border-radius: 999px;
+  box-shadow: 0 12px 34px rgb(0 0 0 / 20%);
 }
 
 .session-remote-desktop-preview-pill {
   display: flex;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   align-items: center;
   gap: 8px;
   padding: 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface-raised);
-  box-shadow: 0 12px 34px rgb(0 0 0 / 20%);
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
   color: var(--text);
   cursor: grab;
 }
@@ -568,8 +586,7 @@ function preferenceKey(instanceId: string, sessionId: string) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-remote-desktop-preview,
-  .session-remote-desktop-preview-pill {
+  .session-remote-desktop-preview {
     transition: none;
   }
 }

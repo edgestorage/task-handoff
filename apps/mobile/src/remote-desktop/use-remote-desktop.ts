@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { unavailableDesktopConnectionOptions, type DesktopConnectionOptions } from '@task-handoff/protocol/control-plane-desktop';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useIsFocused } from 'expo-router/react-navigation';
 import {
   directoryRemoteDesktopCapabilities,
@@ -56,6 +57,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
   const interactiveRef = useLatestRef(interactive);
   const resolutionOverrideRef = useLatestRef(resolutionOverride);
   const controllerConsumerRef = useRef({});
+  const optionsConsumerId = useId();
   const [acquired, setAcquired] = useState<{ key: string; controller: RemoteDesktopController }>();
   const runtimeKey = runtime.api && runtime.transport && controlPlaneId
     ? JSON.stringify([controlPlaneId, instanceId, sessionId || 'direct'])
@@ -75,6 +77,31 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
     () => remoteDesktopPreferencesFor(controlPlaneId, instanceId),
     () => remoteDesktopPreferencesFor(controlPlaneId, instanceId),
   );
+  const [optionState, setOptionState] = useState<{ key: string; value: DesktopConnectionOptions | null }>();
+  const connectionOptions = optionState && optionState.key === runtimeKey ? optionState.value ?? unavailableDesktopConnectionOptions : unavailableDesktopConnectionOptions;
+  const customConfigured = connectionOptions.customTurn.configured;
+  const effectiveAvailability = useMemo(() => ({ ...storedPreferences.transportAvailability, turn: storedPreferences.transportAvailability.turn && customConfigured }), [storedPreferences.transportAvailability, customConfigured]);
+  const effectiveAvailabilityRef = useLatestRef(effectiveAvailability);
+  const optionsReady = Boolean(optionState && optionState.key === runtimeKey);
+  const optionsReadyRef = useLatestRef(optionsReady);
+  useEffect(() => {
+    if (!runtime.api || !runtime.coordinator || !runtimeKey) return;
+    let live = true;
+    let generation = 0;
+    const refresh = async (signal?: AbortSignal) => {
+      const current = ++generation;
+      const value = await runtime.api!.remoteDesktop.connectionOptions(instanceId, signal);
+      if (live && current === generation) setOptionState(previous => previous?.key === runtimeKey && JSON.stringify(previous.value) === JSON.stringify(value) ? previous : { key: runtimeKey, value });
+    };
+    const unregister = runtime.coordinator.register({
+      key: `desktop-connection-options:${instanceId}:${optionsConsumerId}`,
+      topics: ['desktop-connection-options'], snapshotTopics: ['desktop-connection-options'],
+      start: refresh,
+      stop: () => { generation++; },
+      onEvent: event => { if (event.type === 'desktop-connection-options.changed') void refresh().catch(() => undefined); },
+    });
+    return () => { live = false; unregister(); };
+  }, [runtime.api, runtime.coordinator, runtimeKey, instanceId, optionsConsumerId]);
   const controllerSnapshot = controller?.getSnapshot();
   // Stopping a session removes its link. Keep the controller's target after an
   // explicit stop so that removal alone cannot look like a source change and
@@ -104,13 +131,13 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
         transport: runtime.transport,
         instanceId,
         sessionId,
-        active: activeRef.current,
+        active: activeRef.current && optionsReadyRef.current,
         interactive: interactiveRef.current,
         target: nextTarget,
         resolution: resolutionOverrideRef.current ?? current.resolution,
         frameRate: current.frameRate,
         capturePrecision: current.capturePrecision,
-        transportAvailability: current.transportAvailability,
+        transportAvailability: effectiveAvailabilityRef.current,
         videoCodecs,
       });
       setAcquired({ key: runtimeKey, controller: next });
@@ -122,12 +149,14 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
     if (!controller) return;
     const scope = { controlPlaneId, instanceId, sessionId };
     const consumer = controllerConsumerRef.current;
-    updateRemoteDesktopControllerConsumer(scope, consumer, { active, interactive, resolution });
-    if (active) void controller.start();
+    controller.setConnectionOptions(optionState && optionState.key === runtimeKey ? optionState.value : null);
+    controller.setTransportAvailability(effectiveAvailability);
+    updateRemoteDesktopControllerConsumer(scope, consumer, { active: active && optionsReady, interactive, resolution });
+    if (active && optionState && optionState.key === runtimeKey) void controller.start();
     return () => {
       releaseRemoteDesktopControllerConsumer(scope, consumer);
     };
-  }, [active, controlPlaneId, controller, instanceId, interactive, resolution, sessionId]);
+  }, [active, controlPlaneId, controller, instanceId, interactive, resolution, sessionId, optionState, runtimeKey, optionsReady, effectiveAvailability]);
 
   useEffect(() => {
     void controller?.switchTarget(target);
@@ -145,15 +174,13 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
     controller?.setVideoCodecs?.(videoCodecs);
   }, [controller, videoCodecs]);
 
-  useEffect(() => {
-    controller?.setTransportAvailability(storedPreferences.transportAvailability);
-  }, [controller, storedPreferences.transportAvailability]);
-
-  const snapshot: RemoteDesktopSnapshot = useSyncExternalStore(
+  const controllerState: RemoteDesktopSnapshot = useSyncExternalStore(
     controller?.subscribe ?? noSubscribe,
     controller?.getSnapshot ?? (() => emptyRemoteDesktopSnapshot),
     controller?.getSnapshot ?? (() => emptyRemoteDesktopSnapshot),
   );
+
+  const snapshot: RemoteDesktopSnapshot = { ...controllerState, connectionOptions, transportAvailability: effectiveAvailability };
 
   const setTarget = useCallback((nextTarget: PersistedCaptureTarget) => {
     if (sessionId) {
@@ -188,17 +215,18 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
 
   const setTransportAvailability = useCallback((availability: RemoteDesktopTransportAvailability) => {
     updateRemoteDesktopPreferences(controlPlaneId, instanceId, { transportAvailability: { ...availability } });
-    controller?.setTransportAvailability(availability);
-  }, [controlPlaneId, controller, instanceId]);
+    controller?.setTransportAvailability({ ...availability, turn: availability.turn && customConfigured });
+  }, [controlPlaneId, controller, instanceId, customConfigured]);
 
   const toggleTransport = useCallback((key: RemoteDesktopTransportKey) => {
     const current = remoteDesktopPreferencesFor(controlPlaneId, instanceId).transportAvailability;
     const next = { ...current, [key]: !current[key] };
     const enabling = next[key];
-    if (!enabling && !canDisableTransport(current, key)) return;
+    if (key === 'turn' && !customConfigured) return;
+    if (!enabling && !canDisableTransport(effectiveAvailability, key)) return;
     if (!next.p2p && !next.turn && !next.websocket) return;
     setTransportAvailability(next);
-  }, [controlPlaneId, instanceId, setTransportAvailability]);
+  }, [controlPlaneId, instanceId, setTransportAvailability, effectiveAvailability, customConfigured]);
 
   const disconnect = useCallback(async () => {
     await controller?.disconnect();

@@ -433,6 +433,8 @@ function authorizedEvent(client: EventSocket, event: EventEnvelope) {
   if (event.type === "device-trust.changed" || event.type === "node.control-plane-trust.changed") {
     return authorization?.permissionIds.includes("settings:manage") === true;
   }
+  if (event.type === "desktop-turn.updated") return authorization?.permissionIds.includes("settings:manage") === true;
+  if (event.type === "desktop-connection-options.changed" && authorization) return authorization.permissionIds.includes("instances:interactive");
   if (!authorization) return true;
   if (event.topic === "triggers" && !event.scope?.nodeId && !event.scope?.instanceId) {
     return authorization.permissionIds.includes("triggers:manage");

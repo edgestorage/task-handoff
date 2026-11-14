@@ -40,6 +40,9 @@
             @focus-session="(sessionId) => $emit('focusAppSession', targetInstance?.id || '', sessionId)"
           />
           <DropdownMenuItem v-else class="app-launch-menu-item story-resource-menu-item" disabled>{{ targetInstance && supportsApps(targetInstance) ? t("stories.resources.noApps") : t("stories.resources.appsUnsupported") }}</DropdownMenuItem>
+          <DropdownMenuItem v-if="desktopAvailable" class="app-launch-menu-item story-resource-menu-item" @select="openDesktop">
+            <Monitor :size="14" />{{ t("instances.remoteDesktop.title") }}
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuLabel>{{ t("stories.resources.repository") }}</DropdownMenuLabel>
           <DropdownMenuItem v-for="option in repositoryOpenOptions" :key="option.key" class="app-launch-menu-item story-resource-menu-item" @select="runOpenOption(option)">
@@ -75,6 +78,13 @@
       <CircleAlert :size="28" />
       <strong>{{ t("stories.resources.unavailable") }}</strong>
     </div>
+    <SessionRemoteDesktopSurface
+      v-else-if="activeResource?.kind === 'remote-desktop' && canInteractRemoteDesktop"
+      :instance-id="activeResource.instanceId"
+      :session-id="activeResource.aiSessionId"
+      :capabilities="activeInstance.capabilities"
+      :target="sessionRemoteDesktopLinkFor(activeResource.instanceId, activeResource.aiSessionId)?.target"
+    />
     <SessionPaneContent
       v-else-if="activeSession"
       class="story-resource-content"
@@ -98,7 +108,7 @@
 <script setup lang="ts">
 import { computed, type Component } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, CircleAlert, FileDiff, FolderTree, GitBranch, PanelRight, Plus, Server } from "@lucide/vue";
+import { Boxes, CircleAlert, FileDiff, FolderTree, GitBranch, Monitor, PanelRight, Plus, Server } from "@lucide/vue";
 import { normalizeControlledInstanceCapabilities, supportsBrowserTunnel } from "@task-handoff/protocol/control-plane";
 import { supportsDirectoryBrowserTunnel } from "@task-handoff/protocol/control-plane-directory";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
@@ -106,6 +116,9 @@ import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeL
 import { Button } from "../../../components/ui/button";
 import { canUseDesktopBrowserContext } from "../../../lib/desktopBridge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import SessionRemoteDesktopSurface from "../../../components/remote-desktop/SessionRemoteDesktopSurface.vue";
+import { remoteDesktopAvailable } from "../remoteDesktopCapability";
+import { sessionRemoteDesktopLinkFor } from "../instance-detail/sessionRemoteDesktopLinks";
 import SessionPaneContent from "../instance-detail/SessionPaneContent.vue";
 import AppLaunchIcon from "../shared/AppLaunchIcon.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
@@ -116,6 +129,7 @@ import type { StoryResourceDropPlacement } from "./storyResourceOrder.ts";
 
 const props = defineProps<{
   resources: StoryResourceRef[];
+  canInteractRemoteDesktop?: boolean;
   activeKey: string;
   instances: InstanceWithAiSessions[];
   targetInstance?: InstanceWithAiSessions;
@@ -127,6 +141,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   select: [key: string];
+  openRemoteDesktop: [instanceId: string, aiSessionId: string];
   close: [key: string];
   reorder: [sourceKey: string, targetKey: string, placement: StoryResourceDropPlacement];
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
@@ -137,7 +152,7 @@ const { t } = useI18n();
 
 type StoryResourceAppOpenOption = { key: string; kind: "app"; app: LaunchableApp; label: string };
 type StoryResourceRepositoryOpenOption = { key: string; kind: "repository"; page: StoryRepositoryPage; label: string; icon: Component };
-type StoryResourceOpenOption = StoryResourceAppOpenOption | StoryResourceRepositoryOpenOption;
+type StoryResourceOpenOption = StoryResourceAppOpenOption | StoryResourceRepositoryOpenOption | { key: "remote-desktop"; kind: "remote-desktop"; label: string; icon: Component };
 
 const REPOSITORY_OPEN_OPTIONS: readonly { page: StoryRepositoryPage; labelKey: string; icon: Component }[] = [
   { page: "files", labelKey: "stories.resources.files", icon: FolderTree },
@@ -162,14 +177,22 @@ const appOpenOptions = computed<StoryResourceAppOpenOption[]>(() => {
     ? launchableApps(instance).map((app) => ({ key: `app:${app.id}`, kind: "app", app, label: app.label }))
     : [];
 });
-const openOptions = computed<StoryResourceOpenOption[]>(() => [...appOpenOptions.value, ...repositoryOpenOptions.value]);
+const desktopAvailable = computed(() => props.canInteractRemoteDesktop === true && !!props.targetInstance && remoteDesktopAvailable(props.targetInstance));
+const openOptions = computed<StoryResourceOpenOption[]>(() => [
+  ...appOpenOptions.value,
+  ...(desktopAvailable.value ? [{ key: "remote-desktop" as const, kind: "remote-desktop" as const, label: t("instances.remoteDesktop.title"), icon: Monitor }] : []),
+  ...repositoryOpenOptions.value,
+]);
+function openDesktop() {
+  if (desktopAvailable.value && props.targetInstance && props.targetAiSessionId) emit("openRemoteDesktop", props.targetInstance.id, props.targetAiSessionId);
+}
 
 const activeResource = computed(() => props.resources.find((resource) => storyResourceKey(resource) === props.activeKey));
 const activeInstance = computed(() => props.instances.find((instance) => instance.id === activeResource.value?.instanceId));
 const activeSession = computed<SessionTab | undefined>(() => {
   const resource = activeResource.value;
   const instance = activeInstance.value;
-  if (!resource || !instance) return undefined;
+  if (!resource || !instance || resource.kind === "remote-desktop") return undefined;
   if (resource.kind === "app-session") return buildAppSessionTabs(instance, t).find((session) => session.key === resource.sessionId);
   if (resource.kind === "embedded-browser") return {
     key: storyResourceKey(resource),
@@ -199,20 +222,19 @@ const activeSession = computed<SessionTab | undefined>(() => {
   };
 });
 const tabItems = computed<StoryResourceTabItem[]>(() => props.resources.map((resource) => {
-  const instance = props.instances.find((candidate) => candidate.id === resource.instanceId);
-  const app = resource.kind === "app-session" ? buildAppSessionTabs(instance, t).find((session) => session.key === resource.sessionId) : undefined;
+  const instance = props.instances.find(candidate => candidate.id === resource.instanceId);
+  const app = resource.kind === "app-session" ? buildAppSessionTabs(instance, t).find(session => session.key === resource.sessionId) : undefined;
   const instanceLabel = instance?.name || resource.instanceId;
-  const browserLabel = resource.kind === "embedded-browser" ? resource.title || t("sessions.tabs.embeddedBrowser") : "";
+  const label = resource.kind === "repository" ? repositoryLabel(resource.page)
+    : resource.kind === "embedded-browser" ? resource.title || t("sessions.tabs.embeddedBrowser")
+    : resource.kind === "remote-desktop" ? t("instances.remoteDesktop.title")
+    : app?.title || app?.label || resource.sessionId;
   return {
-    key: storyResourceKey(resource),
-    label: resource.kind === "repository" ? repositoryLabel(resource.page) : resource.kind === "embedded-browser" ? browserLabel : app?.title || app?.label || resource.sessionId,
-    instanceLabel,
-    description: `${resource.kind === "repository" ? repositoryLabel(resource.page) : resource.kind === "embedded-browser" ? browserLabel : app?.title || app?.label || resource.sessionId} · ${instanceLabel}`,
+    key: storyResourceKey(resource), label, instanceLabel, description: `${label} · ${instanceLabel}`,
     closeLabel: resource.kind === "app-session" ? t("stories.resources.stopApp") : t("stories.resources.closeTab"),
-    kind: resource.kind === "repository" ? resource.page : resource.kind === "embedded-browser" ? "embedded-browser" : app?.kind === "terminal" ? "terminal" : "app",
+    kind: resource.kind === "repository" ? resource.page : resource.kind === "embedded-browser" || resource.kind === "remote-desktop" ? resource.kind : app?.kind === "terminal" ? "terminal" : "app",
     status: resource.kind === "embedded-browser" ? resource.status : app?.status,
-    closing: props.closingKey === storyResourceKey(resource),
-    rename: storyResourceRenameState(resource, instance),
+    closing: props.closingKey === storyResourceKey(resource), rename: storyResourceRenameState(resource, instance),
   };
 }));
 
@@ -241,7 +263,8 @@ function optionDisabled(option: StoryResourceOpenOption) {
 }
 function runOpenOption(option: StoryResourceOpenOption) {
   if (optionDisabled(option)) return;
-  if (option.kind === "app") launchTargetApp(option.app.id);
+  if (option.kind === "remote-desktop") openDesktop();
+  else if (option.kind === "app") launchTargetApp(option.app.id);
   else openTargetRepository(option.page);
 }
 function launchTargetApp(appId: string, _cwdFolderId?: string, profileId?: string) {

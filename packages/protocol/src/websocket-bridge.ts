@@ -2,7 +2,7 @@ export type WebSocketLike = {
   readyState: number;
   OPEN?: number;
   bufferedAmount?: number;
-  send: (data: unknown, options?: { binary?: boolean; compress?: boolean }) => void;
+  send: (data: unknown, options?: { binary?: boolean; compress?: boolean }, callback?: (error?: Error) => void) => void;
   sendAsync?: (data: unknown, options?: { binary?: boolean; compress?: boolean }) => Promise<void>;
   pause?: () => void;
   resume?: () => void;
@@ -20,6 +20,15 @@ export const TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS = {
   },
 };
 
+/** Managed binary streaming keeps per-message and in-flight safety limits, but
+ * has no lifetime byte quota. Writers must support sendAsync or ws callbacks. */
+export const STREAMING_WEBSOCKET_BRIDGE_OPTIONS = {
+  maxTotalBytes: Number.POSITIVE_INFINITY,
+  maxFrameBytes: 128 * 1024,
+  maxBufferedBytes: 2 * 1024 * 1024,
+  awaitWrites: true,
+} as const;
+
 type WebSocketFrame = {
   data: unknown;
   isBinary: boolean;
@@ -29,7 +38,12 @@ type WebSocketFrame = {
 export type WebSocketBridgeOptions = {
   pendingFrameLimit?: number;
   maxFrameBytes?: number;
+  /** Optional command-side limit when downstream binary frames are larger. */
+  maxClientFrameBytes?: number;
+  /** Infinity opts a managed long-lived stream out of cumulative accounting. */
   maxTotalBytes?: number;
+  /** Native ws write callbacks propagate capacity without polling bufferedAmount. */
+  awaitWrites?: boolean;
   maxBufferedBytes?: number;
   upstreamOpenTimeoutMs?: number;
   onUpstreamOpen?: () => void;
@@ -118,9 +132,10 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
   };
   const acceptFrame = (direction: "client-to-upstream" | "upstream-to-client", value: unknown) => {
     const bytes = frameBytes(value);
-    totalBytes += bytes;
+    if (Number.isFinite(maxTotalBytes)) totalBytes += bytes;
     options.onFrame?.(direction, bytes);
-    if (bytes > maxFrameBytes || totalBytes > maxTotalBytes) {
+    const frameLimit = direction === "client-to-upstream" ? (options.maxClientFrameBytes ?? maxFrameBytes) : maxFrameBytes;
+    if (bytes > frameLimit || totalBytes > maxTotalBytes) {
       closeWebSocket(client, 1009, "WebSocket bridge traffic limit exceeded.");
       closeWebSocket(upstream, 1009, "WebSocket bridge traffic limit exceeded.");
       return false;
@@ -143,21 +158,30 @@ export function bridgeWebSockets(client: WebSocketLike, upstream: WebSocketLike,
       return false;
     }
     try {
-      if (socket.sendAsync) {
+      const sendAsync = socket.sendAsync?.bind(socket) ?? (options.awaitWrites
+        ? (data: unknown, sendOptions?: { binary?: boolean; compress?: boolean }) => new Promise<void>((resolve, reject) => {
+          socket.send(data, sendOptions, (error) => error ? reject(error) : resolve());
+        })
+        : undefined);
+      if (sendAsync) {
         const source = socket === client ? upstream : client;
         const writes = asyncWrites.get(socket) ?? { bytes: 0, tail: Promise.resolve() };
-        if (writes.bytes + frame.bytes > maxBufferedBytes) throw new Error("WebSocket asynchronous queue limit exceeded.");
+        if (writes.bytes + frame.bytes > maxBufferedBytes) {
+          closeWebSocket(client, 1013, "WebSocket bridge consumer is too slow.");
+          closeWebSocket(upstream, 1013, "WebSocket bridge consumer is too slow.");
+          return false;
+        }
         asyncWrites.set(socket, writes);
         writes.bytes += frame.bytes;
         source.pause?.();
         writes.tail = writes.tail.then(async () => {
-          if (isOpen(socket)) await socket.sendAsync!(frame.data, { binary: frame.isBinary, compress: false });
+          if (isOpen(socket)) await sendAsync(frame.data, { binary: frame.isBinary, compress: false });
         }).catch(() => {
           closeWebSocket(client, 1011, "WebSocket asynchronous send failed.");
           closeWebSocket(upstream, 1011, "WebSocket asynchronous send failed.");
         }).finally(() => {
           writes.bytes -= frame.bytes;
-          if (!writes.bytes && isOpen(source)) source.resume?.();
+          if (!writes.bytes && isOpen(source) && isOpen(socket)) source.resume?.();
         });
       } else sendFrame(socket, frame);
       return true;

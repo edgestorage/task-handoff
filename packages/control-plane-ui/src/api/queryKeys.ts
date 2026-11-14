@@ -1,6 +1,8 @@
 export const controlPlaneQueryKeys = {
   status: ["control-plane-status"] as const,
   settings: ["control-plane-settings"] as const,
+  desktopTurn: ["control-plane-desktop-turn"] as const,
+  desktopConnectionOptions: (instanceId?: string) => instanceId ? ["desktop-connection-options", instanceId] as const : ["desktop-connection-options"] as const,
   mobileSessions: ["control-plane-mobile-sessions"] as const,
   cliSessions: ["control-plane-cli-sessions"] as const,
   currentAccess: ["control-plane-current-access"] as const,

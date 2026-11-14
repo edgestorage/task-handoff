@@ -23,6 +23,7 @@ import {
   floatingPreviewMediaAspectRatio,
   floatingPreviewLayout,
   floatingPreviewPreferenceForFrame,
+  floatingPreviewPreferenceForCollapse,
   FLOATING_PREVIEW_MAX_WIDTH,
   FLOATING_PREVIEW_MIN_WIDTH,
   resistedFloatingPreviewDrag,
@@ -255,12 +256,11 @@ function FloatingPreviewContent({
   const toggleCollapsed = useCallback((collapsed: boolean) => {
     const current = gestureContext.current;
     const frame = frameRef.current;
-    const expandedWidth = current.preference.collapsed ? current.preference.width : frame.width;
-    const nextPreference = floatingPreviewPreferenceForFrame({
+    const nextPreference = floatingPreviewPreferenceForCollapse({
       collapsed,
-      expandedWidth,
+      preference: current.preference,
       frame,
-      mediaAspectRatio,
+      mediaAspectRatio: current.mediaAspectRatio,
       viewport: current.viewport,
     });
     current.applyFrame(floatingPreviewLayout(current.viewport, nextPreference, current.mediaAspectRatio).frame, true);
@@ -270,7 +270,7 @@ function FloatingPreviewContent({
       preference: nextPreference,
       sessionId,
     });
-  }, [controlPlaneId, instanceId, mediaAspectRatio, sessionId]);
+  }, [controlPlaneId, instanceId, sessionId]);
 
   // PanResponder retains these callbacks; gestureContext keeps them current without rerendering the card.
   // eslint-disable-next-line react-hooks/refs
@@ -334,6 +334,7 @@ function FloatingPreviewContent({
       onPanResponderMove: (_event, gesture) => {
         const frame = resizeFloatingPreviewFrame({
           dx: gesture.dx,
+          dy: gesture.dy,
           edge,
           mediaAspectRatio: gestureContext.current.mediaAspectRatio,
           start: resizeStartRef.current,
@@ -343,7 +344,7 @@ function FloatingPreviewContent({
       },
       onPanResponderRelease: (_event, gesture) => {
         const current = gestureContext.current;
-        const frame = resizeFloatingPreviewFrame({ dx: gesture.dx, edge, mediaAspectRatio: current.mediaAspectRatio, start: resizeStartRef.current, viewport: current.viewport });
+        const frame = resizeFloatingPreviewFrame({ dx: gesture.dx, dy: gesture.dy, edge, mediaAspectRatio: current.mediaAspectRatio, start: resizeStartRef.current, viewport: current.viewport });
         current.applyFrame(frame, true);
         current.persistFrame(frame, false, frame.width);
         setResizing(false);
@@ -424,7 +425,6 @@ function FloatingPreviewContent({
     {...dragPanResponder.panHandlers}
   >
     <Pressable
-      accessibilityHint={preference.collapsed ? undefined : t('remoteDesktop.previewHint')}
       accessibilityLabel={preference.collapsed
         ? `${t('remoteDesktop.expandPreview')}: ${title}`
         : `${t('remoteDesktop.open')}: ${title}`}
@@ -513,7 +513,7 @@ function FloatingPreviewContent({
         style={[styles.resizeHandle, styles.resizeHandleLeft]}
         testID="session-remote-desktop-floating-preview-resize-left"
         {...resizeResponders.left.panHandlers}
-      ><View style={[styles.resizeGrip, { backgroundColor: colors.border }]} /></View>
+      ><View style={[styles.resizeGrip, styles.resizeGripLeft, { borderColor: colors.textMuted }]} /></View>
       <View
         accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
         accessibilityLabel={t('remoteDesktop.resizePreview')}
@@ -527,7 +527,7 @@ function FloatingPreviewContent({
         style={[styles.resizeHandle, styles.resizeHandleRight]}
         testID="session-remote-desktop-floating-preview-resize-right"
         {...resizeResponders.right.panHandlers}
-      ><View style={[styles.resizeGrip, { backgroundColor: colors.border }]} /></View>
+      ><View style={[styles.resizeGrip, styles.resizeGripRight, { borderColor: colors.textMuted }]} /></View>
     </>}
     <Pressable
       accessibilityLabel={t('remoteDesktop.closePreview')}
@@ -591,10 +591,12 @@ const styles = StyleSheet.create({
   collapsedRow: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 8, paddingHorizontal: 12 },
   collapsedIcon: { alignItems: 'center', borderRadius: 12, height: 28, justifyContent: 'center', width: 28 },
   collapsedTitle: { flex: 1, fontSize: 13, fontWeight: '500', lineHeight: 18, minWidth: 0 },
-  resizeHandle: { alignItems: 'center', bottom: 30, justifyContent: 'center', position: 'absolute', top: 30, width: 20 },
-  resizeHandleLeft: { left: -10 },
-  resizeHandleRight: { right: -10 },
-  resizeGrip: { borderRadius: 2, height: 28, opacity: 0.72, width: 3 },
+  resizeHandle: { alignItems: 'center', bottom: -15, height: 48, justifyContent: 'center', position: 'absolute', width: 48 },
+  resizeHandleLeft: { left: -15 },
+  resizeHandleRight: { right: -15 },
+  resizeGrip: { borderBottomWidth: 1.5, height: 10, opacity: 0.55, width: 10 },
+  resizeGripLeft: { borderBottomLeftRadius: 10, borderLeftWidth: 1.5 },
+  resizeGripRight: { borderBottomRightRadius: 10, borderRightWidth: 1.5 },
   close: {
     alignItems: 'center',
     borderRadius: 14,

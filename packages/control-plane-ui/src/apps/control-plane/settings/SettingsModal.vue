@@ -103,6 +103,8 @@
 
       <UserAccessSettingsSection v-else-if="settingsSection === 'users'" :nodes="nodes.data.value || []" :instances="instances" :read-only="authSession.data.value?.enabled === false" />
 
+      <RemoteDesktopSettingsSection v-else-if="settingsSection === 'remote-desktop'" />
+
       <CloudConnectivitySettingsSection v-else-if="settingsSection === 'cloud-connectivity'" />
 
       <GitCredentialsSettingsSection v-else-if="settingsSection === 'git-credentials'" />
@@ -531,6 +533,7 @@ import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
 import EnvironmentTemplatesSettings from "./EnvironmentTemplatesSettings.vue";
 import ImageSettingsSection from "./ImageSettingsSection.vue";
+import RemoteDesktopSettingsSection from "./RemoteDesktopSettingsSection.vue";
 import CloudConnectivitySettingsSection from "./CloudConnectivitySettingsSection.vue";
 import GitCredentialsSettingsSection from "./GitCredentialsSettingsSection.vue";
 import ModelSettingsSection from "./ModelSettingsSection.vue";

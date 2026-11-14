@@ -10,3 +10,4 @@ export * from "./client.ts";
 export * from "./device-auth.ts";
 export * from "./e2e.ts";
 export * from "./mobile-client.ts";
+export * from "./turn.ts";

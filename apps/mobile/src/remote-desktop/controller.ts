@@ -1,3 +1,5 @@
+import type { DesktopConnectionOptions } from '@task-handoff/protocol/control-plane-desktop';
+import { RemoteDesktopDecodeQueue } from './decode-queue';
 import {
   DesktopFallbackFrameAssembler,
   DesktopViewerSourcesSchema,
@@ -161,8 +163,7 @@ export class RemoteDesktopController {
   private statsPeer?: RTCPeerConnection;
   private webRTCReceiveSample?: RemoteDesktopWebRTCReceiveSample;
   private availabilityTimer?: ReturnType<typeof setTimeout>;
-  private decodeQueue = Promise.resolve();
-  private decodeBacklog = 0;
+  private readonly decodeQueue = new RemoteDesktopDecodeQueue();
   private fallbackDiagnosticFrames = 0;
   private decoderErrorSubscription?: { remove(): void };
   private stopDecoderSubscription?: () => void;
@@ -183,11 +184,12 @@ export class RemoteDesktopController {
       transportAvailability: { ...input.transportAvailability },
     };
     try {
-      this.decoderErrorSubscription = subscribeRemoteDesktopDecoderErrors(() => {
+      this.decoderErrorSubscription = subscribeRemoteDesktopDecoderErrors((event) => {
         if (this.destroyed || this.fallbackState === 'idle') return;
+        this.decodeQueue.clear();
         this.fallbackNeedsKeyframe = true;
         this.fallbackDroppedFrames += 1;
-        void resetRemoteDesktopDecoder().catch(() => undefined);
+        if (event.code !== 'REMOTE_DESKTOP_DECODER_BACKPRESSURE') void resetRemoteDesktopDecoder().catch(() => undefined);
         this.requestFallbackKeyframe();
       });
     } catch {
@@ -249,7 +251,7 @@ export class RemoteDesktopController {
         });
         return;
       }
-      const created = await this.input.api.createSession(this.input.instanceId, selection);
+      const created = await this.input.api.createSession(this.input.instanceId, selection, undefined, this.snapshotValue.connectionOptions ? (this.snapshotValue.transportAvailability.turn ? 'custom' : 'none') : undefined);
       if (this.destroyed || this.stopping || !this.current(epoch)) {
         await this.input.api.stop(this.input.instanceId, created.snapshot.viewerSessionId).catch(() => undefined);
         return;
@@ -393,6 +395,10 @@ export class RemoteDesktopController {
 
   setVideoCodecs(codecs: readonly string[]) {
     this.videoCodecs = codecs;
+  }
+
+  setConnectionOptions(options: DesktopConnectionOptions | null) {
+    this.update({ connectionOptions: options ?? undefined });
   }
 
   setTransportAvailability(availability: RemoteDesktopTransportAvailability) {
@@ -855,6 +861,7 @@ export class RemoteDesktopController {
       this.fallbackFrameRate = fps;
       diagnosticLog.info('remote.desktop.fallback.configure', { attempt, codec, width, height, fps, bitrate });
       this.fallbackConfigKey = `${codec}:${width}x${height}:${fps}:${bitrate}`;
+      this.decodeQueue.clear();
       this.fallbackAssembler.reset();
       this.fallbackNeedsKeyframe = true;
       this.fallbackFirstFrame = false;
@@ -916,6 +923,7 @@ export class RemoteDesktopController {
       });
     }
     if (assembled.skippedFrames) {
+      this.decodeQueue.clear();
       this.fallbackDroppedFrames += 1;
       this.fallbackNeedsKeyframe = true;
     }
@@ -926,7 +934,6 @@ export class RemoteDesktopController {
     }
     const timestampUs = Number(assembled.timestampUs);
     if (!Number.isFinite(timestampUs)) return;
-    this.decodeBacklog += 1;
     const generation = this.epoch;
     if (traceFallbackFrame) {
       diagnosticLog.info('remote.desktop.fallback.decode.enqueue', {
@@ -936,47 +943,54 @@ export class RemoteDesktopController {
         generation,
         epoch: this.epoch,
         state: this.fallbackState,
-        backlog: this.decodeBacklog,
+        backlog: this.decodeQueue.size,
       });
     }
-    this.decodeQueue = this.decodeQueue.then(async () => {
-      if (traceFallbackFrame) {
-        diagnosticLog.info('remote.desktop.fallback.decode.start', {
-          frameId: assembled.frameId,
-          keyframe: assembled.keyframe,
-          generation,
-          epoch: this.epoch,
-          state: this.fallbackState,
-        });
-      }
-      if (this.destroyed || generation !== this.epoch || this.fallbackState === 'idle') return;
-      if (!this.active) {
-        this.fallbackNeedsKeyframe = true;
-        return;
-      }
-      await decodeRemoteDesktopFrame(assembled.payload, assembled.keyframe, timestampUs);
-      this.fallbackFramesDecoded += 1;
-      if (assembled.keyframe) this.fallbackNeedsKeyframe = false;
-      if (!this.fallbackFirstFrame) {
-        this.fallbackFirstFrame = true;
-        this.update({
-          videoWidth: this.fallbackWidth(),
-          videoHeight: this.fallbackHeight(),
-          videoCodec: this.fallbackCodec,
-          videoFrameRate: this.fallbackFrameRate || undefined,
-          phase: this.snapshotValue.paused ? 'paused' : 'connected',
-        });
-      }
-    }).catch((cause) => {
-      diagnosticLog.warn('remote.desktop.fallback.decode.failed', {
-        frameId: assembled.frameId,
-        keyframe: assembled.keyframe,
-        message: errorMessage(cause),
-      });
+    const accepted = this.decodeQueue.enqueue({
+      bytes: assembled.payload.byteLength,
+      run: async (isCurrent) => {
+        try {
+          if (traceFallbackFrame) {
+            diagnosticLog.info('remote.desktop.fallback.decode.start', {
+              frameId: assembled.frameId, keyframe: assembled.keyframe,
+              generation, epoch: this.epoch, state: this.fallbackState,
+            });
+          }
+          if (!isCurrent() || this.destroyed || generation !== this.epoch
+            || attempt !== this.fallbackAttempt || this.fallbackState === 'idle') return;
+          if (!this.active) {
+            this.fallbackNeedsKeyframe = true;
+            return;
+          }
+          await decodeRemoteDesktopFrame(assembled.payload, assembled.keyframe, timestampUs);
+          if (!isCurrent() || this.destroyed || generation !== this.epoch || attempt !== this.fallbackAttempt) return;
+          this.fallbackFramesDecoded += 1;
+          if (assembled.keyframe) this.fallbackNeedsKeyframe = false;
+          if (!this.fallbackFirstFrame) {
+            this.fallbackFirstFrame = true;
+            this.update({
+              videoWidth: this.fallbackWidth(), videoHeight: this.fallbackHeight(),
+              videoCodec: this.fallbackCodec, videoFrameRate: this.fallbackFrameRate || undefined,
+              phase: this.snapshotValue.paused ? 'paused' : 'connected',
+            });
+          }
+        } catch (cause) {
+          if (!isCurrent() || generation !== this.epoch || attempt !== this.fallbackAttempt) return;
+          this.decodeQueue.clear();
+          diagnosticLog.warn('remote.desktop.fallback.decode.failed', {
+            frameId: assembled.frameId, keyframe: assembled.keyframe, message: errorMessage(cause),
+          });
+          this.fallbackNeedsKeyframe = true;
+          void resetRemoteDesktopDecoder().catch(() => undefined);
+          this.requestFallbackKeyframe();
+        }
+      },
+    });
+    if (!accepted) {
+      this.fallbackDroppedFrames += 1;
       this.fallbackNeedsKeyframe = true;
-      void resetRemoteDesktopDecoder().catch(() => undefined);
       this.requestFallbackKeyframe();
-    }).finally(() => { this.decodeBacklog = Math.max(0, this.decodeBacklog - 1); });
+    }
   }
 
   private handleFallbackControlMessage(value: any, attempt: number) {
@@ -1083,7 +1097,7 @@ export class RemoteDesktopController {
     if (now - this.fallbackLastMetricsLogAt >= 900) {
       const metrics = {
         receiveMbps: bandwidth.mbps,
-        decodeQueueSize: this.decodeBacklog,
+        decodeQueueSize: this.decodeQueue.size,
         rttMs: latency.latencyMs,
         droppedFrames: this.fallbackDroppedFrames,
         receivedFrames: this.fallbackFramesReceived,
@@ -1736,6 +1750,7 @@ export class RemoteDesktopController {
   }
 
   private closeFallbackSockets(reason: string) {
+    this.decodeQueue.clear();
     const media = this.fallbackMedia;
     const control = this.fallbackControl;
     this.fallbackMedia = undefined;

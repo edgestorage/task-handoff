@@ -13,8 +13,16 @@
         :data-instance-id="instanceId"
         :data-session-key="tab.key"
       >
+        <SessionRemoteDesktopSurface
+          v-if="canInteract && remoteDesktopSessionId(tab)"
+          :instance-id="instanceId"
+          :session-id="remoteDesktopSessionId(tab)"
+          :capabilities="instanceCapabilities[instanceId]"
+          :active="isActiveTab(instanceId, tab.key)"
+          :target="sessionRemoteDesktopLinkFor(instanceId, remoteDesktopSessionId(tab))?.target"
+        />
         <InstanceRemoteDesktopViewer
-          v-if="canInteract"
+          v-else-if="canInteract"
           :active="isActiveTab(instanceId, tab.key)"
           :auto-connect="Boolean(remoteDesktopSessionId(tab))"
           :can-manage="canManage"
@@ -33,6 +41,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch, type CSSProperties } from "vue";
 import type { SessionTab } from "../useInstanceSessions";
+import SessionRemoteDesktopSurface from "../../../components/remote-desktop/SessionRemoteDesktopSurface.vue";
 import InstanceRemoteDesktopViewer from "./InstanceRemoteDesktopViewer.vue";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
 import { requestCloseSessionRemoteDesktop } from "./sessionRemoteDesktopEvents";

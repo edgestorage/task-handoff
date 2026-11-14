@@ -60,6 +60,8 @@ const EVENT_PERMISSION_PREFIXES: ReadonlyArray<readonly [string, ControlPlanePer
   ["git.", "instances:read"],
   ["device-trust", "settings:manage"],
   ["cloud-node-relay", "settings:manage"],
+  ["desktop-turn.", "settings:manage"],
+  ["desktop-connection-options.", "instances:interactive"],
 ];
 
 /** Events are a read surface. Unknown families fail closed instead of inheriting a broad allow. */
@@ -100,6 +102,9 @@ function apiRouteAuthorization(method: string, path: string): { action: ControlP
     return { action: "manage-settings", resource: { type: "control-plane-settings" } };
   }
   if (path === "/api/control-plane/relay-trace" || path.startsWith("/api/control-plane/relay-trace/") || path === "/api/control-plane/node-relay-trace" || path.startsWith("/api/control-plane/node-relay-trace/")) {
+    return { action: "manage-settings", resource: { type: "control-plane-settings" } };
+  }
+  if (path === "/api/control-plane/desktop-turn") {
     return { action: "manage-settings", resource: { type: "control-plane-settings" } };
   }
   if (path.startsWith("/api/control-plane/settings")) {

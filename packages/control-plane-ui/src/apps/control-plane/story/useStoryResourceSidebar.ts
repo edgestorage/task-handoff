@@ -10,6 +10,7 @@ import {
   type StoryRepositoryResourceRef,
   type StoryEmbeddedBrowserResourceRef,
   type StoryResourceRef,
+  type StoryRemoteDesktopResourceRef,
 } from "./storyResources.ts";
 import { reorderStoryResourceKeys, type StoryResourceDropPlacement } from "./storyResourceOrder.ts";
 import { createBrowserUuid } from "../../../lib/random-id.ts";
@@ -56,6 +57,7 @@ export function useStoryResourceSidebar(input: {
   const width = ref(storedWidth());
   const repositoryByAiSession = reactive<Record<string, StoryRepositoryResourceRef[]>>({});
   const browserByAiSession = reactive<Record<string, StoryEmbeddedBrowserResourceRef[]>>({});
+  const desktopByAiSession = reactive<Record<string, StoryRemoteDesktopResourceRef>>({});
   const activeByAiSession = reactive<Record<string, string>>({});
   const pendingAppByAiSession = reactive<Record<string, string>>({});
   const orderByAiSession = reactive<Record<string, string[]>>({});
@@ -75,6 +77,7 @@ export function useStoryResourceSidebar(input: {
       ...instanceAppResourceRefs(instanceId, input.instances.value),
       ...repositoryResourcesForContext(contextKey.value, repositoryByAiSession),
       ...(browserByAiSession[contextKey.value] || []),
+      ...(desktopByAiSession[contextKey.value] ? [desktopByAiSession[contextKey.value]!] : []),
     ];
   });
   const resources = computed<StoryResourceRef[]>(() => {
@@ -196,6 +199,19 @@ export function useStoryResourceSidebar(input: {
     }
   }
 
+  function openRemoteDesktop(instanceId: string, aiSessionId: string) {
+    if (!aiSessionId || aiSessionId !== input.aiSessionId.value || instanceId !== input.instanceId.value) return;
+    const resource: StoryRemoteDesktopResourceRef = { kind: "remote-desktop", instanceId, aiSessionId };
+    desktopByAiSession[contextKey.value] = resource;
+    select(resource);
+  }
+
+  function removeRemoteDesktop(resource: StoryRemoteDesktopResourceRef) {
+    const key = aiSessionResourceContextKey(resource.instanceId, resource.aiSessionId);
+    delete desktopByAiSession[key];
+  }
+
+  const allRemoteDesktopResources = computed(() => Object.values(desktopByAiSession));
   const allBrowserResources = computed(() => Object.values(browserByAiSession).flat());
 
   function focusApp(instanceId: string, sessionId: string) {
@@ -233,6 +249,9 @@ export function useStoryResourceSidebar(input: {
     updateBrowser,
     removeBrowser,
     allBrowserResources,
+    allRemoteDesktopResources,
+    openRemoteDesktop,
+    removeRemoteDesktop,
     focusApp,
     reorder,
   };

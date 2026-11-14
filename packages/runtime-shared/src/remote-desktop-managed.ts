@@ -1,3 +1,4 @@
+import { STREAMING_WEBSOCKET_BRIDGE_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 /** CP → node-agent → instance private transport. This module is deliberately
  * outside the public protocol entry: callers cannot supply URLs or headers. */
 import { z } from "zod";
@@ -44,4 +45,15 @@ export function desktopManagedEndpoint(operation: DesktopManagedOperation) {
   if (operation === "settings-get") return { method: "GET", path: "/api/internal/remote-desktop/settings" };
   if (operation === "settings-set") return { method: "PUT", path: "/api/internal/remote-desktop/settings" };
   return { method: "POST", path: `/api/internal/remote-desktop/${operation}` };
+}
+
+/** Transport-local policy, derived from the existing managed endpoint. It is
+ * never sent over the wire. Keep ordinary proxies' cumulative limits intact. */
+export const DESKTOP_FALLBACK_BRIDGE_OPTIONS = STREAMING_WEBSOCKET_BRIDGE_OPTIONS;
+
+export function managedWebSocketBridgeOptions(route: string) {
+  const pathname = route.split("?", 1)[0];
+  return /^\/instances\/[^/]+\/remote-desktop\/fallback\/(media|control)$/.test(pathname)
+    ? DESKTOP_FALLBACK_BRIDGE_OPTIONS
+    : {};
 }

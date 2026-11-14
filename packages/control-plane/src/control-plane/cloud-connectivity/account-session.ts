@@ -39,7 +39,10 @@ export class CloudAccountSessionService {
   private readonly serviceOrigin: string;
   private readonly clock: () => number;
 
-  constructor(options: { statePath: string; serviceOrigin: string; clock?: () => number }) {
+  private readonly onSignedInChanged?: () => void;
+
+  constructor(options: { statePath: string; serviceOrigin: string; clock?: () => number; onSignedInChanged?: () => void }) {
+    this.onSignedInChanged = options.onSignedInChanged;
     this.serviceOrigin = new URL(options.serviceOrigin).origin;
     this.clock = options.clock ?? Date.now;
     this.state = new JsonFile<CloudAccountSessionState>(options.statePath, () => ({
@@ -55,12 +58,19 @@ export class CloudAccountSessionService {
     this.state.init();
     const current = this.state.get();
     if (current.serviceOrigin !== this.serviceOrigin) {
-      this.state.put({ version: 1, serviceOrigin: this.serviceOrigin, status: "signed-out", updatedAt: new Date(this.clock()).toISOString() });
+      this.put({ version: 1, serviceOrigin: this.serviceOrigin, status: "signed-out", updatedAt: new Date(this.clock()).toISOString() });
       return;
     }
     if (current.status !== "signed-out" && current.pendingExpiresAt && Date.parse(current.pendingExpiresAt) <= this.clock()) {
-      this.state.put({ ...current, status: current.refreshCredential ? "signed-in" : "signed-out", pendingRequestId: undefined, pendingAuthorizationUrl: undefined, pendingScope: undefined, pendingExpiresAt: undefined, pendingOwnerUserId: undefined, updatedAt: new Date(this.clock()).toISOString() });
+      this.put({ ...current, status: current.refreshCredential ? "signed-in" : "signed-out", pendingRequestId: undefined, pendingAuthorizationUrl: undefined, pendingScope: undefined, pendingExpiresAt: undefined, pendingOwnerUserId: undefined, updatedAt: new Date(this.clock()).toISOString() });
     }
+  }
+
+  private put(value: CloudAccountSessionState) {
+    const before = Boolean(this.state.get().refreshCredential);
+    const result = this.state.put(value);
+    if (before !== Boolean(result.refreshCredential)) this.onSignedInChanged?.();
+    return result;
   }
 
   snapshot() {
@@ -116,7 +126,7 @@ export class CloudAccountSessionService {
 
   beginRequest(input: { requestId: string; authorizationUrl: string; scope: string; expiresAt: string; ownerUserId?: string }) {
     const current = this.state.get();
-    this.state.put({
+    this.put({
       ...current, status: "pending", pendingRequestId: input.requestId, pendingAuthorizationUrl: input.authorizationUrl,
       pendingScope: input.scope, pendingExpiresAt: input.expiresAt, pendingOwnerUserId: input.ownerUserId, lastRequestFailure: undefined,
       updatedAt: new Date(this.clock()).toISOString(),
@@ -130,7 +140,7 @@ export class CloudAccountSessionService {
       ? current.pendingOwnerUserId
       : undefined;
     const ownerUserId = deliveredOwnerUserId ?? (current.accountId === input.accountId ? current.ownerUserId : undefined);
-    this.state.put({
+    this.put({
       version: 1, serviceOrigin: current.serviceOrigin, status: "signed-in",
       accountId: input.accountId, email: input.email ?? current.email, deviceSessionId: input.deviceSessionId,
       refreshCredential: input.refreshCredential, sessionExpiresAt: input.sessionExpiresAt,
@@ -154,7 +164,7 @@ export class CloudAccountSessionService {
     const current = this.state.get();
     if (current.pendingRequestId !== input.requestId) return this.snapshot();
     const signedIn = Boolean(current.refreshCredential);
-    this.state.put({
+    this.put({
       ...current, status: signedIn ? "signed-in" : "signed-out",
       pendingRequestId: undefined, pendingAuthorizationUrl: undefined, pendingScope: undefined, pendingExpiresAt: undefined,
       pendingOwnerUserId: undefined,
@@ -173,7 +183,7 @@ export class CloudAccountSessionService {
     // Signing out ends the account credential session but does not unbind the
     // relay. Retain the private binding owner so the same administrator can
     // sign in again; an explicit unbind is the only ownership transfer point.
-    this.state.put({
+    this.put({
       ...current,
       status: "signed-out",
       deviceSessionId: undefined,

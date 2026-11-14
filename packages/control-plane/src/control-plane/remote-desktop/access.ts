@@ -28,7 +28,7 @@ type Entry = {
   captureSelection: DesktopCaptureSelection; attachToken?: string; initialTicket?: string;
   attached?: boolean; attachTask?: Promise<void>;
   signalBind?: (socket: NodeAgentWebSocket) => void; signalSend?: (value: unknown) => void;
-  ice: DesktopIceConfig; socket?: NodeAgentWebSocket; release?: () => void;
+  ice: DesktopIceConfig; issueIce: () => DesktopIceConfig; socket?: NodeAgentWebSocket; release?: () => void;
   timers: Set<ReturnType<typeof setTimeout>>; closed: boolean;
   transportLossTimer?: ReturnType<typeof setTimeout>;
   upstreamHeartbeat?: ReturnType<typeof setInterval>;
@@ -117,7 +117,7 @@ export class DesktopAccess {
     for (const rate of rateKeys) this.rates.set(rate, [...(this.rates.get(rate) ?? []), this.now()]);
     const promise = run(); this.retries.set(key, { until: this.now() + 30_000, input: encoded, promise, principalKey: desktopPrincipalKey(principal) }); return promise;
   }
-  async create(principal: DesktopPrincipal, instanceId: string, nodeId: string, requestId: string, captureSelection: DesktopCaptureSelection, takeoverId?: string, ice = this.options.issueIce()) {
+  async create(principal: DesktopPrincipal, instanceId: string, nodeId: string, requestId: string, captureSelection: DesktopCaptureSelection, takeoverId?: string, ice = this.options.issueIce(), issueIce = () => this.options.issueIce()) {
     const result = await this.options.request(instanceId, takeoverId ? "takeover" : "reserve", {
       requestId, owner: desktopOwner(principal), captureSelection, ...(takeoverId ? { viewerSessionId: takeoverId } : {}),
     }) as Record<string, unknown>;
@@ -132,7 +132,7 @@ export class DesktopAccess {
     // roundtrip in the caller; authority may additionally expose a shorter one.
     const authorityDeadline = typeof result.attachExpiresAt === "number" ? result.attachExpiresAt : this.now();
     const expires = Math.min(this.now() + 30_000, authorityDeadline, principal.expiresAt ?? Infinity);
-    const entry: Entry = { principal, key: desktopPrincipalKey(principal), instanceId, nodeId, viewerSessionId: snapshot.viewerSessionId, captureSelection, attachToken: result.attachToken, ice, timers: new Set(), closed: false };
+    const entry: Entry = { principal, key: desktopPrincipalKey(principal), instanceId, nodeId, viewerSessionId: snapshot.viewerSessionId, captureSelection, attachToken: result.attachToken, ice, issueIce, timers: new Set(), closed: false };
     const ticket = randomBytes(32).toString("base64url"); entry.initialTicket = ticket;
     entry.release = this.options.watch?.(principal, () => void this.close(entry));
     this.entries.set(entry.viewerSessionId, entry); this.tickets.set(ticket, { entry, expiresAt: expires });
@@ -323,7 +323,7 @@ export class DesktopAccess {
       this.timer(entry, entry.ice.iceCredentialsExpiresAt - this.now() - 120_000, () => {
         void (async () => {
           if (entry.closed || negotiation || configuring || !(await this.options.renewAuthorization(entry.principal))) throw failure("REMOTE_DESKTOP_AUTHORIZATION_CHANGED");
-          renewal = this.options.issueIce();
+          renewal = entry.issueIce();
           configuring = randomBytes(16).toString("hex");
           forward({ type: "configureIce", requestId: configuring, ...renewal });
           send({ type: "configureIce", requestId: configuring, ...renewal });

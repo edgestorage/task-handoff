@@ -1,3 +1,4 @@
+import { managedWebSocketBridgeOptions } from "@task-handoff/runtime-shared/remote-desktop-managed";
 import crypto from "node:crypto";
 import {
   CONTROL_PLANE_PROXY_AUTH_HEADERS,
@@ -154,6 +155,7 @@ export class ControlPlaneProxyNodeAgentTransport implements NodeAgentTransport {
       upstream.send(frame);
     });
     bridgeWebSockets(socket, upstream, {
+      ...managedWebSocketBridgeOptions(route),
       onUpstreamError: () => socket.close(1011, "Control-plane proxy websocket failed."),
       onUpstreamErrorBeforeOpen: () => true,
     });

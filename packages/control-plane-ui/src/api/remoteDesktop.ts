@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { CustomTurnSettingsSchema, DesktopConnectionOptionsSchema, type CustomTurnUpdate } from "@task-handoff/protocol/control-plane-desktop";
+import { ApiError } from "./client";
+
 import {
   DesktopCreatedSchema,
   DesktopFallbackSessionSchema,
@@ -19,8 +22,8 @@ export async function listRemoteDesktopSources(instanceId: string, signal?: Abor
   const value = await getApiData<{ sources: RemoteDesktopSource[] }>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop/sources`, { signal });
   return { sources: DesktopSourcesSchema.parse(value.sources) };
 }
-export function createRemoteDesktopSession(instanceId: string, selection: DesktopCaptureSelection) {
-  return postApiData<RemoteDesktopCreated>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop-sessions`, { requestId: createBrowserUuid(), selection }).then(value => DesktopCreatedSchema.parse(value));
+export function createRemoteDesktopSession(instanceId: string, selection: DesktopCaptureSelection, turnSource?: "none" | "custom") {
+  return postApiData<RemoteDesktopCreated>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop-sessions`, { requestId: createBrowserUuid(), selection, ...(turnSource ? { turnSource } : {}) }).then(value => DesktopCreatedSchema.parse(value));
 }
 export function stopRemoteDesktopSession(instanceId: string, viewerSessionId: string) {
   return deleteApiData<{ stopped: boolean }>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop-sessions/${encodeURIComponent(viewerSessionId)}`, { requestId: createBrowserUuid() });
@@ -52,4 +55,21 @@ export function takeoverRemoteDesktopSession(instanceId: string, viewerSessionId
 }
 export function forceStopRemoteDesktopSession(instanceId: string, viewerSessionId: string) {
   return postApiData<{ stopped: boolean }>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop-sessions/${encodeURIComponent(viewerSessionId)}/force-stop`, { requestId: createBrowserUuid() });
+}
+
+export async function getDesktopConnectionOptions(instanceId: string, signal?: AbortSignal) {
+  try {
+    return DesktopConnectionOptionsSchema.parse(await getApiData(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop/connection-options`, { signal }));
+  } catch (error) {
+    // Compatibility for v0.0.51: absent additive endpoint disables only the
+    // new TURN choices; P2P and WebSocket remain usable.
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+export async function getCustomTurnSettings() {
+  return CustomTurnSettingsSchema.parse(await getApiData("control-plane/desktop-turn"));
+}
+export async function updateCustomTurnSettings(input: CustomTurnUpdate) {
+  return CustomTurnSettingsSchema.parse(await putApiData("control-plane/desktop-turn", input));
 }

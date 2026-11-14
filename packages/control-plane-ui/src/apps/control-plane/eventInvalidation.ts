@@ -8,6 +8,8 @@ export type InvalidationEvent = {
 export function controlPlaneEventDomains(events: InvalidationEvent[]): ControlPlaneQueryDomain[] {
   const topics = new Set(events.map((event) => event.topic).filter(Boolean));
   const domains: ControlPlaneQueryDomain[] = [];
+  if (events.some(event => event.type === "desktop-turn.updated")) domains.push("desktopTurn");
+  if (topics.has("desktop-connection-options")) domains.push("desktopConnectionOptions");
   if (topics.has("node.state")) domains.push("nodeState");
   if (topics.has("node.runtime")) domains.push("nodeRuntimeState");
   if (topics.has("nodes")) domains.push("nodeTopology");

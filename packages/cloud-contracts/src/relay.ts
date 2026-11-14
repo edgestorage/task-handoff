@@ -491,3 +491,8 @@ export type RelaySelectionFallback = z.infer<typeof RelaySelectionFallbackSchema
 export type RelayCandidateMeasurement = z.infer<typeof RelayCandidateMeasurementSchema>;
 export type RelayAttachCapability = z.infer<typeof RelayAttachCapabilitySchema>;
 export type RelayRateLimit = z.infer<typeof RelayRateLimitSchema>;
+
+/** Capability names are additive; missing declarations disable only this feature. */
+export function relayHasCapability(capabilities: unknown, capability: string): boolean {
+  return RelayCapabilitiesSchema.safeParse(capabilities).data?.includes(capability) === true;
+}

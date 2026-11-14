@@ -1,12 +1,11 @@
-import { EventEmitter } from "node:events";
+import { createBrowserChannelSocket } from "../instances/browser-channel-socket.ts";
 import { controlledInstanceRemoteDesktopCapabilities } from "@task-handoff/protocol/control-plane";
 import {
   parseRemoteDesktopRelayPath,
   remoteDesktopRelaySubprotocol,
 } from "@task-handoff/protocol/remote-desktop";
-import { browserChannelError, type BrowserChannel, type BrowserChannelHandlers } from "@task-handoff/protocol/relay-browser-channel";
+import { type BrowserChannel, type BrowserChannelHandlers } from "@task-handoff/protocol/relay-browser-channel";
 import { assertCan, instanceScopeAllows, type ControlPlaneActor } from "../auth/authorization.ts";
-import type { NodeAgentWebSocket } from "../nodes/client.ts";
 import type { DesktopAccess } from "./access.ts";
 
 type RemoteDesktopAccess = Pick<DesktopAccess, "consume" | "consumeFallback" | "connect" | "connectFallback">;
@@ -66,59 +65,4 @@ export async function openRemoteDesktopRelayChannel(
 /** One Relay channel is one NodeAgentWebSocket in both directions. Upstream
  * frames become BrowserChannel messages; client frames are emitted to the
  * desktop access layer with their original text/binary identity. */
-export function createRemoteDesktopChannel(handlers: BrowserChannelHandlers) {
-  const emitter = new EventEmitter();
-  let readyState = 1;
-  let closed = false;
-  let outgoing = Promise.resolve();
-  const closeUpstream = (error?: Error) => {
-    if (closed) return;
-    closed = true;
-    readyState = 3;
-    handlers.onClose(error);
-  };
-  const socket: NodeAgentWebSocket = {
-    get readyState() { return readyState; },
-    on(event, listener) { emitter.on(event, listener); },
-    send(data, options) {
-      if (closed) return;
-      // Tunnel payloads are Buffers on this boundary even when the peer sent a
-      // text WebSocket frame. Preserve an explicit binary flag instead of
-      // inferring from the transport representation, otherwise JSON control
-      // messages become binary fallback frames downstream.
-      const binary = typeof options?.binary === "boolean"
-        ? options.binary
-        : ArrayBuffer.isView(data) || data instanceof ArrayBuffer;
-      const bytes = typeof data === "string"
-        ? new TextEncoder().encode(data)
-        : ArrayBuffer.isView(data)
-          ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-          : data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array();
-      if (!bytes.byteLength) return;
-      outgoing = outgoing.then(() => handlers.onMessage({ bytes, binary })).catch((error: unknown) => {
-        closeUpstream(error instanceof Error ? error : browserChannelError("REMOTE_DESKTOP_CHANNEL_CONSUMER_FAILED"));
-      });
-    },
-    close(code, reason) {
-      if (closed) return;
-      readyState = 3;
-      closeUpstream();
-      emitter.emit("close", code ?? 1000, reason ?? "");
-    },
-  };
-  const channel: BrowserChannel = {
-    send(message) {
-      if (closed) return Promise.reject(browserChannelError("BROWSER_CHANNEL_CLOSED"));
-      if (!emitter.listenerCount("message")) return Promise.reject(browserChannelError("REMOTE_DESKTOP_CHANNEL_UNAVAILABLE"));
-      emitter.emit("message", Buffer.from(message.bytes), message.binary);
-      return Promise.resolve();
-    },
-    close() {
-      if (closed) return;
-      readyState = 3;
-      closed = true;
-      emitter.emit("close", 1000, "Remote desktop channel closed.");
-    },
-  };
-  return { socket, channel };
-}
+export const createRemoteDesktopChannel = createBrowserChannelSocket;

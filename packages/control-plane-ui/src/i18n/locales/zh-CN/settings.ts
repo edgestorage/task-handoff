@@ -2,6 +2,29 @@ import type { MessageShape } from "../en-US/index.ts";
 import type { settings as englishSettings } from "../en-US/settings.ts";
 
 export const settings = {
+  desktopTurn: {
+    "navigation": "远程桌面",
+    "title": "自定义 TURN",
+    "description": "为通过此控制面板打开的远程桌面配置 TURN 服务。",
+    "enabled": "启用自定义 TURN",
+    "urls": "TURN 地址",
+    "urlsHint": "每行一个地址，UDP/TCP 使用 turn:，TLS 使用 turns:。",
+    "authentication": "认证方式",
+    "passwordAuth": "用户名和密码",
+    "sharedSecretAuth": "共享密钥（coturn REST）",
+    "username": "用户名",
+    "password": "密码",
+    "sharedSecret": "共享密钥",
+    "keepSecret": "已配置，留空保留",
+    "secretHint": "凭证加密保存，仅向会话参与端下发。",
+    "sharedSecretHint": "共享密钥仅保存在控制面板，连接时签发临时凭证。本机和 TURN 服务器需保持时间同步。",
+    "loadFailed": "无法加载 TURN 配置。若版本不支持，请更新控制面板。",
+    "invalid": "请检查 TURN 地址，并填写所需认证信息。",
+    "saved": "已保存，新建连接和凭证续期将使用此配置。",
+    "saveFailed": "无法保存 TURN 配置。",
+    "conflict": "配置已在其他位置更新，请取消编辑以加载最新配置后再保存。"
+},
+
   title: "设置",
   appearance: {
     title: "外观",

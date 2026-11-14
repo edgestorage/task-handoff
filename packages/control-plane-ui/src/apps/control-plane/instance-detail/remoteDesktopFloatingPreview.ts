@@ -13,6 +13,7 @@ export const SESSION_REMOTE_DESKTOP_PREVIEW_DEFAULT_MEDIA_ASPECT_RATIO = 9 / 16;
 export type SessionRemoteDesktopPreviewViewport = {
   width: number;
   height: number;
+  topInset?: number;
 };
 
 export type SessionRemoteDesktopPreviewPreference = {
@@ -58,7 +59,7 @@ export function sessionRemoteDesktopPreviewLayout(
   const ratio = normalizeSessionRemoteDesktopPreviewAspectRatio(mediaAspectRatio);
   const maxMediaHeight = Math.max(
     0,
-    viewport.height - SESSION_REMOTE_DESKTOP_PREVIEW_TOP_MARGIN - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN - SESSION_REMOTE_DESKTOP_PREVIEW_FOOTER_HEIGHT,
+    viewport.height - previewTop(viewport) - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN - SESSION_REMOTE_DESKTOP_PREVIEW_FOOTER_HEIGHT,
   );
   const displayWidth = collapsed ? width : Math.min(width, Math.floor(maxMediaHeight / ratio));
   const height = collapsed
@@ -66,7 +67,7 @@ export function sessionRemoteDesktopPreviewLayout(
     : Math.round(displayWidth * ratio) + SESSION_REMOTE_DESKTOP_PREVIEW_FOOTER_HEIGHT;
   const minX = SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN;
   const maxX = Math.max(minX, viewport.width - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN - displayWidth);
-  const minY = SESSION_REMOTE_DESKTOP_PREVIEW_TOP_MARGIN;
+  const minY = previewTop(viewport);
   const maxY = Math.max(minY, viewport.height - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN - height);
   return {
     x: minX + (maxX - minX) * clamp(preference.xRatio, 0, 1),
@@ -83,19 +84,22 @@ export function clampSessionRemoteDesktopPreviewFrame(
   return {
     ...frame,
     x: clamp(frame.x, SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN, Math.max(SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN, viewport.width - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN - frame.width)),
-    y: clamp(frame.y, SESSION_REMOTE_DESKTOP_PREVIEW_TOP_MARGIN, Math.max(SESSION_REMOTE_DESKTOP_PREVIEW_TOP_MARGIN, viewport.height - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN - frame.height)),
+    y: clamp(frame.y, previewTop(viewport), Math.max(previewTop(viewport), viewport.height - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN - frame.height)),
   };
 }
 
 export function resizeSessionRemoteDesktopPreviewFrame(input: {
   dx: number;
+  dy?: number;
   edge: "left" | "right";
   frame: SessionRemoteDesktopPreviewFrame;
   mediaAspectRatio: number;
   viewport: SessionRemoteDesktopPreviewViewport;
 }) {
-  const widthDelta = input.edge === "left" ? -input.dx : input.dx;
   const ratio = normalizeSessionRemoteDesktopPreviewAspectRatio(input.mediaAspectRatio);
+  const horizontal = input.edge === "left" ? -input.dx : input.dx;
+  // Project the corner gesture onto the fixed aspect ratio.
+  const widthDelta = input.dy === undefined ? horizontal : (horizontal + ratio * input.dy) / (1 + ratio * ratio);
   const maxWidth = Math.min(SESSION_REMOTE_DESKTOP_PREVIEW_MAX_WIDTH, input.viewport.width - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN * 2);
   const width = clamp(input.frame.width + widthDelta, SESSION_REMOTE_DESKTOP_PREVIEW_MIN_WIDTH, maxWidth);
   const height = Math.round(width * ratio) + SESSION_REMOTE_DESKTOP_PREVIEW_FOOTER_HEIGHT;
@@ -112,7 +116,7 @@ export function sessionRemoteDesktopPreviewPreferenceForFrame(input: {
 }): SessionRemoteDesktopPreviewPreference {
   const minX = SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN;
   const maxX = Math.max(minX, input.viewport.width - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN - input.frame.width);
-  const minY = SESSION_REMOTE_DESKTOP_PREVIEW_TOP_MARGIN;
+  const minY = previewTop(input.viewport);
   const maxY = Math.max(minY, input.viewport.height - SESSION_REMOTE_DESKTOP_PREVIEW_MARGIN - input.frame.height);
   return {
     collapsed: input.collapsed,
@@ -120,6 +124,27 @@ export function sessionRemoteDesktopPreviewPreferenceForFrame(input: {
     xRatio: maxX === minX ? 1 : clamp((input.frame.x - minX) / (maxX - minX), 0, 1),
     yRatio: maxY === minY ? 1 : clamp((input.frame.y - minY) / (maxY - minY), 0, 1),
   };
+}
+
+export function sessionRemoteDesktopPreviewPreferenceForCollapse(input: {
+  collapsed: boolean;
+  frame: SessionRemoteDesktopPreviewFrame;
+  preference: SessionRemoteDesktopPreviewPreference;
+  viewport: SessionRemoteDesktopPreviewViewport;
+  mediaAspectRatio: number;
+}) {
+  const expandedWidth = input.preference.collapsed ? input.preference.width : input.frame.width;
+  const next = sessionRemoteDesktopPreviewLayout(input.viewport, { ...input.preference, collapsed: input.collapsed, width: expandedWidth }, input.mediaAspectRatio);
+  const frame = clampSessionRemoteDesktopPreviewFrame({
+    ...next,
+    x: input.frame.x + (input.frame.width - next.width) * clamp(input.preference.xRatio, 0, 1),
+    y: input.frame.y + input.frame.height - next.height,
+  }, input.viewport);
+  return sessionRemoteDesktopPreviewPreferenceForFrame({ collapsed: input.collapsed, expandedWidth, frame, viewport: input.viewport });
+}
+
+function previewTop(viewport: SessionRemoteDesktopPreviewViewport) {
+  return Math.max(0, viewport.topInset ?? 0) + SESSION_REMOTE_DESKTOP_PREVIEW_TOP_MARGIN;
 }
 
 function clamp(value: number, min: number, max: number) {

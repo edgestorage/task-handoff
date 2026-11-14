@@ -37,10 +37,16 @@ export const StoryEmbeddedBrowserResourceRefSchema = AiSessionResourceIdentitySc
   status: z.string().trim().min(1).max(40).optional(),
 }).strict();
 
+export const StoryRemoteDesktopResourceRefSchema = AiSessionResourceIdentitySchema.extend({
+  kind: z.literal("remote-desktop"),
+}).strict();
+export type StoryRemoteDesktopResourceRef = z.infer<typeof StoryRemoteDesktopResourceRefSchema>;
+
 export const StoryResourceRefSchema = z.discriminatedUnion("kind", [
   StoryAppResourceRefSchema,
   StoryRepositoryResourceRefSchema,
   StoryEmbeddedBrowserResourceRefSchema,
+  StoryRemoteDesktopResourceRefSchema,
 ]);
 
 export type StoryAppResourceRef = z.infer<typeof StoryAppResourceRefSchema>;
@@ -72,6 +78,8 @@ function parseRepositoryResourceKey(value: readonly unknown[]) {
 export function storyResourceKey(resource: StoryResourceRef) {
   return JSON.stringify(resource.kind === "app-session"
     ? [resource.instanceId, resource.kind, resource.sessionId]
+    : resource.kind === "remote-desktop"
+      ? [resource.aiSessionId, resource.instanceId, resource.kind]
     : resource.kind === "embedded-browser"
       ? [resource.aiSessionId, resource.instanceId, resource.kind, resource.browserTabId]
       : repositoryResourceKeyParts(resource));
@@ -82,6 +90,10 @@ export function parseStoryResourceKey(key: string): StoryResourceRef | undefined
     if (!Array.isArray(value)) return undefined;
     if (value[1] === "app-session") {
       const parsed = StoryAppResourceRefSchema.safeParse({ instanceId: value[0], kind: value[1], sessionId: value[2] });
+      return parsed.success ? parsed.data : undefined;
+    }
+    if (value[2] === "remote-desktop") {
+      const parsed = StoryRemoteDesktopResourceRefSchema.safeParse({ aiSessionId: value[0], instanceId: value[1], kind: value[2] });
       return parsed.success ? parsed.data : undefined;
     }
     if (value[2] === "embedded-browser") {
@@ -164,8 +176,13 @@ export async function closeStoryResourceTarget(
     stopAppSession: (instanceId: string, sessionId: string) => Promise<unknown>;
     closeRepository: (resource: StoryRepositoryResourceRef) => void;
     closeEmbeddedBrowser: (resource: StoryEmbeddedBrowserResourceRef) => void;
+    closeRemoteDesktop: (resource: StoryRemoteDesktopResourceRef) => void;
   },
 ) {
+  if (resource.kind === "remote-desktop") {
+    actions.closeRemoteDesktop(resource);
+    return;
+  }
   if (resource.kind === "repository") {
     actions.closeRepository(resource);
     return;
