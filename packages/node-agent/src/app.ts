@@ -12,6 +12,7 @@ import { z } from "zod";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
 import { nowIso as now } from "@task-handoff/core/core/time";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
+import { installLogStreamErrorHandlers, withSafeLogDestination } from "@task-handoff/core/storage/log-sink";
 import { selectModelNameEntry } from "@task-handoff/core/core/instance-private-model-catalog";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
@@ -1072,7 +1073,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const context = state.context(instance);
     return resolveArtifactForAdapter(version, requireManagedAdapterForInstance(instance), context);
   };
-  const app = Fastify({ logger: options.logger ?? true });
+  const app = Fastify({ logger: withSafeLogDestination(options.logger) as FastifyServerOptions["logger"] });
   // 定义行里出现当前版本未知的列只说明它由更高版本写入：读取时忽略并保留诊断，不阻断启动或读取。
   storyRepository.agents.definitions.setDiagnostic((message, details) => app.log.warn(details, message));
   storyRepository.agents.storyEntries.setDiagnostic((message, details) => app.log.warn(details, message));
@@ -2265,6 +2266,7 @@ function createNodeAgentStartupReporter(startedAt = Date.now()) {
 }
 
 export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
+  installLogStreamErrorHandlers();
   const startup = createNodeAgentStartupReporter();
   startup("starting", {
     dataDir: options.dataDir || process.env.TASK_HANDOFF_NODE_AGENT_DATA_DIR || "",

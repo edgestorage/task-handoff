@@ -180,7 +180,13 @@ export class AiSessionForkCoordinator {
         else await provider.archiveSession?.(operation.providerSessionId);
       } catch (cleanupError) { failures.push(String(cleanupError)); }
       const projected = this.options.registry.getByProviderSessionId(source.agent, operation.providerSessionId);
-      if (projected) this.options.registry.discard(projected.id);
+      if (projected) {
+        try {
+          this.options.registry.discard(projected.id);
+        } catch (cleanupError) {
+          failures.push(String(cleanupError));
+        }
+      }
     }
     if (operation.worktreeId && this.options.removeManagedWorktree) {
       try {
@@ -189,14 +195,18 @@ export class AiSessionForkCoordinator {
     }
     this.operations.delete(operation.clientRequestId);
     this.persist();
-    this.options.onDiagnostic?.({
-      code: "AI_SESSION_FORK_COMPENSATED",
-      clientRequestId: operation.clientRequestId,
-      providerSessionId: operation.providerSessionId,
-      worktreeId: operation.worktreeId,
-      error: error instanceof Error ? error.message : String(error),
-      cleanupFailures: failures,
-    });
+    try {
+      this.options.onDiagnostic?.({
+        code: "AI_SESSION_FORK_COMPENSATED",
+        clientRequestId: operation.clientRequestId,
+        providerSessionId: operation.providerSessionId,
+        worktreeId: operation.worktreeId,
+        error: error instanceof Error ? error.message : String(error),
+        cleanupFailures: failures,
+      });
+    } catch {
+      // Compensation diagnostics must never mask the original failure.
+    }
   }
 
   private restore() {

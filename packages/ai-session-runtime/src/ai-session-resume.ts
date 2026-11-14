@@ -9,6 +9,7 @@ import {
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import type { AiSessionHistoryStore } from "./ai-session-history-store";
+import { isAiSessionStorageFailure } from "./ai-session/file-store";
 
 export type AiSessionResumeAppSession = {
   id: string;
@@ -112,14 +113,20 @@ export class AiSessionResumeCoordinator {
         creationSource: item.creationSource,
       });
     } catch (error: unknown) {
-      if (!previous) this.options.registry.discard(item.id);
-      else this.options.registry.restoreAuthority(previous);
-      if (previousProvider) this.options.registry.restoreAuthority(previousProvider);
+      const original = error;
+      try {
+        if (!previous) this.options.registry.discard(item.id);
+        else this.options.registry.restoreAuthority(previous);
+        if (previousProvider) this.options.registry.restoreAuthority(previousProvider);
+      } catch {
+        // Rollback is best-effort. The original failure remains authoritative.
+      }
+      if (isAiSessionStorageFailure(original)) throw original;
       throw resumeError(
         "AI_SESSION_RESUME_UNAVAILABLE",
-        error instanceof Error ? error.message : "Provider session could not be resumed.",
+        original instanceof Error ? original.message : "Provider session could not be resumed.",
         409,
-        error,
+        original,
       );
     }
   }

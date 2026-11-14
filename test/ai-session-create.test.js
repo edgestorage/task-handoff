@@ -6,6 +6,7 @@ const path = require("node:path");
 const { Readable } = require("node:stream");
 const test = require("node:test");
 const ts = require("typescript");
+const writeFileAtomic = require("write-file-atomic");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
 
 registerWorkspaceRequire();
@@ -206,6 +207,47 @@ test("AI session create coordinator removes the projection and provider thread w
   assert.deepEqual(deleted, ["thread-failed"]);
   assert.deepEqual(registry.all(), []);
   assert.equal(diagnostics[0].providerSessionId, "thread-failed");
+});
+
+test("AI session create keeps the original storage error when compensation also fails", async () => {
+  const { registry, controller } = runtime();
+  const diagnostics = [];
+  let deletes = 0;
+  controller.register({
+    agent: "codex",
+    async createSession({ cwd }) { return { providerSessionId: "thread-compensation-storage", cwd, creationSource: "ai-session" }; },
+    async startMessage(session) {
+      const originalWrite = writeFileAtomic.sync;
+      writeFileAtomic.sync = () => {
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      };
+      try {
+        registry.applyRealtimeEvent(session.id, { kind: "assistant-message", text: "Not persisted" }, { persistence: "strict" });
+      } finally {
+        writeFileAtomic.sync = originalWrite;
+      }
+      throw new Error("expected strict persistence failure");
+    },
+    async deleteSession() {
+      deletes += 1;
+      throw new Error("provider cleanup failed");
+    },
+  });
+  const originalDiscard = registry.discard;
+  registry.discard = () => {
+    throw Object.assign(new Error("cleanup has no space"), { code: "ENOSPC" });
+  };
+  try {
+    const coordinator = new AiSessionCreateCoordinator({ registry, controller, onDiagnostic: (entry) => diagnostics.push(entry) });
+    await assert.rejects(
+      coordinator.create({ agent: "codex", cwd: "/workspace", message: "Start", clientRequestId: "create-compensation-storage" }),
+      (error) => error.code === "AI_SESSION_STORAGE_FULL" && error.statusCode === 507,
+    );
+  } finally {
+    registry.discard = originalDiscard;
+  }
+  assert.equal(deletes, 1);
+  assert.equal(diagnostics[0].cleanupFailures.length, 2);
 });
 
 test("AI session create retries the same uploaded attachment after first-turn compensation", async (t) => {
@@ -873,6 +915,67 @@ test("Codex bridge creates a persistent Direct thread on the shared client", asy
     storyAgentTools: [],
   });
   assert.equal(registry.getByProviderSessionId("codex", "thread-bridge").creationSource, "ai-session");
+});
+
+test("Codex bridge deletes a newly started thread when strict projection fails", async () => {
+  const { registry } = runtime();
+  const calls = [];
+  class FakeClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async startThread(options) {
+      return { id: "thread-projection-failed", cwd: options.cwd, ephemeral: false, status: { type: "idle" }, turns: [] };
+    }
+    async unsubscribeThread(id) { calls.push(["unsubscribe", id]); }
+    async deleteThread(id) { calls.push(["delete", id]); }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeClient());
+  const originalWrite = writeFileAtomic.sync;
+  writeFileAtomic.sync = () => {
+    throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+  };
+  try {
+    await assert.rejects(
+      bridge.createSession({ cwd: "/workspace/project" }),
+      (error) => error.code === "AI_SESSION_STORAGE_FULL" && error.statusCode === 507,
+    );
+  } finally {
+    writeFileAtomic.sync = originalWrite;
+  }
+  assert.deepEqual(calls, [
+    ["unsubscribe", "thread-projection-failed"],
+    ["delete", "thread-projection-failed"],
+  ]);
+  assert.equal(registry.getByProviderSessionId("codex", "thread-projection-failed"), undefined);
+});
+
+test("Codex bridge does not archive a resumed thread when strict projection hits storage failure", async () => {
+  const { registry } = runtime();
+  const archived = [];
+  class FakeClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async resumeThread(id) {
+      return { id, cwd: "/workspace/project", ephemeral: false, status: { type: "idle" }, turns: [] };
+    }
+    async archiveThread(id) { archived.push(id); }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeClient());
+  const originalWrite = writeFileAtomic.sync;
+  writeFileAtomic.sync = () => {
+    throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+  };
+  try {
+    await assert.rejects(
+      bridge.resumeSession("thread-resume-storage"),
+      (error) => error.code === "AI_SESSION_STORAGE_FULL" && error.statusCode === 507,
+    );
+  } finally {
+    writeFileAtomic.sync = originalWrite;
+  }
+  assert.deepEqual(archived, []);
 });
 
 test("Codex bridge readiness does not run full thread discovery before Direct creation", async () => {
@@ -1756,4 +1859,26 @@ test("connection manager keeps a ready generation when the client has no livenes
   await manager.ready();
   await manager.ready();
   assert.equal(client.starts, 1);
+});
+
+test("connection manager forgets a thread after its local subscription is released", async () => {
+  const { CodexAppServerConnectionManager } = require("../packages/ai-session-runtime/src/codex-app-server/client/connection-manager.ts");
+  class ThreadClient extends EventEmitter {
+    constructor() { super(); this.resumed = []; this.listed = 0; }
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { this.listed += 1; return []; }
+    async resumeThread(id) { this.resumed.push(id); return { id, cwd: "/workspace", ephemeral: false, status: { type: "idle" }, turns: [] }; }
+  }
+  const client = new ThreadClient();
+  const manager = new CodexAppServerConnectionManager({ createClient: () => client, onEvent: () => {} });
+  manager.configure({ transport: "unix", socketPath: "/tmp/app-server.sock" }, "codex");
+  const connection = await manager.ready();
+
+  assert.equal(manager.registerStartedThread(client, "thread-released"), true);
+  assert.equal(manager.forgetStartedThread(client, "thread-released"), true);
+  await manager.ensureThreadReady(connection, "thread-released");
+
+  assert.equal(client.listed, 1);
+  assert.deepEqual(client.resumed, ["thread-released"]);
 });

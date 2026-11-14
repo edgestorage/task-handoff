@@ -1,5 +1,5 @@
 import { AiSessionReasoningEffortSchema, type AiSessionLineage, type AiSessionModelSelection, type AiSessionStatus, type AiSessionSubAgent, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
-import type { AiSessionRegistry } from "../../ai-session-registry";
+import type { AiSessionApplyOptions, AiSessionRegistry } from "../../ai-session-registry";
 import { CodexSubAgentTracker, CodexToolActivityTracker } from "../protocol/activity";
 import { lifecycleForStatus } from "../protocol/status";
 import { summarizeThreadTurns } from "../protocol/thread-summary";
@@ -195,7 +195,7 @@ export class CodexAppServerSessionProjector {
     return false;
   }
 
-  applyThreadSnapshot(thread: CodexThread, context: ThreadProjectionContext = {}) {
+  applyThreadSnapshot(thread: CodexThread, context: ThreadProjectionContext = {}, options: AiSessionApplyOptions = {}) {
     const threadId = typeof thread.id === "string" ? thread.id : undefined;
     if (!threadId || thread.ephemeral === true) {
       return;
@@ -223,7 +223,7 @@ export class CodexAppServerSessionProjector {
       toolCallsSinceLastMessage: activity.toolActivity.toolCallsSinceLastMessage,
       subAgents: activity.subAgents,
       replaceActivity: true,
-    });
+    }, options);
   }
 
   private threadSnapshotBase(

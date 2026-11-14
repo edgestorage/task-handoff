@@ -16,6 +16,7 @@ import { AiSessionCreateResultSchema } from "@task-handoff/protocol/ai-sessions"
 import { normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { aiSessionControlError, type AiSessionController } from "./ai-session-control";
 import type { AiSessionRegistry } from "./ai-session-registry";
+import { isAiSessionStorageFailure } from "./ai-session/file-store";
 
 export type AiSessionCreateCoordinatorInput = {
   agent: AiAgentKind;
@@ -131,39 +132,49 @@ export class AiSessionCreateCoordinator {
       throw aiSessionControlError("AI_SESSION_CREATE_INVALID_RESPONSE", "Provider returned an invalid Direct AI session identity.", 502);
     }
     let session = this.options.registry.getByProviderSessionId(input.agent, providerSessionId);
-    if (!session) {
-      session = this.options.registry.applyAdapterSnapshot({
-        source: "control",
-        agent: input.agent,
-        creationSource: "ai-session",
-        appId: input.agent === "codex" ? "codex-app-server" : input.agent,
-        providerSessionId,
-        modelSelection: created.modelSelection || modelSelection,
-        reasoningEffort: created.reasoningEffort || input.reasoningEffort,
-        storyId: input.storyId,
-        cwd: created.cwd || input.cwd,
-        cwdFolderId: input.cwdFolderId,
-        status: "idle",
-        phase: "unknown",
-      });
-    }
-    if (!session || session.creationSource !== "ai-session") {
-      await this.compensate(provider, providerSessionId, session?.id, "registry-projection-failed");
-      throw aiSessionControlError("AI_SESSION_MATERIALIZATION_FAILED", "Direct AI session could not be projected.", 502);
-    }
-    if (input.cwdFolderId && session.cwdFolderId !== input.cwdFolderId) {
-      session = this.options.registry.patch(session.id, { cwdFolderId: input.cwdFolderId });
-    }
-    if (input.storyId && session.storyId !== input.storyId) {
-      session = this.options.registry.patch(session.id, { storyId: input.storyId });
-    }
-    const actualModelSelection = created.modelSelection || modelSelection;
-    if (actualModelSelection && session.modelSelection !== actualModelSelection) {
-      session = this.options.registry.patch(session.id, { modelSelection: actualModelSelection });
-    }
-    const actualReasoningEffort = created.reasoningEffort || input.reasoningEffort;
-    if (actualReasoningEffort && session.reasoningEffort !== actualReasoningEffort) {
-      session = this.options.registry.patch(session.id, { reasoningEffort: actualReasoningEffort });
+    try {
+      if (!session) {
+        session = this.options.registry.applyAdapterSnapshot({
+          source: "control",
+          agent: input.agent,
+          creationSource: "ai-session",
+          appId: input.agent === "codex" ? "codex-app-server" : input.agent,
+          providerSessionId,
+          modelSelection: created.modelSelection || modelSelection,
+          reasoningEffort: created.reasoningEffort || input.reasoningEffort,
+          storyId: input.storyId,
+          cwd: created.cwd || input.cwd,
+          cwdFolderId: input.cwdFolderId,
+          status: "idle",
+          phase: "unknown",
+        }, { persistence: "strict" });
+      }
+      if (!session || session.creationSource !== "ai-session") {
+        throw aiSessionControlError("AI_SESSION_MATERIALIZATION_FAILED", "Direct AI session could not be projected.", 502);
+      }
+      if (input.cwdFolderId && session.cwdFolderId !== input.cwdFolderId) {
+        session = this.options.registry.patch(session.id, { cwdFolderId: input.cwdFolderId });
+      }
+      if (input.storyId && session.storyId !== input.storyId) {
+        session = this.options.registry.patch(session.id, { storyId: input.storyId });
+      }
+      const actualModelSelection = created.modelSelection || modelSelection;
+      if (actualModelSelection && session.modelSelection !== actualModelSelection) {
+        session = this.options.registry.patch(session.id, { modelSelection: actualModelSelection });
+      }
+      const actualReasoningEffort = created.reasoningEffort || input.reasoningEffort;
+      if (actualReasoningEffort && session.reasoningEffort !== actualReasoningEffort) {
+        session = this.options.registry.patch(session.id, { reasoningEffort: actualReasoningEffort });
+      }
+    } catch (error: unknown) {
+      await this.compensate(provider, providerSessionId, session?.id, "registry-projection-failed", error);
+      if (isAiSessionStorageFailure(error)) throw error;
+      if (error instanceof Error && (error as { code?: string }).code === "AI_SESSION_MATERIALIZATION_FAILED") throw error;
+      throw aiSessionControlError(
+        "AI_SESSION_MATERIALIZATION_FAILED",
+        error instanceof Error ? error.message : "Direct AI session could not be projected.",
+        502,
+      );
     }
     try {
       await this.measure(input, "first-turn", () => withTimeout(
@@ -179,10 +190,12 @@ export class AiSessionCreateCoordinator {
         this.options.materializationTimeoutMs ?? 15_000,
       ));
     } catch (error: unknown) {
-      await this.compensate(provider, providerSessionId, session.id, "first-turn-failed", error);
+      const original = error;
+      await this.compensate(provider, providerSessionId, session.id, "first-turn-failed", original);
+      if (isAiSessionStorageFailure(original)) throw original;
       throw aiSessionControlError(
         "AI_SESSION_MATERIALIZATION_FAILED",
-        error instanceof Error ? error.message : "The first provider turn could not be materialized.",
+        original instanceof Error ? original.message : "The first provider turn could not be materialized.",
         502,
       );
     }
@@ -271,8 +284,14 @@ export class AiSessionCreateCoordinator {
     reason: string,
     error?: unknown,
   ) {
-    if (aiSessionId) this.options.registry.discard(aiSessionId);
     const failures: string[] = [];
+    if (aiSessionId) {
+      try {
+        this.options.registry.discard(aiSessionId);
+      } catch (cleanupError: unknown) {
+        failures.push(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
+      }
+    }
     try {
       if (provider.deleteSession) await provider.deleteSession(providerSessionId);
       else await provider.archiveSession?.(providerSessionId);
@@ -284,14 +303,18 @@ export class AiSessionCreateCoordinator {
     } catch (cleanupError: unknown) {
       failures.push(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
     }
-    this.options.onDiagnostic?.({
-      code: "AI_SESSION_CREATE_COMPENSATED",
-      reason,
-      aiSessionId,
-      providerSessionId,
-      error: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
-      cleanupFailures: failures,
-    });
+    try {
+      this.options.onDiagnostic?.({
+        code: "AI_SESSION_CREATE_COMPENSATED",
+        reason,
+        aiSessionId,
+        providerSessionId,
+        error: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
+        cleanupFailures: failures,
+      });
+    } catch {
+      // Compensation diagnostics are best-effort and must not mask the original failure.
+    }
   }
 }
 

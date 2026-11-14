@@ -15,7 +15,7 @@ import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-ha
 import { sameAiSessionModelSelection } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
-import type { AiSessionRegistry } from "./ai-session-registry";
+import type { AiSessionApplyOptions, AiSessionRegistry } from "./ai-session-registry";
 import { appendAttachmentPaths, isRetainedAiSessionAttachment, materializeAiSessionAttachments } from "./ai-session-attachments";
 import { AI_SESSION_TITLE_OUTPUT_SCHEMA, aiSessionTitlePrompt, parseAiSessionTitle } from "./ai-session-title";
 import { OpenCodeClient, type OpenCodeConnection, type OpenCodePermissionRule, type OpenCodePromptPart } from "./opencode/client";
@@ -154,13 +154,19 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     if (input.modelSelection && !model) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
     const created = await this.client.createSession(input.cwd, model, openCodeSessionPermissionRules(input.permissionMode, input.storyAgentTools));
     this.armTitleGeneration(created.id);
-    await this.reconcile(created.id, created.directory, created, "ai-session");
+    try {
+      await this.reconcile(created.id, created.directory, created, "ai-session", { persistence: "strict" });
+    } catch (error) {
+      this.forget(created.id);
+      try { await this.client.deleteSession(created.id, created.directory); } catch {}
+      throw error;
+    }
     return { providerSessionId: created.id, cwd: created.directory, creationSource: "ai-session" as const, modelSelection: input.modelSelection, reasoningEffort: input.reasoningEffort };
   }
 
   async readSession(providerSessionId: string) {
     await this.ensureReady();
-    await this.reconcile(providerSessionId, await this.resolveDirectory(providerSessionId), undefined, "ai-session");
+    await this.reconcile(providerSessionId, await this.resolveDirectory(providerSessionId), undefined, "ai-session", { persistence: "strict" });
   }
 
   async resumeSession(providerSessionId: string, _modelSelection?: AiSessionModelSelection, _reasoningEffort?: AiSessionReasoningEffort, storyAgentTools?: AiSessionAgentToolName[]) {
@@ -195,7 +201,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       kind: "model-selection",
       modelSelection: canonical,
       observedAt: new Date().toISOString(),
-    });
+    }, { persistence: "strict" });
     return canonical;
   }
 
@@ -210,7 +216,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       kind: "reasoning-effort",
       reasoningEffort: effort,
       observedAt: new Date().toISOString(),
-    });
+    }, { persistence: "strict" });
     return effort;
   }
 
@@ -220,7 +226,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     }
     this.cancelTitleGeneration(session.providerSessionId);
     const updated = await this.client.renameSession(session.providerSessionId, session.cwd, title);
-    await this.reconcile(updated.id, updated.directory, updated, "ai-session");
+    await this.reconcile(updated.id, updated.directory, updated, "ai-session", { persistence: "strict" });
     const actual = this.registry.getByProviderSessionId(this.agent, session.providerSessionId)?.title;
     if (actual !== title) {
       throw aiSessionControlError("AI_SESSION_RENAME_NOT_CONFIRMED", "OpenCode did not confirm the requested session title.", 502);
@@ -273,7 +279,13 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     const lineage = { kind: "fork" as const, parentProviderSessionId: providerSessionId, throughTurnId: input.throughTurnId };
     this.lineageBySession.set(forked.id, lineage);
     this.armTitleGeneration(forked.id);
-    await this.reconcile(forked.id, forked.directory, forked, "ai-session");
+    try {
+      await this.reconcile(forked.id, forked.directory, forked, "ai-session", { persistence: "strict" });
+    } catch (error) {
+      this.forget(forked.id);
+      try { await this.client.deleteSession(forked.id, forked.directory); } catch {}
+      throw error;
+    }
     return {
       providerSessionId: forked.id,
       cwd: forked.directory,
@@ -293,7 +305,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       status: "running",
       phase: "thinking",
       source: "realtime",
-    }) || session;
+    }, { persistence: "strict" }) || session;
     return { session: updated, provider: this.agent, action: "send", turnId: messageId, providerTurnId: messageId };
   }
 
@@ -308,7 +320,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       status: "running",
       phase: "thinking",
       source: "realtime",
-    }) || session;
+    }, { persistence: "strict" }) || session;
     return { session: updated, provider: this.agent, action: "steer", turnId: updated.activeTurnId, providerTurnId: session.activeTurnId };
   }
 
@@ -353,7 +365,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       status: "idle",
       phase: "unknown",
       source: "realtime",
-    }) || session;
+    }, { persistence: "strict" }) || session;
     this.scheduleReconcile(session.providerSessionId, session.cwd);
     return { session: updated, provider: this.agent, action: "interrupt", turnId: session.activeTurnId, providerTurnId: session.activeTurnId };
   }
@@ -363,11 +375,11 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       throw aiSessionControlError("AI_SESSION_APPROVAL_UNSUPPORTED", "OpenCode has no equivalent for skipping a permission request.", 409);
     }
     if (!session.providerSessionId || !session.cwd) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "OpenCode session identity is missing.", 404);
-    await this.reconcile(session.providerSessionId, session.cwd);
+    await this.reconcile(session.providerSessionId, session.cwd, undefined, undefined, { persistence: "strict" });
     const permission = this.projectionBySession.get(session.providerSessionId)?.pendingPermission;
     if (!permission) throw aiSessionControlError("AI_SESSION_APPROVAL_NOT_FOUND", "No pending OpenCode permission request was found.", 404);
     await this.client.replyPermission(permission.id, session.cwd, decision === "allow" ? "once" : "reject");
-    await this.reconcile(session.providerSessionId, session.cwd);
+    await this.reconcile(session.providerSessionId, session.cwd, undefined, undefined, { persistence: "strict" });
     const updated = this.registry.get(session.id) || session;
     return { session: updated, provider: this.agent, action: "approval", decision };
   }
@@ -411,7 +423,13 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     this.projectionRefreshedAt.clear();
   }
 
-  private async reconcile(providerSessionId: string, directory: string, supplied?: OpenCodeSession, creationSource?: "ai-session" | "app-session") {
+  private async reconcile(
+    providerSessionId: string,
+    directory: string,
+    supplied?: OpenCodeSession,
+    creationSource?: "ai-session" | "app-session",
+    applyOptions: AiSessionApplyOptions = {},
+  ) {
     // A session task-handoff closed must stay closed until it is explicitly
     // resumed, so provider events and discovery cannot re-adopt it.
     if (!this.registry.getByProviderSessionId(this.agent, providerSessionId)
@@ -425,7 +443,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       lineage: this.lineageBySession.get(providerSessionId) || projection.snapshot.lineage,
       creationSource: existing?.creationSource || creationSource || "ai-session",
       source: "adapter-snapshot",
-    });
+    }, applyOptions);
     const userPrompt = projection.snapshot.turns?.find((turn) => turn.userPrompt?.trim())?.userPrompt;
     if (session && userPrompt && this.armedTitleSessions.has(providerSessionId)) {
       void this.maybeGenerateTitle(providerSessionId, directory, userPrompt).catch((error) => {

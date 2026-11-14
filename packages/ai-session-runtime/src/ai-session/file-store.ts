@@ -10,6 +10,118 @@ export type AiSessionFileStoreOptions = {
   selectProviderCandidate?: (sessions: readonly AiSessionStatus[]) => AiSessionStatus | undefined;
 };
 
+const STORAGE_FULL_CODES = new Set(["ENOSPC", "EDQUOT", "SQLITE_FULL"]);
+const STORAGE_UNAVAILABLE_CODES = new Set(["EIO", "EROFS"]);
+const STORAGE_FAILURE_CODES = new Set([...STORAGE_FULL_CODES, ...STORAGE_UNAVAILABLE_CODES]);
+const SQLITE_FULL_ERRCODE = 13;
+
+function normalizedCode(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim().toUpperCase() : undefined;
+}
+
+function isSqliteFullError(record: Record<string, unknown>) {
+  if (Number(record.errcode) === SQLITE_FULL_ERRCODE) return true;
+  return typeof record.errstr === "string" && /database or disk is full/i.test(record.errstr);
+}
+
+function errorCode(error: unknown, seen = new Set<unknown>()): string | undefined {
+  if (!error || typeof error !== "object" || seen.has(error)) return undefined;
+  seen.add(error);
+  const record = error as Record<string, unknown>;
+  const code = normalizedCode(record.code) ?? normalizedCode(record.sqliteCode) ?? normalizedCode(record.storageCode);
+  // node:sqlite reports SQLITE_FULL as ERR_SQLITE_ERROR with errcode 13.
+  if (code === "ERR_SQLITE_ERROR" && isSqliteFullError(record)) return "SQLITE_FULL";
+  if (code) return code;
+  if (isSqliteFullError(record)) return "SQLITE_FULL";
+  const errno = normalizedCode(record.errno);
+  if (errno) return errno;
+  return errorCode(record.cause, seen);
+}
+
+export type AiSessionStorageFailureClass = {
+  storageCode: string;
+  code: "AI_SESSION_STORAGE_FULL" | "AI_SESSION_STORAGE_UNAVAILABLE";
+  statusCode: 507 | 503;
+  message: string;
+};
+
+function classifyStorageCode(storageCode: string | undefined): AiSessionStorageFailureClass | undefined {
+  if (!storageCode) return undefined;
+  if (STORAGE_FULL_CODES.has(storageCode)) {
+    return {
+      storageCode,
+      code: "AI_SESSION_STORAGE_FULL",
+      statusCode: 507,
+      message: "AI Session storage is full.",
+    };
+  }
+  if (STORAGE_UNAVAILABLE_CODES.has(storageCode)) {
+    return {
+      storageCode,
+      code: "AI_SESSION_STORAGE_UNAVAILABLE",
+      statusCode: 503,
+      message: "AI Session storage is unavailable.",
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Storage failures can surface from any AI Session persistence backend, not only
+ * AiSessionFileStore. Keep the classification shared so event degradation and the
+ * HTTP boundary agree on which errors are storage outages.
+ */
+export function classifyAiSessionStorageFailure(error: unknown): AiSessionStorageFailureClass | undefined {
+  if (error instanceof AiSessionPersistenceError) {
+    return error.storageFailure ? classifyStorageCode(error.storageCode) : undefined;
+  }
+  return classifyStorageCode(errorCode(error));
+}
+
+export class AiSessionPersistenceError extends Error {
+  readonly code: string;
+  readonly statusCode: number;
+  readonly sessionId: string;
+  readonly storageCode?: string;
+  readonly storageFailure: boolean;
+
+  constructor(input: { sessionId: string; storageCode?: string; message: string; statusCode: number; code: string; cause?: unknown }) {
+    super(input.message, input.cause === undefined ? undefined : { cause: input.cause });
+    this.name = "AiSessionPersistenceError";
+    this.sessionId = input.sessionId;
+    this.storageCode = input.storageCode;
+    this.storageFailure = Boolean(input.storageCode && STORAGE_FAILURE_CODES.has(input.storageCode));
+    this.statusCode = input.statusCode;
+    this.code = input.code;
+  }
+
+  static from(error: unknown, sessionId: string) {
+    const storage = classifyAiSessionStorageFailure(error);
+    if (storage) {
+      return new AiSessionPersistenceError({
+        sessionId,
+        storageCode: storage.storageCode,
+        code: storage.code,
+        statusCode: storage.statusCode,
+        message: storage.message,
+        cause: error,
+      });
+    }
+    return new AiSessionPersistenceError({
+      sessionId,
+      storageCode: errorCode(error),
+      code: "AI_SESSION_PERSISTENCE_FAILED",
+      statusCode: 500,
+      message: error instanceof Error ? error.message : String(error),
+      cause: error,
+    });
+  }
+}
+
+export function isAiSessionStorageFailure(error: unknown) {
+  return classifyAiSessionStorageFailure(error) !== undefined;
+}
+
 function newestSession(sessions: readonly AiSessionStatus[]) {
   return [...sessions].sort((lhs, rhs) => {
     const timeDifference = Date.parse(rhs.updatedAt) - Date.parse(lhs.updatedAt);
@@ -71,12 +183,17 @@ export class AiSessionFileStore {
 
   save(session: AiSessionStatus) {
     assertSafeSessionId(session.id);
-    this.ensureDirectory();
-    const persisted = encodePersistedAiSession(session);
-    writeFileAtomic.sync(this.sessionPath(session.id), `${JSON.stringify(persisted, null, 2)}\n`, { encoding: "utf8" });
-    const committed = decodePersistedAiSession(persisted);
-    if (!committed) {
-      throw new Error(`Failed to decode persisted AI session ${JSON.stringify(session.id)}`);
+    let committed: AiSessionStatus | undefined;
+    try {
+      this.ensureDirectory();
+      const persisted = encodePersistedAiSession(session);
+      writeFileAtomic.sync(this.sessionPath(session.id), `${JSON.stringify(persisted, null, 2)}\n`, { encoding: "utf8" });
+      committed = decodePersistedAiSession(persisted);
+      if (!committed) {
+        throw new Error(`Failed to decode persisted AI session ${JSON.stringify(session.id)}`);
+      }
+    } catch (error) {
+      throw error instanceof AiSessionPersistenceError ? error : AiSessionPersistenceError.from(error, session.id);
     }
     this.sessions.set(committed.id, committed);
     this.index.replace(committed);

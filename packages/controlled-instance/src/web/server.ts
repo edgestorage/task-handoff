@@ -25,6 +25,7 @@ import { TriggerExecutor } from "../triggers/executor";
 import { TriggerManager } from "../triggers/manager";
 import { TriggerStore, type TriggerCreateInput } from "../triggers/store";
 import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
+import { installLogStreamErrorHandlers, withSafeLogDestination } from "@task-handoff/core/storage/log-sink";
 import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import type { AppCatalogItem, AppLaunchOptions } from "@task-handoff/app-runtime/types";
 import {
@@ -53,6 +54,7 @@ import {
   syncAiSessionTimelineItems,
   aiSessionTurnBodyRevision,
   aiSessionTurnsRevision,
+  classifyAiSessionStorageFailure,
   type AiSessionRegistry,
 } from "@task-handoff/ai-session-runtime";
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
@@ -577,6 +579,15 @@ function sendAiSessionControlError(reply: { code: (statusCode: number) => { send
       }),
     });
   }
+  const storageFailure = classifyAiSessionStorageFailure(error);
+  if (storageFailure) {
+    return reply.code(storageFailure.statusCode).send({
+      error: AiSessionControlErrorSchema.parse({
+        code: storageFailure.code,
+        message: storageFailure.message,
+      }),
+    });
+  }
   const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
   const code = typeof record.code === "string" ? record.code : "AI_SESSION_CONTROL_FAILED";
   const statusCode = typeof record.statusCode === "number"
@@ -729,7 +740,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths, undefined, { managedAppRoot });
-  const app = Fastify({ logger: options.logger ?? true });
+  const app = Fastify({ logger: withSafeLogDestination(options.logger) as FastifyServerOptions["logger"] });
   const appManagementStateDir = path.join(storagePaths.runtimeDir, "app-management");
   const installEnvironment = new AppInstallEnvironmentManager({
     dataDir: storagePaths.dataDir,
@@ -767,7 +778,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   aiSessionAttachmentGcTimer.unref?.();
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry({
     conversationAttachments: aiSessionConversationAttachments,
-    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session timing changed"),
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session diagnostic"),
   });
   const aiSessionHistory = new AiSessionHistoryStore(storagePaths, {
     limit: initialAiSessionPersistenceSettings.historyLimit,
@@ -2845,6 +2856,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
           retainedEventCount: aiSessionEventHistory.length,
           discoveryUnchanged: streamDiagnostics.aiDiscoveryUnchanged,
           discoveryCorrections: streamDiagnostics.aiDiscoveryCorrections,
+          persistence: aiSessions.persistenceSnapshot(),
           messageDeltaCoalescing: {
             windowMs: aiSessionMessageDeltas.windowMs,
             pendingMessageCount: aiSessionMessageDeltas.pendingCount,
@@ -3524,6 +3536,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 }
 
 export async function runWebServer(options: Partial<RunWebServerOptions> = {}) {
+  installLogStreamErrorHandlers();
   const host = options.host || process.env.TASK_HANDOFF_WEB_HOST || "127.0.0.1";
   const port = Number(options.port || process.env.TASK_HANDOFF_WEB_PORT || 8080);
   const localLock = process.env.TASK_HANDOFF_CONTROL_MODE === "controlled" && process.env.TASK_HANDOFF_RUNTIME_KIND === "local"

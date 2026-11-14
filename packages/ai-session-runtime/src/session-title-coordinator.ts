@@ -11,7 +11,7 @@ import {
 } from "@task-handoff/protocol/ai-sessions";
 import { OptionalClientRequestIdSchema } from "@task-handoff/protocol/client-request-id";
 import { aiSessionControlError, type AiSessionController } from "./ai-session-control";
-import type { AiSessionRegistry } from "./ai-session-registry";
+import type { AiSessionApplyOptions, AiSessionRegistry } from "./ai-session-registry";
 
 const SessionRenameIntentSchema = z.object({
   schemaVersion: z.literal(1),
@@ -62,14 +62,27 @@ export class SessionRenameIntentStore {
 
   put(intent: SessionRenameIntent) {
     const parsed = SessionRenameIntentSchema.parse(intent);
+    const previous = this.intents.get(parsed.operationId);
     this.intents.set(parsed.operationId, parsed);
-    this.persist();
+    try {
+      this.persist();
+    } catch (error) {
+      if (previous) this.intents.set(parsed.operationId, previous);
+      else this.intents.delete(parsed.operationId);
+      throw error;
+    }
     return parsed;
   }
 
   remove(operationId: string) {
+    const previous = this.intents.get(operationId);
     if (!this.intents.delete(operationId)) return false;
-    this.persist();
+    try {
+      this.persist();
+    } catch (error) {
+      if (previous) this.intents.set(operationId, previous);
+      throw error;
+    }
     return true;
   }
 
@@ -320,7 +333,7 @@ export class SessionTitleCoordinator {
         const authorityTitle = current.authority === "provider" ? session.title : appSession.title;
         if (authorityTitle && authorityTitle !== current.targetTitle && authorityTitle !== current.previousTitle) {
           if (current.authority === "provider" && appSession.title !== authorityTitle) this.options.appRuntime.rename(appSession.id, authorityTitle);
-          if (current.authority === "app-session" && session.title !== authorityTitle) this.projectAppDerivedTitle(session, authorityTitle);
+          if (current.authority === "app-session" && session.title !== authorityTitle) this.projectAppDerivedTitle(session, authorityTitle, { persistence: "strict" });
           this.diagnoseIntent("AI_SESSION_RENAME_SUPERSEDED", current, { title: authorityTitle });
           this.completeIntent(current.operationId);
           return AiSessionRenameResultSchema.parse({
@@ -337,7 +350,7 @@ export class SessionTitleCoordinator {
         } else {
           if (appSession.title !== current.targetTitle) this.options.appRuntime.rename(appSession.id, current.targetTitle);
           progress = this.updateIntent(current, "authority-confirmed");
-          if (session.title !== current.targetTitle) this.projectAppDerivedTitle(session, current.targetTitle);
+          if (session.title !== current.targetTitle) this.projectAppDerivedTitle(session, current.targetTitle, { persistence: "strict" });
         }
         const confirmedSession = this.requireSession(current.aiSessionId);
         const confirmedApp = this.requireAppSession(current.appSessionId);
@@ -412,7 +425,7 @@ export class SessionTitleCoordinator {
     return this.options.intents.put({ ...intent, phase, updatedAt: new Date().toISOString() });
   }
 
-  private projectAppDerivedTitle(session: AiSessionStatus, title: string) {
+  private projectAppDerivedTitle(session: AiSessionStatus, title: string, options: AiSessionApplyOptions = {}) {
     this.options.registry.applyAdapterSnapshot({
       source: "adapter-snapshot",
       agent: session.agent,
@@ -420,7 +433,7 @@ export class SessionTitleCoordinator {
       appSessionId: session.appSessionId,
       providerSessionId: session.providerSessionId,
       title,
-    });
+    }, options);
   }
 
   private runLocked<T>(key: string, run: () => Promise<T> | T): Promise<T> {

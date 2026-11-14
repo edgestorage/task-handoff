@@ -3,6 +3,7 @@ import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControl
 import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
+import { isAiSessionStorageFailure } from "./ai-session/file-store";
 import { CodexAppServerClient, type CodexAppServerClientOptions } from "./codex-app-server/client/client";
 import type { CodexAppServerClientLike, CodexThreadResumeOptions } from "./codex-app-server/client/contract";
 import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexDynamicToolSpec, CodexThreadStartOptions } from "./codex-app-server/client/contract";
@@ -348,7 +349,12 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       // a newly created thread for an unloaded persisted thread and call thread/resume.
       this.connection.registerStartedThread(client, providerSessionId);
       this.recordTimelineHistorySource(thread);
-      this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+      try {
+        this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" }, { persistence: "strict" });
+      } catch (error) {
+        await this.discardStartedThread(client, providerSessionId, "create-projection-failed");
+        throw error;
+      }
       this.titleGenerator.arm(providerSessionId);
       return {
         providerSessionId,
@@ -449,7 +455,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         kind: "model-selection",
         modelSelection: actualSelection,
         observedAt: new Date().toISOString(),
-      });
+      }, { persistence: "strict" });
       return actualSelection;
     } finally {
       this.pendingThreadSettings.delete(session.id);
@@ -479,7 +485,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         kind: "reasoning-effort",
         reasoningEffort: actual.data,
         observedAt: new Date().toISOString(),
-      });
+      }, { persistence: "strict" });
       return actual.data;
     } finally {
       this.pendingThreadSettings.delete(session.id);
@@ -524,7 +530,12 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       };
       this.connection.registerStartedThread(client, providerSessionId);
       this.recordTimelineHistorySource(thread);
-      this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session", lineage });
+      try {
+        this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session", lineage }, { persistence: "strict" });
+      } catch (error) {
+        await this.discardStartedThread(client, providerSessionId, "fork-projection-failed");
+        throw error;
+      }
       this.titleGenerator.arm(providerSessionId);
       return {
         providerSessionId,
@@ -536,9 +547,13 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       };
     } catch (error) {
       if (error && typeof error === "object" && "rpcCode" in error && error.rpcCode === -32601) {
-        this.registry.patch(input.source.id, {
-          actions: { ...input.source.actions, fork: false },
-        });
+        try {
+          this.registry.patch(input.source.id, {
+            actions: { ...input.source.actions, fork: false },
+          });
+        } catch {
+          // Capability projection is best-effort; never mask the provider error.
+        }
         throw aiSessionControlError("AI_SESSION_FORK_UNSUPPORTED", "Codex app-server does not support Fork.", 409);
       }
       throw error;
@@ -644,10 +659,14 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       if (!thread) throw aiSessionControlError("AI_SESSION_RESUME_UNSUPPORTED", "Codex app-server could not resume the thread.", 409);
       const actualSelection = this.verifiedModelSelection(thread, modelSelection);
       this.recordTimelineHistorySource(thread);
-      this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+      this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" }, { persistence: "strict" });
       return actualSelection;
     } catch (error: unknown) {
-      try { await client.archiveThread?.(providerSessionId); } catch {}
+      // A storage outage is not a provider failure: leave the resumed thread active so
+      // the caller can retry the projection instead of silently archiving the session.
+      if (!isAiSessionStorageFailure(error)) {
+        try { await client.archiveThread?.(providerSessionId); } catch {}
+      }
       throw error;
     }
   }
@@ -680,8 +699,26 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     if (!thread) throw aiSessionControlError("AI_SESSION_RESUME_UNSUPPORTED", "Codex app-server could not reload the thread.", 409);
     const actualSelection = this.verifiedModelSelection(thread, selection);
     this.recordTimelineHistorySource(thread);
-    this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+    this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" }, { persistence: "strict" });
     return actualSelection;
+  }
+
+  private async discardStartedThread(client: CodexAppServerClientLike, providerSessionId: string, reason: string) {
+    try { await client.unsubscribeThread?.(providerSessionId); } catch {}
+    this.connection.forgetStartedThread(client, providerSessionId);
+    try {
+      if (client.deleteThread) await client.deleteThread(providerSessionId);
+      else await client.archiveThread?.(providerSessionId);
+    } catch (error) {
+      try {
+        this.options.onDiagnostic?.({
+          code: "AI_SESSION_PROVIDER_CLEANUP_FAILED",
+          providerSessionId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {}
+    }
   }
 
   private verifiedModelSelection(thread: CodexThread, requested?: AiSessionModelSelection) {
@@ -744,11 +781,13 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     const client = await this.requireReadyClient();
     if (!client.deleteThread) throw aiSessionControlError("AI_SESSION_DELETE_UNSUPPORTED", "Codex app-server does not support thread deletion.", 400);
     await client.deleteThread(providerSessionId);
+    this.connection.forgetStartedThread(client, providerSessionId);
   }
 
   async unsubscribeSession(providerSessionId: string) {
     const client = await this.requireReadyClient();
     await client.unsubscribeThread?.(providerSessionId);
+    this.connection.forgetStartedThread(client, providerSessionId);
   }
 
   async startMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {

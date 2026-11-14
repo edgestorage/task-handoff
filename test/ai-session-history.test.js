@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const ts = require("typescript");
+const writeFileAtomic = require("write-file-atomic");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
 
 registerWorkspaceRequire();
@@ -704,4 +705,48 @@ test("AI session resume coordinator retains history and permits retry after prov
   assert.equal(registry.get(item.id), undefined);
   assert.equal((await coordinator.resume(item.id)).appSessionId, "app-retry");
   assert.equal(attempts, 2);
+});
+
+test("AI session resume keeps the original storage error when rollback also fails", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-storage-rollback-"));
+  const history = new AiSessionHistoryStore({ dataDir: root });
+  const registry = createAiSessionRegistry({ dir: path.join(root, "registry") });
+  const item = historyItem(17, { id: "ai-storage-rollback", creationSource: "ai-session" });
+  history.upsert(item);
+  const originalDiscard = registry.discard;
+  registry.discard = () => {
+    throw Object.assign(new Error("rollback has no space"), { code: "ENOSPC" });
+  };
+  try {
+    const coordinator = new AiSessionResumeCoordinator({
+      history,
+      registry,
+      appSessions: () => [],
+      startApp: () => { throw new Error("must not start an App"); },
+      resumeProvider: async (entry) => {
+        const originalWrite = writeFileAtomic.sync;
+        writeFileAtomic.sync = () => {
+          throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+        };
+        try {
+          registry.applyAdapterSnapshot({
+            agent: "codex",
+            providerSessionId: entry.providerSessionId,
+            status: "running",
+          }, { persistence: "strict" });
+        } finally {
+          writeFileAtomic.sync = originalWrite;
+        }
+        throw new Error("expected strict persistence failure");
+      },
+    });
+
+    await assert.rejects(
+      coordinator.resume(item.id),
+      (error) => error.code === "AI_SESSION_STORAGE_FULL" && error.statusCode === 507,
+    );
+  } finally {
+    registry.discard = originalDiscard;
+  }
+  assert.equal(history.get(item.id).id, item.id);
 });

@@ -35,7 +35,7 @@ import {
   updateTurns,
   type TurnMeta,
 } from "./ai-session-turns";
-import { AiSessionFileStore } from "./ai-session/file-store";
+import { AiSessionFileStore, AiSessionPersistenceError, isAiSessionStorageFailure } from "./ai-session/file-store";
 import { AiSessionQueueService } from "./ai-session/queue-service";
 import {
   AiSessionReconciliationService,
@@ -108,6 +108,29 @@ type AiSessionMutationContext = {
   kind?: AiSessionRealtimeInput["kind"];
   observedAt?: string;
   snapshotVersion?: number;
+};
+
+export type AiSessionApplyOptions = {
+  persistence?: "best-effort" | "strict";
+};
+
+export type AiSessionPersistenceFailure = {
+  code: string;
+  statusCode: number;
+  storageCode?: string;
+  message: string;
+  sessionId?: string;
+  operation: "realtime-event" | "adapter-snapshot";
+  source?: AiSessionSource;
+  kind?: AiSessionRealtimeInput["kind"];
+  observedAt: string;
+};
+
+export type AiSessionPersistenceStatus = {
+  degraded: boolean;
+  failureCount: number;
+  lastFailure?: AiSessionPersistenceFailure;
+  recoveredAt?: string;
 };
 
 const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -378,6 +401,7 @@ export class AiSessionRegistry {
   private readonly changes = new EventEmitter();
   private readonly conversationAttachments?: AiSessionConversationAttachmentStore;
   private readonly onDiagnostic?: RegistryOptions["onDiagnostic"];
+  private persistenceStatus: AiSessionPersistenceStatus = { degraded: false, failureCount: 0 };
   private changeBatchDepth = 0;
   private pendingChangeReason: string | undefined;
 
@@ -535,15 +559,93 @@ export class AiSessionRegistry {
     return this.removeStoredSession(id);
   }
 
+  persistenceSnapshot(): AiSessionPersistenceStatus {
+    return {
+      ...this.persistenceStatus,
+      lastFailure: this.persistenceStatus.lastFailure ? { ...this.persistenceStatus.lastFailure } : undefined,
+    };
+  }
+
+  private shouldDegradeEventPersistence(error: unknown, options: AiSessionApplyOptions) {
+    return options.persistence !== "strict" && isAiSessionStorageFailure(error);
+  }
+
+  private reportPersistenceFailure(
+    error: AiSessionPersistenceError,
+    context: {
+      operation: AiSessionPersistenceFailure["operation"];
+      sessionId?: string;
+      source?: AiSessionSource;
+      kind?: AiSessionRealtimeInput["kind"];
+    },
+  ) {
+    const previous = this.persistenceStatus;
+    const failure: AiSessionPersistenceFailure = {
+      code: error.code,
+      statusCode: error.statusCode,
+      storageCode: error.storageCode,
+      message: error.message,
+      sessionId: context.sessionId,
+      operation: context.operation,
+      source: context.source,
+      kind: context.kind,
+      observedAt: nowIso(),
+    };
+    this.persistenceStatus = {
+      degraded: true,
+      failureCount: previous.failureCount + 1,
+      lastFailure: failure,
+    };
+    const changed = !previous.degraded
+      || previous.lastFailure?.code !== failure.code
+      || previous.lastFailure?.storageCode !== failure.storageCode
+      || previous.lastFailure?.sessionId !== failure.sessionId;
+    if (changed) {
+      this.emitDiagnostic({
+        ...failure,
+        code: "AI_SESSION_PERSISTENCE_DEGRADED",
+      });
+    }
+  }
+
+  private clearPersistenceFailure() {
+    if (!this.persistenceStatus.degraded) return;
+    const recoveredAt = nowIso();
+    this.persistenceStatus = {
+      ...this.persistenceStatus,
+      degraded: false,
+      recoveredAt,
+    };
+    this.emitDiagnostic({
+      code: "AI_SESSION_PERSISTENCE_RECOVERED",
+      failureCount: this.persistenceStatus.failureCount,
+      lastFailure: this.persistenceStatus.lastFailure,
+      observedAt: recoveredAt,
+    });
+  }
+
+  private emitDiagnostic(event: Record<string, unknown>) {
+    try {
+      this.onDiagnostic?.(event);
+    } catch {
+      // Diagnostics are observational. They must never escape an event callback.
+    }
+  }
+
+  private persistenceError(error: unknown, sessionId: string) {
+    return error instanceof AiSessionPersistenceError ? error : AiSessionPersistenceError.from(error, sessionId);
+  }
+
   private put(session: AiSessionStatus, context: AiSessionMutationContext = {}) {
     const current = this.get(session.id);
     if (current && sameAiSessionBusinessState(current, session)) {
       return current;
     }
-    if (current) {
-      this.reportCompletedAtChanges(current, session, context);
-    }
     const committed = this.store.save(session);
+    this.clearPersistenceFailure();
+    if (current) {
+      this.reportCompletedAtChanges(current, committed, context);
+    }
     this.emitChange("write");
     return committed;
   }
@@ -585,7 +687,7 @@ export class AiSessionRegistry {
       });
     }
     if (!changes.length) return;
-    this.onDiagnostic?.({
+    this.emitDiagnostic({
       code: "AI_SESSION_COMPLETED_AT_CHANGED",
       sessionId: current.id,
       agent: current.agent,
@@ -774,8 +876,23 @@ export class AiSessionRegistry {
     return this.reduceRealtimeInput(normalized as AiSessionRealtimeInput);
   }
 
-  applyRealtimeEvent(id: string, event: Omit<AiSessionRealtimeInput, "type" | "sessionId" | "source"> & { source?: AiSessionSource }) {
-    return this.apply({ type: "event", sessionId: id, source: event.source || "realtime", ...event });
+  applyRealtimeEvent(
+    id: string,
+    event: Omit<AiSessionRealtimeInput, "type" | "sessionId" | "source"> & { source?: AiSessionSource },
+    options: AiSessionApplyOptions = {},
+  ) {
+    try {
+      return this.apply({ type: "event", sessionId: id, source: event.source || "realtime", ...event });
+    } catch (error) {
+      if (!this.shouldDegradeEventPersistence(error, options)) throw error;
+      this.reportPersistenceFailure(this.persistenceError(error, id), {
+        operation: "realtime-event",
+        sessionId: id,
+        source: event.source || "realtime",
+        kind: event.kind,
+      });
+      return this.get(id);
+    }
   }
 
   private reduceRealtimeInput(event: AiSessionRealtimeInput) {
@@ -791,21 +908,28 @@ export class AiSessionRegistry {
     }) : undefined;
   }
 
-  applyAdapterSnapshot(input: Omit<AiSessionSnapshotInput, "type" | "source"> & { source?: AiSessionSource }) {
-    return this.apply({ type: "snapshot", source: input.source || "control", ...input });
+  applyAdapterSnapshot(
+    input: Omit<AiSessionSnapshotInput, "type" | "source"> & { source?: AiSessionSource },
+    options: AiSessionApplyOptions = {},
+  ) {
+    const normalized = { type: "snapshot" as const, source: input.source || "control", ...input };
+    try {
+      return this.apply(normalized);
+    } catch (error) {
+      if (!this.shouldDegradeEventPersistence(error, options)) throw error;
+      const previous = this.findSnapshotSession(normalized);
+      this.reportPersistenceFailure(this.persistenceError(error, previous?.id || ""), {
+        operation: "adapter-snapshot",
+        sessionId: previous?.id,
+        source: normalized.source,
+      });
+      return previous;
+    }
   }
 
   private reduceSnapshotInput(input: AiSessionSnapshotInput) {
     const meta = turnMeta(input);
-    let existing = input.providerSessionId
-      ? this.getByProviderSessionId(input.agent, input.providerSessionId)
-      : undefined;
-    if (!existing) {
-      existing = this.readSessions().find((session) =>
-        (input.appSessionId && session.appSessionId === input.appSessionId) ||
-        (input.transcriptPath && session.transcriptPath === input.transcriptPath)
-      );
-    }
+    const existing = this.findSnapshotSession(input);
     if (!existing) {
       const session = this.initialSession({
         agent: input.agent,
@@ -855,6 +979,19 @@ export class AiSessionRegistry {
       observedAt: input.observedAt,
       snapshotVersion: input.snapshotVersion,
     });
+  }
+
+  private findSnapshotSession(input: Pick<AiSessionSnapshotInput, "agent" | "providerSessionId" | "appSessionId" | "transcriptPath">) {
+    const byProvider = input.providerSessionId
+      ? this.getByProviderSessionId(input.agent, input.providerSessionId)
+      : undefined;
+    if (byProvider) return byProvider;
+    return this.readSessions().find((session) =>
+      Boolean(
+        (input.appSessionId && session.appSessionId === input.appSessionId)
+        || (input.transcriptPath && session.transcriptPath === input.transcriptPath),
+      ),
+    );
   }
 
   attachTranscript(id: string, transcriptPath?: string) {

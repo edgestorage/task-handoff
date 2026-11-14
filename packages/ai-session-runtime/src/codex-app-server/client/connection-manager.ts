@@ -113,6 +113,12 @@ export class CodexAppServerConnectionManager {
     return true;
   }
 
+  /** Clears local subscription bookkeeping after a thread is unloaded or deleted. */
+  forgetStartedThread(client: CodexAppServerClientLike, threadId: string) {
+    if (!this.connectionFor(client)) return false;
+    return this.subscribedThreadIds.delete(threadId);
+  }
+
   canRetry() {
     return Date.now() >= this.retryAfter;
   }

@@ -134,7 +134,7 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
       userPrompt: input.message,
       userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
-    }) || session;
+    }, { persistence: "strict" }) || session;
     return { session: updated, provider: this.agent, action: "send", turnId: updated.activeTurnId };
   }
 
@@ -157,7 +157,7 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
       status: "running",
       phase: "unknown",
       source: "control",
-    }) || session;
+    }, { persistence: "strict" }) || session;
     return { session: updated, provider: this.agent, action: "interrupt" };
   }
 

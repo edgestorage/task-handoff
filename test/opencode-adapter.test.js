@@ -5,6 +5,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const ts = require("typescript");
+const writeFileAtomic = require("write-file-atomic");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
 
 registerWorkspaceRequire();
@@ -1099,6 +1100,48 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
   await bridge.deleteSession("ses_fork");
   assert.deepEqual(calls.find((call) => call[0] === "delete"), ["delete", "ses_fork", "/workspace/project"]);
   bridge.close();
+});
+
+test("OpenCode bridge deletes a newly created session when strict reconciliation fails", async () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-storage-")) });
+  const deleted = [];
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+  });
+  const created = {
+    id: "ses_projection_failed",
+    directory: "/workspace/project",
+    title: "Untitled",
+    version: "1.18.21",
+    time: { created: 1, updated: 2 },
+  };
+  bridge.client = {
+    health: async () => ({ healthy: true, version: "1.18.21" }),
+    subscribeGlobal: async (_listener, signal) => new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true })),
+    createSession: async () => created,
+    getSession: async () => created,
+    status: async () => ({}),
+    messages: async () => [],
+    permissions: async () => [],
+    deleteSession: async (id, directory) => { deleted.push([id, directory]); },
+  };
+  const originalWrite = writeFileAtomic.sync;
+  writeFileAtomic.sync = () => {
+    throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+  };
+  try {
+    await assert.rejects(
+      bridge.createSession({ cwd: "/workspace/project" }),
+      (error) => error.code === "AI_SESSION_STORAGE_FULL" && error.statusCode === 507,
+    );
+  } finally {
+    writeFileAtomic.sync = originalWrite;
+    bridge.close();
+  }
+  assert.deepEqual(deleted, [["ses_projection_failed", "/workspace/project"]]);
+  assert.equal(bridge.armedTitleSessions.has("ses_projection_failed"), false);
+  assert.equal(registry.getByProviderSessionId("opencode", "ses_projection_failed"), undefined);
 });
 
 test("OpenCode snapshots keep controlled attachment identities in Turn bodies and timelines", async () => {

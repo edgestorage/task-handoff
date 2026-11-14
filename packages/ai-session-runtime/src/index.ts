@@ -11,6 +11,12 @@ export * from "./ai-session-persistence-settings.ts";
 export * from "./ai-session-provider-registry.ts";
 export * from "./ai-session-history-store.ts";
 export * from "./ai-session-registry.ts";
+export {
+  AiSessionPersistenceError,
+  classifyAiSessionStorageFailure,
+  isAiSessionStorageFailure,
+  type AiSessionStorageFailureClass,
+} from "./ai-session/file-store.ts";
 export * from "./ai-session-resume.ts";
 export * from "./ai-session-title.ts";
 export * from "./ai-session-open-app.ts";

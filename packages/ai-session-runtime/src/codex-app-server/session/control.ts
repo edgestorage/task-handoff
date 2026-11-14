@@ -29,7 +29,7 @@ export class CodexAppServerSessionControl {
       userPrompt: input.message,
       userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
-    }) || session;
+    }, { persistence: "strict" }) || session;
     return { session: updated, provider: "codex", action: result.started ? "send" : "steer", turnId: updated.activeTurnId, providerTurnId: result.turnId };
   }
 
@@ -46,7 +46,7 @@ export class CodexAppServerSessionControl {
       userPrompt: input.message,
       userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
-    }) || session;
+    }, { persistence: "strict" }) || session;
     return { session: updated, provider: "codex", action: "send", turnId: updated.activeTurnId, providerTurnId: result.turnId };
   }
 
@@ -63,7 +63,7 @@ export class CodexAppServerSessionControl {
       userPrompt: input.message,
       userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
-    }) || session;
+    }, { persistence: "strict" }) || session;
     return { session: updated, provider: "codex", action: "steer", turnId: updated.activeTurnId, providerTurnId: result.turnId };
   }
 
@@ -105,7 +105,7 @@ export class CodexAppServerSessionControl {
           status: "running",
           phase: "unknown",
           source: "control",
-        }) || session;
+        }, { persistence: "strict" }) || session;
     return this.options.registry.applyRealtimeEvent(current.id, {
       kind: "turn-completed",
       activeTurnId: turnId,
@@ -114,7 +114,7 @@ export class CodexAppServerSessionControl {
       phase: "unknown",
       text,
       source: "control",
-    }) || session;
+    }, { persistence: "strict" }) || session;
   }
 
   private async steerTurn(client: CodexAppServerClientLike, threadId: string, session: AiSessionStatus, message: string, references: AiSessionReference[] = [], attachmentInputs: CodexAttachmentInput[] = []) {

@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const ts = require("typescript");
+const writeFileAtomic = require("write-file-atomic");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
 
 registerWorkspaceRequire();
@@ -109,6 +110,38 @@ test("the controlled-instance read route reports an unknown session as not found
     const response = await app.inject({ method: "POST", url: "/api/ai-sessions/ais_missing/read" });
     assert.equal(response.statusCode, 404);
     assert.equal(response.json().error.code, "AI_SESSION_NOT_FOUND");
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
+test("the controlled-instance write route returns a structured storage status instead of fake success", async () => {
+  const { aiSessions, app, restore } = await createRuntime();
+  try {
+    const session = aiSessions.start({ agent: "codex", status: "running" }, { timestamp: "2026-07-25T00:00:00.000Z" });
+    aiSessions.complete(session.id, "done");
+    assert.equal(aiSessions.get(session.id).unread, true);
+
+    const originalWrite = writeFileAtomic.sync;
+    writeFileAtomic.sync = () => {
+      throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    };
+    let response;
+    try {
+      response = await app.inject({ method: "POST", url: `/api/ai-sessions/${session.id}/read` });
+    } finally {
+      writeFileAtomic.sync = originalWrite;
+    }
+
+    assert.equal(response.statusCode, 507);
+    assert.deepEqual(response.json(), {
+      error: {
+        code: "AI_SESSION_STORAGE_FULL",
+        message: "AI Session storage is full.",
+      },
+    });
+    assert.equal(aiSessions.get(session.id).unread, true);
   } finally {
     await app.close();
     restore();

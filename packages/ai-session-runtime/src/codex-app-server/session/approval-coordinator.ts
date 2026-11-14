@@ -97,7 +97,7 @@ export class CodexAppServerApprovalCoordinator {
       status: decision === "skip" ? "idle" : "running",
       phase: decision === "skip" ? "unknown" : "thinking",
       source: "control",
-    }) || session;
+    }, { persistence: "strict" }) || session;
     return { session: updated, provider: "codex", action: "approval", decision };
   }
 
