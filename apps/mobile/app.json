@@ -30,8 +30,8 @@
       [
         "expo-image-picker",
         {
-          "cameraPermission": false,
-          "microphonePermission": false,
+          "cameraPermission": "TaskHandoff only receives remote desktop video and does not access your camera. The bundled WebRTC framework includes optional camera support, so Apple requires this disclosure.",
+          "microphonePermission": "TaskHandoff only receives remote desktop video and does not access your microphone. The bundled WebRTC framework includes optional microphone support, so Apple requires this disclosure.",
           "photosPermission": "Allow TaskHandoff to select an image to attach to an AI session."
         }
       ],

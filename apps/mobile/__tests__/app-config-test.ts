@@ -58,6 +58,17 @@ describe('mobile native feature variants', () => {
     expect(config.ios.usesAppleSignIn).toBe(true);
   });
 
+  test('declares the media purpose strings required by the bundled WebRTC framework', () => {
+    const config = require('../app.config.js')();
+    expect(config.plugins).toContainEqual([
+      'expo-image-picker',
+      expect.objectContaining({
+        cameraPermission: expect.stringMatching(/remote desktop.*camera/i),
+        microphonePermission: expect.stringMatching(/remote desktop.*microphone/i),
+      }),
+    ]);
+  });
+
   test('keeps the native splash visible while the initial profile route resolves', () => {
     const config = require('../app.config.js')();
     expect(config.plugins).toContainEqual([

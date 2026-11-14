@@ -1,11 +1,13 @@
-const { AndroidConfig, createRunOncePlugin, withAndroidManifest, withInfoPlist } = require('expo/config-plugins');
+const { AndroidConfig, createRunOncePlugin, withAndroidManifest } = require('expo/config-plugins');
 
 const pkg = require('../package.json');
 
 /**
  * The remote desktop viewer only receives video and uses data channels. The
  * WebRTC dependency declares camera/microphone capabilities for its general
- * media API, so remove them from this product before prebuild.
+ * media API, so remove the unused Android permissions before prebuild. The iOS
+ * purpose strings live in the image-picker permission config because that
+ * plugin owns the final Info.plist permission update.
  */
 function withTaskHandoffRemoteDesktop(config) {
   config = withAndroidManifest(config, (result) => {
@@ -16,11 +18,6 @@ function withTaskHandoffRemoteDesktop(config) {
       'android.permission.SYSTEM_ALERT_WINDOW',
       'android.permission.MODIFY_AUDIO_SETTINGS',
     ]);
-    return result;
-  });
-  config = withInfoPlist(config, (result) => {
-    delete result.modResults.NSCameraUsageDescription;
-    delete result.modResults.NSMicrophoneUsageDescription;
     return result;
   });
   return config;

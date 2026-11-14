@@ -21,8 +21,15 @@ for (const name of Object.keys({ ...manifest.dependencies, ...manifest.devDepend
 }
 
 const imagePickerPlugin = expoConfig.plugins?.find((plugin) => Array.isArray(plugin) && plugin[0] === 'expo-image-picker');
-if (!imagePickerPlugin || imagePickerPlugin[1]?.cameraPermission !== false || imagePickerPlugin[1]?.microphonePermission !== false) {
-  failures.push('expo-image-picker must remove unused camera and microphone permissions');
+const cameraPermission = imagePickerPlugin?.[1]?.cameraPermission;
+const microphonePermission = imagePickerPlugin?.[1]?.microphonePermission;
+if (
+  typeof cameraPermission !== 'string'
+  || !/remote desktop.*camera/i.test(cameraPermission)
+  || typeof microphonePermission !== 'string'
+  || !/remote desktop.*microphone/i.test(microphonePermission)
+) {
+  failures.push('expo-image-picker must declare the App Store purpose strings for the bundled WebRTC camera and microphone APIs');
 }
 
 const productionFiles = sourceFiles(path.join(root, 'app')).concat(sourceFiles(path.join(root, 'src')));
