@@ -55,6 +55,50 @@ test("control plane fallback reuses the node-agent WebSocket proxy with role con
   ]]);
 });
 
+test("node agent maps permission operations to fixed instance endpoints without forwarding caller URLs", async (t) => {
+  const app = Fastify({ logger: false });
+  await app.register(websocket);
+  t.after(async () => {
+    for (const socket of app.websocketServer.clients) socket.terminate();
+    await app.close();
+  });
+  const requests = [];
+  registerManagedDesktopRoutes(app, {
+    instanceBase: () => "http://instance.internal",
+    instanceCredential: () => "registration-secret",
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init });
+      return new Response(JSON.stringify({ data: { platform: "darwin", supported: true, screenCapture: "required", inputControl: "granted" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await app.ready();
+
+  for (const [operation, payload] of [
+    ["permissions-get", {}],
+    ["permissions-request", { kind: "screen-capture" }],
+  ]) {
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/node-agent/instances/inst_remote/remote-desktop/${operation}`,
+      payload,
+    });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().data.platform, "darwin");
+  }
+  assert.deepEqual(requests.map(request => ({
+    url: request.url,
+    method: request.init.method,
+    authorization: request.init.headers.authorization,
+    body: request.init.body,
+  })), [
+    { url: "http://instance.internal/api/internal/remote-desktop/permissions", method: "GET", authorization: "Bearer registration-secret", body: undefined },
+    { url: "http://instance.internal/api/internal/remote-desktop/permissions/request", method: "POST", authorization: "Bearer registration-secret", body: JSON.stringify({ kind: "screen-capture" }) },
+  ]);
+});
+
 class CapturingUpstreamWebSocket extends EventEmitter {
   static OPEN = 1;
   constructor() {

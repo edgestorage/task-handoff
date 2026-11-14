@@ -15,7 +15,7 @@ test("auto-connect starts only after viewer setup has initialized runtime state"
 });
 
 test("remote desktop preview stays open across unrelated session summary updates", () => {
-  assert.match(panelSource, /watch\(\[\(\) => props\.instance\.id, \(\) => selectedSession\.value\?\.id, sessionRemoteDesktopPreviewPresentation\]/);
+  assert.match(panelSource, /watch\(\[\(\) => props\.instance\.id, \(\) => selectedSession\.value\?\.id, \(\) => sessionRemoteDesktopPreviewPresentation\.value\]/);
   assert.doesNotMatch(panelSource, /watch\(\(\) => \[props\.instance\.id, selectedSession\.value\?\.id\] as const/);
 });
 
@@ -51,4 +51,10 @@ test("floating preview keeps its DOM alive through the exit transition", () => {
   assert.match(previewSource, /is-presence-exiting/);
   assert.match(panelSource, /<SessionRemoteDesktopFloatingPreview[\s\S]*?:visible="remoteDesktopPreviewOpen"/);
   assert.doesNotMatch(panelSource, /v-if="remoteDesktopPreviewOpen && selectedSession/);
+});
+
+test("floating preview close resets the requested state through its owning action", () => {
+  assert.match(panelSource, /@close="closeSessionRemoteDesktopPreview"/);
+  assert.doesNotMatch(panelSource, /@close="remoteDesktopPreviewOpen\s*=\s*false"/);
+  assert.match(panelSource, /function closeSessionRemoteDesktopPreview\(\) \{\s*remoteDesktopPreviewRequested\.value = false;\s*remoteDesktopInlineExpanded\.value = false;\s*\}/);
 });

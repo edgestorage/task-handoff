@@ -6,6 +6,8 @@ export type RemoteDesktopTransform = { scale: number; translateX: number; transl
 export const IDENTITY_REMOTE_DESKTOP_TRANSFORM: RemoteDesktopTransform = { scale: 1, translateX: 0, translateY: 0 };
 export const MIN_REMOTE_DESKTOP_ZOOM = 1;
 export const MAX_REMOTE_DESKTOP_ZOOM = 4;
+/** Zoom at which the full edge-overlap pan range is available. */
+export const REMOTE_DESKTOP_PAN_FULL_ZOOM = 1.3;
 export const REMOTE_DESKTOP_MIN_VISIBLE_EDGE = 24;
 export const REMOTE_DESKTOP_TRACKPAD_EDGE_INSET = 20;
 const MULTITOUCH_TAP_TRAVEL_PX = 8;
@@ -97,12 +99,20 @@ function constrainAxis(translate: number, viewportSize: number, rectStart: numbe
   const left = center + scale * (rectStart - center);
   const transformedSize = rectSize * scale;
   const centered = viewportSize / 2 - center - scale * (rectStart + rectSize / 2 - center);
-  if (scale <= MIN_REMOTE_DESKTOP_ZOOM + 0.001) return centered;
-  // Once zoomed, the frame may leave the viewport in either direction. Keep a
-  // narrow edge visible so the user can always pan it back into view.
-  const min = REMOTE_DESKTOP_MIN_VISIBLE_EDGE - (left + transformedSize);
-  const max = viewportSize - REMOTE_DESKTOP_MIN_VISIBLE_EDGE - left;
-  return clamp(translate, min, max);
+  // Open the edge-overlap range linearly so zooming out collapses the pan
+  // bounds to the centered position instead of snapping across a threshold.
+  const panProgress = clamp(
+    (scale - MIN_REMOTE_DESKTOP_ZOOM) / (REMOTE_DESKTOP_PAN_FULL_ZOOM - MIN_REMOTE_DESKTOP_ZOOM),
+    0,
+    1,
+  );
+  const fullMin = REMOTE_DESKTOP_MIN_VISIBLE_EDGE - (left + transformedSize);
+  const fullMax = viewportSize - REMOTE_DESKTOP_MIN_VISIBLE_EDGE - left;
+  return clamp(
+    translate,
+    centered + (fullMin - centered) * panProgress,
+    centered + (fullMax - centered) * panProgress,
+  );
 }
 
 function clamp(value: number, min: number, max: number) {

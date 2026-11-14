@@ -233,7 +233,7 @@ test("model reference distribution expands node instances and opens their model 
   assert.match(settings, /\.model-reference-instance > span \{[^}]*font-size: 12px;/);
   assert.match(settings, /\.model-reference-toggle \{ background: transparent; border: 0; cursor: pointer;/);
   assert.match(modal, /<ModelSettingsSection v-else-if="settingsSection === 'models'" :instances="instances" @open-instance-settings="\(instanceId, section\) => emit\('openInstanceSettings', instanceId, section\)"/);
-  assert.match(modal, /openInstanceSettings: \[instanceId: string, section\?: "general" \| "ai" \| "codex" \| "models" \| "git-credentials" \| "apps"\]/);
+  assert.match(modal, /openInstanceSettings: \[instanceId: string, section\?: "general" \| "ai" \| "browser" \| "codex" \| "models" \| "git-credentials" \| "remote-desktop" \| "apps"\]/);
   for (const locale of [zh, en]) {
     assert.match(locale, /openInstanceSettings: "/);
     assert.match(locale, /unlistedReferences: "/);

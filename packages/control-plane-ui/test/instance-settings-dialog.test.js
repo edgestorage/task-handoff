@@ -19,7 +19,7 @@ test("instance settings is one top-level dialog with three independent entry poi
   assert.match(workbench, /@open-instance-settings="openInstanceSettings"/);
   assert.match(list, /\$emit\('openSettings', instance\.id\)/);
   assert.match(detail, /\$emit\('openSettings', instance\.id\)/);
-  assert.match(settings, /openInstanceSettings: \[instanceId: string, section\?: "general" \| "ai" \| "codex" \| "models" \| "git-credentials" \| "apps"\]/);
+  assert.match(settings, /openInstanceSettings: \[instanceId: string, section\?: "general" \| "ai" \| "browser" \| "codex" \| "models" \| "git-credentials" \| "remote-desktop" \| "apps"\]/);
   assert.match(nodeDetail, /actions\.openInstanceSettings\(instance\.id\)/);
 });
 
@@ -33,7 +33,7 @@ test("the instance App menu opens settings directly on app management", () => {
   assert.match(preview, /\$emit\('openSettings', instance\.id, 'apps'\)/);
   assert.match(detail, /\$emit\('openSettings', instanceId, section\)/);
   assert.match(workbench, /:initial-section="instanceSettingsSection"/);
-  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "ai" \| "browser" \| "codex" \| "models" \| "git-credentials" \| "apps" = "general"\)/);
+  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "ai" \| "browser" \| "codex" \| "models" \| "git-credentials" \| "remote-desktop" \| "apps" = "general"\)/);
   assert.match(dialog, /section\.value = props\.initialSection \|\| "general"/);
 });
 
@@ -56,9 +56,9 @@ test("instance model controls live only in the settings dialog", () => {
   assert.doesNotMatch(dialog, /keyPreview|\.key\b|API key/);
 });
 
-test("instance settings exposes general, models, and apps without the inventory panel", () => {
+test("instance settings exposes general, models, remote desktop, and apps without the inventory panel", () => {
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
-  for (const section of ["general", "models", "apps"]) assert.match(dialog, new RegExp(`value=\\"${section}\\"`));
+  for (const section of ["general", "models", "remote-desktop", "apps"]) assert.match(dialog, new RegExp(`value=\\"${section}\\"`));
   assert.doesNotMatch(dialog, /customLaunchers|appInventory|inventoryState|inventoryBadgeVariant/);
   assert.match(dialog, /:aria-label="t\('instances\.settings\.sections'\)"/);
   assert.match(dialog, /DialogContent/);
@@ -68,6 +68,44 @@ test("instance settings exposes general, models, and apps without the inventory 
   assert.match(dialog, /t\("instances\.settings\.sessionPermissionsDescription"\)/);
   assert.match(dialog, /t\("instances\.settings\.aiSessionHistoryLimit"\)/);
   assert.match(dialog, /aiSessionHistoryLimit:\s*Number\(aiSessionHistoryLimit\.value\)/);
+});
+
+test("remote desktop settings own component enablement and macOS permission requests", () => {
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+  const api = read("src/api/remoteDesktop.ts");
+  const zh = read("src/i18n/locales/zh-CN/instances.ts");
+  const en = read("src/i18n/locales/en-US/instances.ts");
+
+  assert.match(dialog, /<TabsContent value="remote-desktop"/);
+  assert.match(dialog, /t\("instances\.settings\.remoteDesktopPage\.openApps"\)/);
+  assert.match(dialog, /section\.value = "apps"/);
+  assert.match(dialog, /remoteDesktopMac = computed\(\(\) => props\.appManagement\?\.capabilities\.platform === "darwin"\)/);
+  assert.match(dialog, /requestRemoteDesktopPermission\('screen-capture'\)/);
+  assert.match(dialog, /requestRemoteDesktopPermission\('input'\)/);
+  assert.match(dialog, /role="status"/);
+  assert.match(dialog, /role="alert"/);
+  assert.doesNotMatch(dialog, /\.remote-desktop-component-enable,\s*\.remote-desktop-permission-row\s*\{\s*border-top/);
+  assert.match(dialog, /\.remote-desktop-permission-row \+ \.remote-desktop-permission-row \{\s*border-top: 1px solid var\(--line\);\s*\}/);
+  assert.doesNotMatch(dialog, /setInterval|setTimeout\([^)]*refreshRemoteDesktopPermissions/);
+  assert.match(api, /remote-desktop\/permissions\/request/);
+  for (const locale of [zh, en]) {
+    assert.match(locale, /remoteDesktopPage: \{/);
+    assert.match(locale, /screenCaptureTitle:/);
+    assert.match(locale, /inputControlTitle:/);
+  }
+});
+
+test("Windows hides remote desktop settings and its app catalog entry", () => {
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+
+  assert.match(dialog, /import \{ remoteDesktopCapabilities, remoteDesktopVisibleForPlatform \} from "\.\.\/remoteDesktopCapability"/);
+  assert.match(dialog, /<TabsTrigger v-if="remoteDesktopVisible" value="remote-desktop"/);
+  assert.match(dialog, /const visibleManagedApps = computed\(\(\) => \{[\s\S]*?app\.id !== "remote-desktop"/);
+  assert.match(dialog, /count: visibleManagedApps\.value\.length/);
+  assert.match(dialog, /visibleManagedApps\.value\.filter\(\(app\) => app\.canInstall\)/);
+  assert.match(dialog, /visibleManagedApps\.value\.filter\(\(app\) => app\.state === "installed"\)/);
+  assert.match(dialog, /const apps = visibleManagedApps\.value/);
+  assert.match(dialog, /!visibleManagedApps\.length/);
 });
 
 test("instance settings sections use a grouped vertical navigation", () => {

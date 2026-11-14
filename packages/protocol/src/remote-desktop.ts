@@ -206,6 +206,20 @@ export const DesktopIceConfigSchema = z.object({ iceServers: z.array(DesktopIceS
 export const DesktopCreatedSchema = DesktopIceConfigSchema.extend({
   snapshot: DesktopSessionSnapshotSchema, signalUrl: z.string(), ticketExpiresAt: z.number().int().positive(), protocolVersion: z.string(),
 }).strip();
+/** Host permission state is queried at runtime and is never persisted on the
+ * instance or component record. Unknown additive fields are ignored so the UI
+ * can read newer components without treating them as a protocol failure. */
+export const DesktopNativePermissionStatusSchema = z.enum(["granted", "required", "unknown"]);
+export const DesktopNativePermissionKindSchema = z.enum(["screen-capture", "input"]);
+export const DesktopNativePermissionsSchema = z.object({
+  platform: z.string().min(1).max(64),
+  supported: z.boolean(),
+  screenCapture: DesktopNativePermissionStatusSchema,
+  inputControl: DesktopNativePermissionStatusSchema,
+}).strip();
+export type DesktopNativePermissionKind = z.infer<typeof DesktopNativePermissionKindSchema>;
+export type DesktopNativePermissionStatus = z.infer<typeof DesktopNativePermissionStatusSchema>;
+export type DesktopNativePermissions = z.infer<typeof DesktopNativePermissionsSchema>;
 /** Additive resume credential for an existing viewer session. The legacy
  * create-time signal URL remains one-time; a relay reconnect exchanges the
  * authenticated session for a fresh short-lived tunnel without re-attaching

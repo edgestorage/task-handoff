@@ -1368,7 +1368,7 @@
       :session-id="selectedSession.id"
       :target="selectedSessionRemoteDesktopLink.target"
       :visible="remoteDesktopPreviewOpen"
-      @close="remoteDesktopPreviewOpen = false"
+      @close="closeSessionRemoteDesktopPreview"
       @open-details="openSelectedSessionRemoteDesktopDetails"
       @selection-change="updateSelectedSessionRemoteDesktopTarget"
     />
@@ -1812,7 +1812,7 @@ const { presentation: sessionRemoteDesktopPreviewPresentation } = useSessionRemo
 const remoteDesktopPreviewRequested = ref(false);
 const remoteDesktopPreviewOpen = computed(() => remoteDesktopPreviewRequested.value && sessionRemoteDesktopPreviewPresentation.value === "floating");
 const remoteDesktopInlineExpanded = ref(false);
-watch([() => props.instance.id, () => selectedSession.value?.id, sessionRemoteDesktopPreviewPresentation], () => {
+watch([() => props.instance.id, () => selectedSession.value?.id, () => sessionRemoteDesktopPreviewPresentation.value], () => {
   remoteDesktopPreviewRequested.value = false;
   remoteDesktopInlineExpanded.value = false;
 });

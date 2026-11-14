@@ -1,7 +1,29 @@
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
 import { DesktopComponentHost, type ComponentCommand, type ComponentEvent } from "./component-host";
 import { DesktopSettings } from "./settings";
-import { unsupportedRemoteDesktopCapabilities, normalizeRemoteDesktopCapabilities, type RemoteDesktopCapabilities } from "@task-handoff/protocol/remote-desktop";
+import {
+  DesktopNativePermissionsSchema,
+  unsupportedRemoteDesktopCapabilities,
+  normalizeRemoteDesktopCapabilities,
+  type DesktopNativePermissionKind,
+  type DesktopNativePermissions,
+  type RemoteDesktopCapabilities,
+} from "@task-handoff/protocol/remote-desktop";
+import { z } from "zod";
+
+const NativePermissionProbeSchema = z.object({
+  screenCaptureAllowed: z.boolean(),
+  inputAllowed: z.boolean(),
+}).strip();
+const NativeScreenPermissionRequestSchema = z.object({ screenCaptureAllowed: z.boolean() }).strip();
+const NativeInputPermissionRequestSchema = z.object({ inputAllowed: z.boolean() }).strip();
+const NATIVE_PERMISSION_OUTPUT_LIMIT = 64 * 1024;
+const NATIVE_PERMISSION_COMMAND_DEADLINE_MS = 10_000;
+function parseNativePermissionOutput<T extends z.ZodTypeAny>(schema: T, output: string): z.infer<T> {
+  try { return schema.parse(JSON.parse(output) as unknown); }
+  catch { throw new Error("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"); }
+}
 
 export type DesktopPackage = { binary: string; version: string };
 export type DesktopServiceOptions = {
@@ -70,6 +92,87 @@ export class DesktopService extends EventEmitter {
       if (!enabled) await this.stop();
       else {const status=await this.refreshInside();this.maybeRequestProtocolUpdate(status);}
       this.emit("changed"); return settings;
+    });
+  }
+  /** macOS TCC state belongs to the installed component binary, not to the
+   * running streaming host. The settings surface can therefore inspect it
+   * while desktop streaming is disabled. */
+  permissions(): Promise<DesktopNativePermissions> {
+    return this.serial(() => this.readNativePermissionsInside());
+  }
+  requestPermission(kind: DesktopNativePermissionKind): Promise<DesktopNativePermissions> {
+    return this.serial(async () => {
+      this.assertNativePermissionsSupported();
+      const output = await this.runNativePermissionCommand(kind === "screen-capture"
+        ? "--request-screen-permission"
+        : "--request-input-permission");
+      if (kind === "screen-capture") parseNativePermissionOutput(NativeScreenPermissionRequestSchema, output);
+      else parseNativePermissionOutput(NativeInputPermissionRequestSchema, output);
+      return this.readNativePermissionsInside();
+    });
+  }
+  private assertNativePermissionsSupported() {
+    if (process.platform !== "darwin") throw new Error("REMOTE_DESKTOP_PERMISSIONS_UNSUPPORTED");
+    try {
+      if (!this.options.installedPackage()) throw new Error("REMOTE_DESKTOP_NOT_INSTALLED");
+    } catch (error) {
+      if (error instanceof Error && error.message === "REMOTE_DESKTOP_NOT_INSTALLED") throw error;
+      throw new Error("REMOTE_DESKTOP_PACKAGE_INVALID");
+    }
+  }
+  private async readNativePermissionsInside(): Promise<DesktopNativePermissions> {
+    if (process.platform !== "darwin") return DesktopNativePermissionsSchema.parse({
+      platform: process.platform,
+      supported: false,
+      screenCapture: "unknown",
+      inputControl: "unknown",
+    });
+    this.assertNativePermissionsSupported();
+    const output = await this.runNativePermissionCommand("--check-native-permissions");
+    const probe = parseNativePermissionOutput(NativePermissionProbeSchema, output);
+    return DesktopNativePermissionsSchema.parse({
+      platform: process.platform,
+      supported: true,
+      screenCapture: probe.screenCaptureAllowed ? "granted" : "required",
+      inputControl: probe.inputAllowed ? "granted" : "required",
+    });
+  }
+  /** Only fixed internal arguments reach the component. Native errors and
+   * executable paths stay inside the instance boundary. */
+  private runNativePermissionCommand(argument: string): Promise<string> {
+    const installed = this.options.installedPackage();
+    if (!installed) return Promise.reject(new Error("REMOTE_DESKTOP_NOT_INSTALLED"));
+    return new Promise((resolve, reject) => {
+      const child = spawn(installed.binary, [argument], { stdio: ["ignore", "pipe", "pipe"] });
+      let output = "";
+      let settled = false;
+      const finish = (error?: Error, value?: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve(value ?? "");
+      };
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish(new Error("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"));
+      }, NATIVE_PERMISSION_COMMAND_DEADLINE_MS);
+      child.stdout.setEncoding("utf8");
+      child.stderr.resume();
+      child.stdout.on("data", (chunk: string) => {
+        output += chunk;
+        if (Buffer.byteLength(output, "utf8") > NATIVE_PERMISSION_OUTPUT_LIMIT) {
+          child.kill("SIGKILL");
+          finish(new Error("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"));
+        }
+      });
+      child.once("error", (error: NodeJS.ErrnoException) => {
+        finish(new Error(error.code === "ENOENT" ? "REMOTE_DESKTOP_PACKAGE_INVALID" : "REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"));
+      });
+      child.once("close", (code) => {
+        if (code !== 0) return finish(new Error("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"));
+        finish(undefined, output);
+      });
     });
   }
   private async ensure() {

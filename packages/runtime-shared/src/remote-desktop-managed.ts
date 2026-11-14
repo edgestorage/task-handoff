@@ -33,6 +33,8 @@ export const DesktopManagedSchemas = {
   "force-stop": z.object({ requestId: DesktopRequestIdSchema, viewerSessionId: z.string().min(1).max(4096) }).strict(),
   "settings-get": z.object({}).strict(),
   "settings-set": z.object({ enabled: z.boolean() }).strict(),
+  "permissions-get": z.object({}).strict(),
+  "permissions-request": z.object({ kind: z.enum(["screen-capture", "input"]) }).strict(),
   preflight: z.object({}).strict(),
 } as const;
 export type DesktopManagedOperation = keyof typeof DesktopManagedSchemas;
@@ -44,6 +46,8 @@ export const DesktopManagedSignalSchema = z.union([
 export function desktopManagedEndpoint(operation: DesktopManagedOperation) {
   if (operation === "settings-get") return { method: "GET", path: "/api/internal/remote-desktop/settings" };
   if (operation === "settings-set") return { method: "PUT", path: "/api/internal/remote-desktop/settings" };
+  if (operation === "permissions-get") return { method: "GET", path: "/api/internal/remote-desktop/permissions" };
+  if (operation === "permissions-request") return { method: "POST", path: "/api/internal/remote-desktop/permissions/request" };
   return { method: "POST", path: `/api/internal/remote-desktop/${operation}` };
 }
 

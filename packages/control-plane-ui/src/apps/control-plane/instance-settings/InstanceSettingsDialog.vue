@@ -34,6 +34,7 @@
               </div>
               <div class="instance-settings-nav-group">
                 <span class="instance-settings-nav-group-title">{{ t("instances.settings.sectionGroups.provisioning") }}</span>
+                <TabsTrigger v-if="remoteDesktopVisible" value="remote-desktop"><Monitor :size="14" />{{ t("instances.settings.remoteDesktopPage.title") }}</TabsTrigger>
                 <TabsTrigger value="apps"><Boxes :size="14" />{{ t("instances.settings.apps") }}</TabsTrigger>
                 <TabsTrigger value="git-credentials"><KeyRound :size="14" />{{ t("instances.settings.gitCredentials") }}</TabsTrigger>
               </div>
@@ -220,6 +221,113 @@
             </section>
           </TabsContent>
 
+          <TabsContent value="remote-desktop" class="instance-settings-section">
+            <section class="instance-settings-card instance-settings-group">
+              <div class="instance-settings-section-heading">
+                <h3>{{ t("instances.settings.remoteDesktopPage.componentTitle") }}</h3>
+                <p>{{ t("instances.settings.remoteDesktopPage.componentDescription") }}</p>
+              </div>
+              <div class="instance-settings-surface remote-desktop-component">
+                <div v-if="appManagementLoading && !appManagement" class="instance-settings-state" role="status">{{ t("instances.settings.remoteDesktopPage.loadingComponent") }}</div>
+                <div v-else-if="appManagementError && !appManagement" class="instance-settings-state instance-settings-state-error" role="alert">
+                  <span>{{ t("instances.settings.remoteDesktopPage.componentUnavailable") }} · {{ appManagementError }}</span>
+                  <Button size="sm" variant="outline" @click="refreshApps">{{ t("instances.settings.retry") }}</Button>
+                </div>
+                <div v-else-if="!remoteDesktopApp" class="instance-settings-state" role="status">{{ t("instances.settings.remoteDesktopPage.componentMissing") }}</div>
+                <template v-else>
+                  <div class="remote-desktop-component-main">
+                    <span class="instance-app-icon" aria-hidden="true"><Monitor :size="18" /></span>
+                    <div class="remote-desktop-component-copy">
+                      <strong>{{ remoteDesktopApp.name }}</strong>
+                      <small>{{ remoteDesktopApp.description || t("instances.settings.remoteDesktopPage.componentDescription") }}</small>
+                      <code>{{ remoteDesktopApp.id }}<template v-if="remoteDesktopApp.version"> · {{ remoteDesktopApp.version }}</template></code>
+                    </div>
+                    <Badge :variant="managedAppBadgeVariant(remoteDesktopApp.state)">{{ managedAppStateLabel(remoteDesktopApp.state) }}</Badge>
+                  </div>
+                  <div v-if="remoteDesktopActiveJob" class="remote-desktop-component-note">
+                    <span role="status">{{ t("instances.settings.remoteDesktopPage.componentTaskRunning", { status: t(appTaskStatusKey(remoteDesktopActiveJob), { operation: operationNoun(remoteDesktopActiveJob.operation) }) }) }}</span>
+                    <Button size="sm" variant="outline" @click="openAppTask(remoteDesktopActiveJob.id)">{{ t("instances.settings.viewAppTasks") }}</Button>
+                  </div>
+                  <div v-else-if="!remoteDesktopInstalled" class="remote-desktop-component-note remote-desktop-install-guide">
+                    <p>{{ t("instances.settings.remoteDesktopPage.installGuide") }}</p>
+                    <Button size="sm" @click="openRemoteDesktopAppManagement">{{ t("instances.settings.remoteDesktopPage.openApps") }}</Button>
+                  </div>
+                  <div v-else-if="remoteDesktopSettings" class="remote-desktop-component-enable">
+                    <div>
+                      <strong>{{ remoteDesktopSettings.enabled ? t("instances.settings.remoteDesktopPage.enabled") : t("instances.settings.remoteDesktopPage.disabled") }}</strong>
+                      <small>{{ remoteDesktopSettings.enabled ? t("instances.settings.remoteDesktopPage.enabledDescription") : t("instances.settings.remoteDesktopPage.disabledDescription") }}</small>
+                    </div>
+                    <Button size="sm" :variant="remoteDesktopSettings.enabled ? 'outline' : 'default'" :disabled="remoteDesktopSettingsLoading" @click="toggleRemoteDesktop">
+                      <LoaderCircle v-if="remoteDesktopSettingsLoading" class="animate-spin motion-reduce:animate-none" :size="13" aria-hidden="true" />
+                      {{ remoteDesktopSettings.enabled ? t("instances.settings.remoteDesktopDisable") : t("instances.settings.remoteDesktopEnable") }}
+                    </Button>
+                  </div>
+                  <div v-else-if="remoteDesktopSettingsLoading" class="instance-settings-state" role="status">{{ t("instances.settings.remoteDesktopPage.loadingSettings") }}</div>
+                  <div v-if="remoteDesktopSettingsError" class="instance-settings-state instance-settings-state-error" role="alert">
+                    <span>{{ remoteDesktopSettingsError }}</span>
+                    <Button size="sm" variant="outline" @click="refreshRemoteDesktopSettings">{{ t("instances.settings.retry") }}</Button>
+                  </div>
+                </template>
+              </div>
+            </section>
+
+            <section v-if="remoteDesktopPermissionsVisible" class="instance-settings-card instance-settings-group">
+              <div class="instance-settings-section-heading">
+                <h3>{{ t("instances.settings.remoteDesktopPage.permissionsTitle") }}</h3>
+                <p>{{ t("instances.settings.remoteDesktopPage.permissionsDescription") }}</p>
+              </div>
+              <div class="instance-settings-surface remote-desktop-permissions">
+                <div v-if="remoteDesktopPermissionsLoading && !remoteDesktopPermissions" class="instance-settings-state" role="status">{{ t("instances.settings.remoteDesktopPage.checkingPermissions") }}</div>
+                <div v-else-if="remoteDesktopPermissionsError && !remoteDesktopPermissions" class="instance-settings-state instance-settings-state-error" role="alert">
+                  <span>{{ remoteDesktopPermissionsError }}</span>
+                  <Button size="sm" variant="outline" @click="refreshRemoteDesktopPermissions">{{ t("instances.settings.retry") }}</Button>
+                </div>
+                <div v-else-if="remoteDesktopPermissions && !remoteDesktopPermissions.supported" class="instance-settings-state" role="status">{{ t("instances.settings.remoteDesktopPage.permissionsUnsupported") }}</div>
+                <template v-else-if="remoteDesktopPermissions">
+                  <article class="remote-desktop-permission-row">
+                    <div class="remote-desktop-permission-copy">
+                      <Monitor :size="17" aria-hidden="true" />
+                      <div>
+                        <strong>{{ t("instances.settings.remoteDesktopPage.screenCaptureTitle") }}</strong>
+                        <small>{{ t("instances.settings.remoteDesktopPage.screenCaptureDescription") }}</small>
+                      </div>
+                    </div>
+                    <Badge :variant="remoteDesktopPermissionBadgeVariant(remoteDesktopPermissions.screenCapture)">{{ remoteDesktopPermissionStatusLabel(remoteDesktopPermissions.screenCapture) }}</Badge>
+                    <Button v-if="remoteDesktopPermissions.screenCapture !== 'granted'" size="sm" variant="outline" :disabled="Boolean(remoteDesktopPermissionRequesting) || remoteDesktopPermissionsLoading" @click="requestRemoteDesktopPermission('screen-capture')">
+                      <LoaderCircle v-if="remoteDesktopPermissionRequesting === 'screen-capture'" class="animate-spin motion-reduce:animate-none" :size="13" aria-hidden="true" />
+                      {{ remoteDesktopPermissionRequesting === 'screen-capture' ? t("instances.settings.remoteDesktopPage.requestingPermission") : t("instances.settings.remoteDesktopPage.requestPermission") }}
+                    </Button>
+                    <Button size="sm" variant="ghost" :disabled="remoteDesktopPermissionsLoading || Boolean(remoteDesktopPermissionRequesting)" @click="refreshRemoteDesktopPermissions">
+                      <RefreshCw :class="{ 'animate-spin motion-reduce:animate-none': remoteDesktopPermissionsLoading }" :size="13" aria-hidden="true" />
+                      {{ t("instances.settings.remoteDesktopPage.recheckPermission") }}
+                    </Button>
+                  </article>
+                  <article class="remote-desktop-permission-row">
+                    <div class="remote-desktop-permission-copy">
+                      <Accessibility :size="17" aria-hidden="true" />
+                      <div>
+                        <strong>{{ t("instances.settings.remoteDesktopPage.inputControlTitle") }}</strong>
+                        <small>{{ t("instances.settings.remoteDesktopPage.inputControlDescription") }}</small>
+                      </div>
+                    </div>
+                    <Badge :variant="remoteDesktopPermissionBadgeVariant(remoteDesktopPermissions.inputControl)">{{ remoteDesktopPermissionStatusLabel(remoteDesktopPermissions.inputControl) }}</Badge>
+                    <Button v-if="remoteDesktopPermissions.inputControl !== 'granted'" size="sm" variant="outline" :disabled="Boolean(remoteDesktopPermissionRequesting) || remoteDesktopPermissionsLoading" @click="requestRemoteDesktopPermission('input')">
+                      <LoaderCircle v-if="remoteDesktopPermissionRequesting === 'input'" class="animate-spin motion-reduce:animate-none" :size="13" aria-hidden="true" />
+                      {{ remoteDesktopPermissionRequesting === 'input' ? t("instances.settings.remoteDesktopPage.requestingPermission") : t("instances.settings.remoteDesktopPage.requestPermission") }}
+                    </Button>
+                    <Button size="sm" variant="ghost" :disabled="remoteDesktopPermissionsLoading || Boolean(remoteDesktopPermissionRequesting)" @click="refreshRemoteDesktopPermissions">
+                      <RefreshCw :class="{ 'animate-spin motion-reduce:animate-none': remoteDesktopPermissionsLoading }" :size="13" aria-hidden="true" />
+                      {{ t("instances.settings.remoteDesktopPage.recheckPermission") }}
+                    </Button>
+                  </article>
+                  <p class="remote-desktop-permissions-note">{{ t("instances.settings.remoteDesktopPage.permissionsNote") }}</p>
+                  <p v-if="remoteDesktopPermissionNotice" class="remote-desktop-permissions-status" role="status">{{ remoteDesktopPermissionNotice }}</p>
+                  <p v-if="remoteDesktopPermissionsError" class="remote-desktop-permissions-error" role="alert">{{ remoteDesktopPermissionsError }}</p>
+                </template>
+              </div>
+            </section>
+          </TabsContent>
+
           <TabsContent value="apps" class="instance-settings-section">
             <section class="instance-settings-card instance-settings-group">
               <div class="instance-app-heading">
@@ -244,7 +352,7 @@
                 <div v-else-if="!appManagement" class="instance-settings-state">{{ t("instances.settings.noSnapshot") }}</div>
                 <Tabs v-else v-model="appView" class="instance-app-views">
                   <TabsList class="instance-app-view-tabs" :aria-label="t('instances.settings.appViews')">
-                    <TabsTrigger value="catalog">{{ t("instances.settings.appCatalog") }}<span class="instance-app-task-count">{{ appManagement.apps.length }}</span></TabsTrigger>
+                    <TabsTrigger value="catalog">{{ t("instances.settings.appCatalog") }}<span class="instance-app-task-count">{{ visibleManagedApps.length }}</span></TabsTrigger>
                     <TabsTrigger ref="appTasksTab" value="tasks">{{ t("instances.settings.appTasks") }}<span v-if="appManagement.activeJobs.length" class="instance-app-task-count">{{ appManagement.activeJobs.length }}</span></TabsTrigger>
                     <TabsTrigger v-if="installEnvironmentSupported" ref="appEnvironmentTab" value="environment">{{ t("instances.settings.installSettings") }}</TabsTrigger>
                   </TabsList>
@@ -255,7 +363,7 @@
                       <span class="instance-app-task-summary-copy" role="status">{{ appTaskSummary }}<span v-if="appManagement.activeJobs.length > 1"> · {{ t("instances.settings.otherAppTasks", { count: appManagement.activeJobs.length - 1 }) }}</span></span>
                       <Button size="sm" variant="ghost" @click="openAppTask(primaryAppTask.id)">{{ t("instances.settings.viewAppTasks") }}<ChevronRight :size="14" aria-hidden="true" /></Button>
                     </div>
-                    <div v-if="!appManagement.apps.length" class="instance-settings-state instance-settings-empty-state">{{ t("instances.settings.noManagedApps") }}</div>
+                    <div v-if="!visibleManagedApps.length" class="instance-settings-state instance-settings-empty-state">{{ t("instances.settings.noManagedApps") }}</div>
                     <template v-else>
                       <div class="instance-app-toolbar" :aria-label="t('instances.settings.appFilters')">
                         <div class="instance-app-filters">
@@ -265,7 +373,6 @@
                         </div>
                         <small>{{ installableAppCount ? t("instances.settings.readyToInstall", { count: installableAppCount }) : t("instances.settings.noInstalls") }}</small>
                       </div>
-                      <div v-if="remoteDesktopSettingsError" class="instance-settings-state instance-settings-state-error" role="alert">{{ remoteDesktopSettingsError }}</div>
                       <div v-if="!filteredManagedApps.length" class="instance-settings-state">{{ t("instances.settings.noFilterMatches") }}</div>
                       <div v-else class="instance-app-list instance-directory-list">
                         <article v-for="app in filteredManagedApps" :key="app.id" class="instance-app-row instance-managed-app-row">
@@ -285,7 +392,6 @@
                             </div>
                             <div class="instance-app-controls">
                               <Badge :variant="managedAppBadgeVariant(app.state)">{{ managedAppStateLabel(app.state) }}</Badge>
-                              <Button v-if="app.id === 'remote-desktop' && app.state === 'installed' && remoteDesktopSettings" size="sm" variant="outline" :disabled="remoteDesktopSettingsLoading" @click="toggleRemoteDesktop">{{ remoteDesktopSettings.enabled ? t('instances.settings.remoteDesktopDisable') : t('instances.settings.remoteDesktopEnable') }}</Button>
                               <Button v-if="activeJob(app)" size="sm" variant="outline" @click="openAppTask(activeJob(app)!.id)">
                                 <LoaderCircle v-if="activeJob(app)!.state === 'running'" class="animate-spin motion-reduce:animate-none" :size="13" aria-hidden="true" />
                                 <Clock3 v-else :size="13" aria-hidden="true" />
@@ -366,7 +472,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Bot, Boxes, ChevronRight, Clock3, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import { Accessibility, Bot, Boxes, ChevronRight, Clock3, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import { controlledInstanceAppInstallEnvironmentCapabilities, supportsAiSessionFileSizeLimitSettings, supportsControlledInstanceAppInstallEnvironment, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
@@ -398,13 +504,15 @@ import { authorizeInstanceGitCredential, revokeInstanceGitCredential, useGitCred
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { instanceModelEntityId, instanceModelIdMatches } from "./instanceSettingsState";
 import { instanceStatusBadgeLabel } from "../useInstanceStatus";
-import { getRemoteDesktopSettings, updateRemoteDesktopSettings, type RemoteDesktopSettings } from "../../../api/remoteDesktop";
+import { remoteDesktopCapabilities, remoteDesktopVisibleForPlatform } from "../remoteDesktopCapability";
+import { getRemoteDesktopPermissions, getRemoteDesktopSettings, requestRemoteDesktopPermission as postRemoteDesktopPermission, updateRemoteDesktopSettings, type RemoteDesktopSettings } from "../../../api/remoteDesktop";
+import type { DesktopNativePermissionKind, DesktopNativePermissionStatus, DesktopNativePermissions } from "@task-handoff/protocol/remote-desktop";
 
 const { t } = useI18n();
 const { locale } = useControlPlaneLocale();
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
-type InstanceSettingsSection = "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "apps";
+type InstanceSettingsSection = "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "remote-desktop" | "apps";
 type AppFilter = "all" | "available" | "installed";
 
 const props = defineProps<{
@@ -434,6 +542,7 @@ const sectionLabelKeys: Record<InstanceSettingsSection, string> = {
   codex: "instances.settings.codex",
   models: "instances.settings.models",
   "git-credentials": "instances.settings.gitCredentials",
+  "remote-desktop": "instances.settings.remoteDesktopPage.title",
   apps: "instances.settings.apps",
 };
 const activeSectionLabel = computed(() => t(sectionLabelKeys[section.value]));
@@ -463,6 +572,11 @@ const appOperationError = ref("");
 const remoteDesktopSettings = ref<RemoteDesktopSettings>();
 const remoteDesktopSettingsLoading = ref(false);
 const remoteDesktopSettingsError = ref("");
+const remoteDesktopPermissions = ref<DesktopNativePermissions>();
+const remoteDesktopPermissionsLoading = ref(false);
+const remoteDesktopPermissionsError = ref("");
+const remoteDesktopPermissionRequesting = ref<DesktopNativePermissionKind | "">("");
+const remoteDesktopPermissionNotice = ref("");
 const focusEnvironmentAfterConfirmation = ref(false);
 const appFilter = ref<AppFilter>("all");
 const appView = ref("catalog");
@@ -483,22 +597,85 @@ function openAppTask(jobId: string) {
 }
 async function refreshRemoteDesktopSettings() {
   if (!props.instance || remoteDesktopApp.value?.state !== "installed") return;
+  const instanceId = props.instance.id;
   remoteDesktopSettingsLoading.value = true;
+  remoteDesktopSettings.value = undefined;
   remoteDesktopSettingsError.value = "";
-  try { remoteDesktopSettings.value = await getRemoteDesktopSettings(props.instance.id); }
-  catch (reason) {
-    remoteDesktopSettings.value = undefined;
-    remoteDesktopSettingsError.value = translateApiError(reason, t, t("instances.settings.remoteDesktopSettingsFailed"));
+  try {
+    const settings = await getRemoteDesktopSettings(instanceId);
+    if (props.instance?.id === instanceId) remoteDesktopSettings.value = settings;
   }
-  finally { remoteDesktopSettingsLoading.value = false; }
+  catch (reason) {
+    if (props.instance?.id === instanceId) remoteDesktopSettingsError.value = translateApiError(reason, t, t("instances.settings.remoteDesktopSettingsFailed"));
+  }
+  finally { if (props.instance?.id === instanceId) remoteDesktopSettingsLoading.value = false; }
 }
 async function toggleRemoteDesktop() {
   if (!props.instance || !remoteDesktopSettings.value || remoteDesktopSettingsLoading.value) return;
+  const instanceId = props.instance.id;
+  const enabled = !remoteDesktopSettings.value.enabled;
   remoteDesktopSettingsLoading.value = true;
   remoteDesktopSettingsError.value = "";
-  try { remoteDesktopSettings.value = await updateRemoteDesktopSettings(props.instance.id, !remoteDesktopSettings.value.enabled); }
-  catch (reason) { remoteDesktopSettingsError.value = translateApiError(reason, t, t("instances.settings.remoteDesktopSettingsFailed")); }
-  finally { remoteDesktopSettingsLoading.value = false; }
+  try {
+    const settings = await updateRemoteDesktopSettings(instanceId, enabled);
+    if (props.instance?.id === instanceId) remoteDesktopSettings.value = settings;
+  }
+  catch (reason) {
+    if (props.instance?.id === instanceId) remoteDesktopSettingsError.value = translateApiError(reason, t, t("instances.settings.remoteDesktopSettingsFailed"));
+  }
+  finally { if (props.instance?.id === instanceId) remoteDesktopSettingsLoading.value = false; }
+}
+async function refreshRemoteDesktopPermissions() {
+  if (!props.instance || !remoteDesktopInstalled.value || !remoteDesktopMac.value || remoteDesktopPermissionsLoading.value) return;
+  const instanceId = props.instance.id;
+  remoteDesktopPermissionsLoading.value = true;
+  remoteDesktopPermissions.value = undefined;
+  remoteDesktopPermissionsError.value = "";
+  remoteDesktopPermissionNotice.value = "";
+  try {
+    const permissions = await getRemoteDesktopPermissions(instanceId);
+    if (props.instance?.id === instanceId) remoteDesktopPermissions.value = permissions;
+  } catch (reason) {
+    if (props.instance?.id !== instanceId) return;
+    remoteDesktopPermissionsError.value = translateApiError(reason, t, t("instances.settings.remoteDesktopPage.permissionLoadFailed"));
+  } finally {
+    if (props.instance?.id === instanceId) remoteDesktopPermissionsLoading.value = false;
+  }
+}
+async function requestRemoteDesktopPermission(kind: DesktopNativePermissionKind) {
+  if (!props.instance || !remoteDesktopPermissions.value?.supported || remoteDesktopPermissionRequesting.value) return;
+  const instanceId = props.instance.id;
+  remoteDesktopPermissionRequesting.value = kind;
+  remoteDesktopPermissionsError.value = "";
+  remoteDesktopPermissionNotice.value = "";
+  try {
+    const permissions = await postRemoteDesktopPermission(instanceId, kind);
+    if (props.instance?.id !== instanceId) return;
+    remoteDesktopPermissions.value = permissions;
+    const status = kind === "screen-capture" ? permissions.screenCapture : permissions.inputControl;
+    remoteDesktopPermissionNotice.value = t(status === "granted"
+      ? "instances.settings.remoteDesktopPage.permissionGranted"
+      : "instances.settings.remoteDesktopPage.permissionRequested");
+  } catch (reason) {
+    if (props.instance?.id === instanceId) remoteDesktopPermissionsError.value = translateApiError(reason, t, t("instances.settings.remoteDesktopPage.permissionRequestFailed"));
+  } finally {
+    if (props.instance?.id === instanceId) remoteDesktopPermissionRequesting.value = "";
+  }
+}
+function openRemoteDesktopAppManagement() {
+  if (remoteDesktopActiveJob.value) {
+    openAppTask(remoteDesktopActiveJob.value.id);
+    return;
+  }
+  appFilter.value = "all";
+  appView.value = "catalog";
+  section.value = "apps";
+}
+function remoteDesktopPermissionStatusLabel(status: DesktopNativePermissionStatus) {
+  return t(`instances.settings.remoteDesktopPage.permissionStatus.${status}`);
+}
+function remoteDesktopPermissionBadgeVariant(status: DesktopNativePermissionStatus) {
+  return status === "granted" ? "default" as const : "secondary" as const;
 }
 function retryAppTask(job: AppManagementJob) {
   if (!props.appManagement || operationSubmitting.value) return;
@@ -730,21 +907,31 @@ const legacyModelSelectionNeedsUpgrade = computed(() => {
 });
 const modelsChanged = computed(() => legacyModelSelectionNeedsUpgrade.value
   || JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
-const installableAppCount = computed(() => props.appManagement?.apps.filter((app) => app.canInstall).length || 0);
-const installedAppCount = computed(() => props.appManagement?.apps.filter((app) => app.state === "installed").length || 0);
+const remoteDesktopPlatform = computed(() => props.appManagement?.capabilities.platform
+  ?? (props.instance ? remoteDesktopCapabilities(props.instance).platform : undefined));
+const remoteDesktopVisible = computed(() => remoteDesktopVisibleForPlatform(remoteDesktopPlatform.value));
+const visibleManagedApps = computed(() => {
+  const apps = props.appManagement?.apps || [];
+  return remoteDesktopVisible.value ? apps : apps.filter((app) => app.id !== "remote-desktop");
+});
+const installableAppCount = computed(() => visibleManagedApps.value.filter((app) => app.canInstall).length);
+const installedAppCount = computed(() => visibleManagedApps.value.filter((app) => app.state === "installed").length);
 const appFilters = computed(() => [
-  { value: "all" as const, label: t("instances.settings.filterAll"), count: props.appManagement?.apps.length || 0 },
+  { value: "all" as const, label: t("instances.settings.filterAll"), count: visibleManagedApps.value.length },
   { value: "available" as const, label: t("instances.settings.filterAvailable"), count: installableAppCount.value },
   { value: "installed" as const, label: t("instances.settings.filterInstalled"), count: installedAppCount.value },
 ]);
 const filteredManagedApps = computed(() => {
-  const apps = props.appManagement?.apps || [];
+  const apps = visibleManagedApps.value;
   if (appFilter.value === "available") return apps.filter((app) => app.canInstall);
   if (appFilter.value === "installed") return apps.filter((app) => app.state === "installed");
   return apps;
 });
-const remoteDesktopApp = computed(() => props.appManagement?.apps.find((app) => app.id === "remote-desktop"));
+const remoteDesktopApp = computed(() => visibleManagedApps.value.find((app) => app.id === "remote-desktop"));
 const remoteDesktopInstalled = computed(() => remoteDesktopApp.value?.state === "installed");
+const remoteDesktopActiveJob = computed(() => remoteDesktopApp.value ? activeJob(remoteDesktopApp.value) : undefined);
+const remoteDesktopMac = computed(() => props.appManagement?.capabilities.platform === "darwin");
+const remoteDesktopPermissionsVisible = computed(() => remoteDesktopInstalled.value && remoteDesktopMac.value && !remoteDesktopActiveJob.value);
 
 watch(
   [() => props.open, () => props.instance?.id, () => props.initialSection],
@@ -782,7 +969,7 @@ watch(() => props.instance, (instance) => {
 watch(
   [() => props.open, () => props.instance?.id, () => section.value],
   ([open, instanceId, activeSection]) => {
-    if (open && instanceId && (activeSection === "apps" || activeSection === "browser" || activeSection === "codex")) {
+    if (open && instanceId && (activeSection === "apps" || activeSection === "browser" || activeSection === "codex" || activeSection === "remote-desktop")) {
       void props.refreshAppManagement(instanceId);
     }
   },
@@ -790,13 +977,21 @@ watch(
 );
 
 watch(
-  [() => props.open, () => props.instance?.id, () => section.value, remoteDesktopInstalled],
-  ([open, instanceId, activeSection, installed]) => {
-    if (open && instanceId && activeSection === "apps" && installed) {
+  [() => props.open, () => props.instance?.id, () => section.value, remoteDesktopInstalled, remoteDesktopMac],
+  ([open, instanceId, activeSection, installed, mac]) => {
+    if (open && instanceId && activeSection === "remote-desktop" && installed) {
       void refreshRemoteDesktopSettings();
+      if (mac) void refreshRemoteDesktopPermissions();
     } else if (!installed) {
       remoteDesktopSettings.value = undefined;
       remoteDesktopSettingsError.value = "";
+      remoteDesktopPermissions.value = undefined;
+      remoteDesktopPermissionsError.value = "";
+      remoteDesktopPermissionNotice.value = "";
+    } else if (!mac) {
+      remoteDesktopPermissions.value = undefined;
+      remoteDesktopPermissionsError.value = "";
+      remoteDesktopPermissionNotice.value = "";
     }
   },
   { immediate: true },
@@ -1378,6 +1573,119 @@ async function confirmAppOperation() {
   display: grid;
 }
 
+.remote-desktop-component,
+.remote-desktop-permissions {
+  display: grid;
+}
+
+.remote-desktop-component-main,
+.remote-desktop-component-note,
+.remote-desktop-component-enable,
+.remote-desktop-permission-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.remote-desktop-component-main {
+  min-width: 0;
+}
+
+.remote-desktop-component-copy,
+.remote-desktop-component-enable > div,
+.remote-desktop-permission-copy > div {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 4px;
+}
+
+.remote-desktop-component-copy strong,
+.remote-desktop-component-enable strong,
+.remote-desktop-permission-copy strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.remote-desktop-component-copy small,
+.remote-desktop-component-enable small,
+.remote-desktop-permission-copy small,
+.remote-desktop-component-note p,
+.remote-desktop-permissions-note,
+.remote-desktop-permissions-status,
+.remote-desktop-permissions-error {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.remote-desktop-component-copy code {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.remote-desktop-component-note,
+.remote-desktop-component-enable {
+  border-top: 1px solid var(--line);
+}
+
+.remote-desktop-permission-row + .remote-desktop-permission-row {
+  border-top: 1px solid var(--line);
+}
+
+.remote-desktop-component-note {
+  justify-content: space-between;
+}
+
+.remote-desktop-component-enable {
+  justify-content: space-between;
+}
+
+.remote-desktop-install-guide {
+  align-items: flex-start;
+}
+
+.remote-desktop-install-guide p {
+  flex: 1 1 auto;
+}
+
+.remote-desktop-permission-row {
+  justify-content: flex-end;
+}
+
+.remote-desktop-permission-copy {
+  display: flex;
+  flex: 1 1 320px;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.remote-desktop-permission-copy > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--text-muted);
+}
+
+.remote-desktop-permissions-note,
+.remote-desktop-permissions-status,
+.remote-desktop-permissions-error {
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.remote-desktop-permissions-status {
+  color: var(--text);
+  background: var(--surface-inset);
+}
+
+.remote-desktop-permissions-error {
+  color: var(--status-danger);
+}
+
 
 .instance-app-heading,
 .instance-app-row {
@@ -1731,6 +2039,21 @@ async function confirmAppOperation() {
 @media (max-width: 680px) {
   .instance-app-view-tabs { max-width: calc(100% - 20px); margin: 10px; }
   .instance-app-environment-content { padding: 12px; }
+  .remote-desktop-component-main,
+  .remote-desktop-component-note,
+  .remote-desktop-component-enable,
+  .remote-desktop-permission-row {
+    flex-wrap: wrap;
+  }
+  .remote-desktop-component-main > .instance-app-icon,
+  .remote-desktop-component-copy,
+  .remote-desktop-component-enable > div,
+  .remote-desktop-permission-copy {
+    flex-basis: 100%;
+  }
+  .remote-desktop-install-guide p {
+    flex-basis: 100%;
+  }
   .instance-settings-grid {
     grid-template-columns: 1fr;
   }

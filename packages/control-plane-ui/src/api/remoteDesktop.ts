@@ -5,11 +5,14 @@ import { ApiError } from "./client";
 import {
   DesktopCreatedSchema,
   DesktopFallbackSessionSchema,
+  DesktopNativePermissionsSchema,
   DesktopSessionSnapshotSchema,
   DesktopSourcesSchema,
   type DesktopCaptureSelection,
   type DesktopSource,
   type DesktopFallbackSession,
+  type DesktopNativePermissionKind,
+  type DesktopNativePermissions,
   type DesktopSessionSnapshot,
 } from "@task-handoff/protocol/remote-desktop";
 import { deleteApiData, getApiData, postApiData, putApiData } from "./client";
@@ -49,6 +52,12 @@ export function getRemoteDesktopSettings(instanceId: string) {
 }
 export function updateRemoteDesktopSettings(instanceId: string, enabled: boolean) {
   return putApiData<RemoteDesktopSettings>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop/settings`, { enabled }).then(value => RemoteDesktopSettingsSchema.parse(value));
+}
+export function getRemoteDesktopPermissions(instanceId: string) {
+  return getApiData<DesktopNativePermissions>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop/permissions`).then(value => DesktopNativePermissionsSchema.parse(value));
+}
+export function requestRemoteDesktopPermission(instanceId: string, kind: DesktopNativePermissionKind) {
+  return postApiData<DesktopNativePermissions>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop/permissions/request`, { kind }).then(value => DesktopNativePermissionsSchema.parse(value));
 }
 export function takeoverRemoteDesktopSession(instanceId: string, viewerSessionId: string, selection: DesktopCaptureSelection) {
   return postApiData<RemoteDesktopCreated>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop-sessions/${encodeURIComponent(viewerSessionId)}/takeover`, { requestId: createBrowserUuid(), selection }).then(value => DesktopCreatedSchema.parse(value));

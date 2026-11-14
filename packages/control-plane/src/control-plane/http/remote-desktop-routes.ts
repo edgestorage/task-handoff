@@ -5,6 +5,8 @@ import { z } from "zod";
 import { controlledInstanceRemoteDesktopCapabilities } from "@task-handoff/protocol/control-plane";
 import {
   DesktopFallbackRequestSchema,
+  DesktopNativePermissionKindSchema,
+  DesktopNativePermissionsSchema,
   DesktopRequestIdSchema,
   DesktopSignalResumeRequestSchema,
   DesktopSourcesSchema,
@@ -192,6 +194,17 @@ export function registerRemoteDesktopRoutes(options: {
     const data = await service.desktopRequest(instance.id, "settings-set", input);
     if (!input.enabled) await access.invalidate((_p, id) => id === instance.id);
     return { data };
+  });
+  app.get(`${base}/remote-desktop/permissions`, noStore, async request => {
+    const { instance } = await authorize(request, true, false);
+    const data = await service.desktopRequest(instance.id, "permissions-get", {});
+    return { data: DesktopNativePermissionsSchema.parse(data) };
+  });
+  app.post(`${base}/remote-desktop/permissions/request`, noStore, async request => {
+    const { instance } = await authorize(request, true, false);
+    const { kind } = z.object({ kind: DesktopNativePermissionKindSchema }).strict().parse(request.body);
+    const data = await service.desktopRequest(instance.id, "permissions-request", { kind });
+    return { data: DesktopNativePermissionsSchema.parse(data) };
   });
   const authorized = new WeakMap<FastifyRequest, ReturnType<DesktopAccess["consume"]>>();
   const fallbackAuthorized = new WeakMap<FastifyRequest, ReturnType<DesktopAccess["consumeFallback"]>>();

@@ -11,6 +11,8 @@ import {
   DesktopIceConfigSchema,
   DesktopCaptureSelectionSchema,
   DesktopSignalSchema,
+  DesktopNativePermissionKindSchema,
+  DesktopNativePermissionsSchema,
   REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL,
   REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL,
 } from "@task-handoff/protocol/remote-desktop";
@@ -43,6 +45,15 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
   app.get("/api/internal/remote-desktop/settings",boundary,async()=>({data:service.settings.get()}));
   app.put("/api/internal/remote-desktop/settings",boundary,async(request,reply)=>{
     try{return {data:await service.setEnabled(z.object({enabled:z.boolean()}).strict().parse(request.body).enabled)};}catch(error){return respondError(reply,error);}
+  });
+  app.get("/api/internal/remote-desktop/permissions",boundary,async(_request,reply)=>{
+    try{return {data:DesktopNativePermissionsSchema.parse(await service.permissions())};}catch(error){return respondError(reply,error);}
+  });
+  app.post("/api/internal/remote-desktop/permissions/request",{...boundary,bodyLimit:1024},async(request,reply)=>{
+    try{
+      const {kind}=z.object({kind:DesktopNativePermissionKindSchema}).strict().parse(request.body);
+      return {data:DesktopNativePermissionsSchema.parse(await service.requestPermission(kind))};
+    }catch(error){return respondError(reply,error);}
   });
   for(const [route,type,schema]of [
     ["sources","listSources",Base],["reserve","reserve",Body],

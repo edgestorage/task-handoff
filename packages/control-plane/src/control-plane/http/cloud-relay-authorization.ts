@@ -170,7 +170,7 @@ function apiRouteAuthorization(method: string, path: string): { action: ControlP
     const repository = /^\/api\/controlled-instances\/([^/]+)\/repository(?:\/(?:context|directories|files|changes|diff|worktrees|worktrees\/remove|worktrees\/move-to-main|worktrees\/move-to-main\/preflight|branches))?$/.exec(path);
     if (repository) return repositoryAuthorization(method, decodePathSegment(repository[1]));
     if (/^\/api\/controlled-instances\/[^/]+\/remote-desktop(?:-sessions)?(?:\/|$)/.test(path)) {
-      const management = /\/force-stop$|\/remote-desktop\/settings$/.test(path);
+      const management = /\/force-stop$|\/remote-desktop\/(?:settings|permissions|permissions\/request)$/.test(path);
       return { action: management ? "update" : "interactive-access", resource: { type: "instance" } };
     }
     if (/^\/api\/controlled-instances\/[^/]+\/(?:shell|browser-access)$/.test(path)) return { action: "interactive-access", resource: { type: "instance" } };

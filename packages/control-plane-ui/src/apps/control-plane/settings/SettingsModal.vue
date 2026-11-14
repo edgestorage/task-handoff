@@ -566,7 +566,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   back: [];
-  openInstanceSettings: [instanceId: string, section?: "general" | "ai" | "codex" | "models" | "git-credentials" | "apps"];
+  openInstanceSettings: [instanceId: string, section?: "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "remote-desktop" | "apps"];
   "section-change": [section: SettingsSection];
 }>();
 

@@ -414,10 +414,11 @@ test('remote desktop installation and enabled intent stay in the existing app ma
   assert.match(api, /force-stop/);
   assert.match(settings, /getRemoteDesktopSettings/);
   assert.match(settings, /updateRemoteDesktopSettings/);
-  assert.match(settings, /app\.id === 'remote-desktop'/);
+  assert.match(settings, /remoteDesktopVisibleForPlatform/);
+  assert.match(settings, /visibleManagedApps[\s\S]*?app\.id !== "remote-desktop"/);
   assert.match(settings, /remoteDesktopSettings\.enabled/);
   assert.match(viewer, /forceStopRemoteDesktopSession/);
   assert.match(viewer, /canManage/);
   assert.match(settings, /remoteDesktopInstalled/);
-  assert.match(settings, /activeSection === "apps" && installed/);
+  assert.match(settings, /activeSection === "remote-desktop" && installed/);
 });

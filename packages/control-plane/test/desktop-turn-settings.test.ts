@@ -142,6 +142,52 @@ test("settings permission and viewer options are separate; disabled TURN never i
   assert.equal(cloudEventAllowed({ permissionIds: ["instances:interactive"] }, { type: "desktop-turn.updated", topic: "system" }), false);
 });
 
+test("desktop permission inspection and requests require instance management", async t => {
+  const { service } = await fixture(t);
+  const app = Fastify(); await app.register(websocket);
+  let permissionIds: string[] = ["instances:interactive"];
+  const actor = () => ({ type: "user", identityId: "identity_1", userId: "user_1", permissionIds, roleIds: [], nodeScope: { kind: "all" }, instanceScope: { kind: "inherit-node-scope" }, authorizationRevision: 1, requiresPasswordChange: false } as const);
+  const calls: Array<{ operation: string; input: unknown }> = [];
+  app.addHook("onRequest", async request => { setControlPlaneRequestActor(request, actor() as any); });
+  const capability = { ...unsupportedRemoteDesktopCapabilities(), available: true, runtimeKind: "local" };
+  const snapshot = { platform: "darwin", supported: true, screenCapture: "required", inputControl: "granted" };
+  const access = registerRemoteDesktopRoutes({
+    app,
+    service: {
+      desktopTurn: service,
+      requireControlledInstance: async () => ({ id: "inst_1", nodeId: "node_1", capabilities: { features: { remoteDesktop: capability } } }),
+      getSettings: () => ({}),
+      desktopRequest: async (_id: string, operation: string, input: unknown) => {
+        calls.push({ operation, input });
+        return operation === "permissions-request" ? { ...snapshot, screenCapture: "granted" } : snapshot;
+      },
+    } as any,
+    events: new ControlPlaneEventBus(),
+    authorizationConnections: { track: () => () => {} } as any,
+    principal: async () => ({ actor: actor() as any, deviceSessionId: "device_1" }),
+    renewAuthorization: async () => true,
+  });
+  t.after(async () => { await access.shutdown(); await app.close(); }); await app.ready();
+
+  const permissionUrl = "/api/controlled-instances/inst_1/remote-desktop/permissions";
+  let response = await app.inject({ url: permissionUrl });
+  assert.equal(response.statusCode, 403, response.body);
+  assert.equal((await app.inject({ method: "POST", url: `${permissionUrl}/request`, payload: { kind: "screen-capture" } })).statusCode, 403);
+  permissionIds = ["instances:interactive", "instances:manage"];
+  response = await app.inject({ url: permissionUrl });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.deepEqual(response.json().data, snapshot);
+  response = await app.inject({ method: "POST", url: `${permissionUrl}/request`, payload: { kind: "screen-capture" } });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.json().data.screenCapture, "granted");
+  assert.deepEqual(calls, [
+    { operation: "permissions-get", input: {} },
+    { operation: "permissions-request", input: { kind: "screen-capture" } },
+  ]);
+  assert.deepEqual(routeAuthorization("GET", permissionUrl), { action: "update", resource: { type: "instance" } });
+  assert.deepEqual(routeAuthorization("POST", `${permissionUrl}/request`), { action: "update", resource: { type: "instance" } });
+});
+
 test("account login/logout publishes only actual sign-in changes; readers ignore future fields", async t => {
   const { root } = await fixture(t); let changes = 0;
   const account = new CloudAccountSessionService({ statePath: path.join(root, "account.json"), serviceOrigin: "https://cloud.example.com", onSignedInChanged: () => { changes++; } });

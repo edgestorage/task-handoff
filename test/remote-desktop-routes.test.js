@@ -13,6 +13,7 @@ require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileModule(
 const {DesktopService}=require('../packages/controlled-instance/src/remote-desktop/service.ts');
 const {registerDesktopRoutes}=require('../packages/controlled-instance/src/remote-desktop/routes.ts');
 const {REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL}=require('../packages/protocol/src/remote-desktop.ts');
+const {DesktopManagedSchemas,desktopManagedEndpoint}=require('../packages/runtime-shared/src/remote-desktop-managed.ts');
 const owner={actorId:'actor',deviceSessionId:'device'};
 function service(t,extra={}){
   const dataDir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-service-'));
@@ -42,6 +43,37 @@ test('desktop routes require header credential and validate nested input before 
   assert.equal(calls,0);
   assert.equal((await app.inject({method:'PUT',url:'/api/internal/remote-desktop/settings',headers,payload:{enabled:true,extra:1}})).statusCode,400);
   assert.equal(instance.settings.get().enabled,false);
+});
+test('managed permission operations use fixed endpoints and strict request kinds',async t=>{
+  assert.deepEqual(desktopManagedEndpoint('permissions-get'),{method:'GET',path:'/api/internal/remote-desktop/permissions'});
+  assert.deepEqual(desktopManagedEndpoint('permissions-request'),{method:'POST',path:'/api/internal/remote-desktop/permissions/request'});
+  assert.equal(DesktopManagedSchemas['permissions-request'].safeParse({kind:'screen-capture'}).success,true);
+  assert.equal(DesktopManagedSchemas['permissions-request'].safeParse({kind:'screen-capture',executable:'/tmp/forged'}).success,false);
+
+  const instance=service(t),calls=[];
+  const snapshot={platform:'darwin',supported:true,screenCapture:'required',inputControl:'granted'};
+  instance.permissions=async()=>{calls.push(['get']);return snapshot;};
+  instance.requestPermission=async kind=>{calls.push(['request',kind]);return {...snapshot,screenCapture:'granted'};};
+  const app=await appFor(t,instance);
+  let response=await app.inject({url:'/api/internal/remote-desktop/permissions',headers});
+  assert.equal(response.statusCode,200);assert.deepEqual(response.json().data,snapshot);
+  assert.equal((await app.inject({method:'POST',url:'/api/internal/remote-desktop/permissions/request',headers,payload:{kind:'screen-capture',extra:1}})).statusCode,400);
+  assert.equal((await app.inject({method:'POST',url:'/api/internal/remote-desktop/permissions/request',headers,payload:{kind:'clipboard'}})).statusCode,400);
+  response=await app.inject({method:'POST',url:'/api/internal/remote-desktop/permissions/request',headers,payload:{kind:'screen-capture'}});
+  assert.equal(response.statusCode,200);assert.equal(response.json().data.screenCapture,'granted');
+  assert.deepEqual(calls,[['get'],['request','screen-capture']]);
+});
+test('macOS permission service invokes only fixed component arguments and normalizes results',{skip:process.platform!=='darwin'},async t=>{
+  const dataDir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-permissions-'));
+  const binary=path.join(dataDir,'component.js'),logFile=path.join(dataDir,'calls.jsonl'),screenMarker=path.join(dataDir,'screen'),inputMarker=path.join(dataDir,'input');
+  fs.writeFileSync(binary,`#!${process.execPath}\nconst fs=require('node:fs');const args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(logFile)},JSON.stringify(args)+'\\n');if(args[0]==='--request-screen-permission'){fs.writeFileSync(${JSON.stringify(screenMarker)},'1');console.log(JSON.stringify({screenCaptureAllowed:true}));}else if(args[0]==='--request-input-permission'){fs.writeFileSync(${JSON.stringify(inputMarker)},'1');console.log(JSON.stringify({inputAllowed:true}));}else if(args[0]==='--check-native-permissions')console.log(JSON.stringify({screenCaptureAllowed:fs.existsSync(${JSON.stringify(screenMarker)}),inputAllowed:fs.existsSync(${JSON.stringify(inputMarker)})}));`,{mode:0o700});
+  const instance=new DesktopService({dataDir,mode:'local',installedPackage:()=>({binary,version:'test'}),canStart:()=>true});
+  t.after(async()=>{await instance.close();fs.rmSync(dataDir,{recursive:true,force:true});});
+  assert.deepEqual(await instance.permissions(),{platform:'darwin',supported:true,screenCapture:'required',inputControl:'required'});
+  assert.deepEqual(await instance.requestPermission('screen-capture'),{platform:'darwin',supported:true,screenCapture:'granted',inputControl:'required'});
+  assert.deepEqual(fs.readFileSync(logFile,'utf8').trim().split('\n').map(line=>JSON.parse(line)),[
+    ['--check-native-permissions'],['--request-screen-permission'],['--check-native-permissions'],
+  ]);
 });
 test('no package, disabled state, uninstall and drain never spawn an implicit component',async t=>{
   let installed;const instance=service(t,{installedPackage:()=>installed});

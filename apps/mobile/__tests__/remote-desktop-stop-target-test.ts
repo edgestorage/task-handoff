@@ -40,6 +40,7 @@ const mockController = {
   setResolution: jest.fn(),
   setFrameRate: jest.fn(),
   setCapturePrecision: jest.fn(),
+  setConnectionOptions: jest.fn(),
   setTransportAvailability: jest.fn(),
   close: jest.fn(async () => undefined),
 };

@@ -1045,7 +1045,7 @@ const configSyncDialogOpen = computed({
   },
 });
 const instanceSettingsId = ref("");
-const instanceSettingsSection = ref<"general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "apps">("general");
+const instanceSettingsSection = ref<"general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "remote-desktop" | "apps">("general");
 const instanceSettingsOpen = computed({
   get: () => Boolean(instanceSettingsId.value),
   set: (open: boolean) => {
@@ -2320,7 +2320,7 @@ async function runInstanceAppUpdateCheck(instanceId: string, appId: string) {
   instanceAppManagement.applyUpdateCheck(instanceId, response.check);
 }
 
-function openInstanceSettings(instanceId: string, section: "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "apps" = "general") {
+function openInstanceSettings(instanceId: string, section: "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "remote-desktop" | "apps" = "general") {
   if (!boardInstancesWithAppSessions.value.some((instance) => instance.id === instanceId)) return;
   instanceSettingsSection.value = section;
   instanceSettingsId.value = instanceId;

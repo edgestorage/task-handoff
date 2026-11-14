@@ -1,5 +1,6 @@
 import {
   IDENTITY_REMOTE_DESKTOP_TRANSFORM,
+  REMOTE_DESKTOP_PAN_FULL_ZOOM,
   REMOTE_DESKTOP_MIN_VISIBLE_EDGE,
   REMOTE_DESKTOP_TRACKPAD_EDGE_INSET,
   constrainRemoteDesktopTransform,
@@ -97,6 +98,41 @@ test('covering zoom retains the same edge-overlap movement range', () => {
   const bottom = constrainRemoteDesktopTransform({ scale: 4, translateX: 0, translateY: -10_000 }, portrait, rect);
   expect(frameBounds(portrait, rect, top).top).toBeCloseTo(portrait.height - REMOTE_DESKTOP_MIN_VISIBLE_EDGE, 8);
   expect(frameBounds(portrait, rect, bottom).bottom).toBeCloseTo(REMOTE_DESKTOP_MIN_VISIBLE_EDGE, 8);
+});
+
+test('pan range opens linearly from center through 1.3x zoom', () => {
+  const portrait = { width: 390, height: 844 };
+  const rect = remoteDesktopContainRect(portrait, content);
+  const panToLimit = (scale: number) => constrainRemoteDesktopTransform(
+    { scale, translateX: 10_000, translateY: 10_000 },
+    portrait,
+    rect,
+  );
+  const expectedLinearLimit = (scale: number, axis: 'x' | 'y') => {
+    const progress = (scale - 1) / (REMOTE_DESKTOP_PAN_FULL_ZOOM - 1);
+    const viewportSize = axis === 'x' ? portrait.width : portrait.height;
+    const rectStart = axis === 'x' ? rect.x : rect.y;
+    const rectSize = axis === 'x' ? rect.width : rect.height;
+    const left = viewportSize / 2 + scale * (rectStart - viewportSize / 2);
+    const fullLimit = viewportSize - REMOTE_DESKTOP_MIN_VISIBLE_EDGE - left;
+    return fullLimit * progress;
+  };
+
+  const minimum = panToLimit(1);
+  const nearlyMinimum = panToLimit(1.0001);
+  const slightlyZoomed = panToLimit(1.01);
+  const halfOpen = panToLimit(1.15);
+  const fullyOpen = panToLimit(REMOTE_DESKTOP_PAN_FULL_ZOOM);
+
+  expect(REMOTE_DESKTOP_PAN_FULL_ZOOM).toBe(1.3);
+  expect(minimum.translateX).toBeCloseTo(0, 8);
+  expect(minimum.translateY).toBeCloseTo(0, 8);
+  expect(Math.abs(nearlyMinimum.translateY - minimum.translateY)).toBeLessThan(1);
+  expect(slightlyZoomed.translateX).toBeCloseTo(expectedLinearLimit(1.01, 'x'), 8);
+  expect(slightlyZoomed.translateY).toBeCloseTo(expectedLinearLimit(1.01, 'y'), 8);
+  expect(halfOpen.translateX).toBeCloseTo(expectedLinearLimit(1.15, 'x'), 8);
+  expect(halfOpen.translateY).toBeCloseTo(expectedLinearLimit(1.15, 'y'), 8);
+  expect(frameBounds(portrait, rect, fullyOpen).top).toBeCloseTo(portrait.height - REMOTE_DESKTOP_MIN_VISIBLE_EDGE, 8);
 });
 
 test('phone-sized window streaming keeps a practical 3x vertical pan range', () => {
