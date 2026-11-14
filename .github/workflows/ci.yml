@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v6
         with:
@@ -35,6 +37,12 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - name: Install Rust for remote desktop host tests
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Install remote desktop host build dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libxcb1-dev
+      - name: Build remote desktop host test binary
+        run: cargo build --manifest-path remote-desktop-rs/Cargo.toml -p desktop-streaming --bin task-handoff-desktop-streaming
       - name: Test Node packages
         run: pnpm run test:node
       - name: Test Control Plane client

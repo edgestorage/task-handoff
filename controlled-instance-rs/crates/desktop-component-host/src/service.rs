@@ -6,6 +6,7 @@ use crate::{
     settings::DesktopSettings,
 };
 use controlled_instance_protocol::RemoteDesktopCapabilities;
+use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -13,7 +14,15 @@ use std::{
         Arc,
     },
 };
-use tokio::sync::{broadcast, Mutex};
+use tokio::{
+    io::AsyncReadExt,
+    process::Command as ProcessCommand,
+    sync::{broadcast, Mutex},
+    time::timeout,
+};
+
+const NATIVE_PERMISSION_OUTPUT_LIMIT: usize = 64 * 1024;
+const NATIVE_PERMISSION_COMMAND_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 #[derive(Clone)]
 pub struct DesktopPackage {
     pub binary: PathBuf,
@@ -23,7 +32,7 @@ pub struct DesktopPackage {
 }
 #[derive(Clone)]
 pub enum DesktopEvent {
-    Session(SessionEvent),
+    Session(Box<SessionEvent>),
     Changed,
     ResnapshotRequired,
 }
@@ -181,6 +190,94 @@ impl DesktopService {
         let _ = self.events.send(DesktopEvent::Changed);
         Ok(())
     }
+    /// Native TCC state belongs to the installed component binary, not to the
+    /// running streaming host. A missing package stays distinguishable from a
+    /// permission command that fails inside an installed component.
+    pub async fn permissions(&self) -> anyhow::Result<Value> {
+        if !cfg!(target_os = "macos") {
+            return Ok(json!({
+                "platform": std::env::consts::OS,
+                "supported": false,
+                "screenCapture": "unknown",
+                "inputControl": "unknown",
+            }));
+        }
+        let probe = self
+            .run_native_permission_command("--check-native-permissions")
+            .await?;
+        let screen_capture = probe
+            .get("screenCaptureAllowed")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"))?;
+        let input_control = probe
+            .get("inputAllowed")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"))?;
+        Ok(json!({
+            "platform": "darwin",
+            "supported": true,
+            "screenCapture": if screen_capture { "granted" } else { "required" },
+            "inputControl": if input_control { "granted" } else { "required" },
+        }))
+    }
+    pub async fn request_permission(&self, kind: &str) -> anyhow::Result<Value> {
+        anyhow::ensure!(
+            cfg!(target_os = "macos"),
+            "REMOTE_DESKTOP_PERMISSIONS_UNSUPPORTED"
+        );
+        let argument = match kind {
+            "screen-capture" => "--request-screen-permission",
+            "input-control" => "--request-input-permission",
+            _ => anyhow::bail!("REMOTE_DESKTOP_INVALID_REQUEST"),
+        };
+        let probe = self.run_native_permission_command(argument).await?;
+        let field = if kind == "screen-capture" {
+            "screenCaptureAllowed"
+        } else {
+            "inputAllowed"
+        };
+        anyhow::ensure!(
+            probe.get(field).and_then(Value::as_bool).is_some(),
+            "REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"
+        );
+        self.permissions().await
+    }
+    async fn run_native_permission_command(&self, argument: &str) -> anyhow::Result<Value> {
+        let package = (self.installed)()
+            .map_err(|_| anyhow::anyhow!("REMOTE_DESKTOP_PACKAGE_INVALID"))?
+            .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_NOT_INSTALLED"))?;
+        let mut command = ProcessCommand::new(&package.binary);
+        command
+            .arg(argument)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let mut child = command
+            .spawn()
+            .map_err(|_| anyhow::anyhow!("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"))?;
+        let execution = async {
+            let mut stdout = stdout.take((NATIVE_PERMISSION_OUTPUT_LIMIT + 1) as u64);
+            let mut output = Vec::new();
+            let (status, read) = tokio::join!(child.wait(), stdout.read_to_end(&mut output));
+            Ok::<_, std::io::Error>((status?, read?, output))
+        };
+        let (status, read, output) = timeout(NATIVE_PERMISSION_COMMAND_DEADLINE, execution)
+            .await
+            .map_err(|_| anyhow::anyhow!("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"))??;
+        anyhow::ensure!(
+            status.success()
+                && read <= NATIVE_PERMISSION_OUTPUT_LIMIT
+                && output.len() <= NATIVE_PERMISSION_OUTPUT_LIMIT,
+            "REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"
+        );
+        serde_json::from_slice(&output)
+            .map_err(|_| anyhow::anyhow!("REMOTE_DESKTOP_PERMISSION_UNAVAILABLE"))
+    }
     pub async fn request(&self, request_id: &str, command: Command) -> anyhow::Result<Reply> {
         self.request_bound(request_id, command, None)
             .await
@@ -252,7 +349,7 @@ impl DesktopService {
                             drop(projection);let _ = publish.send(DesktopEvent::Changed); break;
                         }
                         event = events.recv() => match event {
-                            Ok(event) => { let _ = publish.send(DesktopEvent::Session(event)); }
+                            Ok(event) => { let _ = publish.send(DesktopEvent::Session(Box::new(event))); }
                             // A missing event must close the downstream subscription;
                             // callers recover by HTTP snapshot, never fabricated state.
                             Err(broadcast::error::RecvError::Lagged(_)) => { let _ = publish.send(DesktopEvent::ResnapshotRequired); }

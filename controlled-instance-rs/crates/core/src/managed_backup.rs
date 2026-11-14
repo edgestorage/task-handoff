@@ -34,7 +34,7 @@ pub fn prune_managed_backups(path: &Path, limit: usize) -> io::Result<Vec<PathBu
             parse_generation(generation).map(|key| (key, name, entry.path()))
         })
         .collect::<Vec<_>>();
-    backups.sort_by(|left, right| left.0.cmp(&right.0));
+    backups.sort_by_key(|left| left.0);
     let remove_count = backups.len().saturating_sub(limit);
     let removed = backups
         .into_iter()

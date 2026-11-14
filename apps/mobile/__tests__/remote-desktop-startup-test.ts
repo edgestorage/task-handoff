@@ -17,7 +17,7 @@ import {
 jest.mock('react-native-webrtc', () => ({
   RTCPeerConnection: jest.fn(),
   RTCRtpReceiver: { getCapabilities: jest.fn(() => ({ codecs: [] })) },
-}));
+}), { virtual: true });
 
 jest.mock('../modules/task-handoff-remote-desktop/src', () => ({
   closeRemoteDesktopDecoder: jest.fn(async () => undefined),

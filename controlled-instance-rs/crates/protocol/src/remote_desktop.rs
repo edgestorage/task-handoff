@@ -188,6 +188,8 @@ pub fn deserialize_remote_desktop<'de, D: serde::Deserializer<'de>>(
     Ok(Some(parsed.unwrap_or_default()))
 }
 
+pub const INSTANCE_CAPABILITIES_CHANGED_EVENT_TYPE: &str = "instance.capabilities.changed";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +237,3 @@ mod tests {
         assert_eq!(read.source_providers[0].kind, "future-source");
     }
 }
-
-pub const INSTANCE_CAPABILITIES_CHANGED_EVENT_TYPE: &str = "instance.capabilities.changed";

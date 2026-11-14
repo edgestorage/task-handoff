@@ -81,20 +81,21 @@ test("runtime releases sync npmmirror as a non-blocking post-publish step", () =
 
   assert.ok(syncJob.length > 0);
   assert.match(syncJob, /name: Sync npmmirror \(best effort\)/);
-  assert.match(syncJob, /needs: \[publish, runtime-packages\]/);
-  assert.match(syncJob, /needs\.publish\.result == 'success'/);
+  assert.match(syncJob, /needs: \[publish, runtime-packages, remote-desktop-metadata\]/);
+  assert.match(syncJob, /needs\.publish\.result == 'success' && needs\.remote-desktop-metadata\.result == 'success'/);
   assert.match(syncJob, /continue-on-error: true/);
   assert.match(syncJob, /node scripts\/sync-npmmirror\.mjs/);
   assert.match(syncJob, /--version "\$RELEASE_VERSION"/);
   assert.match(syncJob, /--dist-tag "\$NPM_DIST_TAG"/);
+  assert.match(syncJob, /--packages-file release\/remote-desktop-packages\/remote-desktop-packages\.json/);
   assert.ok(workflow.indexOf("  publish:") < workflow.indexOf("  sync-npmmirror:"));
 });
 
 test("runtime release builds and publishes only the selected controlled instance implementation", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
   assert.match(workflow, /resolveControlledInstanceImplementation/);
-  assert.match(workflow, /controlled-instance-rust-binaries:\n\s+needs: runtime-selection\n\s+if: needs\.runtime-selection\.outputs\.implementation == 'rust'/);
-  assert.match(workflow, /needs: \[runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries\]/);
+  assert.match(workflow, /controlled-instance-rust-binaries:\n\s+needs: \[runtime-selection, remote-desktop-metadata\]\n\s+if: \$\{\{ needs\.runtime-selection\.outputs\.implementation == 'rust' && needs\.remote-desktop-metadata\.result == 'success' \}\}/);
+  assert.match(workflow, /controlled-instance-artifact:\n[\s\S]*?needs: \[runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries, remote-desktop-metadata\]/);
   assert.match(workflow, /needs\.controlled-instance-rust-binaries\.result == 'skipped'/);
   assert.match(workflow, /runtime-packages:\n\s+needs: controlled-instance-artifact/);
   assert.match(workflow, /TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: \$\{\{ needs\.controlled-instance-artifact\.outputs\.implementation \}\}/);
@@ -104,7 +105,7 @@ test("runtime release builds and publishes only the selected controlled instance
   }
   assert.match(workflow, /pnpm runtime:build -- --target controlled-instance/);
   assert.match(workflow, /pnpm runtime:artifact --/);
-  assert.match(workflow, /needs: \[controlled-instance-artifact, runtime-packages, wsl-base-template\]/);
+  assert.match(workflow, /needs: \[controlled-instance-artifact, runtime-packages, wsl-base-template, remote-desktop-metadata\]/);
   assert.doesNotMatch(workflow, /controlled-instance-rust-artifact:|rust-controlled-instance-artifacts|node-rollback-artifacts|stem-rust|stem-node/);
   assert.match(workflow, /gh release create[\s\S]*release\/runtime-artifacts\/\*/);
   assert.match(workflow, /name: wsl-base-template-\$\{\{ needs\.runtime-packages\.outputs\.version \}\}/);

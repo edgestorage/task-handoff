@@ -360,7 +360,6 @@ fn launcher(
 
 pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
     let mut definitions = vec![
-        crate::remote_desktop::definition(),
         ManagedAppDefinition {
             launcher: launcher(
                 "terminal-tty",
@@ -805,6 +804,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
         ],
     });
+    definitions.push(crate::remote_desktop::definition());
     if let Some(claude) = definitions
         .iter_mut()
         .find(|definition| definition.launcher.id == "claude")
@@ -2022,6 +2022,10 @@ mod tests {
         assert!(definitions
             .iter()
             .any(|item| item.launcher.id == "codex" && item.launchable));
+        assert_eq!(
+            definitions.last().map(|item| item.launcher.id.as_str()),
+            Some("remote-desktop")
+        );
         let codex = find_builtin_managed_app("codex").expect("codex");
         let codex_recipe = &codex.recipes[0];
         assert!(matches!(codex_recipe, InstallRecipe::NativePackage { .. }));

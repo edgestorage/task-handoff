@@ -164,4 +164,3 @@ export function releaseArmedRemoteDesktopModifiers(state: RemoteDesktopModifierS
   for (const modifier of released) next[modifier] = 'off';
   return { released, state: next };
 }
-

@@ -6,12 +6,13 @@ const ts = require("typescript");
 
 const root = path.resolve(__dirname, "..");
 const serverPath = path.join(root, "controlled-instance-rs", "crates", "instance", "src", "server.rs");
+const remoteDesktopPath = path.join(root, "controlled-instance-rs", "crates", "instance", "src", "remote_desktop.rs");
 const matrixPath = path.join(root, "controlled-instance-rs", "docs", "http-route-matrix.md");
 
 const BASELINE_HEADING = "## `v0.0.46` compatibility baseline";
 const TARGET_HEADING = "## Target-current Node extensions after `v0.0.46`";
 const BASELINE_ROUTE_COUNT = 201;
-const TARGET_ROUTE_COUNT = 209;
+const TARGET_ROUTE_COUNT = 222;
 const POST_BASELINE_ROUTES = new Set([
   "GET /api/internal/instance-shell",
   "GET /api/apps/install-environment",
@@ -21,6 +22,19 @@ const POST_BASELINE_ROUTES = new Set([
   "GET /api/ai-sessions/{}/repository/files/content",
   "GET /api/apps/sessions/{}/repository/files/content",
   "GET /api/ai-sessions/{}/turns/{}/tool-activity",
+  "GET /api/internal/remote-desktop/attach",
+  "GET /api/internal/remote-desktop/fallback/{}",
+  "GET /api/internal/remote-desktop/permissions",
+  "GET /api/internal/remote-desktop/settings",
+  "POST /api/internal/remote-desktop/force-stop",
+  "POST /api/internal/remote-desktop/permissions/request",
+  "POST /api/internal/remote-desktop/preflight",
+  "POST /api/internal/remote-desktop/reserve",
+  "POST /api/internal/remote-desktop/snapshot",
+  "POST /api/internal/remote-desktop/sources",
+  "POST /api/internal/remote-desktop/stop",
+  "POST /api/internal/remote-desktop/takeover",
+  "PUT /api/internal/remote-desktop/settings",
 ]);
 const WEB_PROXY_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"];
 const WEB_PROXY_ALIAS_PATH = "/api/apps/sessions/{}/web/";
@@ -361,36 +375,37 @@ function functionSupportsWebSocket(name, functions, seen = new Set()) {
 }
 
 function rustRouteSurface() {
-  const source = fs.readFileSync(serverPath, "utf8");
-  const testModule = source.lastIndexOf("#[cfg(test)]");
-  assert.notEqual(testModule, -1, "server.rs must keep tests behind #[cfg(test)]");
-  const production = source.slice(0, testModule);
-  const functions = rustFunctions(production);
   const routes = new Map();
   const unresolved = [];
-
-  for (const block of routeBlocks(production)) {
-    const route = parseRustRoute(block, block.slice(0, 80));
-    if (!route) {
-      unresolved.push("unparsed .route() registration");
-      continue;
-    }
-    if (route.methods.size === 0) unresolved.push(`no methods for ${route.path}`);
-    const paths = route.path.includes("{prefix}")
-      ? [
-        route.path.replace("{prefix}", "/api/ai-sessions/{id}/repository"),
-        route.path.replace("{prefix}", "/api/apps/sessions/{id}/repository"),
-      ]
-      : [route.path];
-    for (const routePath of paths) {
-      for (const [method, handler] of route.methods) {
-        const key = `${method} ${normalizedPath(routePath)}`;
-        routes.set(key, {
-          method,
-          path: normalizedPath(routePath),
-          websocket: method === "GET" && functionSupportsWebSocket(handler, functions),
-          handler,
-        });
+  for (const sourcePath of [serverPath, remoteDesktopPath]) {
+    const source = fs.readFileSync(sourcePath, "utf8");
+    const testModule = source.lastIndexOf("#[cfg(test)]");
+    assert.notEqual(testModule, -1, `${path.basename(sourcePath)} must keep tests behind #[cfg(test)]`);
+    const production = source.slice(0, testModule);
+    const functions = rustFunctions(production);
+    for (const block of routeBlocks(production)) {
+      const route = parseRustRoute(block, block.slice(0, 80));
+      if (!route) {
+        unresolved.push(`${path.basename(sourcePath)}: unparsed .route() registration`);
+        continue;
+      }
+      if (route.methods.size === 0) unresolved.push(`${path.basename(sourcePath)}: no methods for ${route.path}`);
+      const paths = route.path.includes("{prefix}")
+        ? [
+          route.path.replace("{prefix}", "/api/ai-sessions/{id}/repository"),
+          route.path.replace("{prefix}", "/api/apps/sessions/{id}/repository"),
+        ]
+        : [route.path];
+      for (const routePath of paths) {
+        for (const [method, handler] of route.methods) {
+          const key = `${method} ${normalizedPath(routePath)}`;
+          routes.set(key, {
+            method,
+            path: normalizedPath(routePath),
+            websocket: method === "GET" && functionSupportsWebSocket(handler, functions),
+            handler,
+          });
+        }
       }
     }
   }

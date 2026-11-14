@@ -21,7 +21,14 @@ export function readLegacyDesktopTurn() {
  * Health is measured by the deployment's CP/coturn clock monitor, not a browser.
  * No stored/session credentials and no default public relay. */
 export class DesktopTurnIssuer {
-  constructor(private readonly configuration: unknown, private readonly environmentSecret?: string, private readonly now = Date.now) {}
+  private readonly configuration: unknown;
+  private readonly environmentSecret?: string;
+  private readonly now: () => number;
+  constructor(configuration: unknown, environmentSecret?: string, now = Date.now) {
+    this.configuration = configuration;
+    this.environmentSecret = environmentSecret;
+    this.now = now;
+  }
   static fromEnvironment() {
     const file = process.env.TASK_HANDOFF_DESKTOP_TURN_CONFIG;
     return new DesktopTurnIssuer(file ? JSON.parse(fs.readFileSync(file, "utf8")) : undefined, process.env.TASK_HANDOFF_DESKTOP_TURN_SECRET);

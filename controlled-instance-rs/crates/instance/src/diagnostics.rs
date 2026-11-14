@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use controlled_instance_ai_session::AiSessionRuntime;
 use controlled_instance_app_runtime::resolve_executable;
 use controlled_instance_core::{paths::StoragePaths, process::hostname};
 use serde_json::{json, Map, Value};
@@ -137,6 +138,7 @@ pub(crate) fn instance_diagnostics(
     config: &InstanceConfig,
     started_at: &str,
     ai_sessions: &AiSessionAuthority,
+    ai_session_runtime: &AiSessionRuntime,
     app_sessions: &AppSessionAuthority,
     message_delta_coalescing: Value,
     stream_diagnostics: &StreamDiagnostics,
@@ -243,6 +245,7 @@ pub(crate) fn instance_diagnostics(
                 "retainedEventCount": ai_sessions.retained_event_count(),
                 "discoveryUnchanged": stream_diagnostics.ai_discovery_unchanged.load(std::sync::atomic::Ordering::Relaxed),
                 "discoveryCorrections": stream_diagnostics.ai_discovery_corrections.load(std::sync::atomic::Ordering::Relaxed),
+                "persistence": ai_session_runtime.persistence_snapshot(),
                 "messageDeltaCoalescing": message_delta_coalescing,
             },
             "app": {
@@ -585,6 +588,7 @@ mod tests {
             "ais_test",
             "2026-11-02T00:00:00.000Z".to_string(),
         );
+        let ai_sessions = AiSessionRuntime::default();
         let app = AppSessionAuthority::new(
             "inst_test",
             "aps_test",
@@ -594,6 +598,7 @@ mod tests {
             &config,
             "2026-11-02T00:00:00.000Z",
             &ai,
+            &ai_sessions,
             &app,
             json!({
                 "windowMs": 32,

@@ -243,7 +243,7 @@ This section freezes 201 explicit Node registrations at tag `v0.0.46`, including
 
 ## Target-current Node extensions after `v0.0.46`
 
-This section contains target-current routes that are not part of the `v0.0.46` compatibility baseline. It currently has eight routes.
+This section contains target-current routes that are not part of the `v0.0.46` compatibility baseline. It currently has twenty-one routes.
 
 | Method | Path | Auth | Transport | Success / notes |
 | --- | --- | --- | --- | --- |
@@ -255,6 +255,19 @@ This section contains target-current routes that are not part of the `v0.0.46` c
 | `GET` | `/api/ai-sessions/:id/repository/files/content` | Web | JSON | 200; post-`v0.0.46` only |
 | `GET` | `/api/apps/sessions/:id/repository/files/content` | Web | JSON | 200; post-`v0.0.46` only |
 | `GET` | `/api/ai-sessions/:id/turns/:turnId/tool-activity` | Web | JSON | 200; post-`v0.0.46` only |
+| `GET` | `/api/internal/remote-desktop/attach` | Node Agent | WebSocket | 101 then framed; post-`v0.0.46` only |
+| `GET` | `/api/internal/remote-desktop/fallback/:role` | Node Agent | WebSocket | 101 then binary fallback stream; post-`v0.0.46` only |
+| `GET` | `/api/internal/remote-desktop/permissions` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `GET` | `/api/internal/remote-desktop/settings` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/internal/remote-desktop/force-stop` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/internal/remote-desktop/permissions/request` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/internal/remote-desktop/preflight` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/internal/remote-desktop/reserve` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/internal/remote-desktop/snapshot` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/internal/remote-desktop/sources` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/internal/remote-desktop/stop` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `POST` | `/api/internal/remote-desktop/takeover` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `PUT` | `/api/internal/remote-desktop/settings` | Node Agent | JSON | 200; post-`v0.0.46` only |
 
 ## Additional contract families
 
@@ -273,7 +286,7 @@ This section contains target-current routes that are not part of the `v0.0.46` c
 - HTTP, WebSocket, Node Agent, private model/config, agent-tool, App Runtime, repository, Trigger, Config Sync, Story and Git credential domains have Rust handlers and contract tests in their owning crates.
 - AI Session message and Timeline deltas use the same 20-50ms coalescing window (32ms default), insertion order, authoritative-event flush and `event-source-close` behavior as Node. Diagnostics expose the live coalescer counters instead of placeholders.
 - Non-`/api` paths use the frozen UI's `index.html` with HTTP `200` for SPA route refreshes; unmatched `/api/*` paths remain structured `404` responses.
-- The route matrix now records both the 201-route `v0.0.46` baseline and the 209-route target-current Node surface. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
+- The route matrix now records both the 201-route `v0.0.46` baseline and the 222-route target-current Node surface. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
 
 ## Remaining fixture work
 

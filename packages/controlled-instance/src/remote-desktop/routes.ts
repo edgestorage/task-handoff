@@ -17,7 +17,7 @@ import {
   REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL,
 } from "@task-handoff/protocol/remote-desktop";
 import type { DesktopService } from "./service";
-import type { ComponentEvent } from "./component-host";
+import type { ComponentCommand, ComponentEvent } from "./component-host";
 const SIGNAL_MESSAGES_PER_SECOND=64;
 const SIGNAL_MAX_QUEUED=SIGNAL_MESSAGES_PER_SECOND;
 const Owner=z.object({actorId:z.string().min(1).max(4096),deviceSessionId:z.string().min(1).max(4096)}).strict();
@@ -55,18 +55,19 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
       return {data:DesktopNativePermissionsSchema.parse(await service.requestPermission(kind))};
     }catch(error){return respondError(reply,error);}
   });
-  for(const [route,type,schema]of [
-    ["sources","listSources",Base],["reserve","reserve",Body],
-    ["takeover","takeover",Session.extend({captureSelection:DesktopCaptureSelectionSchema})],
-    ["force-stop","forceStop",z.object({requestId:z.string().min(1).refine(value=>Buffer.byteLength(value,"utf8")<=128),viewerSessionId:z.string().min(1).max(4096)}).strict()],["snapshot","snapshot",Session],["stop","stop",Session],
-  ]as const){
-    app.post(`/api/internal/remote-desktop/${route}`,{...boundary,bodyLimit:16*1024},async(request,reply)=>{
-      try{const{requestId,...fields}=schema.parse(request.body);const result=await service.request(requestId,{type,...fields});
-        if(result.type==="error")return reply.code(409).send({error:{code:result.code,message:"Remote desktop operation failed."}});
-        return {data:result};
-      }catch(error){return respondError(reply,error);}
-    });
-  }
+  const requestHandler=(type:string,schema:z.ZodTypeAny)=>async(request:FastifyRequest,reply:FastifyReply)=>{
+    try{const{requestId,...fields}=schema.parse(request.body) as {requestId:string}&Record<string,unknown>;const result=await service.request(requestId,{type,...fields} as ComponentCommand);
+      if(result.type==="error")return reply.code(409).send({error:{code:result.code,message:"Remote desktop operation failed."}});
+      return {data:result};
+    }catch(error){return respondError(reply,error);}
+  };
+  const requestOptions={...boundary,bodyLimit:16*1024};
+  app.post("/api/internal/remote-desktop/sources",requestOptions,requestHandler("listSources",Base));
+  app.post("/api/internal/remote-desktop/reserve",requestOptions,requestHandler("reserve",Body));
+  app.post("/api/internal/remote-desktop/takeover",requestOptions,requestHandler("takeover",Session.extend({captureSelection:DesktopCaptureSelectionSchema})));
+  app.post("/api/internal/remote-desktop/force-stop",requestOptions,requestHandler("forceStop",z.object({requestId:z.string().min(1).refine(value=>Buffer.byteLength(value,"utf8")<=128),viewerSessionId:z.string().min(1).max(4096)}).strict()));
+  app.post("/api/internal/remote-desktop/snapshot",requestOptions,requestHandler("snapshot",Session));
+  app.post("/api/internal/remote-desktop/stop",requestOptions,requestHandler("stop",Session));
   app.get("/api/internal/remote-desktop/attach",{...boundary,websocket:true},(socket)=>{
     let binding:z.infer<typeof Session>|undefined;
     let closed=false,queued=0,ready=false,attached=false,lastRevision=-1;

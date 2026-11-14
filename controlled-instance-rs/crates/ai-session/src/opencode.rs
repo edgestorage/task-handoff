@@ -3048,10 +3048,9 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
     });
     let pending_permission = permissions
         .iter()
-        .filter(|permission| {
+        .rfind(|permission| {
             permission.get("sessionID").and_then(Value::as_str) == Some(session_id.as_str())
         })
-        .next_back()
         .cloned();
     let users = messages
         .iter()

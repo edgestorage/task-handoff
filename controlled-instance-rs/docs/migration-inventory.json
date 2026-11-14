@@ -105,7 +105,7 @@
       ]
     },
     {
-      "source": "packages/controlled-instance/src/web/{app-install-environment,app-management,app-recipe-executor,app-update-check}.ts",
+      "source": "packages/controlled-instance/src/web/{app-install-environment,app-management,app-recipe-executor,app-update-check,archive-transaction}.ts",
       "rust": [
         "controlled-instance-rs/crates/app-runtime/src/install_environment.rs",
         "controlled-instance-rs/crates/app-runtime/src/management.rs",
@@ -170,6 +170,40 @@
       "verification": "unit-tested-platform-runtime-unverified",
       "limitations": [
         "Windows credential/SSH/named-pipe runtime e2e remains pending."
+      ]
+    },
+    {
+      "source": "packages/{controlled-instance/src/remote-desktop/*,protocol/src/remote-desktop}.ts",
+      "rust": [
+        "controlled-instance-rs/crates/instance/src/remote_desktop.rs",
+        "controlled-instance-rs/crates/desktop-component-host/src/service.rs",
+        "controlled-instance-rs/crates/desktop-component-host/src/host.rs",
+        "controlled-instance-rs/crates/desktop-component-host/src/settings.rs",
+        "controlled-instance-rs/crates/protocol/src/remote_desktop.rs"
+      ],
+      "tests": [
+        "controlled-instance-rs/crates/instance/src/remote_desktop.rs",
+        "controlled-instance-rs/crates/desktop-component-host/src/service.rs",
+        "controlled-instance-rs/crates/desktop-component-host/src/host.rs"
+      ],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": [
+        "Route and ownership contracts are shared; full macOS TCC and Linux capture differential fixtures remain pending."
+      ]
+    },
+    {
+      "source": "shared/remote-desktop-packages.json",
+      "rust": [
+        "controlled-instance-rs/crates/app-runtime/src/remote_desktop.rs"
+      ],
+      "tests": [
+        "controlled-instance-rs/crates/app-runtime/src/remote_desktop.rs"
+      ],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": [
+        "Package availability parsing is shared; signed-market download and platform installation remain integration-test concerns."
       ]
     },
     {
@@ -422,6 +456,20 @@
       "verification": "unit-and-contract-tested",
       "limitations": [
         "Scheduler restart and timezone differential remain pending."
+      ]
+    },
+    {
+      "source": "packages/core/src/storage/log-sink.ts",
+      "rust": [
+        "controlled-instance-rs/crates/instance/src/diagnostics.rs"
+      ],
+      "tests": [
+        "controlled-instance-rs/crates/instance/src/diagnostics.rs"
+      ],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": [
+        "Rust tracing owns the production sink; Node stream backpressure differential coverage remains partial."
       ]
     },
     {

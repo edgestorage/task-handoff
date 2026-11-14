@@ -139,6 +139,11 @@ pub fn routes(state: AppState) -> Router<AppState> {
             "/api/internal/remote-desktop/settings",
             get(settings).put(update_settings),
         )
+        .route("/api/internal/remote-desktop/permissions", get(permissions))
+        .route(
+            "/api/internal/remote-desktop/permissions/request",
+            post(request_permission),
+        )
         .route("/api/internal/remote-desktop/preflight", post(preflight))
         .route("/api/internal/remote-desktop/sources", post(sources))
         .route("/api/internal/remote-desktop/reserve", post(reserve))
@@ -165,6 +170,29 @@ async fn settings(State(state): State<AppState>) -> Response {
         StatusCode::OK,
         json!({"data":{"enabled":state.desktop_service.settings.enabled()}}),
     )
+}
+async fn permissions(State(state): State<AppState>) -> Response {
+    match state.desktop_service.permissions().await {
+        Ok(data) => response(StatusCode::OK, json!({"data":data})),
+        Err(error) => failed(&error_code(&error)),
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PermissionInput {
+    kind: String,
+}
+async fn request_permission(
+    State(state): State<AppState>,
+    body: Result<Json<PermissionInput>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Ok(Json(input)) = body else {
+        return invalid();
+    };
+    match state.desktop_service.request_permission(&input.kind).await {
+        Ok(data) => response(StatusCode::OK, json!({"data":data})),
+        Err(error) => failed(&error_code(&error)),
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -94,4 +94,3 @@ test('unmounting the virtual keyboard releases held remote keys', async () => {
   await act(async () => { screen.unmount(); });
   expect(sendKey).toHaveBeenCalledWith('ControlLeft', false, 0);
 });
-

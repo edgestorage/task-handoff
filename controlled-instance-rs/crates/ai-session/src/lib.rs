@@ -425,8 +425,18 @@ pub struct AiSessionRuntime {
     stream_id: String,
     revision: AtomicU64,
     last_event_at: RwLock<String>,
+    persistence_status: RwLock<AiSessionPersistenceStatus>,
     persistence_dir: Option<PathBuf>,
     mutation: Mutex<()>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSessionPersistenceStatus {
+    pub degraded: bool,
+    pub failure_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovered_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -448,6 +458,7 @@ impl AiSessionRuntime {
             stream_id: format!("ais_{instance_id}_{}", Uuid::new_v4()),
             revision: AtomicU64::new(0),
             last_event_at: RwLock::new(now_iso()),
+            persistence_status: RwLock::new(AiSessionPersistenceStatus::default()),
             persistence_dir,
             mutation: Mutex::new(()),
         };
@@ -467,6 +478,13 @@ impl AiSessionRuntime {
 
     pub fn last_event_at(&self) -> String {
         self.last_event_at
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub fn persistence_snapshot(&self) -> AiSessionPersistenceStatus {
+        self.persistence_status
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -547,7 +565,11 @@ impl AiSessionRuntime {
             persistence::sanitize_runtime_session(&serde_json::to_value(session.clone())?)
                 .ok_or(AiSessionStoreError::InvalidSession)?;
         *session = sanitized;
-        self.write_session(session)?;
+        if let Err(error) = self.write_session(session) {
+            self.report_persistence_failure();
+            return Err(error);
+        }
+        self.clear_persistence_failure();
         self.sessions
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1014,6 +1036,28 @@ impl AiSessionRuntime {
         Ok(())
     }
 
+    fn report_persistence_failure(&self) {
+        let mut status = self
+            .persistence_status
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        status.degraded = true;
+        status.failure_count = status.failure_count.saturating_add(1);
+        status.recovered_at = None;
+    }
+
+    fn clear_persistence_failure(&self) {
+        let mut status = self
+            .persistence_status
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !status.degraded {
+            return;
+        }
+        status.degraded = false;
+        status.recovered_at = Some(now_iso());
+    }
+
     fn load(&self, directory: &Path) {
         let Ok(entries) = std::fs::read_dir(directory) else {
             return;
@@ -1272,6 +1316,35 @@ mod tests {
         let unbound = runtime.bound_snapshot(&[]);
         assert_eq!(unbound.sessions.len(), 1);
         assert_eq!(unbound.sessions[0].id, "ses_0000000000001");
+    }
+
+    #[test]
+    fn persistence_status_tracks_write_failures_and_recovery() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let persistence_dir = root.path().join("sessions");
+        std::fs::write(&persistence_dir, b"not a directory").expect("blocked persistence path");
+        let runtime = AiSessionRuntime::new("test", Some(persistence_dir.clone()));
+        assert_eq!(
+            runtime.persistence_snapshot(),
+            AiSessionPersistenceStatus::default()
+        );
+        assert!(runtime
+            .save(session("ses_0000000000002", None, "running"))
+            .is_err());
+        let failed = runtime.persistence_snapshot();
+        assert!(failed.degraded);
+        assert_eq!(failed.failure_count, 1);
+        assert_eq!(failed.recovered_at, None);
+
+        std::fs::remove_file(&persistence_dir).expect("remove blocker");
+        std::fs::create_dir(&persistence_dir).expect("create persistence directory");
+        runtime
+            .save(session("ses_0000000000002", None, "running"))
+            .expect("recovered save");
+        let recovered = runtime.persistence_snapshot();
+        assert!(!recovered.degraded);
+        assert_eq!(recovered.failure_count, 1);
+        assert!(recovered.recovered_at.is_some());
     }
 
     #[test]

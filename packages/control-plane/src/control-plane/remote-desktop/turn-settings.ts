@@ -13,7 +13,14 @@ function error(code: string, statusCode: number) { return Object.assign(new Erro
 export class DesktopTurnSettingsService {
   private record: DesktopTurnRecord = { revision: 0, enabled: false, urls: [], authentication: "password", username: "" };
   private writes: Promise<unknown> = Promise.resolve();
-  constructor(private readonly repository: DesktopTurnRepository, private readonly secrets: SecretEnvelopeService, private readonly now = Date.now) {}
+  private readonly repository: DesktopTurnRepository;
+  private readonly secrets: SecretEnvelopeService;
+  private readonly now: () => number;
+  constructor(repository: DesktopTurnRepository, secrets: SecretEnvelopeService, now = Date.now) {
+    this.repository = repository;
+    this.secrets = secrets;
+    this.now = now;
+  }
   async init() {
     const stored = await this.repository.get();
     if (stored) { this.record = stored; return; }

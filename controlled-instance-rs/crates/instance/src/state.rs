@@ -804,6 +804,7 @@ impl AppState {
             &self.config,
             &self.started_at,
             &ai_sessions,
+            &self.ai_sessions,
             &app_sessions,
             self.ai_session_message_deltas.diagnostic_value(),
             &self.stream_diagnostics,
