@@ -8,6 +8,7 @@ import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
   withTiming,
 } from 'react-native-reanimated';
 
@@ -17,23 +18,33 @@ const DISCLOSURE_COLLAPSE_DURATION_MS = 180;
 export function AnimatedDisclosure({
   animateContent = true,
   children,
+  contentRevealDelay = 0,
   expanded,
+  expandDuration = DISCLOSURE_EXPAND_DURATION_MS,
   onContentMeasured,
   onSettled,
+  reserveExpandedHeight = false,
   spacing = 0,
   testID,
 }: {
-  /** Height clipping is always animated. Disable content motion for live surfaces. */
+  /** Disable content motion while retaining the disclosure animation. */
   animateContent?: boolean;
   children: ReactNode;
+  /** Delay before content motion begins when opening. */
+  contentRevealDelay?: number;
   expanded: boolean;
+  /** Duration of the opening motion; collapse keeps its shorter duration. */
+  expandDuration?: number;
   onContentMeasured?(height: number): void;
   onSettled?(expanded: boolean): void;
+  /** Reserve the measured height immediately when opening, then animate the rest around it. */
+  reserveExpandedHeight?: boolean;
   spacing?: number;
   testID?: string;
 }) {
   const [contentVisible, setContentVisible] = useState(expanded);
   const progress = useSharedValue(expanded ? 1 : 0);
+  const layoutProgress = useSharedValue(expanded ? 1 : 0);
   const contentHeight = useSharedValue(0);
   const handleSettled = useCallback((next: boolean) => {
     if (!next) setContentVisible(false);
@@ -42,20 +53,34 @@ export function AnimatedDisclosure({
   if (expanded && !contentVisible) setContentVisible(true);
 
   useEffect(() => {
-    progress.value = withTiming(expanded ? 1 : 0, {
-      duration: expanded ? DISCLOSURE_EXPAND_DURATION_MS : DISCLOSURE_COLLAPSE_DURATION_MS,
-      easing: expanded ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+    const duration = expanded ? expandDuration : DISCLOSURE_COLLAPSE_DURATION_MS;
+    const easing = expanded ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic);
+    const reveal = withTiming(expanded ? 1 : 0, {
+      duration,
+      easing,
       reduceMotion: ReduceMotion.System,
     }, (finished) => {
       if (finished) runOnJS(handleSettled)(expanded);
     });
-  }, [expanded, handleSettled, progress]);
+    progress.value = expanded && contentRevealDelay > 0
+      ? withDelay(contentRevealDelay, reveal)
+      : reveal;
+    if (reserveExpandedHeight && expanded) {
+      layoutProgress.value = 1;
+      return;
+    }
+    layoutProgress.value = withTiming(expanded ? 1 : 0, {
+      duration,
+      easing,
+      reduceMotion: ReduceMotion.System,
+    });
+  }, [contentRevealDelay, expandDuration, expanded, handleSettled, layoutProgress, progress, reserveExpandedHeight]);
 
   const animatedStyle = useAnimatedStyle(() => animateContent ? ({
-    height: contentHeight.value * progress.value,
+    height: contentHeight.value * layoutProgress.value,
     opacity: interpolate(progress.value, [0, 0.18, 1], [0, 0.88, 1]),
     transform: [{ translateY: interpolate(progress.value, [0, 1], [-4, 0]) }],
-  }) : ({ height: contentHeight.value * progress.value }));
+  }) : ({ height: contentHeight.value * layoutProgress.value }));
 
   if (!contentVisible) return null;
   return <Animated.View

@@ -16,6 +16,7 @@ import {
 import type { RemoteDesktopController } from './controller';
 import {
   canDisableTransport,
+  defaultRemoteDesktopPreferences,
   remoteDesktopPreferenceStore,
   remoteDesktopPreferencesFor,
   updateRemoteDesktopPreferences,
@@ -81,7 +82,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
   const target = sessionId
     ? sessionLink?.target
       ?? (controllerSnapshot?.phase === 'stopped' ? controllerSnapshot.target : undefined)
-      ?? storedPreferences.target
+      ?? defaultRemoteDesktopPreferences.target
     : storedPreferences.target;
   const resolution = resolutionOverride ?? storedPreferences.resolution;
   const preferences = useMemo(() => ({ ...storedPreferences, resolution, target }), [resolution, storedPreferences, target]);
@@ -95,7 +96,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
       if (!live || !runtime.api || !runtime.transport || !controlPlaneId) return;
       const current = remoteDesktopPreferencesFor(controlPlaneId, instanceId);
       const nextTarget = sessionId
-        ? sessionRemoteDesktopLinkFor(controlPlaneId, instanceId, sessionId)?.target ?? current.target
+        ? sessionRemoteDesktopLinkFor(controlPlaneId, instanceId, sessionId)?.target ?? defaultRemoteDesktopPreferences.target
         : current.target;
       const next = acquireRemoteDesktopController({
         controlPlaneId,
@@ -121,20 +122,16 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
     if (!controller) return;
     const scope = { controlPlaneId, instanceId, sessionId };
     const consumer = controllerConsumerRef.current;
-    updateRemoteDesktopControllerConsumer(scope, consumer, { active, interactive });
+    updateRemoteDesktopControllerConsumer(scope, consumer, { active, interactive, resolution });
     if (active) void controller.start();
     return () => {
       releaseRemoteDesktopControllerConsumer(scope, consumer);
     };
-  }, [active, controlPlaneId, controller, instanceId, interactive, sessionId]);
+  }, [active, controlPlaneId, controller, instanceId, interactive, resolution, sessionId]);
 
   useEffect(() => {
     void controller?.switchTarget(target);
   }, [controller, target]);
-
-  useEffect(() => {
-    controller?.setResolution(resolution);
-  }, [controller, resolution]);
 
   useEffect(() => {
     controller?.setFrameRate(storedPreferences.frameRate);
@@ -168,8 +165,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
 
   const setResolution = useCallback((resolution: RemoteDesktopResolution) => {
     updateRemoteDesktopPreferences(controlPlaneId, instanceId, { resolution });
-    controller?.setResolution(resolution);
-  }, [controlPlaneId, controller, instanceId]);
+  }, [controlPlaneId, instanceId]);
 
   const setFrameRate = useCallback((frameRate: RemoteDesktopFrameRate) => {
     updateRemoteDesktopPreferences(controlPlaneId, instanceId, { frameRate });

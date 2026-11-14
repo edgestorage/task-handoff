@@ -60,6 +60,7 @@ import {
   removeSessionRemoteDesktopLink,
   rememberSessionRemoteDesktopLink,
 } from '../src/remote-desktop/session-links';
+import { updateRemoteDesktopControllerConsumer } from '../src/remote-desktop/controller-registry';
 import { remoteDesktopPreferencesFor, updateRemoteDesktopPreferences } from '../src/remote-desktop/preferences';
 import { useRemoteDesktop } from '../src/remote-desktop/use-remote-desktop';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
@@ -86,6 +87,7 @@ beforeEach(() => {
   mockController.start.mockClear();
   mockController.setResolution.mockClear();
   mockController.setCapturePrecision.mockClear();
+  (updateRemoteDesktopControllerConsumer as jest.Mock).mockClear();
   updateRemoteDesktopPreferences(controlPlaneId, instanceId, { target: instanceTarget });
   rememberSessionRemoteDesktopLink({ controlPlaneId, instanceId, sessionId, target: sessionTarget });
 });
@@ -122,12 +124,28 @@ test('switching a session target issues one controller transition', async () => 
   hook.unmount();
 });
 
-test('applies a preview resolution override without overwriting the instance preference', async () => {
+test('a session without a link does not inherit a stale instance window', async () => {
+  removeSessionRemoteDesktopLink(controlPlaneId, instanceId, sessionId);
+
+  const hook = await renderHook(() => useRemoteDesktop(instanceId, { sessionId }));
+  await waitFor(() => expect(hook.result.current.ready).toBe(true));
+
+  expect(hook.result.current.preferences.target).toEqual({ kind: 'display' });
+  expect(mockController.switchTarget).not.toHaveBeenCalledWith(instanceTarget);
+  hook.unmount();
+});
+
+test('forwards a preview resolution override as a provisional consumer policy', async () => {
   updateRemoteDesktopPreferences(controlPlaneId, instanceId, { resolution: 'auto' });
   const hook = await renderHook(() => useRemoteDesktop(instanceId, { resolutionOverride: '540p', sessionId }));
   await waitFor(() => expect(hook.result.current.ready).toBe(true));
-  await waitFor(() => expect(mockController.setResolution).toHaveBeenLastCalledWith('540p'));
+  await waitFor(() => expect(updateRemoteDesktopControllerConsumer).toHaveBeenLastCalledWith(
+    { controlPlaneId, instanceId, sessionId },
+    expect.anything(),
+    expect.objectContaining({ resolution: '540p' }),
+  ));
   expect(hook.result.current.preferences.resolution).toBe('540p');
   expect(remoteDesktopPreferencesFor(controlPlaneId, instanceId).resolution).toBe('auto');
+  expect(mockController.setResolution).not.toHaveBeenCalled();
   hook.unmount();
 });

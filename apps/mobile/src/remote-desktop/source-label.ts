@@ -14,3 +14,8 @@ export function sourceKindLabel(kind: string, t: Translate) {
 export function sourceTargetLabel(target: PersistedCaptureTarget, t: Translate) {
   return target.title?.trim() || sourceKindLabel(target.kind, t);
 }
+
+export function remoteDesktopSourceHeaderLabel(target: PersistedCaptureTarget, sourceEnded: boolean, t: Translate) {
+  if (sourceEnded) return t(target.kind === 'window' ? 'remoteDesktop.windowClosed' : 'remoteDesktop.sourceEnded');
+  return sourceTargetLabel(target, t);
+}

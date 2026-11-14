@@ -40,6 +40,9 @@ import { sourceKindLabel, sourceTargetLabel } from '../remote-desktop/source-lab
 
 const english: Translate = (key, params) => translate('en-US', key, params);
 const SCROLL_BOTTOM_THRESHOLD = 48;
+const REMOTE_DESKTOP_SCROLL_BOTTOM_TOLERANCE = 2;
+const REMOTE_DESKTOP_CONTENT_REVEAL_DELAY_MS = 64;
+const REMOTE_DESKTOP_CONTENT_REVEAL_DURATION_MS = 260;
 export const conversationListOptions = {
   alignItemsAtEnd: true,
   contentInsetAdjustmentBehavior: 'automatic',
@@ -168,6 +171,8 @@ export function SessionDetail({
   const remoteDesktopExpansionLayout = useRef<{ contentHeight: number; viewportHeight: number } | null>(null);
   const remoteDesktopExpansionFollow = useRef(false);
   const remoteDesktopExpansionFollowLogged = useRef(false);
+  const remoteDesktopExpansionScrollStarted = useRef(false);
+  const remoteDesktopExpansionNeedsPreciseSettle = useRef(false);
   const followingRef = useRef(true);
   const [scrollPosition, setScrollPosition] = useState({ sessionId: session?.id, atBottom: true });
   const [canScroll, setCanScroll] = useState(false);
@@ -250,7 +255,10 @@ export function SessionDetail({
         viewportHeight,
       });
     }
-    scheduleScrollToOffset(Math.max(0, height - viewportHeight), false);
+    if (remoteDesktopExpansionScrollStarted.current) return;
+    remoteDesktopExpansionScrollStarted.current = true;
+    remoteDesktopExpansionNeedsPreciseSettle.current = true;
+    scheduleScrollToOffset(Math.max(0, height - viewportHeight), true);
   }, [scheduleScrollToOffset]);
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
     scrollMetrics.current.viewportHeight = event.nativeEvent.layout.height;
@@ -276,12 +284,22 @@ export function SessionDetail({
     if (!expanded || !followingRef.current || userDragging.current) return;
     const { contentHeight, offsetY, viewportHeight } = scrollMetrics.current;
     diagnosticLog.info('remote.desktop.inline.expand.settle', { contentHeight, offsetY, viewportHeight });
-    if (contentHeight > 0 && viewportHeight > 0) {
+    if (!remoteDesktopExpansionScrollStarted.current && contentHeight > 0 && viewportHeight > 0) {
       scheduleScrollToOffset(Math.max(0, contentHeight - viewportHeight), true);
     }
   }, [scheduleScrollToOffset]);
   const finishProgrammaticScroll = useCallback(() => {
     userDragging.current = false;
+    if (remoteDesktopExpansionNeedsPreciseSettle.current) {
+      remoteDesktopExpansionNeedsPreciseSettle.current = false;
+      if (followingRef.current && !isSessionScrollNearBottom(
+        scrollMetrics.current,
+        REMOTE_DESKTOP_SCROLL_BOTTOM_TOLERANCE,
+      )) {
+        scheduleScrollToBottom(true);
+      }
+      return;
+    }
     if (followingRef.current && !isSessionScrollNearBottom(scrollMetrics.current)) scheduleScrollToBottom(false);
   }, [scheduleScrollToBottom]);
   useEffect(() => {
@@ -393,6 +411,8 @@ export function SessionDetail({
             };
             remoteDesktopExpansionFollow.current = true;
             remoteDesktopExpansionFollowLogged.current = false;
+            remoteDesktopExpansionScrollStarted.current = false;
+            remoteDesktopExpansionNeedsPreciseSettle.current = false;
             diagnosticLog.info('remote.desktop.inline.expand.start', {
               contentHeight: scrollMetrics.current.contentHeight,
               offsetY: scrollMetrics.current.offsetY,
@@ -404,6 +424,8 @@ export function SessionDetail({
             remoteDesktopExpansionLayout.current = null;
             remoteDesktopExpansionFollow.current = false;
             remoteDesktopExpansionFollowLogged.current = false;
+            remoteDesktopExpansionScrollStarted.current = false;
+            remoteDesktopExpansionNeedsPreciseSettle.current = false;
           }
         }
         else onOpenRemoteDesktopPreview();
@@ -453,7 +475,12 @@ export function SessionDetail({
           onMomentumScrollBegin={() => { userDragging.current = true; }}
           onMomentumScrollEnd={finishProgrammaticScroll}
           onScroll={handleScroll}
-          onScrollBeginDrag={() => { userDragging.current = true; remoteDesktopExpansionFollow.current = false; }}
+          onScrollBeginDrag={() => {
+            userDragging.current = true;
+            remoteDesktopExpansionFollow.current = false;
+            remoteDesktopExpansionScrollStarted.current = false;
+            remoteDesktopExpansionNeedsPreciseSettle.current = false;
+          }}
           onScrollEndDrag={() => { userDragging.current = false; }}
           recycleItems={false}
           renderItem={renderDetailItem}
@@ -479,7 +506,12 @@ export function SessionDetail({
           onMomentumScrollBegin={() => { userDragging.current = true; }}
           onMomentumScrollEnd={finishProgrammaticScroll}
           onScroll={handleScroll}
-          onScrollBeginDrag={() => { userDragging.current = true; remoteDesktopExpansionFollow.current = false; }}
+          onScrollBeginDrag={() => {
+            userDragging.current = true;
+            remoteDesktopExpansionFollow.current = false;
+            remoteDesktopExpansionScrollStarted.current = false;
+            remoteDesktopExpansionNeedsPreciseSettle.current = false;
+          }}
           onScrollEndDrag={() => { userDragging.current = false; }}
           renderItem={renderDetailItem}
           scrollEventThrottle={16}
@@ -541,9 +573,9 @@ export function isSessionScrollNearBottom({
   contentHeight: number;
   offsetY: number;
   viewportHeight: number;
-}) {
+}, threshold = SCROLL_BOTTOM_THRESHOLD) {
   if (contentHeight <= viewportHeight) return true;
-  return contentHeight - viewportHeight - offsetY <= SCROLL_BOTTOM_THRESHOLD;
+  return contentHeight - viewportHeight - offsetY <= threshold;
 }
 
 export function detailItems(
@@ -1068,10 +1100,12 @@ function SessionRemoteDesktopEntry({ expanded, onOpenDetail, onPress, onRemove, 
     </Pressable> : null}
     </View>
     {preview ? <AnimatedDisclosure
-      animateContent={false}
+      contentRevealDelay={REMOTE_DESKTOP_CONTENT_REVEAL_DELAY_MS}
       expanded={expanded}
+      expandDuration={REMOTE_DESKTOP_CONTENT_REVEAL_DURATION_MS}
       onContentMeasured={onPreviewMeasured}
       onSettled={onPreviewSettled}
+      reserveExpandedHeight
       testID="session-remote-desktop-expansion"
     >
       <View

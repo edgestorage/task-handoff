@@ -360,7 +360,15 @@ export class RemoteDesktopController {
     const current = this.snapshotValue.target;
     const { sources } = await this.input.api.sources(this.input.instanceId);
     const resolved = resolvePersistedCaptureTarget(sources, current);
-    if (!resolved) return undefined;
+    if (!resolved) {
+      diagnosticLog.warn('remote.desktop.target.unresolved', {
+        capturableKindCount: sources.filter((source) => source.capturable && source.kind === current.kind).length,
+        hasSourceRef: Boolean(current.sourceRef),
+        kind: current.kind,
+        sourceCount: sources.length,
+      });
+      return undefined;
+    }
     if (!sameTarget(current, resolved)) this.update({ target: resolved });
     return captureSelectionForProtocol(resolved);
   }

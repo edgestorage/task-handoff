@@ -5,6 +5,7 @@ import { isRemoteDesktopSourceEndedError } from "../src/remote-desktop-source-st
 
 test("terminal source failures are distinguished from transient capture races", () => {
   assert.equal(isRemoteDesktopSourceEndedError("REMOTE_DESKTOP_WINDOW_UNAVAILABLE"), true);
+  assert.equal(isRemoteDesktopSourceEndedError("REMOTE_DESKTOP_SOURCE_SELECTION_REQUIRED"), true);
   assert.equal(isRemoteDesktopSourceEndedError("REMOTE_DESKTOP_GEOMETRY_CHANGED"), false);
   assert.equal(isRemoteDesktopSourceEndedError("REMOTE_DESKTOP_CAPTURE_UNAVAILABLE"), false);
   assert.equal(isRemoteDesktopSourceEndedError(undefined), false);

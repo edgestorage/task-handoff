@@ -6,6 +6,7 @@ jest.mock('../src/remote-desktop/controller', () => {
       input,
       setActive: jest.fn(),
       setInteractive: jest.fn(),
+      setResolution: jest.fn(),
     };
     instances.push(controller);
     return controller;
@@ -56,9 +57,9 @@ test('keeps two real controller scopes and evicts the least recently used inacti
   jest.spyOn(Date, 'now').mockImplementation(() => now++);
   const registry = loadRegistry();
   const first = acquire(registry, 'session_a');
-  registry.updateRemoteDesktopControllerConsumer(scope('session_a'), {}, { active: false, interactive: false });
+  registry.updateRemoteDesktopControllerConsumer(scope('session_a'), {}, { active: false, interactive: false, resolution: 'auto' });
   const second = acquire(registry, 'session_b');
-  registry.updateRemoteDesktopControllerConsumer(scope('session_b'), {}, { active: false, interactive: false });
+  registry.updateRemoteDesktopControllerConsumer(scope('session_b'), {}, { active: false, interactive: false, resolution: 'auto' });
   const third = acquire(registry, 'session_c');
 
   expect((first as unknown as { close: jest.Mock }).close).toHaveBeenCalledTimes(1);
@@ -84,10 +85,12 @@ test('keeps a shared controller active until the last consumer releases its leas
   registry.updateRemoteDesktopControllerConsumer(scope('session_a'), previewConsumer, {
     active: true,
     interactive: false,
+    resolution: '540p',
   });
   registry.updateRemoteDesktopControllerConsumer(scope('session_a'), detailConsumer, {
     active: true,
     interactive: true,
+    resolution: 'auto',
   });
   registry.releaseRemoteDesktopControllerConsumer(scope('session_a'), previewConsumer);
 
@@ -98,6 +101,43 @@ test('keeps a shared controller active until the last consumer releases its leas
 
   expect(controller.setActive).toHaveBeenLastCalledWith(false);
   expect(controller.setInteractive).toHaveBeenLastCalledWith(false);
+});
+
+test('keeps the preview resolution provisional until the interactive viewer releases it', () => {
+  const registry = loadRegistry();
+  const controller = acquire(registry, 'session_a') as unknown as {
+    setResolution: jest.Mock;
+  };
+  const previewConsumer = {};
+  const detailConsumer = {};
+
+  registry.updateRemoteDesktopControllerConsumer(scope('session_a'), previewConsumer, {
+    active: true,
+    interactive: false,
+    resolution: '540p',
+  });
+  expect(controller.setResolution).toHaveBeenLastCalledWith('540p');
+
+  registry.updateRemoteDesktopControllerConsumer(scope('session_a'), detailConsumer, {
+    active: false,
+    interactive: true,
+    resolution: 'auto',
+  });
+  expect(controller.setResolution).toHaveBeenLastCalledWith('540p');
+
+  registry.updateRemoteDesktopControllerConsumer(scope('session_a'), detailConsumer, {
+    active: true,
+    interactive: true,
+    resolution: 'auto',
+  });
+
+  expect(controller.setResolution).toHaveBeenLastCalledWith('auto');
+
+  registry.releaseRemoteDesktopControllerConsumer(scope('session_a'), detailConsumer);
+  expect(controller.setResolution).toHaveBeenLastCalledWith('540p');
+
+  registry.releaseRemoteDesktopControllerConsumer(scope('session_a'), previewConsumer);
+  expect(controller.setResolution).toHaveBeenLastCalledWith('540p');
 });
 
 test('does not evict a currently active controller', () => {

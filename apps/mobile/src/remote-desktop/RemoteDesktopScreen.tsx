@@ -27,7 +27,7 @@ import { RemoteDesktopSettingsMenu } from './RemoteDesktopSettingsMenu';
 import { RemoteDesktopToolbar } from './RemoteDesktopToolbar';
 import { RemoteDesktopTouchSurface } from './RemoteDesktopTouchSurface';
 import { RemoteDesktopSourcePicker } from './RemoteDesktopSourcePicker';
-import { sourceTargetLabel } from './source-label';
+import { remoteDesktopSourceHeaderLabel } from './source-label';
 import { transportIcon, transportLabel } from './transport-presentation';
 import { useRemoteDesktop } from './use-remote-desktop';
 import type { RemoteDesktopMouseMode } from './preferences';
@@ -81,7 +81,10 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   const stoppedSessionLink = useRef(false);
 
   useEffect(() => {
-    if (!sessionId || !remote.ready || stoppedSessionLink.current) return;
+    // A restored target is only a hint until the component accepts it. Do not
+    // turn the instance fallback (or a failed reconnect attempt) into a
+    // session-owned link before a real desktop session exists.
+    if (!sessionId || !remote.ready || !remote.snapshot.session || stoppedSessionLink.current) return;
     const targetKey = JSON.stringify(remote.snapshot.target);
     if (rememberedTargetKey.current === targetKey) return;
     rememberedTargetKey.current = targetKey;
@@ -91,7 +94,7 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
       sessionId,
       target: remote.snapshot.target,
     });
-  }, [instanceId, remote.controlPlaneId, remote.ready, remote.snapshot.target, sessionId]);
+  }, [instanceId, remote.controlPlaneId, remote.ready, remote.snapshot.session, remote.snapshot.target, sessionId]);
 
   useEffect(() => {
     if (!connectionInfo || !remote.capability?.sourceProviders.some((provider) => provider.available)) return;
@@ -223,15 +226,7 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   };
 
   const reconnect = () => {
-    if (sessionId) {
-      stoppedSessionLink.current = false;
-      rememberSessionRemoteDesktopLink({
-        controlPlaneId: remote.controlPlaneId,
-        instanceId,
-        sessionId,
-        target: remote.preferences.target,
-      });
-    }
+    if (sessionId) stoppedSessionLink.current = false;
     void remote.reconnect();
   };
 
@@ -256,8 +251,8 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   const activeTransport = snapshot.path ?? (Object.entries(snapshot.transportStates).find(([, state]) => state === 'active')?.[0] as keyof typeof snapshot.transportStates | undefined);
   const showVideo = snapshot.phase === 'connected' || snapshot.phase === 'paused' || snapshot.phase === 'reconnecting' || Boolean(snapshot.path);
   const errorMessage = remoteDesktopErrorMessage(snapshot.error, t);
-  const sourceTitle = sourceTargetLabel(snapshot.target, t);
   const sourceEnded = isRemoteDesktopSourceEndedError(snapshot.error?.code);
+  const sourceTitle = remoteDesktopSourceHeaderLabel(snapshot.target, sourceEnded, t);
 
   return <View style={[styles.root, { backgroundColor: '#000' }]}>
     <StatusBar style="light" />

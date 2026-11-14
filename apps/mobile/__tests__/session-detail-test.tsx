@@ -115,7 +115,7 @@ test('expanded preview mode toggles an inline surface from the session card', as
   setSessionPreviewPresentation('floating');
 });
 
-test('expanding an inline remote desktop tracks the growing content height at the bottom', async () => {
+test('expanding an inline remote desktop reserves its height and animates the list to the bottom', async () => {
   setSessionPreviewPresentation('expanded');
   const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
     setTimeout(() => callback(Date.now()), 0);
@@ -143,13 +143,11 @@ test('expanding an inline remote desktop tracks the growing content height at th
     nativeEvent: { layout: { height: 200, width: 390 } },
   });
   expect(scrollToOffset).not.toHaveBeenCalled();
-  await fireEvent(list, 'contentSizeChange', 390, 1_300);
   await fireEvent(list, 'contentSizeChange', 390, 1_400);
-  await waitFor(() => expect(scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 900 }));
-  expect(scrollToOffset).not.toHaveBeenCalledWith({ animated: true, offset: 900 });
+  await waitFor(() => expect(scrollToOffset).toHaveBeenLastCalledWith({ animated: true, offset: 900 }));
   const expansion = StyleSheet.flatten(screen.getByTestId('session-remote-desktop-expansion').props.style);
-  expect(expansion).not.toHaveProperty('opacity');
-  expect(expansion).not.toHaveProperty('transform');
+  expect(expansion).toHaveProperty('opacity');
+  expect(expansion).toHaveProperty('transform');
   const divider = StyleSheet.flatten(screen.getByTestId('session-remote-desktop-inline-preview-divider').props.style);
   expect(divider.borderTopWidth).toBeGreaterThan(0);
   expect(divider.borderTopColor).toBeTruthy();
@@ -734,6 +732,8 @@ test('conversation keeps native end following enabled when the keyboard viewport
 test('scroll following uses a bottom tolerance and treats short content as settled', () => {
   expect(isSessionScrollNearBottom({ contentHeight: 400, offsetY: 0, viewportHeight: 500 })).toBe(true);
   expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 460, viewportHeight: 500 })).toBe(true);
+  expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 498, viewportHeight: 500 }, 2)).toBe(true);
+  expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 497, viewportHeight: 500 }, 2)).toBe(false);
   expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 300, viewportHeight: 500 })).toBe(false);
 });
 

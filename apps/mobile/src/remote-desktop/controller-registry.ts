@@ -23,13 +23,15 @@ type Entry = {
   transport: MobileControlPlaneTransport;
   controller: RemoteDesktopController;
   active: boolean;
-  consumers: Map<object, RemoteDesktopControllerConsumerState>;
+  consumerRevision: number;
+  consumers: Map<object, RemoteDesktopControllerConsumerState & { revision: number }>;
   lastUsedAt: number;
 };
 
 export type RemoteDesktopControllerConsumerState = {
   active: boolean;
   interactive: boolean;
+  resolution: RemoteDesktopResolution;
 };
 
 export const MAX_RETAINED_REMOTE_DESKTOP_CONTROLLERS = 2;
@@ -91,6 +93,7 @@ export function acquireRemoteDesktopController(input: {
     transport: input.transport,
     controller,
     active: input.active,
+    consumerRevision: 0,
     consumers: new Map(),
     lastUsedAt: Date.now(),
   });
@@ -105,7 +108,10 @@ export function updateRemoteDesktopControllerConsumer(
 ) {
   const entry = entries.get(scopeKey(scope));
   if (!entry) return;
-  entry.consumers.set(consumer, state);
+  entry.consumers.set(consumer, {
+    ...state,
+    revision: ++entry.consumerRevision,
+  });
   syncEntryActivation(entry);
 }
 
@@ -144,10 +150,15 @@ function evictInactiveControllers(keepKey: string) {
 
 function syncEntryActivation(entry: Entry) {
   const consumers = [...entry.consumers.values()];
-  const active = consumers.some((consumer) => consumer.active);
-  const interactive = consumers.some((consumer) => consumer.active && consumer.interactive);
+  const activeConsumers = consumers.filter((consumer) => consumer.active);
+  const active = activeConsumers.length > 0;
+  const interactive = activeConsumers.some((consumer) => consumer.interactive);
+  const resolution = activeConsumers
+    .sort((left, right) => Number(right.interactive) - Number(left.interactive) || right.revision - left.revision)[0]
+    ?.resolution;
   entry.active = active;
   if (active) entry.lastUsedAt = Date.now();
+  if (resolution) entry.controller.setResolution(resolution);
   entry.controller.setInteractive(interactive);
   entry.controller.setActive(active);
 }

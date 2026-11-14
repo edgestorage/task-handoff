@@ -29,6 +29,38 @@ struct ContentKey {
     height: f64,
     scale: f64,
 }
+#[derive(Default)]
+struct ScaleTracker {
+    queried: Option<(f64, f64)>,
+    observed: Option<(f64, f64)>,
+}
+impl ScaleTracker {
+    fn new(queried: (f64, f64)) -> Self {
+        Self {
+            queried: Some(queried),
+            observed: None,
+        }
+    }
+    /// ScreenCaptureKit frame metadata is authoritative for the display that
+    /// actually produced the frame. Some long-lived processes keep returning a
+    /// stale CoreGraphics mode after display topology changes, so prefer the
+    /// observed scale until CoreGraphics itself reports a different mode.
+    fn effective(&mut self, queried: (f64, f64)) -> (f64, f64) {
+        if self
+            .queried
+            .is_none_or(|previous| !same_scale(previous, queried))
+        {
+            self.observed = None;
+        }
+        self.queried = Some(queried);
+        self.observed.unwrap_or(queried)
+    }
+    fn observe(&mut self, observed: Option<(f64, f64)>) {
+        if let Some(scale) = observed.filter(|(x, y)| valid_scale(*x) && valid_scale(*y)) {
+            self.observed = Some(scale);
+        }
+    }
+}
 impl DisplayTarget {
     pub fn source(&self, show_cursor: bool) -> anyhow::Result<crate::capture::Source> {
         Capture::new_with_cursor(Target::Display(self.display.clone()), show_cursor)
@@ -91,6 +123,8 @@ pub struct Capture {
     pointer_mapping: PointerMapping,
     content_key: Option<ContentKey>,
     capture_size: (u32, u32),
+    scale: (f64, f64),
+    scale_tracker: ScaleTracker,
     precision: CapturePrecision,
     display_geometry: Option<super::display_geometry::DisplayGeometry>,
     pixel_size: (usize, usize),
@@ -185,7 +219,14 @@ impl Capture {
             BackendError::InvalidGeometry
         );
         let precision = CapturePrecision::Auto;
-        let capture_size = capture_size_for(&retained_target, capture_bounds, precision)?;
+        let scale = capture_scale_for(&retained_target, capture_bounds);
+        let capture_size = capture_size_for_scaled_bounds(
+            capture_bounds.width,
+            capture_bounds.height,
+            precision,
+            scale.0,
+            scale.1,
+        )?;
         let config = SCStreamConfiguration::new()
             .with_width(capture_size.0)
             .with_height(capture_size.1)
@@ -206,6 +247,8 @@ impl Capture {
             pointer_mapping: PointerMapping::from_geometry(capture_bounds),
             content_key: None,
             capture_size,
+            scale,
+            scale_tracker: ScaleTracker::new(scale),
             precision,
             display_geometry,
             pixel_size: (capture_size.0 as usize, capture_size.1 as usize),
@@ -225,19 +268,26 @@ impl Capture {
             return Ok(false);
         }
         self.precision = precision;
-        self.reconfigure_capture_size()?;
+        self.reconfigure_capture_size(self.scale)?;
         Ok(true)
     }
     pub fn capture_dimensions(&self) -> (u32, u32) {
         self.capture_size
     }
-    fn reconfigure_capture_size(&mut self) -> anyhow::Result<()> {
-        let next = capture_size_for(&self.target, self.capture_bounds, self.precision)?;
-        if next == self.capture_size {
+    fn reconfigure_capture_size(&mut self, scale: (f64, f64)) -> anyhow::Result<()> {
+        let next = capture_size_for_scaled_bounds(
+            self.capture_bounds.width,
+            self.capture_bounds.height,
+            self.precision,
+            scale.0,
+            scale.1,
+        )?;
+        if next == self.capture_size && same_scale(scale, self.scale) {
             return Ok(());
         }
         self.pause()?;
         self.content_key = None;
+        self.scale = scale;
         self.capture_size = next;
         self.pixel_size = (next.0 as usize, next.1 as usize);
         self.config = self.config.clone().with_width(next.0).with_height(next.1);
@@ -262,17 +312,27 @@ impl Capture {
                 current.width <= 8192 && current.height <= 8192,
                 BackendError::InvalidGeometry
             );
-            let next_capture_size = capture_size_for(&self.target, bounds, self.precision)?;
+            let queried_scale = capture_scale_for(&self.target, bounds);
+            let scale = self.scale_tracker.effective(queried_scale);
+            let next_capture_size = capture_size_for_scaled_bounds(
+                bounds.width,
+                bounds.height,
+                self.precision,
+                scale.0,
+                scale.1,
+            )?;
             let window_changed = current != self.geometry;
             let bounds_changed = bounds != self.capture_bounds;
             let size_changed = next_capture_size != self.capture_size;
-            if window_changed || bounds_changed || size_changed {
+            let scale_changed = !same_scale(scale, self.scale);
+            if window_changed || bounds_changed || size_changed || scale_changed {
                 eprintln!(
-                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.geometry_changed queryMs={} windowFrom={:?} windowTo={current:?} boundsFrom={:?} boundsTo={bounds:?} captureFrom={:?} captureTo={next_capture_size:?} windowChanged={window_changed} boundsChanged={bounds_changed}",
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.geometry_changed queryMs={} windowFrom={:?} windowTo={current:?} boundsFrom={:?} boundsTo={bounds:?} captureFrom={:?} captureTo={next_capture_size:?} scaleFrom={:?} scaleTo={scale:?} windowChanged={window_changed} boundsChanged={bounds_changed}",
                     query_started.elapsed().as_millis(),
                     self.geometry,
                     self.capture_bounds,
-                    self.capture_size
+                    self.capture_size,
+                    self.scale,
                 );
                 let pause_started = Instant::now();
                 let pause_result = self.pause();
@@ -293,6 +353,7 @@ impl Capture {
                     self.pointer_mapping = PointerMapping::from_geometry(bounds);
                     self.content_key = None;
                 }
+                self.scale = scale;
                 if size_changed {
                     self.capture_size = next_capture_size;
                     self.pixel_size = (next_capture_size.0 as usize, next_capture_size.1 as usize);
@@ -307,7 +368,9 @@ impl Capture {
             display.validate()?;
         }
         if self.window.is_none() && self.display_geometry.is_some() {
-            self.reconfigure_capture_size()?;
+            let queried_scale = capture_scale_for(&self.target, self.capture_bounds);
+            let scale = self.scale_tracker.effective(queried_scale);
+            self.reconfigure_capture_size(scale)?;
         }
         Ok(self.geometry)
     }
@@ -387,11 +450,23 @@ impl Capture {
             return Ok(None);
         };
         if let Some(info) = sample.frame_info() {
+            let frame_scale = info
+                .scale_factor
+                .filter(|scale| valid_scale(*scale))
+                .map(|scale| (scale, scale));
+            if let Some(scale) = frame_scale {
+                self.scale_tracker.observe(Some(scale));
+                if !same_scale(scale, self.scale) {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.scale_changed window={:?} configured={:?} observed={scale:?} captureSize={:?}",
+                        self.geometry, self.scale, self.capture_size
+                    );
+                    self.content_key = None;
+                    return Ok(None);
+                }
+            }
             if let Some(content_rect) = info.content_rect {
-                let scale = info
-                    .scale_factor
-                    .filter(|scale| scale.is_finite() && *scale > 0.0)
-                    .unwrap_or(1.0);
+                let scale = frame_scale.map(|scale| scale.0).unwrap_or(1.0);
                 let key = ContentKey {
                     x: content_rect.origin.x,
                     y: content_rect.origin.y,
@@ -526,12 +601,16 @@ fn backing_scale_for_window(origin_x: f64, origin_y: f64, width: f64, height: f6
     backing_scale_for_display(display)
 }
 
-fn capture_size_for(
-    target: &Target,
-    bounds: Geometry,
-    precision: CapturePrecision,
-) -> anyhow::Result<(u32, u32)> {
-    let (scale_x, scale_y) = match target {
+fn valid_scale(scale: f64) -> bool {
+    scale.is_finite() && scale > 0.0
+}
+
+fn same_scale(left: (f64, f64), right: (f64, f64)) -> bool {
+    (left.0 - right.0).abs() < 0.001 && (left.1 - right.1).abs() < 0.001
+}
+
+fn capture_scale_for(target: &Target, bounds: Geometry) -> (f64, f64) {
+    match target {
         Target::Display(display) => {
             backing_scale_for_display(core_graphics::display::CGDisplay::new(display.display_id()))
         }
@@ -541,8 +620,7 @@ fn capture_size_for(
             f64::from(bounds.width),
             f64::from(bounds.height),
         ),
-    };
-    capture_size_for_scaled_bounds(bounds.width, bounds.height, precision, scale_x, scale_y)
+    }
 }
 
 fn capture_size_for_scaled_bounds(
@@ -575,7 +653,7 @@ impl Drop for Capture {
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_size_for_scaled_bounds, normalized_content_rect};
+    use super::{capture_size_for_scaled_bounds, normalized_content_rect, ScaleTracker};
     use crate::traits::{CapturePrecision, Geometry, PointerMapping};
     use screencapturekit::cg::CGRect;
 
@@ -650,6 +728,33 @@ mod tests {
             capture_size_for_scaled_bounds(1794, 1050, CapturePrecision::Auto, 2.0, 2.0).unwrap(),
             (3588, 2100)
         );
+    }
+
+    #[test]
+    fn window_retina_scale_change_updates_the_capture_canvas() {
+        assert_eq!(
+            capture_size_for_scaled_bounds(1217, 820, CapturePrecision::Auto, 1.0, 1.0).unwrap(),
+            (1217, 820)
+        );
+        assert_eq!(
+            capture_size_for_scaled_bounds(1217, 820, CapturePrecision::Auto, 2.0, 2.0).unwrap(),
+            (2434, 1640)
+        );
+    }
+
+    #[test]
+    fn observed_frame_scale_corrects_a_stale_display_query() {
+        let mut scale = ScaleTracker::new((1.0, 1.0));
+        assert_eq!(scale.effective((1.0, 1.0)), (1.0, 1.0));
+
+        scale.observe(Some((2.0, 2.0)));
+        assert_eq!(scale.effective((1.0, 1.0)), (2.0, 2.0));
+
+        // Once CoreGraphics catches up, the observed override is released.
+        assert_eq!(scale.effective((2.0, 2.0)), (2.0, 2.0));
+
+        scale.observe(Some((1.0, 1.0)));
+        assert_eq!(scale.effective((1.0, 1.0)), (1.0, 1.0));
     }
 
     #[test]
