@@ -18,9 +18,11 @@ test('remote desktop npm packages use the runtime version, preserve the binary a
  assert.equal(path.basename(packed.archive),`task-handoff-remote-desktop-linux-arm64-${version}.tgz`);
  assert.match(packed.metadata.integrity,/^sha512-/);
  assert.equal(packed.metadata.integrity,`sha512-${crypto.createHash('sha512').update(fs.readFileSync(packed.archive)).digest('base64')}`);
- const entries=[];await tar.list({file:packed.archive,onReadEntry:entry=>entries.push([entry.path,entry.mode])});
+ const entries=[];let manifestSource='';await tar.list({file:packed.archive,onReadEntry:entry=>{entries.push([entry.path,entry.mode]);if(entry.path==='package/package.json')entry.on('data',chunk=>{manifestSource+=chunk});}});
  const executable=entries.find(([name])=>name==='package/bin/task-handoff-desktop-streaming');
  assert.ok(executable);assert.ok((executable[1]&0o111)!==0);
+ const packageManifest=JSON.parse(manifestSource);
+ assert.deepEqual(packageManifest.repository,require('../package.json').repository);
  const manifest=await collectRemoteDesktopPackages(output,path.join(dir,'metadata.json'));
  assert.deepEqual(manifest.packages,[packed.metadata]);
  await assert.rejects(()=>collectRemoteDesktopPackages(output,path.join(dir,'complete.json'),{complete:true}),/incomplete/i);

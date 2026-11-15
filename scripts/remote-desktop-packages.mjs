@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 export const PACKAGE_PREFIX = "@task-handoff/remote-desktop";
 const EXECUTABLE = "bin/task-handoff-desktop-streaming";
 const PLATFORMS = new Set(["linux", "darwin"]);
@@ -76,6 +77,7 @@ export async function packRemoteDesktopPackage(options) {
       version,
       description: `TaskHandoff remote desktop component for ${platform}/${arch}.`,
       license: "Apache-2.0",
+      repository: rootPackage.repository,
       os: [platform],
       cpu: [arch],
       bin: { "task-handoff-desktop-streaming": EXECUTABLE },

@@ -67,6 +67,11 @@ test("runtime releases map stable to latest and isolate prerelease dist-tags", (
   assert.equal((workflow.match(/publish_or_verify release\/npm\/[a-z-]+ "release\/npm\/artifacts\//g) || []).length, 5);
   assert.match(workflow, /Published \$package@\$version integrity does not match/);
   assert.match(workflow, /npm publish "\$archive" --access public --tag "\$NPM_DIST_TAG"/);
+  const publishStep = workflow.slice(
+    workflow.indexOf("- name: Publish or verify immutable npm packages"),
+    workflow.indexOf("- name: Keep prereleases out of the latest dist-tag"),
+  );
+  assert.ok(publishStep.indexOf("for metadata in release/remote-desktop-packages/*.metadata.json") < publishStep.indexOf("publish_or_verify release/npm/control-plane"));
   assert.doesNotMatch(workflow, /npm pack "\$directory"/);
   assert.match(workflow, /Keep prereleases out of the latest dist-tag/);
   assert.match(workflow, /if \[\[ "\$latest" == "\$RELEASE_VERSION" \]\]/);
@@ -89,6 +94,14 @@ test("runtime releases sync npmmirror as a non-blocking post-publish step", () =
   assert.match(syncJob, /--dist-tag "\$NPM_DIST_TAG"/);
   assert.match(syncJob, /--packages-file release\/remote-desktop-packages\/remote-desktop-packages\.json/);
   assert.ok(workflow.indexOf("  publish:") < workflow.indexOf("  sync-npmmirror:"));
+});
+
+test("runtime remote desktop packages build against the current macOS SDK", () => {
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
+
+  assert.match(workflow, /runner: macos-26-intel\s+platform: darwin\s+arch: x64/);
+  assert.match(workflow, /runner: macos-26\s+platform: darwin\s+arch: arm64/);
+  assert.doesNotMatch(workflow, /runner: macos-15(?:-intel)?\s/);
 });
 
 test("runtime release builds and publishes only the selected controlled instance implementation", () => {

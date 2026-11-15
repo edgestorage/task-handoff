@@ -90,10 +90,10 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-          - runner: macos-15-intel
+          - runner: macos-26-intel
             platform: darwin
             arch: x64
-          - runner: macos-15
+          - runner: macos-26
             platform: darwin
             arch: arm64
     runs-on: ${{ matrix.runner }}
@@ -636,11 +636,8 @@ jobs:
             version="$(node -p "require('./$directory/package.json').version")"
             publish_or_verify_package "$package" "$version" "$archive"
           }
-          publish_or_verify release/npm/control-plane "release/npm/artifacts/task-handoff-control-plane-$RELEASE_VERSION.tgz"
-          publish_or_verify release/npm/node-agent "release/npm/artifacts/task-handoff-node-agent-$RELEASE_VERSION.tgz"
-          publish_or_verify release/npm/controlled-instance "release/npm/artifacts/task-handoff-controlled-instance-$RELEASE_VERSION.tgz"
-          publish_or_verify release/npm/server "release/npm/artifacts/task-handoff-server-$RELEASE_VERSION.tgz"
-          publish_or_verify release/npm/thctl "release/npm/artifacts/task-handoff-thctl-$RELEASE_VERSION.tgz"
+          # The controlled instance runtime embeds these package integrities. Publish
+          # them first so a partial failure is recoverable without mutating core packages.
           for metadata in release/remote-desktop-packages/*.metadata.json; do
             package="$(node -p "require('./${metadata}').package")"
             version="$(node -p "require('./${metadata}').version")"
@@ -648,6 +645,11 @@ jobs:
             prefix="${prefix//\//-}"
             publish_or_verify_package "$package" "$version" "release/remote-desktop-packages/${prefix}-${version}.tgz"
           done
+          publish_or_verify release/npm/control-plane "release/npm/artifacts/task-handoff-control-plane-$RELEASE_VERSION.tgz"
+          publish_or_verify release/npm/node-agent "release/npm/artifacts/task-handoff-node-agent-$RELEASE_VERSION.tgz"
+          publish_or_verify release/npm/controlled-instance "release/npm/artifacts/task-handoff-controlled-instance-$RELEASE_VERSION.tgz"
+          publish_or_verify release/npm/server "release/npm/artifacts/task-handoff-server-$RELEASE_VERSION.tgz"
+          publish_or_verify release/npm/thctl "release/npm/artifacts/task-handoff-thctl-$RELEASE_VERSION.tgz"
 
       - name: Keep prereleases out of the latest dist-tag
         if: needs.runtime-packages.outputs.npm_tag != 'latest'
