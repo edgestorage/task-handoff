@@ -158,7 +158,7 @@ export function SessionDetail({
   const { locale, t } = useI18n();
   const previewPresentation = useSessionPreviewPresentation();
   const canExpandRemoteDesktopInline = previewPresentation === 'expanded' && Boolean(renderRemoteDesktopInlinePreview);
-  const remoteDesktopExpansionKey = `${previewPresentation}:${session?.id || ''}:${remoteDesktopTarget?.kind || ''}:${remoteDesktopTarget?.sourceRef || ''}`;
+  const remoteDesktopExpansionKey = `${previewPresentation}:${session?.id || ''}`;
   const [remoteDesktopExpansion, setRemoteDesktopExpansion] = useState({ expanded: false, key: remoteDesktopExpansionKey });
   const remoteDesktopExpanded = canExpandRemoteDesktopInline
     && remoteDesktopExpansion.key === remoteDesktopExpansionKey

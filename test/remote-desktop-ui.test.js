@@ -77,7 +77,7 @@ test('remote desktop source directory loads when capabilities arrive after mount
 });
 
 test('a closed window returns to source selection with a neutral prompt', () => {
-  assert.match(viewer, /isRemoteDesktopSourceEndedError\(snapshot\.value\.reason\)/);
+  assert.match(viewer, /isRemoteDesktopSourceEndedError\(next\.reason\)/);
   assert.match(viewer, /sourceEndedNotice\.value = translateApiError/);
   assert.match(viewer, /if \(sourceEnded\) void loadSources\(\)/);
   assert.match(viewer, /remote-desktop-source-ended/);
@@ -210,7 +210,7 @@ test('remote desktop blocks insecure contexts before reserving a session', () =>
   assert.match(viewer, /if \(!signalTransportReady\)/);
   assert.match(viewer, /secureTransportHint/);
   assert.match(viewer, /disabled="connecting \|\| !canConnect \|\| !signalTransportReady"/);
-  assert.match(viewer, /void stopRemoteDesktopSession\(props\.instanceId, closedSession\.snapshot\.viewerSessionId\)/);
+  assert.match(viewer, /if \(current\) void stopRemoteDesktopSession\(props\.instanceId, current\.snapshot\.viewerSessionId\)/);
 });
 
 test('remote desktop target selection is explicit and provider driven', () => {

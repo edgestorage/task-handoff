@@ -25,6 +25,11 @@ test("session preview presentation switches between the floating window and an i
   assert.match(panelSource, /if \(sessionRemoteDesktopPreviewPresentation\.value === "expanded"\) \{\s*remoteDesktopInlineExpanded\.value = !remoteDesktopInlineExpanded\.value;/);
 });
 
+test("switching a session preview source keeps the inline surface expanded", () => {
+  assert.doesNotMatch(panelSource, /watch\(\(\) => selectedSessionRemoteDesktopLink\.value\?\.target\.sourceRef/);
+  assert.match(panelSource, /function updateSelectedSessionRemoteDesktopTarget\(target: SessionRemoteDesktopTarget\) \{\s*const session = selectedSession\.value;\s*if \(!session\) return;\s*rememberSessionRemoteDesktopLink\(/);
+});
+
 test("session preview card does not render a redundant expand or collapse chevron", () => {
   assert.doesNotMatch(sessionCardSource, /Chevron(?:Up|Down)/);
   assert.doesNotMatch(sessionCardSource, /session-remote-desktop-card-chevron/);

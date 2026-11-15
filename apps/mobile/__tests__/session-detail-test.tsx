@@ -164,6 +164,30 @@ test('expanded preview mode toggles an inline surface from the session card', as
   setSessionPreviewPresentation('floating');
 });
 
+test('switching the remote desktop source keeps the inline preview expanded', async () => {
+  setSessionPreviewPresentation('expanded');
+  const idleSession = ControlPlaneAiSessionSummarySchema.parse({ ...session, currentTool: undefined, phase: 'thinking', status: 'idle', subAgents: [] });
+  const renderSession = (sourceRef: string, title: string) => <SessionDetail
+    instanceId="instance-1"
+    messages={[]}
+    onOpenRemoteDesktopPreview={jest.fn()}
+    remoteDesktopTarget={{ kind: 'window', sourceRef, subtitle: title, title }}
+    renderRemoteDesktopInlinePreview={() => <View testID="session-remote-desktop-inline-preview-stub" />}
+    session={idleSession}
+  />;
+  const screen = await render(renderSession('window_1', 'Editor'));
+
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-entry'));
+  expect(screen.getByTestId('session-remote-desktop-inline-preview-stub')).toBeTruthy();
+
+  await screen.rerender(renderSession('window_2', 'Terminal'));
+  expect(screen.getByText('Terminal')).toBeTruthy();
+  expect(screen.getByTestId('session-remote-desktop-inline-preview-stub')).toBeTruthy();
+
+  await screen.unmount();
+  setSessionPreviewPresentation('floating');
+});
+
 test('expanding an inline remote desktop reserves its height and animates the list to the bottom', async () => {
   setSessionPreviewPresentation('expanded');
   const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {

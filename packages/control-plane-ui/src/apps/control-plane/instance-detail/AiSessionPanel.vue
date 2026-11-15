@@ -1816,9 +1816,6 @@ watch([() => props.instance.id, () => selectedSession.value?.id, () => sessionRe
   remoteDesktopPreviewRequested.value = false;
   remoteDesktopInlineExpanded.value = false;
 });
-watch(() => selectedSessionRemoteDesktopLink.value?.target.sourceRef, () => {
-  remoteDesktopInlineExpanded.value = false;
-});
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: [props.instance.id] })));
 useAiSessionTimelineDemand(computed(() => selectedSession.value ? {
