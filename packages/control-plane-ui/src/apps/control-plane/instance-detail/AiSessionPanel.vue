@@ -1072,24 +1072,29 @@
             @continue-from-turn="forkSession(selectedSession, 'current', $event)"
             @save-as-preset="saveTurnAsPresetAction"
           />
-          <SessionRemoteDesktopCard
+          <div
             v-if="selectedSessionRemoteDesktopLink && remoteDesktopAvailableForInstance"
-            :expanded="remoteDesktopInlineExpanded"
-            :presentation="sessionRemoteDesktopPreviewPresentation"
-            :target="selectedSessionRemoteDesktopLink.target"
-            @details="openSelectedSessionRemoteDesktopDetails"
-            @preview="openSelectedSessionRemoteDesktopPreview"
-            @remove="removeSelectedSessionRemoteDesktop"
-          />
-          <SessionRemoteDesktopInlinePreview
-            v-if="remoteDesktopInlineExpanded && sessionRemoteDesktopPreviewPresentation === 'expanded' && selectedSessionRemoteDesktopLink && remoteDesktopAvailableForInstance"
-            :capabilities="instance.capabilities"
-            :instance-id="instance.id"
-            :session-id="selectedSession.id"
-            :target="selectedSessionRemoteDesktopLink.target"
-            @open-details="openSelectedSessionRemoteDesktopDetails"
-            @selection-change="updateSelectedSessionRemoteDesktopTarget"
-          />
+            class="session-remote-desktop-card-group"
+            :class="{ 'is-expanded': remoteDesktopInlineExpanded && sessionRemoteDesktopPreviewPresentation === 'expanded' }"
+          >
+            <SessionRemoteDesktopCard
+              :expanded="remoteDesktopInlineExpanded"
+              :presentation="sessionRemoteDesktopPreviewPresentation"
+              :target="selectedSessionRemoteDesktopLink.target"
+              @details="openSelectedSessionRemoteDesktopDetails"
+              @preview="openSelectedSessionRemoteDesktopPreview"
+              @remove="removeSelectedSessionRemoteDesktop"
+            />
+            <SessionRemoteDesktopInlinePreview
+              v-if="remoteDesktopInlineExpanded && sessionRemoteDesktopPreviewPresentation === 'expanded'"
+              :capabilities="instance.capabilities"
+              :instance-id="instance.id"
+              :session-id="selectedSession.id"
+              :target="selectedSessionRemoteDesktopLink.target"
+              @open-details="openSelectedSessionRemoteDesktopDetails"
+              @selection-change="updateSelectedSessionRemoteDesktopTarget"
+            />
+          </div>
           <span ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor" aria-hidden="true" />
           </section>
         </ScrollArea>

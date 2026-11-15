@@ -4,8 +4,10 @@ import test from "node:test";
 
 const viewerSource = readFileSync(new URL("../src/apps/control-plane/instance-detail/InstanceRemoteDesktopViewer.vue", import.meta.url), "utf8");
 const panelSource = readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+const panelCss = readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const previewSource = readFileSync(new URL("../src/components/remote-desktop/SessionRemoteDesktopFloatingPreview.vue", import.meta.url), "utf8");
 const sessionCardSource = readFileSync(new URL("../src/components/remote-desktop/SessionRemoteDesktopCard.vue", import.meta.url), "utf8");
+const inlinePreviewSource = readFileSync(new URL("../src/components/remote-desktop/SessionRemoteDesktopInlinePreview.vue", import.meta.url), "utf8");
 
 test("auto-connect starts only after viewer setup has initialized runtime state", () => {
   assert.match(viewerSource, /function connectIfAutoConnectReady\(\)/);
@@ -33,6 +35,15 @@ test("switching a session preview source keeps the inline surface expanded", () 
 test("session preview card does not render a redundant expand or collapse chevron", () => {
   assert.doesNotMatch(sessionCardSource, /Chevron(?:Up|Down)/);
   assert.doesNotMatch(sessionCardSource, /session-remote-desktop-card-chevron/);
+});
+
+test("expanded session preview joins the card and surface into one bordered shadowed frame", () => {
+  assert.match(panelSource, /class="session-remote-desktop-card-group"\s+:class="\{ 'is-expanded': remoteDesktopInlineExpanded && sessionRemoteDesktopPreviewPresentation === 'expanded' \}"/);
+  assert.match(panelSource, /<SessionRemoteDesktopCard[\s\S]*?<SessionRemoteDesktopInlinePreview/);
+  assert.match(panelCss, /\.session-remote-desktop-card-group\.is-expanded\s*\{[^}]*box-shadow: 0 2px 10px rgb\(0 0 0 \/ 5%\);/);
+  assert.match(panelCss, /\.session-remote-desktop-card-group\.is-expanded :deep\(\.session-remote-desktop-card\)\s*\{[^}]*box-shadow: none;/);
+  assert.match(sessionCardSource, /\.session-remote-desktop-card\.is-expanded\s*\{[^}]*border-bottom-color: var\(--line-subtle\);/);
+  assert.match(inlinePreviewSource, /border: 1px solid var\(--line-subtle\);\s*border-top: 0;/);
 });
 
 test("every surface honors explicit inactivity while an omitted active prop defaults to visible", () => {

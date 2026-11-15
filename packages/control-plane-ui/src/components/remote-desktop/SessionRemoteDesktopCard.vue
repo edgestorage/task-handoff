@@ -64,7 +64,7 @@ const mainLabel = computed(() => props.presentation === "expanded"
 .session-remote-desktop-card.is-expanded {
   border-bottom-right-radius: 0;
   border-bottom-left-radius: 0;
-  border-bottom-color: transparent;
+  border-bottom-color: var(--line-subtle);
 }
 
 .session-remote-desktop-card-main {

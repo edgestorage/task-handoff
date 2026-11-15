@@ -1896,6 +1896,21 @@
   margin-top: 16px;
 }
 
+.session-remote-desktop-card-group {
+  display: grid;
+  min-width: 0;
+  gap: 0;
+  border-radius: 14px;
+}
+
+.session-remote-desktop-card-group.is-expanded {
+  box-shadow: 0 2px 10px rgb(0 0 0 / 5%);
+}
+
+.session-remote-desktop-card-group.is-expanded :deep(.session-remote-desktop-card) {
+  box-shadow: none;
+}
+
 .session-ai-detail-bottom-anchor {
   display: block;
   width: 1px;
