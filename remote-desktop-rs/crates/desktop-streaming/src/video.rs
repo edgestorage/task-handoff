@@ -1,8 +1,45 @@
 //! Feedback-driven encoder load and maintained SIMD image conversion/scaling.
 use crate::traits::RawFrame;
+#[cfg(target_os = "macos")]
+use apple_cf::cv::{CVPixelBuffer, CVPixelBufferLockFlags};
 use fast_image_resize::{images::Image, PixelType, ResizeAlg, ResizeOptions, Resizer};
 use openh264::formats::{YUVBuffer, YUVSource};
 use std::time::Duration;
+
+/// One capture result at the component-local encoder boundary. Native macOS
+/// frames stay in ScreenCaptureKit's 420v surface until VideoToolbox consumes
+/// them; software encoding and every other platform use the normalized I420
+/// representation.
+pub enum Frame {
+    I420(YUVBuffer),
+    #[cfg(target_os = "macos")]
+    Native420(Native420Frame),
+}
+
+#[cfg(target_os = "macos")]
+pub struct Native420Frame {
+    pub buffer: CVPixelBuffer,
+    pub geometry: crate::traits::Geometry,
+    pub captured_at: std::time::Instant,
+}
+
+impl Frame {
+    /// Normalize to the encoder target. Native 420v is converted only when a
+    /// hardware encoder is unavailable, never on the successful zero-copy path.
+    pub fn into_i420(self, budget: Budget) -> anyhow::Result<YUVBuffer> {
+        match self {
+            Self::I420(frame) => {
+                if frame.dimensions() == (budget.width as usize, budget.height as usize) {
+                    Ok(frame)
+                } else {
+                    scale_yuv(frame, budget)
+                }
+            }
+            #[cfg(target_os = "macos")]
+            Self::Native420(frame) => from_native_420v(frame, budget),
+        }
+    }
+}
 
 /// Initial content budget; congestion feedback can reduce below this default.
 pub const INITIAL_BITRATE: u32 = 8_000_000;
@@ -193,6 +230,104 @@ pub fn from_bgra(frame: RawFrame, budget: Budget) -> anyhow::Result<YUVBuffer> {
     )?;
     Ok(YUVBuffer::from_vec(data, width, height))
 }
+
+#[cfg(target_os = "macos")]
+fn from_native_420v(frame: Native420Frame, budget: Budget) -> anyhow::Result<YUVBuffer> {
+    anyhow::ensure!(
+        frame.buffer.pixel_format() == u32::from_be_bytes(*b"420v"),
+        "REMOTE_DESKTOP_NATIVE_PIXEL_FORMAT_UNSUPPORTED"
+    );
+    let guard = frame
+        .buffer
+        .lock(CVPixelBufferLockFlags::READ_ONLY)
+        .map_err(|_| anyhow::anyhow!("REMOTE_DESKTOP_NATIVE_PIXEL_LOCK_FAILED"))?;
+    let width = guard.width();
+    let height = guard.height();
+    anyhow::ensure!(
+        width > 0
+            && height > 0
+            && width.is_multiple_of(2)
+            && height.is_multiple_of(2)
+            && guard.plane_count() == 2
+            && guard.width_of_plane(0) == width
+            && guard.width_of_plane(1) == width / 2
+            && guard.height_of_plane(0) == height
+            && guard.height_of_plane(1) == height / 2,
+        "REMOTE_DESKTOP_NATIVE_PIXEL_LAYOUT_INVALID"
+    );
+    let target_width = budget.width as usize;
+    let target_height = budget.height as usize;
+    anyhow::ensure!(
+        target_width > 0
+            && target_height > 0
+            && target_width.is_multiple_of(2)
+            && target_height.is_multiple_of(2),
+        "REMOTE_DESKTOP_INVALID_ENCODE_BUDGET"
+    );
+
+    let y_plane = unsafe { guard.plane_data(0) }
+        .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_NATIVE_Y_PLANE_MISSING"))?;
+    let uv_plane = unsafe { guard.plane_data(1) }
+        .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_NATIVE_UV_PLANE_MISSING"))?;
+    let packed_y = pack_plane(y_plane, guard.bytes_per_row_of_plane(0), width, height)?;
+    let packed_uv = pack_plane(uv_plane, guard.bytes_per_row_of_plane(1), width, height / 2)?;
+    let y = if (width, height) == (target_width, target_height) {
+        packed_y
+    } else {
+        resize(
+            packed_y,
+            width as u32,
+            height as u32,
+            target_width as u32,
+            target_height as u32,
+            PixelType::U8,
+        )?
+    };
+    let uv = if (width, height) == (target_width, target_height) {
+        packed_uv
+    } else {
+        resize(
+            packed_uv,
+            width as u32,
+            (height / 2) as u32,
+            target_width as u32,
+            (target_height / 2) as u32,
+            PixelType::U8x2,
+        )?
+    };
+
+    let mut data = vec![0; target_width * target_height * 3 / 2];
+    let (y_out, uv_out) = data.split_at_mut(target_width * target_height);
+    y_out.copy_from_slice(&y);
+    let (u_out, v_out) = uv_out.split_at_mut(target_width * target_height / 4);
+    for (pixel, (u, v)) in uv
+        .chunks_exact(2)
+        .zip(u_out.iter_mut().zip(v_out.iter_mut()))
+    {
+        *u = pixel[0];
+        *v = pixel[1];
+    }
+    Ok(YUVBuffer::from_vec(data, target_width, target_height))
+}
+
+#[cfg(target_os = "macos")]
+fn pack_plane(bytes: &[u8], stride: usize, width: usize, height: usize) -> anyhow::Result<Vec<u8>> {
+    let length = height
+        .checked_mul(stride)
+        .ok_or_else(|| anyhow::anyhow!("REMOTE_DESKTOP_NATIVE_PLANE_TOO_LARGE"))?;
+    anyhow::ensure!(
+        stride >= width && bytes.len() >= length,
+        "REMOTE_DESKTOP_NATIVE_PLANE_INVALID"
+    );
+    if stride == width {
+        return Ok(bytes[..length].to_vec());
+    }
+    let mut packed = Vec::with_capacity(width * height);
+    for row in bytes.chunks_exact(stride).take(height) {
+        packed.extend_from_slice(&row[..width]);
+    }
+    Ok(packed)
+}
 pub fn scale_yuv(frame: YUVBuffer, budget: Budget) -> anyhow::Result<YUVBuffer> {
     let (width, height) = frame.dimensions();
     if (width, height) == (budget.width as usize, budget.height as usize) {
@@ -266,10 +401,9 @@ impl FramePressure {
                 .last_change
                 .is_some_and(|at| now.saturating_duration_since(at) >= Duration::from_secs(5))
         {
-            self.max_pixels = self.max_pixels.and_then(|pixels| {
-                let increased = ((pixels as f64 * 1.5) as u64).min(base_pixels);
-                Some(increased)
-            });
+            self.max_pixels = self
+                .max_pixels
+                .map(|pixels| ((pixels as f64 * 1.5) as u64).min(base_pixels));
             self.last_change = Some(now);
             self.probe_bitrate = bitrate;
         }
@@ -323,6 +457,73 @@ pub struct SoftwareQuality {
     floor: u8,
     changed: Option<std::time::Instant>,
     keyframe_headroom: bool,
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod native_tests {
+    use super::{Budget, Frame, Native420Frame};
+    use apple_cf::cv::CVPixelBuffer;
+    use openh264::formats::YUVSource;
+    use std::time::Instant;
+
+    #[test]
+    fn native_420v_copies_biplanar_planes_into_i420_without_color_conversion() {
+        let buffer =
+            CVPixelBuffer::create(4, 4, u32::from_be_bytes(*b"420v")).expect("native buffer");
+        {
+            let mut lock = buffer.lock_read_write().expect("native write lock");
+            assert_eq!(lock.plane_count(), 2);
+            let y_stride = lock.bytes_per_row_of_plane(0);
+            let uv_stride = lock.bytes_per_row_of_plane(1);
+            assert!(y_stride >= 4);
+            assert!(uv_stride >= 4);
+            let y = lock.base_address_of_plane_mut(0).expect("Y plane");
+            let uv = lock.base_address_of_plane_mut(1).expect("UV plane");
+            unsafe {
+                let y_plane = std::slice::from_raw_parts_mut(y, y_stride * 4);
+                y_plane.fill(0);
+                for (row, values) in [
+                    [16, 17, 18, 19],
+                    [20, 21, 22, 23],
+                    [24, 25, 26, 27],
+                    [28, 29, 30, 31],
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    y_plane[row * y_stride..row * y_stride + 4].copy_from_slice(&values);
+                }
+                let uv_plane = std::slice::from_raw_parts_mut(uv, uv_stride * 2);
+                uv_plane.fill(128);
+                uv_plane[..4].copy_from_slice(&[40, 140, 41, 141]);
+                uv_plane[uv_stride..uv_stride + 4].copy_from_slice(&[42, 142, 43, 143]);
+            }
+        }
+        let frame = Frame::Native420(Native420Frame {
+            buffer,
+            geometry: crate::traits::Geometry {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+                scale: 1.0,
+            },
+            captured_at: Instant::now(),
+        });
+        let yuv = frame
+            .into_i420(Budget {
+                width: 4,
+                height: 4,
+                fps: 30,
+            })
+            .expect("I420 fallback");
+        assert_eq!(
+            yuv.y(),
+            &[16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+        );
+        assert_eq!(yuv.u(), &[40, 41, 42, 43]);
+        assert_eq!(yuv.v(), &[140, 141, 142, 143]);
+    }
 }
 impl SoftwareQuality {
     pub fn floor(&mut self, now: std::time::Instant) -> u8 {

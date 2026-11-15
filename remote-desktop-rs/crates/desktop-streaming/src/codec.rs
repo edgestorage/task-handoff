@@ -148,7 +148,7 @@ pub fn negotiate_h264_offer(sdp: &str) -> anyhow::Result<H264Negotiation> {
 }
 
 pub fn negotiate_h264_fmtp(fmtp: &str) -> anyhow::Result<H264Negotiation> {
-    let fields = parse_fields(&fmtp)?;
+    let fields = parse_fields(fmtp)?;
     let offered = offered_level(&fields)?;
     let (offered_fs, offered_mbps) = level_capacity(offered)?;
     let explicit_fs = explicit_limit(&fields, "max-fs", 1)?;
@@ -333,8 +333,8 @@ fn h265_level_capacity(level: u8) -> anyhow::Result<(u32, u32)> {
 
 fn h265_level_bitrate(level: u8) -> u32 {
     match level {
-        ..=93 => 4_000_000,
-        ..=123 => 8_000_000,
+        0..=93 => 4_000_000,
+        94..=123 => 8_000_000,
         _ => MAX_H265_BITRATE,
     }
 }
@@ -428,8 +428,8 @@ fn level_bitrate(level: u8) -> u32 {
         11 => 192_000,
         12 => 384_000,
         13 => 768_000,
-        20 | 21 | 22 => 2_000_000,
-        30 | 31 | 32 => 8_000_000,
+        20..=22 => 2_000_000,
+        30..=32 => 8_000_000,
         _ => MAX_H264_BITRATE,
     }
 }

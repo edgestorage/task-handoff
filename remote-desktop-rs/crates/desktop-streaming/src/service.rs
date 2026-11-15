@@ -20,6 +20,8 @@ use std::{
 use tokio::{sync::mpsc, task::JoinSet};
 use webrtc::data_channel::DataChannel;
 
+const STALE_INPUT_NOTICE_INTERVAL: Duration = Duration::from_secs(2);
+
 struct FallbackRuntime {
     viewer: String,
     media: Option<mpsc::Sender<remote_desktop_protocol::fallback::EncodedFrame>>,
@@ -30,7 +32,7 @@ struct FallbackRuntime {
 
 fn input_trace_sample(counter: &AtomicUsize) -> bool {
     let count = counter.fetch_add(1, Ordering::Relaxed);
-    count < 5 || count % 120 == 0
+    count < 20 || count.is_multiple_of(12)
 }
 
 struct LivePeer {
@@ -53,6 +55,7 @@ struct LivePeer {
     fallback_active: bool,
     fallback_control: Option<mpsc::Sender<String>>,
     webrtc_connected: bool,
+    input_suspension_notice_at: Option<Instant>,
 }
 impl LivePeer {
     async fn reply(&mut self, kind: Channel, message: serde_json::Value) -> anyhow::Result<()> {
@@ -908,6 +911,7 @@ impl Service {
                             fallback_active: false,
                             fallback_control: None,
                             webrtc_connected: false,
+                            input_suspension_notice_at: None,
                         },
                     );
                 }
@@ -1351,9 +1355,18 @@ impl Service {
                 bytes,
                 received,
             } => {
-                if received.elapsed() > Duration::from_millis(100) && kind != Channel::Pointer {
-                    let effects = self.registry.suspend_input(&session)?;
-                    self.effects(&session, effects).await;
+                let queue_age = received.elapsed();
+                if queue_age > Duration::from_millis(100) && kind != Channel::Pointer {
+                    eprintln!(
+                        "REMOTE_DESKTOP_INPUT_TRACE phase=service.queue_delayed session={session} kind={kind:?} queueMicros={}",
+                        queue_age.as_micros()
+                    );
+                    self.notify_input_suspended(
+                        &session,
+                        "REMOTE_DESKTOP_INPUT_QUEUE_DELAYED",
+                        Instant::now(),
+                    )
+                    .await?;
                     return Ok(());
                 }
                 let Some(live) = self.live.get_mut(&session) else {
@@ -1540,6 +1553,9 @@ impl Service {
                 .await?;
             return Err(error.into());
         }
+        if let Some(live) = self.live.get_mut(id) {
+            live.input_suspension_notice_at = None;
+        }
         eprintln!(
             "REMOTE_DESKTOP_GEOMETRY_TRACE phase=control.resume.armed session={id} epoch={epoch}"
         );
@@ -1614,6 +1630,51 @@ impl Service {
             .reply(
                 Channel::Control,
                 geometry_input_suspended_notice(session_revision),
+            )
+            .await
+    }
+
+    async fn notify_input_suspended(
+        &mut self,
+        id: &str,
+        cause: &str,
+        now: Instant,
+    ) -> anyhow::Result<()> {
+        let Some(live) = self.live.get(id) else {
+            return Ok(());
+        };
+        if live.input_suspension_notice_at.is_some_and(|sent_at| {
+            now.saturating_duration_since(sent_at) < STALE_INPUT_NOTICE_INTERVAL
+        }) {
+            return Ok(());
+        }
+        let owner = live.owner.clone();
+        let has_live_epoch = match self.registry.snapshot(id, &owner) {
+            Ok(snapshot) => snapshot.input_epoch.is_some(),
+            Err(_) => return Ok(()),
+        };
+        let effects = if has_live_epoch {
+            match self.registry.suspend_input(id) {
+                Ok(effects) => effects,
+                Err(_) => return Ok(()),
+            }
+        } else {
+            Effects::default()
+        };
+        self.effects(id, effects).await;
+        let session_revision = self.registry.snapshot(id, &owner)?.session_revision;
+        if let Some(live) = self.live.get_mut(id) {
+            live.input_suspension_notice_at = Some(now);
+        }
+        eprintln!(
+            "REMOTE_DESKTOP_INPUT_TRACE phase=service.input_suspended session={id} cause={cause} sessionRevision={session_revision}"
+        );
+        self.live
+            .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("peer closed"))?
+            .reply(
+                Channel::Control,
+                input_suspended_notice_for_cause(cause, session_revision),
             )
             .await
     }
@@ -1760,6 +1821,10 @@ impl Service {
                         .await?;
                 }
                 Control::Alive(epoch) => {
+                    eprintln!(
+                        "REMOTE_DESKTOP_INPUT_TRACE phase=service.alive.received session={id} epoch={}",
+                        epoch.input_epoch
+                    );
                     match self.registry.input_alive(&id, epoch.input_epoch, now) {
                         Ok(()) => {
                             let reply = self
@@ -1770,7 +1835,12 @@ impl Service {
                                     epoch: epoch.input_epoch,
                                 })
                                 .await?;
-                            if !self.guard_state(&id, epoch.input_epoch, reply).await? {
+                            let accepted = self.guard_state(&id, epoch.input_epoch, reply).await?;
+                            eprintln!(
+                                "REMOTE_DESKTOP_INPUT_TRACE phase=service.alive.result session={id} epoch={} accepted={accepted}",
+                                epoch.input_epoch
+                            );
+                            if !accepted {
                                 return Ok(());
                             }
                         }
@@ -1927,13 +1997,32 @@ impl Service {
             },
             Message::Input(input) => {
                 let epoch = input.epoch();
+                if let crate::channel::Input::Button(button) = &input {
+                    eprintln!(
+                        "REMOTE_DESKTOP_INPUT_TRACE phase=service.button.received session={id} epoch={} button={} down={} x={:.4} y={:.4}",
+                        button.input_epoch, button.button, button.down, button.x, button.y
+                    );
+                }
                 if let Err(error) = self.registry.check_epoch(&id, epoch, now) {
+                    if let crate::channel::Input::Button(button) = &input {
+                        eprintln!(
+                            "REMOTE_DESKTOP_INPUT_TRACE phase=service.button.rejected session={id} epoch={} button={} down={} currentEpoch={:?} error={error}",
+                            button.input_epoch,
+                            button.button,
+                            button.down,
+                            self.registry.live_input_epoch(&id, now)
+                        );
+                    }
                     static INPUT_REJECTED: AtomicUsize = AtomicUsize::new(0);
                     if input_trace_sample(&INPUT_REJECTED) {
                         eprintln!(
                             "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.input.rejected session={id} receivedEpoch={epoch} currentEpoch={:?} error={error}",
                             self.registry.live_input_epoch(&id, now)
                         );
+                    }
+                    if error == crate::session::Error::StaleEpoch {
+                        self.notify_input_suspended(&id, "REMOTE_DESKTOP_STALE_EPOCH", now)
+                            .await?;
                     }
                 } else {
                     let reply = self
@@ -1956,7 +2045,14 @@ impl Service {
                             eprintln!("desktop-input-trace rejected seq={seq}");
                         }
                     }
-                    if !self.guard_state(&id, epoch, reply).await? {
+                    let accepted = self.guard_state(&id, epoch, reply).await?;
+                    if let crate::channel::Input::Button(button) = &input {
+                        eprintln!(
+                            "REMOTE_DESKTOP_INPUT_TRACE phase=service.button.result session={id} epoch={} button={} down={} accepted={accepted}",
+                            button.input_epoch, button.button, button.down
+                        );
+                    }
+                    if !accepted {
                         return Ok(());
                     }
                     self.live
@@ -1993,6 +2089,10 @@ impl Service {
                             self.registry.live_input_epoch(&id, now)
                         );
                     }
+                    if error == crate::session::Error::StaleEpoch {
+                        self.notify_input_suspended(&id, "REMOTE_DESKTOP_STALE_EPOCH", now)
+                            .await?;
+                    }
                 } else {
                     let reply = self
                         .input_guard
@@ -2002,7 +2102,14 @@ impl Service {
                             event: pointer.clone(),
                         })
                         .await?;
-                    if !self.guard_state(&id, pointer.input_epoch, reply).await? {
+                    let accepted = self.guard_state(&id, pointer.input_epoch, reply).await?;
+                    if input_trace_sample(&POINTER_RECEIVED) {
+                        eprintln!(
+                            "REMOTE_DESKTOP_INPUT_TRACE phase=service.pointer.result session={id} epoch={} x={:.4} y={:.4} accepted={accepted}",
+                            pointer.input_epoch, pointer.x, pointer.y
+                        );
+                    }
+                    if !accepted {
                         return Ok(());
                     }
                     self.live
@@ -2394,10 +2501,14 @@ fn input_suspended_notice(
     cause: crate::error::BackendError,
     session_revision: u64,
 ) -> serde_json::Value {
+    input_suspended_notice_for_cause(&cause.to_string(), session_revision)
+}
+
+fn input_suspended_notice_for_cause(cause: &str, session_revision: u64) -> serde_json::Value {
     serde_json::json!({
         "type": "input.suspended",
         "payload": {
-            "cause": cause.to_string(),
+            "cause": cause,
             "recoverable": true,
             "sessionRevision": session_revision,
         }
@@ -2436,6 +2547,27 @@ mod tests {
         );
         assert_eq!(notice["payload"]["recoverable"], true);
         assert_eq!(notice["payload"]["sessionRevision"], 23);
+    }
+
+    #[test]
+    fn stale_input_suspension_is_recoverable() {
+        let notice = input_suspended_notice_for_cause("REMOTE_DESKTOP_STALE_EPOCH", 23);
+        assert_eq!(notice["type"], "input.suspended");
+        assert_eq!(notice["payload"]["cause"], "REMOTE_DESKTOP_STALE_EPOCH");
+        assert_eq!(notice["payload"]["recoverable"], true);
+        assert_eq!(notice["payload"]["sessionRevision"], 23);
+    }
+
+    #[test]
+    fn delayed_control_suspension_is_recoverable() {
+        let notice = input_suspended_notice_for_cause("REMOTE_DESKTOP_INPUT_QUEUE_DELAYED", 24);
+        assert_eq!(notice["type"], "input.suspended");
+        assert_eq!(
+            notice["payload"]["cause"],
+            "REMOTE_DESKTOP_INPUT_QUEUE_DELAYED"
+        );
+        assert_eq!(notice["payload"]["recoverable"], true);
+        assert_eq!(notice["payload"]["sessionRevision"], 24);
     }
 
     #[test]
@@ -2515,6 +2647,7 @@ mod tests {
                 fallback_active: false,
                 fallback_control: None,
                 webrtc_connected: false,
+                input_suspension_notice_at: None,
             },
         );
         service.registry.fallback_activated(&viewer).unwrap();
@@ -2623,6 +2756,7 @@ mod tests {
                 fallback_active: false,
                 fallback_control: None,
                 webrtc_connected: false,
+                input_suspension_notice_at: None,
             },
         );
         service.registry.fallback_activated(&viewer).unwrap();
@@ -2864,6 +2998,7 @@ mod tests {
                 fallback_active: false,
                 fallback_control: None,
                 webrtc_connected: false,
+                input_suspension_notice_at: None,
             },
         );
 

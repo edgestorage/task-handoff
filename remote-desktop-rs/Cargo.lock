@@ -849,6 +849,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
  "crabgrab",
+ "crc32fast",
  "cros-codecs",
  "cros-libva",
  "desktop-component-host",

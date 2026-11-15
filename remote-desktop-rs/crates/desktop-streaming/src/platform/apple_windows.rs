@@ -22,7 +22,7 @@ pub struct DisplayTarget {
 impl DisplayTarget {
     pub fn source(&self, show_cursor: bool) -> anyhow::Result<crate::capture::Source> {
         Capture::new_with_cursor(Target::Display(self.display.clone()), show_cursor)
-            .map(crate::capture::Source::Native)
+            .map(|capture| crate::capture::Source::Native(Box::new(capture)))
     }
 }
 pub async fn enumerate_displays() -> anyhow::Result<Vec<crate::catalog::NativeSource<DisplayTarget>>>

@@ -158,6 +158,26 @@ impl Encoder {
                 }
             }
         }
+        self.encode_buffer(buffer, idr)
+    }
+    /// Submit a ScreenCaptureKit-owned 420v surface directly. The retained
+    /// wrapper is cloned cheaply; no CPU color conversion or plane copy occurs.
+    pub fn encode_native(
+        &mut self,
+        buffer: &CVPixelBuffer,
+        idr: bool,
+    ) -> anyhow::Result<EncodedFrame> {
+        anyhow::ensure!(
+            buffer.pixel_format() == u32::from_be_bytes(*b"420v"),
+            "VT native pixel format changed"
+        );
+        anyhow::ensure!(
+            buffer.is_planar() && buffer.plane_count() == 2,
+            "VT native plane format changed"
+        );
+        self.encode_buffer(buffer.clone(), idr)
+    }
+    fn encode_buffer(&mut self, buffer: CVPixelBuffer, idr: bool) -> anyhow::Result<EncodedFrame> {
         let sample = futures_executor::block_on(
             self.session.encode_frame_async(
                 buffer,

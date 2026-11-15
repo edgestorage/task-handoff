@@ -64,7 +64,7 @@ impl WindowTarget {
             #[cfg(target_os = "macos")]
             Self::Macos(target) => {
                 crate::platform::macos::Capture::new_with_cursor(target.clone(), show_cursor)
-                    .map(crate::capture::Source::Native)
+                    .map(|capture| crate::capture::Source::Native(Box::new(capture)))
             }
             #[cfg(target_os = "linux")]
             Self::Linux(target) => target

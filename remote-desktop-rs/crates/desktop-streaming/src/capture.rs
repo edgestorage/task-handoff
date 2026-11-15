@@ -1,9 +1,8 @@
 //! Component-local platform choice. It is not a public capability document.
 use crate::{
     traits::{CapturePrecision, Geometry, PointerMapping},
-    video::Budget,
+    video::{Budget, Frame},
 };
-use openh264::formats::YUVBuffer;
 
 /// Both SCK and WGC accept bounded BGRA surfaces. Larger native modes are fit
 /// proportionally instead of fabricating a per-platform hard-coded ceiling.
@@ -56,7 +55,7 @@ pub enum Source {
     #[cfg(target_os = "linux")]
     X11(Box<crate::platform::linux::Capture>),
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    Native(crate::platform::native_capture::Capture),
+    Native(Box<crate::platform::native_capture::Capture>),
 }
 impl Source {
     pub async fn local(show_cursor: bool) -> anyhow::Result<Self> {
@@ -79,10 +78,10 @@ impl Source {
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            Ok(Self::Native(
+            Ok(Self::Native(Box::new(
                 crate::platform::native_capture::Capture::primary_display_with_cursor(show_cursor)
                     .await?,
-            ))
+            )))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
@@ -160,24 +159,26 @@ impl Source {
         input: &crate::synthetic::SyntheticInput,
         _force: bool,
         budget: Budget,
-    ) -> anyhow::Result<Option<YUVBuffer>> {
+    ) -> anyhow::Result<Option<Frame>> {
         match self {
-            Self::Synthetic => Ok(Some(crate::video::scale_yuv(
+            Self::Synthetic => Ok(Some(Frame::I420(crate::video::scale_yuv(
                 crate::synthetic::pattern(index, input),
                 budget,
-            )?)),
+            )?))),
             #[cfg(target_os = "linux")]
             // XDamage controls native readback, while cached frames maintain
             // video cadence. A completely silent static track makes browser
             // jitter buffers wait for another frame and repeatedly request PLI.
             Self::X11(c) => c
                 .frame(true)?
-                .map(|raw| crate::video::from_bgra(raw, budget))
+                .map(|raw| crate::video::from_bgra(raw, budget).map(Frame::I420))
                 .transpose(),
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            #[cfg(target_os = "macos")]
+            Self::Native(c) => c.frame(_force),
+            #[cfg(target_os = "windows")]
             Self::Native(c) => c
                 .frame(_force)?
-                .map(|raw| crate::video::from_bgra(raw, budget))
+                .map(|raw| crate::video::from_bgra(raw, budget).map(Frame::I420))
                 .transpose(),
         }
     }

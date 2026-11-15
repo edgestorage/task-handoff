@@ -20,7 +20,8 @@ async fn main() -> anyhow::Result<()> {
     let budget = Budget::select_with_limits(geometry.width, geometry.height, 8_000_000, limits);
     let yuv = source
         .frame(0, &SyntheticInput::default(), true, budget)?
-        .ok_or_else(|| anyhow::anyhow!("no fixture frame"))?;
+        .ok_or_else(|| anyhow::anyhow!("no fixture frame"))?
+        .into_i420(budget)?;
     let mut samples = Vec::new();
     let qp = std::env::args()
         .nth(1)

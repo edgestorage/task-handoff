@@ -181,6 +181,14 @@ impl NativeInput {
         let (x, y) = self.pointer_mapping.map(x, y)?;
         #[cfg(target_os = "macos")]
         {
+            static POINTER_TRACE: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
+            let count = POINTER_TRACE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if count < 20 || count.is_multiple_of(12) {
+                eprintln!(
+                    "REMOTE_DESKTOP_INPUT_TRACE phase=driver.pointer mappedX={x} mappedY={y}"
+                );
+            }
             self.mouse.pointer((x, y), &self.buttons)?;
         }
         #[cfg(not(target_os = "macos"))]
@@ -245,10 +253,16 @@ impl NativeInput {
                     return Ok(());
                 }
                 #[cfg(target_os = "macos")]
-                let result = self
-                    .mouse
-                    .button(self.pointer_mapping.map(b.x, b.y)?, b.button, b.down)
-                    .map_err(|_| enigo::InputError::Simulate("native mouse event failed"));
+                let result = {
+                    let (mapped_x, mapped_y) = self.pointer_mapping.map(b.x, b.y)?;
+                    eprintln!(
+                        "REMOTE_DESKTOP_INPUT_TRACE phase=driver.button epoch={} button={} down={} normalizedX={:.4} normalizedY={:.4} mappedX={mapped_x} mappedY={mapped_y}",
+                        b.input_epoch, b.button, b.down, b.x, b.y
+                    );
+                    self.mouse
+                        .button((mapped_x, mapped_y), b.button, b.down)
+                        .map_err(|_| enigo::InputError::Simulate("native mouse event failed"))
+                };
                 #[cfg(not(target_os = "macos"))]
                 let result = self.enigo.button(
                     button,

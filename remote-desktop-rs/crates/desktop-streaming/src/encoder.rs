@@ -4,8 +4,8 @@ use crate::{
     codec::{Limits, VideoCodec},
     synthetic::SoftwareEncoder,
     traits::EncodedFrame,
+    video::{Budget, Frame},
 };
-use openh264::formats::YUVBuffer;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use openh264::formats::YUVSource;
 
@@ -114,23 +114,29 @@ impl Encoder {
         }
         Ok(())
     }
-    pub fn encode(&mut self, yuv: &YUVBuffer, idr: bool) -> anyhow::Result<Option<EncodedFrame>> {
+    pub fn encode(
+        &mut self,
+        frame: Frame,
+        budget: Budget,
+        idr: bool,
+    ) -> anyhow::Result<Option<EncodedFrame>> {
         #[allow(unused_mut)]
         let mut idr = idr;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self.automatic && !self.hardware_failed {
             let result = (|| -> anyhow::Result<EncodedFrame> {
+                let size = (budget.width as usize, budget.height as usize);
                 if self
                     .hardware
                     .as_ref()
-                    .is_none_or(|h| h.size() != yuv.dimensions())
+                    .is_none_or(|hardware| hardware.size() != size)
                 {
                     self.hardware = None;
                     #[cfg(target_os = "macos")]
                     {
                         self.hardware = Some(crate::platform::macos_encoder::Encoder::new(
-                            yuv.dimensions().0,
-                            yuv.dimensions().1,
+                            size.0,
+                            size.1,
                             self.bitrate(),
                             self.limits,
                             self.codec,
@@ -139,15 +145,33 @@ impl Encoder {
                     #[cfg(target_os = "linux")]
                     {
                         self.hardware = Some(crate::platform::linux_encoder::Encoder::new(
-                            yuv.dimensions().0,
-                            yuv.dimensions().1,
+                            size.0,
+                            size.1,
                             self.bitrate(),
                             self.limits,
                         )?);
                     }
                     idr = true;
                 }
-                self.hardware.as_mut().unwrap().encode(yuv, idr)
+                match &frame {
+                    Frame::I420(yuv) => {
+                        anyhow::ensure!(yuv.dimensions() == size, "encoder geometry changed");
+                        #[cfg(target_os = "macos")]
+                        {
+                            self.hardware.as_mut().unwrap().encode(yuv, idr)
+                        }
+                        #[cfg(target_os = "linux")]
+                        {
+                            self.hardware.as_mut().unwrap().encode(yuv, idr)
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
+                    Frame::Native420(native) => self
+                        .hardware
+                        .as_mut()
+                        .unwrap()
+                        .encode_native(&native.buffer, idr),
+                }
             })();
             match result {
                 Ok(frame) => return Ok(Some(frame)),
@@ -168,6 +192,7 @@ impl Encoder {
                 }
             }
         }
-        self.software.encode(yuv, idr)
+        let yuv = frame.into_i420(budget)?;
+        self.software.encode(&yuv, idr)
     }
 }

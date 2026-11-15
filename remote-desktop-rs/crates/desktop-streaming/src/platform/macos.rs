@@ -6,11 +6,15 @@ use super::frame_mailbox::FrameMailbox;
 use crate::{
     capture::resolve_capture_size,
     error::BackendError,
-    traits::{CapturePrecision, Geometry, NormalizedRect, PointerMapping, RawFrame},
+    traits::{CapturePrecision, Geometry, NormalizedRect, PointerMapping},
+    video::{Frame, Native420Frame},
 };
+use apple_cf::cv::{CVPixelBuffer, CVPixelBufferLockFlags};
 use core_graphics::access::ScreenCaptureAccess;
-use screencapturekit::{cm::SCFrameStatus, cv::CVPixelBufferLockFlags, prelude::*};
-use std::time::Instant;
+use screencapturekit::{cm::SCFrameStatus, prelude::*};
+use std::time::{Duration, Instant};
+
+const STATIC_FRAME_HEARTBEAT: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub enum Target {
@@ -28,6 +32,92 @@ struct ContentKey {
     width: f64,
     height: f64,
     scale: f64,
+}
+#[derive(Default)]
+struct FrameCadence {
+    emitted_display_time: Option<u64>,
+    emitted_signature: Option<(u32, u32)>,
+    emitted_at: Option<Instant>,
+    dirty_rects_observed: bool,
+}
+impl FrameCadence {
+    /// ScreenCaptureKit may deliver callbacks at 30 fps even when the captured
+    /// surface did not change. Window capture on supported macOS releases can
+    /// omit dirtyRects, so the native plane signature is the primary detector.
+    /// Display time remains available as a conservative last resort.
+    fn should_emit(
+        &mut self,
+        display_time: Option<u64>,
+        dirty: Option<bool>,
+        signature: Option<(u32, u32)>,
+        force: bool,
+        now: Instant,
+    ) -> bool {
+        if dirty.is_some() {
+            self.dirty_rects_observed = true;
+        }
+        let display_time_changed =
+            display_time.is_some_and(|sample| self.emitted_display_time != Some(sample));
+        let changed = match (signature, dirty) {
+            (Some(signature), _) => self
+                .emitted_signature
+                .is_none_or(|emitted| emitted != signature),
+            (None, Some(changed)) => changed,
+            (None, None) if self.dirty_rects_observed => false,
+            (None, None) => display_time.is_none() || display_time_changed,
+        };
+        let heartbeat = self
+            .emitted_at
+            .is_none_or(|emitted| now.saturating_duration_since(emitted) >= STATIC_FRAME_HEARTBEAT);
+        if !force && !changed && !heartbeat {
+            return false;
+        }
+        if let Some(display_time) = display_time {
+            self.emitted_display_time = Some(display_time);
+        }
+        if signature.is_some() {
+            self.emitted_signature = signature;
+        }
+        self.emitted_at = Some(now);
+        true
+    }
+
+    fn reset(&mut self) {
+        self.emitted_display_time = None;
+        self.emitted_signature = None;
+        self.emitted_at = None;
+        self.dirty_rects_observed = false;
+    }
+}
+
+fn native_420v_signature(buffer: &CVPixelBuffer) -> Option<(u32, u32)> {
+    let guard = buffer.lock(CVPixelBufferLockFlags::READ_ONLY).ok()?;
+    if !buffer.is_planar() || guard.plane_count() != 2 {
+        return None;
+    }
+    Some((hash_plane(&guard, 0)?, hash_plane(&guard, 1)?))
+}
+
+fn hash_plane(guard: &apple_cf::cv::CVPixelBufferLockGuard<'_>, plane: usize) -> Option<u32> {
+    let width = guard.width_of_plane(plane);
+    let height = guard.height_of_plane(plane);
+    let stride = guard.bytes_per_row_of_plane(plane);
+    if width == 0 || height == 0 || stride < width {
+        return None;
+    }
+    let data = unsafe { guard.plane_data(plane) }?;
+    let length = height.checked_mul(stride)?;
+    if data.len() < length {
+        return None;
+    }
+    if width == stride {
+        return Some(crc32fast::hash(&data[..length]));
+    }
+    let mut hasher = crc32fast::Hasher::new();
+    for row in data.chunks_exact(stride).take(height) {
+        hasher.update(&row[..width]);
+    }
+    Some(hasher.finalize())
 }
 #[derive(Default)]
 struct ScaleTracker {
@@ -64,7 +154,7 @@ impl ScaleTracker {
 impl DisplayTarget {
     pub fn source(&self, show_cursor: bool) -> anyhow::Result<crate::capture::Source> {
         Capture::new_with_cursor(Target::Display(self.display.clone()), show_cursor)
-            .map(crate::capture::Source::Native)
+            .map(|capture| crate::capture::Source::Native(Box::new(capture)))
     }
 }
 struct Output(FrameMailbox<(CMSampleBuffer, Instant)>);
@@ -131,6 +221,7 @@ pub struct Capture {
     window: Option<super::macos_window::Identity>,
     stream: Option<SCStream>,
     latest: FrameMailbox<(CMSampleBuffer, Instant)>,
+    cadence: FrameCadence,
 }
 impl Capture {
     pub async fn primary_display() -> anyhow::Result<Self> {
@@ -230,7 +321,7 @@ impl Capture {
         let config = SCStreamConfiguration::new()
             .with_width(capture_size.0)
             .with_height(capture_size.1)
-            .with_pixel_format(PixelFormat::BGRA)
+            .with_pixel_format(PixelFormat::YCbCr_420v)
             .with_shows_cursor(show_cursor)
             .with_captures_audio(false)
             .with_minimum_frame_interval(&CMTime::new(1, 30))
@@ -255,6 +346,7 @@ impl Capture {
             window: window_identity,
             stream: None,
             latest: FrameMailbox::default(),
+            cadence: FrameCadence::default(),
         })
     }
     pub fn retained_target(&self) -> Target {
@@ -393,6 +485,7 @@ impl Capture {
             preflight()?;
             // Fresh mailbox isolates late callbacks from an obsolete stream.
             self.latest = FrameMailbox::default();
+            self.cadence.reset();
             let mut stream = SCStream::new_with_delegate(
                 &self.filter,
                 &self.config,
@@ -431,6 +524,7 @@ impl Capture {
             Ok(())
         };
         self.latest = FrameMailbox::default();
+        self.cadence.reset();
         if had_stream {
             eprintln!(
                 "REMOTE_DESKTOP_GEOMETRY_TRACE phase=capture.stop elapsedMs={} result={}",
@@ -440,16 +534,14 @@ impl Capture {
         }
         result
     }
-    pub fn frame(&mut self, _force: bool) -> anyhow::Result<Option<RawFrame>> {
-        if let Some(display) = &self.display_geometry {
-            display.validate()?;
-        }
+    pub fn frame(&mut self, force: bool) -> anyhow::Result<Option<Frame>> {
         self.resume()?;
         let sample = self.latest.snapshot()?;
         let Some((sample, captured_at)) = sample else {
             return Ok(None);
         };
-        if let Some(info) = sample.frame_info() {
+        let frame_info = sample.frame_info();
+        if let Some(info) = &frame_info {
             let frame_scale = info
                 .scale_factor
                 .filter(|scale| valid_scale(*scale))
@@ -507,29 +599,35 @@ impl Capture {
         let buffer = sample
             .pixel_buffer()
             .ok_or_else(|| anyhow::anyhow!(BackendError::CaptureFailed))?;
-        let guard = buffer
-            .lock(CVPixelBufferLockFlags::READ_ONLY)
-            .map_err(|_| anyhow::anyhow!(BackendError::CaptureFailed))?;
-        let (width, height, stride) = (guard.width(), guard.height(), guard.bytes_per_row());
+        anyhow::ensure!(
+            buffer.pixel_format() == u32::from_be_bytes(*b"420v")
+                && buffer.is_planar()
+                && buffer.plane_count() == 2,
+            BackendError::CaptureFormatUnsupported
+        );
+        let (width, height) = (buffer.width(), buffer.height());
         anyhow::ensure!(
             (width, height) == self.pixel_size,
             BackendError::GeometryChanged
         );
-        anyhow::ensure!(
-            stride >= width * 4 && stride <= 8192 * 4,
-            BackendError::CaptureFormatUnsupported
-        );
-        // The maintained read-only lock pins this non-planar BGRA buffer for
-        // the slice lifetime; copy exactly its bounded rows before unlocking.
-        let bytes = unsafe { guard.as_slice() }
-            .ok_or_else(|| anyhow::anyhow!(BackendError::CaptureFailed))?;
-        let length = height
-            .checked_mul(stride)
-            .ok_or_else(|| anyhow::anyhow!(BackendError::InvalidGeometry))?;
-        anyhow::ensure!(bytes.len() >= length, BackendError::CaptureFailed);
-        Ok(Some(RawFrame {
-            bgra: bytes[..length].to_vec(),
-            stride,
+        let display_time = frame_info.as_ref().and_then(|info| info.display_time);
+        let dirty = frame_info
+            .as_ref()
+            .and_then(|info| info.dirty_rects.as_ref())
+            .map(|rects| {
+                rects
+                    .iter()
+                    .any(|rect| rect.size.width > 0.0 && rect.size.height > 0.0)
+            });
+        let signature = native_420v_signature(&buffer);
+        if !self
+            .cadence
+            .should_emit(display_time, dirty, signature, force, Instant::now())
+        {
+            return Ok(None);
+        }
+        Ok(Some(Frame::Native420(Native420Frame {
+            buffer,
             geometry: Geometry {
                 x: 0,
                 y: 0,
@@ -538,7 +636,7 @@ impl Capture {
                 scale: 1.0,
             },
             captured_at,
-        }))
+        })))
     }
 }
 
@@ -643,6 +741,7 @@ fn capture_size_for_scaled_bounds(
         scale_x,
         scale_y,
     )
+    .map(|(width, height)| (width.max(2) & !1, height.max(2) & !1))
 }
 
 impl Drop for Capture {
@@ -653,9 +752,14 @@ impl Drop for Capture {
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_size_for_scaled_bounds, normalized_content_rect, ScaleTracker};
+    use super::{
+        capture_size_for_scaled_bounds, native_420v_signature, normalized_content_rect,
+        FrameCadence, ScaleTracker, STATIC_FRAME_HEARTBEAT,
+    };
     use crate::traits::{CapturePrecision, Geometry, PointerMapping};
+    use apple_cf::cv::CVPixelBuffer;
     use screencapturekit::cg::CGRect;
+    use std::time::Duration;
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
         CGRect::new(x, y, width, height)
@@ -734,11 +838,96 @@ mod tests {
     fn window_retina_scale_change_updates_the_capture_canvas() {
         assert_eq!(
             capture_size_for_scaled_bounds(1217, 820, CapturePrecision::Auto, 1.0, 1.0).unwrap(),
-            (1217, 820)
+            (1216, 820)
         );
         assert_eq!(
             capture_size_for_scaled_bounds(1217, 820, CapturePrecision::Auto, 2.0, 2.0).unwrap(),
             (2434, 1640)
+        );
+    }
+
+    #[test]
+    fn cadence_uses_content_signature_before_timestamps() {
+        let mut cadence = FrameCadence::default();
+        let started = std::time::Instant::now();
+        assert!(cadence.should_emit(Some(10), None, Some((1, 2)), false, started));
+        assert!(!cadence.should_emit(
+            Some(11),
+            None,
+            Some((1, 2)),
+            false,
+            started + Duration::from_millis(30)
+        ));
+        assert!(cadence.should_emit(
+            Some(11),
+            None,
+            Some((2, 2)),
+            false,
+            started + Duration::from_millis(60)
+        ));
+        assert!(cadence.should_emit(
+            Some(12),
+            None,
+            Some((2, 2)),
+            true,
+            started + Duration::from_millis(90)
+        ));
+        assert!(!cadence.should_emit(
+            Some(13),
+            None,
+            Some((2, 2)),
+            false,
+            started + Duration::from_millis(100)
+        ));
+        assert!(cadence.should_emit(
+            Some(14),
+            None,
+            Some((2, 2)),
+            false,
+            started + Duration::from_millis(90) + STATIC_FRAME_HEARTBEAT
+        ));
+    }
+
+    #[test]
+    fn cadence_falls_back_to_dirty_rectangles_without_a_signature() {
+        let mut cadence = FrameCadence::default();
+        let started = std::time::Instant::now();
+        assert!(cadence.should_emit(Some(1), Some(true), None, false, started));
+        assert!(!cadence.should_emit(
+            Some(2),
+            Some(false),
+            None,
+            false,
+            started + Duration::from_millis(30)
+        ));
+        assert!(cadence.should_emit(
+            Some(3),
+            Some(true),
+            None,
+            false,
+            started + Duration::from_millis(60)
+        ));
+    }
+
+    #[test]
+    fn native_signature_is_stable_until_plane_content_changes() {
+        let buffer =
+            CVPixelBuffer::create(4, 4, u32::from_be_bytes(*b"420v")).expect("native buffer");
+        let initial = native_420v_signature(&buffer).expect("initial signature");
+        assert_eq!(
+            initial,
+            native_420v_signature(&buffer).expect("repeated signature")
+        );
+        {
+            let mut guard = buffer.lock_read_write().expect("native write lock");
+            let y = guard
+                .base_address_of_plane_mut(0)
+                .expect("writable Y plane");
+            unsafe { *y = y.read().wrapping_add(1) };
+        }
+        assert_ne!(
+            initial,
+            native_420v_signature(&buffer).expect("changed signature")
         );
     }
 

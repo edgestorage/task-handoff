@@ -39,6 +39,8 @@ use webrtc::{
     peer_connection::*,
 };
 
+const GEOMETRY_PROBE_INTERVAL: Duration = Duration::from_millis(100);
+
 pub enum PeerEvent {
     Connected(String),
     Disconnected(String),
@@ -828,6 +830,7 @@ impl MediaPeer {
                 let mut pointer_mapping = source.pointer_mapping();
                 let mut capture_size = source.capture_dimensions();
                 let mut geometry_unstable = None;
+                let mut next_geometry_probe = Instant::now();
                 let mut resolution = control.resolution_limit();
                 let mut frame_rate = control.frame_rate_limit();
                 let mut budget = crate::video::Budget::select_with_limits_resolution_and_fps(
@@ -857,27 +860,33 @@ impl MediaPeer {
                         continue;
                     }
 
-                    let requested_precision = control.capture_precision();
-                    let (next_source, precision_changed, refreshed, next_capture_size) =
-                        tokio::task::spawn_blocking(move || {
-                            let precision_changed =
-                                source.set_capture_precision(requested_precision)?;
-                            let refreshed = source.refresh_geometry();
-                            let capture_size = source.capture_dimensions();
-                            Ok::<_, anyhow::Error>((
-                                source,
-                                precision_changed,
-                                refreshed,
-                                capture_size,
-                            ))
-                        })
-                        .await??;
-                    source = next_source;
-                    if precision_changed || next_capture_size != capture_size {
-                        frame_pressure = crate::video::FramePressure::default();
-                        control.idr.store(true, Ordering::SeqCst);
+                    let probe_now = Instant::now();
+                    let mut refreshed = Ok(geometry);
+                    if probe_now >= next_geometry_probe {
+                        next_geometry_probe = probe_now + GEOMETRY_PROBE_INTERVAL;
+                        let requested_precision = control.capture_precision();
+                        let (next_source, precision_changed, next_refreshed, next_capture_size) =
+                            tokio::task::spawn_blocking(move || {
+                                let precision_changed =
+                                    source.set_capture_precision(requested_precision)?;
+                                let refreshed = source.refresh_geometry();
+                                let capture_size = source.capture_dimensions();
+                                Ok::<_, anyhow::Error>((
+                                    source,
+                                    precision_changed,
+                                    refreshed,
+                                    capture_size,
+                                ))
+                            })
+                            .await??;
+                        source = next_source;
+                        if precision_changed || next_capture_size != capture_size {
+                            frame_pressure = crate::video::FramePressure::default();
+                            control.idr.store(true, Ordering::SeqCst);
+                        }
+                        capture_size = next_capture_size;
+                        refreshed = next_refreshed;
                     }
-                    capture_size = next_capture_size;
                     let refreshed = match refreshed {
                         Ok(g) => {
                             geometry_unstable = None;
@@ -1007,10 +1016,10 @@ impl MediaPeer {
                     // while an encoder is busy. Native callbacks retain only one frame.
                     let (next, next_source, frame) = tokio::task::spawn_blocking(move || {
                         let result = (|| -> anyhow::Result<_> {
-                            let Some(yuv) = source.frame(index, &input, idr, budget)? else {
+                            let Some(frame) = source.frame(index, &input, idr, budget)? else {
                                 return Ok(None);
                             };
-                            encoder.encode(&yuv, idr)
+                            encoder.encode(frame, budget, idr)
                         })();
                         (encoder, source, result)
                     })
@@ -1185,6 +1194,39 @@ impl MediaPeer {
     }
 }
 
+fn diagnostic_logs_enabled() -> bool {
+    std::env::var("TASK_HANDOFF_DIAGNOSTIC_LOGS")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+/// Effective ICE credentials per media section, parsed by the maintained SDP
+/// library. Never log this value: it belongs only to this peer's transport.
+fn ice_generation(description: &RTCSessionDescription) -> anyhow::Result<Vec<(String, String)>> {
+    let parsed = description.unmarshal()?;
+    parsed
+        .media_descriptions
+        .iter()
+        .map(|media| {
+            let attribute = |name: &str| {
+                media
+                    .attributes
+                    .iter()
+                    .chain(parsed.attributes.iter())
+                    .find(|a| a.key == name)
+                    .and_then(|a| a.value.clone())
+                    .ok_or_else(|| anyhow::anyhow!("missing ICE credentials"))
+            };
+            Ok((attribute("ice-ufrag")?, attribute("ice-pwd")?))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod negotiation_tests {
     use super::*;
@@ -1342,37 +1384,4 @@ mod negotiation_tests {
         assert_eq!(answer_video_codec(&answer), "H264");
         Ok(())
     }
-}
-
-fn diagnostic_logs_enabled() -> bool {
-    std::env::var("TASK_HANDOFF_DIAGNOSTIC_LOGS")
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-}
-
-/// Effective ICE credentials per media section, parsed by the maintained SDP
-/// library. Never log this value: it belongs only to this peer's transport.
-fn ice_generation(description: &RTCSessionDescription) -> anyhow::Result<Vec<(String, String)>> {
-    let parsed = description.unmarshal()?;
-    parsed
-        .media_descriptions
-        .iter()
-        .map(|media| {
-            let attribute = |name: &str| {
-                media
-                    .attributes
-                    .iter()
-                    .chain(parsed.attributes.iter())
-                    .find(|a| a.key == name)
-                    .and_then(|a| a.value.clone())
-                    .ok_or_else(|| anyhow::anyhow!("missing ICE credentials"))
-            };
-            Ok((attribute("ice-ufrag")?, attribute("ice-pwd")?))
-        })
-        .collect()
 }

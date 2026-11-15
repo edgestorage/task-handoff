@@ -315,7 +315,7 @@ where
         let Some(next) = parent(&current) else {
             return false;
         };
-        if &next == &current {
+        if next == current {
             return false;
         }
         if &next == target {
@@ -945,10 +945,7 @@ mod tests {
         let sheet = focus_node(11, 42, Some(10));
         let unrelated = focus_node(12, 42, None);
         let pid = |node: &FocusNode| Some(node.pid);
-        let parent = |node: &FocusNode| match node.parent {
-            Some(id) => Some(focus_node(id, node.pid, None)),
-            None => None,
-        };
+        let parent = |node: &FocusNode| node.parent.map(|id| focus_node(id, node.pid, None));
         assert!(focused_window_matches(&target, &target, 42, pid, parent));
         assert!(focused_window_matches(&target, &sheet, 42, pid, parent));
         assert!(!focused_window_matches(
@@ -970,16 +967,9 @@ mod tests {
         let cycle = focus_node(11, 42, Some(11));
         let too_deep = focus_node(15, 42, Some(14));
         let pid = |node: &FocusNode| Some(node.pid);
-        assert!(!focused_window_matches(
-            &target,
-            &cycle,
-            42,
-            pid,
-            |node| match node.parent {
-                Some(id) => Some(focus_node(id, node.pid, Some(id))),
-                None => None,
-            }
-        ));
+        assert!(!focused_window_matches(&target, &cycle, 42, pid, |node| {
+            node.parent.map(|id| focus_node(id, node.pid, Some(id)))
+        }));
         assert!(!focused_window_matches(
             &target,
             &too_deep,

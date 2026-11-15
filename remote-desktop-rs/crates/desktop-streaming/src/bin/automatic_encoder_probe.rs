@@ -4,6 +4,7 @@ fn main() -> anyhow::Result<()> {
         codec::{Limits, VideoCodec},
         encoder::{Encoder, Policy},
         synthetic::{pattern, SyntheticInput},
+        video::{Budget, Frame},
     };
     use openh264::formats::YUVSource;
     let expect_software = std::env::args().any(|a| a == "--expect-software");
@@ -21,7 +22,15 @@ fn main() -> anyhow::Result<()> {
         }
         let start = std::time::Instant::now();
         let encoded = encoder
-            .encode(&pattern(i, &SyntheticInput::default()), i % 5 == 0)?
+            .encode(
+                Frame::I420(pattern(i, &SyntheticInput::default())),
+                Budget {
+                    width: 640,
+                    height: 360,
+                    fps: 30,
+                },
+                i % 5 == 0,
+            )?
             .ok_or_else(|| anyhow::anyhow!("missing frame"))?;
         if i % 5 == 0 || i == 7 {
             anyhow::ensure!(encoded.keyframe, "requested IDR missing");

@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
         session::Owner,
         synthetic::SoftwareEncoder,
         traits::CapturePrecision,
-        video::{from_bgra, Budget},
+        video::{Budget, Frame},
     };
     use openh264::formats::YUVSource;
     use std::time::{Duration, Instant};
@@ -55,19 +55,22 @@ async fn main() -> anyhow::Result<()> {
         let mut encoder = SoftwareEncoder::with_limits(2_000_000, limits)?;
         while began.elapsed() < Duration::from_secs(5) && frames < 10 {
             if let Some(frame) = capture.frame(true)? {
+                let Frame::Native420(native) = &frame else {
+                    anyhow::bail!("native capture returned a non-native frame");
+                };
                 anyhow::ensure!(
-                    frame.captured_at >= began,
+                    native.captured_at >= began,
                     "obsolete native sample after resume"
                 );
-                pixel_size = Some((frame.geometry.width, frame.geometry.height));
+                pixel_size = Some((native.geometry.width, native.geometry.height));
                 if encoded.is_none() {
                     let budget = Budget::select_with_limits(
-                        frame.geometry.width,
-                        frame.geometry.height,
+                        native.geometry.width,
+                        native.geometry.height,
                         2_000_000,
                         limits,
                     );
-                    let yuv = from_bgra(frame, budget)?;
+                    let yuv = frame.into_i420(budget)?;
                     if let Some(frame) = encoder.encode(&yuv, true)? {
                         let mut decoder = openh264::decoder::Decoder::new()?;
                         let decoded = decoder.decode(&frame.annex_b)?.ok_or_else(|| {

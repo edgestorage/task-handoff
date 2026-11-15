@@ -159,6 +159,9 @@ export class RemoteDesktopController {
   private fallbackUpgradeTimer?: ReturnType<typeof setTimeout>;
   private fallbackPointerTimer?: ReturnType<typeof setTimeout>;
   private fallbackPointer?: { x: number; y: number; inputEpoch: number };
+  private pointerTraceCount = 0;
+  private pointerTraceSkipped = 0;
+  private pointerTraceLastAt = 0;
   private statsTimer?: ReturnType<typeof setTimeout>;
   private statsPeer?: RTCPeerConnection;
   private webRTCReceiveSample?: RemoteDesktopWebRTCReceiveSample;
@@ -439,8 +442,21 @@ export class RemoteDesktopController {
   }
 
   sendPointer(x: number, y: number) {
-    if (!this.inputReady()) return;
-    const pointer = { x: clamp01(x), y: clamp01(y), inputEpoch: this.inputEpoch };
+    const point = { x: clamp01(x), y: clamp01(y) };
+    const blockedReason = this.inputBlockedReason();
+    if (blockedReason) {
+      if (this.shouldTracePointer()) {
+        diagnosticLog.info('remote.desktop.pointer.drop', {
+          reason: blockedReason,
+          ...point,
+          ...this.inputTraceState(),
+          skipped: this.pointerTraceSkipped,
+        });
+        this.pointerTraceSkipped = 0;
+      }
+      return;
+    }
+    const pointer = { ...point, inputEpoch: this.inputEpoch };
     if (this.fallbackState === 'active') {
       this.fallbackPointer = pointer;
       if (this.fallbackPointerTimer) return;
@@ -450,16 +466,65 @@ export class RemoteDesktopController {
         this.fallbackPointerTimer = undefined;
         const latest = this.fallbackPointer;
         this.fallbackPointer = undefined;
-        if (latest && this.inputReady()) this.wire('pointer', 'pointer', latest);
+        if (!latest) return;
+        const blocked = this.inputBlockedReason();
+        if (blocked) {
+          diagnosticLog.info('remote.desktop.pointer.drop', {
+            reason: blocked,
+            channel: 'fallback',
+            x: latest.x,
+            y: latest.y,
+            inputEpoch: latest.inputEpoch,
+            ...this.inputTraceState(),
+          });
+          return;
+        }
+        const sequence = this.transmit('pointer', 'pointer', latest);
+        diagnosticLog.info('remote.desktop.pointer.sent', {
+          channel: 'fallback',
+          sequence,
+          x: latest.x,
+          y: latest.y,
+          inputEpoch: latest.inputEpoch,
+          ...this.inputTraceState(),
+        });
       }, 16);
       return;
     }
-    this.wire('pointer', 'pointer', pointer);
+    const sequence = this.transmit('pointer', 'pointer', pointer);
+    if (this.shouldTracePointer()) {
+      diagnosticLog.info('remote.desktop.pointer.sent', {
+        channel: 'webrtc',
+        sequence,
+        ...pointer,
+        ...this.inputTraceState(),
+        skipped: this.pointerTraceSkipped,
+      });
+      this.pointerTraceSkipped = 0;
+    }
   }
 
   sendButton(x: number, y: number, button: number, down: boolean) {
-    if (!this.inputReady()) return;
-    this.wire('input', 'button', { x: clamp01(x), y: clamp01(y), button, down, inputEpoch: this.inputEpoch });
+    const point = { x: clamp01(x), y: clamp01(y) };
+    const blockedReason = this.inputBlockedReason();
+    if (blockedReason) {
+      diagnosticLog.info('remote.desktop.button.drop', {
+        reason: blockedReason,
+        ...point,
+        button,
+        down,
+        ...this.inputTraceState(),
+      });
+      return;
+    }
+    const payload = { ...point, button, down, inputEpoch: this.inputEpoch };
+    const sequence = this.transmit('input', 'button', payload);
+    diagnosticLog.info('remote.desktop.button.sent', {
+      channel: this.fallbackState === 'active' ? 'fallback' : 'webrtc',
+      sequence,
+      ...payload,
+      ...this.inputTraceState(),
+    });
   }
 
   sendWheel(x: number, y: number, deltaX: number, deltaY: number) {
@@ -1403,7 +1468,22 @@ export class RemoteDesktopController {
     this.stopInputAlive();
     this.inputAliveTimer = setInterval(() => {
       if (!this.active || !this.snapshotValue.inputEnabled) return;
-      this.wire('control', 'input.alive', { inputEpoch: this.inputEpoch });
+      const rawChannel = this.fallbackState === 'active' ? this.fallbackControl : this.channels.get('control');
+      const sequence = this.transmit('control', 'input.alive', { inputEpoch: this.inputEpoch });
+      diagnosticLog.info('remote.desktop.input.alive', {
+        sent: sequence !== undefined,
+        sequence,
+        inputEpoch: this.inputEpoch,
+        channel: this.fallbackState === 'active' ? 'websocket' : 'webrtc',
+        channelReadyState: rawChannel?.readyState,
+        active: this.active,
+        inputEnabled: this.snapshotValue.inputEnabled,
+        inputRequested: this.snapshotValue.inputRequested,
+        inputPending: this.snapshotValue.inputPending,
+        isController: this.snapshotValue.isController,
+        paused: this.snapshotValue.paused,
+        path: this.snapshotValue.path,
+      });
     }, INPUT_ALIVE_MS);
   }
 
@@ -1447,17 +1527,52 @@ export class RemoteDesktopController {
   }
 
   private wire(name: ChannelName, type: string, payload: unknown = {}, maxBytes = REMOTE_DESKTOP_MAX_MESSAGE_BYTES) {
+    return this.transmit(name, type, payload, maxBytes) !== undefined;
+  }
+
+  private transmit(name: ChannelName, type: string, payload: unknown = {}, maxBytes = REMOTE_DESKTOP_MAX_MESSAGE_BYTES) {
     const channel = this.outputChannel(name);
-    if (!channel) return false;
+    if (!channel) return undefined;
     const next = this.seq + 1;
     const encoded = JSON.stringify({ v: REMOTE_DESKTOP_CHANNEL_VERSION, seq: next, type, payload });
-    if (utf8Length(encoded) > maxBytes) return false;
-    try { channel.send(encoded); this.seq = next; return true; }
-    catch { return false; }
+    if (utf8Length(encoded) > maxBytes) return undefined;
+    try { channel.send(encoded); this.seq = next; return next; }
+    catch { return undefined; }
   }
 
   private inputReady() {
-    return !this.destroyed && this.active && this.snapshotValue.inputEnabled && this.inputEpoch > 0;
+    return this.inputBlockedReason() === undefined;
+  }
+
+  private inputBlockedReason() {
+    if (this.destroyed) return 'destroyed';
+    if (!this.active) return 'inactive';
+    if (!this.snapshotValue.inputEnabled) return 'input-disabled';
+    if (this.inputEpoch <= 0) return 'epoch-unavailable';
+    return undefined;
+  }
+
+  private inputTraceState() {
+    return {
+      active: this.active,
+      inputEnabled: this.snapshotValue.inputEnabled,
+      inputRequested: this.snapshotValue.inputRequested,
+      inputPending: this.snapshotValue.inputPending,
+      isController: this.snapshotValue.isController,
+      paused: this.snapshotValue.paused,
+      path: this.snapshotValue.path,
+    };
+  }
+
+  private shouldTracePointer() {
+    const now = Date.now();
+    this.pointerTraceCount += 1;
+    if (this.pointerTraceCount <= 10 || now - this.pointerTraceLastAt >= 500) {
+      this.pointerTraceLastAt = now;
+      return true;
+    }
+    this.pointerTraceSkipped += 1;
+    return false;
   }
 
   private armFallbackHeadStart() {

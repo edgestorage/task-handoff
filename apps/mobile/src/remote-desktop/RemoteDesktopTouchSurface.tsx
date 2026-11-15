@@ -5,6 +5,7 @@ import { RemoteDesktopWheelPump } from '@task-handoff/control-plane-client';
 
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
+import { diagnosticLog } from '../observability/diagnostic-logs';
 import { remoteDesktopControlHint, type RemoteDesktopControlHint } from './control-presentation';
 import type { RemoteDesktopController } from './controller';
 import { RemoteDesktopCursor } from './RemoteDesktopCursor';
@@ -341,6 +342,17 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     const tapSuppressed = suppressRemoteDesktopTap(touchSequenceRef.current)
       || event.nativeEvent.touches.length > 0;
     const mode = gestureRef.current;
+    diagnosticLog.info('remote.desktop.touch.end', {
+      mode,
+      touchCount: event.nativeEvent.touches.length,
+      tapSuppressed,
+      inputReady: inputReadyRef.current,
+      trackpadMoved: trackpadMovedRef.current,
+      trackpadDragging: trackpadDraggingRef.current,
+      inputRequested: snapshotRef.current.inputRequested,
+      isController: snapshotRef.current.isController,
+      paused: snapshotRef.current.paused,
+    });
     gestureRef.current = 'none';
     if (mode === 'direct-pending' && !tapSuppressed && lastMappedRef.current) {
       const point = event.nativeEvent.touches[0] ? mapTouchClamped(event.nativeEvent.touches[0]) : lastMappedRef.current;
@@ -369,6 +381,14 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
   const onPanResponderGrant = useCallback((event: GestureResponderEvent) => {
     const touches = event.nativeEvent.touches;
     touchSequenceRef.current = startRemoteDesktopTouchSequence(touchSequenceRef.current, touches.length);
+    diagnosticLog.info('remote.desktop.touch.start', {
+      touchCount: touches.length,
+      mouseMode: mouseModeRef.current,
+      inputReady: inputReadyRef.current,
+      inputRequested: snapshotRef.current.inputRequested,
+      isController: snapshotRef.current.isController,
+      paused: snapshotRef.current.paused,
+    });
     clearWheelPump();
     if (touches.length > 1) {
       beginMultiTouch(touches);
