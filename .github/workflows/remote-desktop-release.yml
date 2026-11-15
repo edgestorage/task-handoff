@@ -7,11 +7,16 @@ on:
         description: Existing remote-desktop-v* tag to publish
         required: true
         type: string
+      artifact_run_id:
+        description: Existing successful run whose complete remote desktop artifact should be reused
+        required: false
+        type: string
   push:
     tags:
       - "remote-desktop-v*"
 
 permissions:
+  actions: read
   contents: write
   id-token: write
 
@@ -70,6 +75,7 @@ jobs:
   packages:
     name: Build remote desktop ${{ matrix.platform }}-${{ matrix.arch }}
     needs: verify
+    if: ${{ !cancelled() && needs.verify.result == 'success' && inputs.artifact_run_id == '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -156,7 +162,7 @@ jobs:
   complete-set:
     name: Verify complete remote desktop target set
     needs: [verify, packages]
-    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.packages.result == 'success' }}
+    if: ${{ always() && needs.verify.result == 'success' && (needs.packages.result == 'success' || (inputs.artifact_run_id != '' && needs.packages.result == 'skipped')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -177,10 +183,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - uses: actions/download-artifact@v7
+        if: inputs.artifact_run_id == ''
         with:
           pattern: remote-desktop-package-*
           path: release/remote-desktop-packages
           merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        if: inputs.artifact_run_id != ''
+        with:
+          name: remote-desktop-complete-${{ needs.verify.outputs.version }}
+          path: release/remote-desktop-packages
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ secrets.DESKTOP_RELEASE_TOKEN || github.token }}
 
       - name: Generate release metadata from the complete target set
         env:
@@ -289,7 +304,7 @@ jobs:
             archive="release/remote-desktop-packages/${prefix}-${version}.tgz"
             local_integrity="sha512-$(openssl dgst -sha512 -binary "$archive" | openssl base64 -A)"
             verified=false
-            for ((attempt = 1; attempt <= 40; attempt++)); do
+            for ((attempt = 1; attempt <= 120; attempt++)); do
               published_integrity="$(remote_integrity "$package" "$version")"
               if [[ "$published_integrity" == "$local_integrity" ]]; then
                 verified=true
@@ -319,11 +334,20 @@ jobs:
             version="$(node -p "require('./${metadata}').version")"
             [[ "$version" == "$RELEASE_VERSION" ]]
             npm dist-tag add "$package@$version" latest
-            latest="$(npm view "$package" dist-tags.latest)"
-            [[ "$latest" == "$version" ]] || {
-              echo "::error::$package latest is $latest, expected $version"
+            promoted=false
+            for ((attempt = 1; attempt <= 60; attempt++)); do
+              latest="$(npm view "$package" dist-tags.latest 2>/dev/null || true)"
+              if [[ "$latest" == "$version" ]]; then
+                promoted=true
+                break
+              fi
+              sleep 2
+            done
+            [[ "$promoted" == true ]] || {
+              echo "::error::$package latest is ${latest:-unavailable}, expected $version"
               exit 1
             }
+            echo "Promoted $package@$version to latest"
           done
 
       - name: Publish the independent GitHub Release
