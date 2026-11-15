@@ -1,19 +1,22 @@
-import { remoteDesktopTextInputUpdate, remoteDesktopTextToSend } from '../src/remote-desktop/text-input';
+import { remoteDesktopTextEdit, remoteDesktopTextInputUpdate } from '../src/remote-desktop/text-input';
 
-test('sends only the new suffix when an Android IME reports cumulative text', () => {
-  expect(remoteDesktopTextToSend('', 'e')).toBe('e');
-  expect(remoteDesktopTextToSend('e', 'ec')).toBe('c');
-  expect(remoteDesktopTextToSend('ec', 'echo')).toBe('ho');
+test('inserts only the new suffix when an Android IME reports cumulative text', () => {
+  expect(remoteDesktopTextEdit('', 'e')).toEqual({ deleteCount: 0, insertText: 'e' });
+  expect(remoteDesktopTextEdit('e', 'ec')).toEqual({ deleteCount: 0, insertText: 'c' });
+  expect(remoteDesktopTextEdit('ec', 'echo')).toEqual({ deleteCount: 0, insertText: 'ho' });
 });
 
-test('resets on an empty controlled input and accepts replacement composition', () => {
-  expect(remoteDesktopTextToSend('echo', '')).toBeUndefined();
-  expect(remoteDesktopTextToSend('', 'echo MOBILE_OK')).toBe('echo MOBILE_OK');
-  expect(remoteDesktopTextToSend('echo', '你好')).toBe('你好');
+test('turns dictation corrections into a suffix deletion followed by replacement text', () => {
+  expect(remoteDesktopTextEdit('今天天汽', '今天天气')).toEqual({ deleteCount: 1, insertText: '气' });
+  expect(remoteDesktopTextEdit('我想去北京玩', '我想去上海玩')).toEqual({ deleteCount: 3, insertText: '上海玩' });
+  expect(remoteDesktopTextEdit('你好世界', '你好')).toEqual({ deleteCount: 2, insertText: '' });
+  expect(remoteDesktopTextEdit('', 'echo MOBILE_OK')).toEqual({ deleteCount: 0, insertText: 'echo MOBILE_OK' });
 });
 
-test('does not replay deletions already handled by key events', () => {
-  expect(remoteDesktopTextToSend('echo', 'ech')).toBeUndefined();
+test('counts user-perceived characters when correcting emoji and combined text', () => {
+  expect(remoteDesktopTextEdit('hi😀', 'hi😎')).toEqual({ deleteCount: 1, insertText: '😎' });
+  expect(remoteDesktopTextEdit('hi👨‍👩‍👧‍👦', 'hi👨‍👩‍👧‍👦!')).toEqual({ deleteCount: 0, insertText: '!' });
+  expect(remoteDesktopTextEdit('e\u0301', 'é')).toEqual({ deleteCount: 1, insertText: 'é' });
 });
 
 test('holds pinyin marked text until the input method commits a candidate', () => {
@@ -24,14 +27,14 @@ test('holds pinyin marked text until the input method commits a candidate', () =
   }
 
   const committed = remoteDesktopTextInputUpdate(baseline, '你好', false);
-  expect(committed).toEqual({ nextText: '你好', textToSend: '你好' });
+  expect(committed).toEqual({ nextText: '你好', edit: { deleteCount: 0, insertText: '你好' } });
   baseline = committed.nextText;
 
   expect(remoteDesktopTextInputUpdate(baseline, '你好shi', true)).toEqual({ nextText: baseline });
-  expect(remoteDesktopTextInputUpdate(baseline, '你好是', false)).toEqual({ nextText: '你好是', textToSend: '是' });
+  expect(remoteDesktopTextInputUpdate(baseline, '你好是', false)).toEqual({ nextText: '你好是', edit: { deleteCount: 0, insertText: '是' } });
 });
 
-test('does not send a cancelled composition or duplicate committed text', () => {
+test('does not send a cancelled composition or unchanged committed text', () => {
   expect(remoteDesktopTextInputUpdate('你好', '你好shi', true)).toEqual({ nextText: '你好' });
-  expect(remoteDesktopTextInputUpdate('你好', '你好', false)).toEqual({ nextText: '你好', textToSend: undefined });
+  expect(remoteDesktopTextInputUpdate('你好', '你好', false)).toEqual({ nextText: '你好', edit: undefined });
 });

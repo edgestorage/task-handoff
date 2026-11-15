@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Easing, Keyboard, type LayoutChangeEvent, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
@@ -13,6 +13,7 @@ import {
 import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
+import { diagnosticLog } from '../observability/diagnostic-logs';
 import { subscribeToKeyboardState, type MobileKeyboardState } from '../platform/keyboard';
 import { isRemoteDesktopSourceEndedError, remoteDesktopErrorMessage } from './errors';
 import {
@@ -31,11 +32,12 @@ import { remoteDesktopSourceHeaderLabel } from './source-label';
 import { transportIcon, transportLabel } from './transport-presentation';
 import { useRemoteDesktop } from './use-remote-desktop';
 import type { RemoteDesktopMouseMode } from './preferences';
-import { remoteDesktopTextInputUpdate, remoteDesktopTextToSend } from './text-input';
+import { remoteDesktopTextInputUpdate, type RemoteDesktopTextEdit } from './text-input';
 import type { RemoteDesktopKeyboardMode } from './virtual-keyboard';
 import { rememberSessionRemoteDesktopLink, removeSessionRemoteDesktopLink } from './session-links';
 
 const KEYBOARD_INPUT_ID = 'remote-desktop-keyboard-input';
+const KEY_DELETION_HANDLED_WINDOW_MS = 250;
 const INITIAL_KEYBOARD_STATE: MobileKeyboardState = { visible: false, height: 0, duration: DEFAULT_REMOTE_DESKTOP_KEYBOARD_DURATION_MS, easing: 'keyboard' };
 
 function keyboardAnimationEasing(easing: MobileKeyboardState['easing']) {
@@ -66,11 +68,16 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   const virtualKeyboardInteractive = keyboardOpen && keyboardMode === 'virtual';
   const keyboardVisible = keyboardOpen && (systemKeyboardVisible || virtualKeyboardSurfaceVisible);
   const [keyboardInset] = useState(() => new Animated.Value(0));
+  // The previous fit-to-reduced-height layout kept the content centered in the
+  // visible area, which moved its visual center by half the obstruction. Match
+  // that position without shrinking the capture surface.
+  const keyboardStageOffset = useMemo(() => Animated.multiply(keyboardInset, -0.5), [keyboardInset]);
   const [virtualKeyboardOpacity] = useState(() => new Animated.Value(0));
   const keyboardAnimationGeneration = useRef(0);
   const keyboardModeRef = useRef<RemoteDesktopKeyboardMode>('system');
   const keyboardInput = useRef<TextInput>(null);
   const pendingRemoteText = useRef('');
+  const keyDeletionAt = useRef(0);
   const nativeTextInputActive = useRef(false);
   const composingText = useRef(false);
   const { snapshot } = remote;
@@ -147,26 +154,60 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
       useNativeDriver: false,
     }).start();
   }, [keyboard.duration, keyboard.easing, virtualKeyboardOpacity, virtualKeyboardSurfaceVisible]);
+
+  const sendTextEdit = useCallback((edit: RemoteDesktopTextEdit) => {
+    const controller = controllerRef.current;
+    if (!controller) return;
+    for (let index = 0; index < edit.deleteCount; index += 1) {
+      controller.sendKey('Backspace', true);
+      controller.sendKey('Backspace', false);
+    }
+    if (edit.insertText) controller.sendText(edit.insertText);
+  }, []);
+
+  const applyTextInputValue = useCallback((previousText: string, text: string) => {
+    if (!snapshotRef.current.inputEnabled) {
+      pendingRemoteText.current = '';
+      keyDeletionAt.current = 0;
+      return;
+    }
+    const update = remoteDesktopTextInputUpdate(previousText, text, false);
+    pendingRemoteText.current = update.nextText;
+    const deletionHandledByKey = keyDeletionAt.current > 0
+      && Date.now() - keyDeletionAt.current <= KEY_DELETION_HANDLED_WINDOW_MS;
+    keyDeletionAt.current = 0;
+    if (!update.edit) return;
+    if (update.edit.deleteCount > 0) {
+      diagnosticLog.info('remote.desktop.text.edit', {
+        deleteCount: update.edit.deleteCount,
+        insertLength: update.edit.insertText.length,
+        previousLength: previousText.length,
+        currentLength: text.length,
+        deletionHandledByKey,
+      });
+    }
+    if (!deletionHandledByKey) sendTextEdit(update.edit);
+  }, [sendTextEdit]);
+
   useEffect(() => {
     const subscription = subscribeRemoteDesktopTextInput(({ composing, text }) => {
       composingText.current = composing;
       if (composing || !nativeTextInputActive.current) return;
-      const update = remoteDesktopTextInputUpdate(pendingRemoteText.current, text, false);
-      pendingRemoteText.current = update.nextText;
-      if (update.textToSend && snapshotRef.current.inputEnabled) controllerRef.current?.sendText(update.textToSend);
+      applyTextInputValue(pendingRemoteText.current, text);
     });
     return () => {
       subscription?.remove();
       stopRemoteDesktopTextInputObservation();
       nativeTextInputActive.current = false;
     };
-  }, []);
+  }, [applyTextInputValue]);
 
   const resetTextInput = useCallback(() => {
     stopRemoteDesktopTextInputObservation();
     nativeTextInputActive.current = false;
     composingText.current = false;
     pendingRemoteText.current = '';
+    keyDeletionAt.current = 0;
     keyboardInput.current?.clear();
   }, []);
 
@@ -306,11 +347,19 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
       </RemoteDesktopSettingsMenu>
     </View>
 
-    <Animated.View style={[styles.stage, Platform.OS === 'ios' ? { marginBottom: keyboardInset } : undefined]}>
+    {/* Keyboard panels overlay the capture surface. Reserving their height
+        here would shrink the contain rect and change the apparent zoom while
+        the user is typing. */}
+    <View style={[styles.stage, styles.stageClip]} testID="remote-desktop-stage">
       {capability?.available === false || (!capability && remote.instance) ? <CenteredState title={t('remoteDesktop.unsupported')} detail={capability?.reason === 'REMOTE_DESKTOP_UPDATING' ? t('remoteDesktop.loading') : t('remoteDesktop.unsupportedDescription')} />
         : !remote.ready || !remote.instance ? <CenteredState loading title={t('remoteDesktop.connecting')} detail={t('remoteDesktop.loading')} />
           : sourceEnded ? <CenteredState title={snapshot.target.kind === 'window' ? t('remoteDesktop.windowClosed') : t('remoteDesktop.sourceEnded')} detail={errorMessage || t('remoteDesktop.sourceEndedDetail')} actionLabel={t('remoteDesktop.chooseAnotherSource')} onAction={() => setSourcePicker(true)} />
-            : showVideo ? <RemoteDesktopTouchSurface controller={remote.controller} mouseMode={remote.preferences.mouseMode} snapshot={snapshot} />
+            : showVideo ? <Animated.View
+              style={[styles.stageContent, { transform: [{ translateY: keyboardStageOffset }] }]}
+              testID="remote-desktop-touch-surface-host"
+            >
+              <RemoteDesktopTouchSurface controller={remote.controller} mouseMode={remote.preferences.mouseMode} snapshot={snapshot} />
+            </Animated.View>
             : snapshot.phase === 'error' || snapshot.phase === 'stopped' ? <CenteredState title={snapshot.phase === 'stopped' ? t('remoteDesktop.stopped') : t('remoteDesktop.error')} detail={snapshot.phase === 'error' ? errorMessage || t('remoteDesktop.errorGeneric') : undefined} actionLabel={t('remoteDesktop.reconnect')} onAction={reconnect} />
               : <CenteredState loading title={t('remoteDesktop.connecting')} detail={t('remoteDesktop.waitingForFrame')} />}
       {showVideo && snapshot.phase === 'error' && !sourceEnded ? <View style={[styles.errorBanner, { backgroundColor: colors.errorSoft, borderColor: colors.error }]}>
@@ -319,7 +368,7 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
         <Pressable accessibilityRole="button" onPress={reconnect}><Text style={[styles.bannerAction, { color: colors.error }]}>{t('remoteDesktop.retry')}</Text></Pressable>
       </View> : null}
       {showVideo && !snapshot.streamURL && snapshot.path !== 'websocket' && !snapshot.path ? <View pointerEvents="none" style={styles.waiting}><ActivityIndicator color="#fff" size="small" /><Text style={styles.waitingText}>{t('remoteDesktop.waitingForFrame')}</Text></View> : null}
-    </Animated.View>
+    </View>
 
     <TextInput
       autoCapitalize="none"
@@ -331,18 +380,7 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
       nativeID={KEYBOARD_INPUT_ID}
       onChangeText={(value) => {
         if (nativeTextInputActive.current) return;
-        if (!snapshot.inputEnabled) {
-          pendingRemoteText.current = '';
-          return;
-        }
-        if (!value) {
-          pendingRemoteText.current = '';
-          return;
-        }
-        const previous = pendingRemoteText.current;
-        const text = remoteDesktopTextToSend(previous, value);
-        if (text) remote.controller?.sendText(text);
-        pendingRemoteText.current = value;
+        applyTextInputValue(pendingRemoteText.current, value);
       }}
       onBlur={resetTextInput}
       onFocus={() => {
@@ -354,6 +392,7 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
         if (composingText.current) return;
         const code = remoteKeyboardCode(event.nativeEvent.key);
         if (!code || !snapshot.inputEnabled) return;
+        if (code === 'Backspace' || code === 'Delete') keyDeletionAt.current = Date.now();
         remote.controller?.sendKey(code, true);
         remote.controller?.sendKey(code, false);
       }}
@@ -472,6 +511,8 @@ const styles = StyleSheet.create({
   transportBadge: { alignItems: 'center', borderRadius: 20, height: 40, justifyContent: 'center', marginLeft: 5, width: 40 },
   transportBadgePressed: { backgroundColor: 'rgba(255,255,255,0.12)' },
   stage: { flex: 1, position: 'relative' },
+  stageClip: { overflow: 'hidden' },
+  stageContent: { flex: 1 },
   centered: { alignItems: 'center', flex: 1, gap: 10, justifyContent: 'center', padding: 30 },
   centeredTitle: { color: '#fff', fontSize: 17, fontWeight: '500', lineHeight: 23, textAlign: 'center' },
   centeredDetail: { color: 'rgba(255,255,255,0.64)', fontSize: 13, lineHeight: 19, maxWidth: 360, textAlign: 'center' },
