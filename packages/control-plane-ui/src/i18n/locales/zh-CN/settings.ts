@@ -39,6 +39,7 @@ export const settings = {
     theme: "主题",
     themeDescription: "选择控制面板使用的配色方案。",
     colorTheme: "颜色主题",
+    system: "跟随系统",
     light: "浅色",
     dark: "深色",
     queuePlacement: "排队消息位置",

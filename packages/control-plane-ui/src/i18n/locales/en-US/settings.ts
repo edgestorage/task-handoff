@@ -36,6 +36,7 @@ export const settings = {
     theme: "Theme",
     themeDescription: "Choose the color scheme used throughout the control plane.",
     colorTheme: "Color theme",
+    system: "Follow system",
     light: "Light",
     dark: "Dark",
     queuePlacement: "Queued message position",

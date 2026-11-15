@@ -41,9 +41,10 @@ test("Windows overlay mirrors the macOS flex spacer inside the titlebar", () => 
 });
 
 test("open desktop windows follow theme changes made in another window", () => {
-  assert.match(theme, /let themeStorageSyncInitialized = false/);
+  assert.match(theme, /let themeSyncInitialized = false/);
   assert.match(theme, /window\.addEventListener\("storage", \(event\) => \{/);
-  assert.match(theme, /event\.key !== THEME_STORAGE_KEY \|\| !isThemePreference\(event\.newValue\)/);
+  assert.match(theme, /event\.key !== THEME_STORAGE_KEY/);
+  assert.match(theme, /event\.newValue === null/);
   assert.match(theme, /applyThemePreference\(event\.newValue\)/);
 });
 

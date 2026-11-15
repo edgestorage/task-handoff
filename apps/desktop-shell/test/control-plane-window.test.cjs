@@ -47,7 +47,8 @@ test("the main window and live theme changes keep the native surface aligned wit
   const createWindowSource = mainSource.match(/function createWindow\(url\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(createWindowSource, /backgroundColor: desktopWindowBackgroundColor\("dark"\)/);
   assert.doesNotMatch(createWindowSource, /backgroundColor: "#eef3f4"/);
-  assert.match(mainSource, /ipcMain\.handle\("task-handoff:set-window-chrome-theme"[\s\S]*?targetWindow\.setBackgroundColor\(desktopWindowBackgroundColor\(theme\)\)/);
+  assert.match(mainSource, /ipcMain\.handle\("task-handoff:set-window-chrome-theme"[\s\S]*?!\["system", "light", "dark"\]\.includes\(theme\)/);
+  assert.match(mainSource, /ipcMain\.handle\("task-handoff:set-window-chrome-theme"[\s\S]*?targetWindow\.setBackgroundColor\(desktopWindowBackgroundColor\(resolvedTheme\)\)/);
 });
 
 test("only the main window can synchronize native chrome density", () => {

@@ -77,6 +77,14 @@ test("Windows native caption hover follows the renderer theme", () => {
   assert.deepEqual(overlays, [{ color: "#00000000", symbolColor: "#17232a", height: 42 }]);
 });
 
+test("Windows native chrome keeps following the OS when the app uses the system theme", () => {
+  const nativeTheme = { themeSource: "light", shouldUseDarkColors: true };
+  const overlays = [];
+  applyWindowsTitleBarTheme({ setTitleBarOverlay: (value) => overlays.push(value) }, nativeTheme, { height: 42, theme: "system" });
+  assert.equal(nativeTheme.themeSource, "system");
+  assert.deepEqual(overlays, [{ color: "#00000000", symbolColor: "#e6f0f2", height: 42 }]);
+});
+
 test("macOS keeps its native inset traffic lights", () => {
   assert.equal(desktopWindowChromeMode("darwin"), "macos-overlay");
   assert.deepEqual(desktopTitleBarOptions({

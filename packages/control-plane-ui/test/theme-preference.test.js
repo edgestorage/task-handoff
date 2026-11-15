@@ -3,12 +3,14 @@ import test from "node:test";
 import { watchSyncEffect } from "vue";
 import { initializeThemePreference, saveThemePreference, useThemePreference } from "../src/utils/theme.ts";
 
-test("SVG renderers follow the applied DOM theme on startup, settings changes, and window sync", (t) => {
+test("theme consumers follow the resolved DOM theme on startup, settings changes, system changes, and window sync", (t) => {
   const previousWindow = globalThis.window;
   const previousDocument = globalThis.document;
   const classes = new Set();
   const storage = new Map([["task-handoff.theme", "light"]]);
   let onStorage;
+  let onSystemThemeChange;
+  let systemDark = true;
   globalThis.document = {
     documentElement: {
       dataset: {},
@@ -18,6 +20,10 @@ test("SVG renderers follow the applied DOM theme on startup, settings changes, a
   globalThis.window = {
     localStorage: { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     addEventListener: (event, listener) => { if (event === "storage") onStorage = listener; },
+    matchMedia: (query) => ({
+      get matches() { return query === "(prefers-color-scheme: dark)" && systemDark; },
+      addEventListener: (event, listener) => { if (event === "change") onSystemThemeChange = listener; },
+    }),
   };
   t.after(() => {
     if (previousWindow === undefined) delete globalThis.window;
@@ -39,8 +45,16 @@ test("SVG renderers follow the applied DOM theme on startup, settings changes, a
 
   saveThemePreference("dark");
   assert.equal(storage.get("task-handoff.theme"), "dark");
+  saveThemePreference("system");
+  assert.equal(storage.get("task-handoff.theme"), "system");
+  assert.equal(theme.value, "dark");
+  systemDark = false;
+  onSystemThemeChange({ matches: false });
+  assert.equal(theme.value, "light");
   onStorage({ key: "task-handoff.theme", newValue: "light" });
   onStorage({ key: "task-handoff.theme", newValue: "invalid" });
+  onStorage({ key: "task-handoff.theme", newValue: null });
+  assert.equal(theme.value, "light");
   assert.deepEqual(changes, [
     ["light", "light", false],
     ["dark", "dark", true],

@@ -50,7 +50,7 @@ const {
   stopExistingDesktopNodeAgent,
 } = require("./node-agent-handoff.cjs");
 const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath, desktopTrayIconPath: resolveDesktopTrayIconPath } = require("./icon.cjs");
-const { applyMainWindowChromeDensity, applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowBackgroundColor, desktopWindowChromeMode, mainWindowChromeMetrics } = require("./window-chrome.cjs");
+const { applyMainWindowChromeDensity, applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowBackgroundColor, desktopWindowChromeMode, mainWindowChromeMetrics, resolveWindowChromeTheme } = require("./window-chrome.cjs");
 const { appendRotatingLog } = require("./rotating-log.cjs");
 const { markLogStreamUnavailable, writeLogLine } = require("./log-sink.cjs");
 const { DesktopBrowserContextManager } = require("./desktop-browser-contexts.cjs");
@@ -1337,11 +1337,12 @@ ipcMain.handle("task-handoff:window-action", (_event, action) => {
 
 ipcMain.handle("task-handoff:set-window-chrome-theme", (_event, theme) => {
   const targetWindow = BrowserWindow.fromWebContents(_event.sender);
-  if (!targetWindow || targetWindow.isDestroyed() || !["light", "dark"].includes(theme)) {
+  if (!targetWindow || targetWindow.isDestroyed() || !["system", "light", "dark"].includes(theme)) {
     return { ok: false };
   }
+  const resolvedTheme = resolveWindowChromeTheme(nativeTheme, theme);
   nativeTheme.themeSource = theme;
-  targetWindow.setBackgroundColor(desktopWindowBackgroundColor(theme));
+  targetWindow.setBackgroundColor(desktopWindowBackgroundColor(resolvedTheme));
   const height = windowsTitleBarOverlayHeights.get(targetWindow);
   if (process.platform === "win32" && height) {
     applyWindowsTitleBarTheme(targetWindow, nativeTheme, { height, theme });

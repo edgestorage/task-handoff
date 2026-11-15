@@ -20,6 +20,7 @@
           <div class="setting-row compact-row">
             <div class="setting-copy"><strong>{{ t("settings.appearance.theme") }}</strong><p>{{ t("settings.appearance.themeDescription") }}</p></div>
             <div class="theme-choice-group row-control" :aria-label="t('settings.appearance.colorTheme')">
+              <Button variant="outline" :class="{ active: themePreference === 'system' }" :aria-pressed="themePreference === 'system'" @click="emit('update:themePreference', 'system')"><Monitor :size="16" /><span>{{ t("settings.appearance.system") }}</span></Button>
               <Button variant="outline" :class="{ active: themePreference === 'light' }" :aria-pressed="themePreference === 'light'" @click="emit('update:themePreference', 'light')"><Sun :size="16" /><span>{{ t("settings.appearance.light") }}</span></Button>
               <Button variant="outline" :class="{ active: themePreference === 'dark' }" :aria-pressed="themePreference === 'dark'" @click="emit('update:themePreference', 'dark')"><Moon :size="16" /><span>{{ t("settings.appearance.dark") }}</span></Button>
             </div>
@@ -116,7 +117,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { AlertTriangle, Archive, Download, ExternalLink, Moon, RefreshCw, RotateCw, Sun } from "@lucide/vue";
+import { AlertTriangle, Archive, Download, ExternalLink, Monitor, Moon, RefreshCw, RotateCw, Sun } from "@lucide/vue";
 import type { UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import type { ThemePreference } from "../../../utils/theme";

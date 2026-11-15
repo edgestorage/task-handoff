@@ -10,6 +10,8 @@ test("the control plane establishes its persisted theme and background before mo
 
   assert.ok(bootstrapIndex >= 0);
   assert.ok(appScriptIndex > bootstrapIndex);
+  assert.match(index, /const systemTheme = window\.matchMedia\?\.\("\(prefers-color-scheme: dark\)"\)\?\.matches \? "dark" : "light"/);
+  assert.match(index, /let theme = systemTheme/);
   assert.match(index, /document\.documentElement\.dataset\.theme = theme/);
   assert.match(index, /html,[\s\S]*body,[\s\S]*#app \{[\s\S]*background: var\(--workspace-bg, hsl\(195 45% 5%\)\);[\s\S]*color-scheme: dark;/);
   assert.match(index, /html\[data-theme="light"\][\s\S]*background: var\(--workspace-bg, hsl\(190 24% 95%\)\);[\s\S]*color-scheme: light;/);

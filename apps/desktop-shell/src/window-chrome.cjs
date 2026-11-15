@@ -50,8 +50,15 @@ function desktopTitleBarOptions({
 }
 
 function applyWindowsTitleBarTheme(targetWindow, nativeTheme, { height, theme }) {
+  const resolvedTheme = resolveWindowChromeTheme(nativeTheme, theme);
   nativeTheme.themeSource = theme;
-  targetWindow.setTitleBarOverlay(windowsTitleBarOverlayOptions({ height, theme }));
+  targetWindow.setTitleBarOverlay(windowsTitleBarOverlayOptions({ height, theme: resolvedTheme }));
+}
+
+function resolveWindowChromeTheme(nativeTheme, theme) {
+  return theme === "system"
+    ? nativeTheme.shouldUseDarkColors ? "dark" : "light"
+    : theme;
 }
 
 function applyMainWindowChromeDensity(targetWindow, {
@@ -75,5 +82,6 @@ module.exports = {
   desktopWindowBackgroundColor,
   desktopWindowChromeMode,
   mainWindowChromeMetrics,
+  resolveWindowChromeTheme,
   windowsTitleBarOverlayOptions,
 };
