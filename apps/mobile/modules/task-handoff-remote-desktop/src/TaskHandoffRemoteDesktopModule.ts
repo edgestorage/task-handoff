@@ -3,6 +3,7 @@ import { requireOptionalNativeModule } from 'expo';
 import type {
   RemoteDesktopCodecConfig,
   RemoteDesktopDecoderError,
+  RemoteDesktopVideoDimensions,
 } from './RemoteDesktopDecoder.types';
 
 type NativeRemoteDesktopModule = {
@@ -14,6 +15,7 @@ type NativeRemoteDesktopModule = {
   startTextInputObservation(nativeID: string): boolean;
   stopTextInputObservation(): void;
   addListener?(name: 'onRemoteDesktopDecoderError', listener: (event: RemoteDesktopDecoderError) => void): { remove(): void };
+  addListener?(name: 'onRemoteDesktopVideoDimensions', listener: (event: RemoteDesktopVideoDimensions) => void): { remove(): void };
   addListener?(name: 'onRemoteDesktopTextInput', listener: (event: RemoteDesktopTextInputEvent) => void): { remove(): void };
 };
 
@@ -26,6 +28,11 @@ export const nativeRemoteDesktopTextInputAvailable = typeof native?.startTextInp
 
 export function subscribeRemoteDesktopDecoderErrors(listener: (event: RemoteDesktopDecoderError) => void) {
   try { return native?.addListener?.('onRemoteDesktopDecoderError', listener); }
+  catch { return undefined; }
+}
+
+export function subscribeRemoteDesktopVideoDimensions(listener: (event: RemoteDesktopVideoDimensions) => void) {
+  try { return native?.addListener?.('onRemoteDesktopVideoDimensions', listener); }
   catch { return undefined; }
 }
 

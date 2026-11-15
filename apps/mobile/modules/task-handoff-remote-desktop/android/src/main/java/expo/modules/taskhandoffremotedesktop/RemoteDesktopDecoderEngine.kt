@@ -32,13 +32,17 @@ internal object RemoteDesktopDecoderEngine {
   private var parameterSetFailures: Long = 0
   private var surfaceWarnings: Int = 0
   private var needsKeyframe = true
+  private var lastReportedWidth = 0
+  private var lastReportedHeight = 0
   var onError: ((code: String, message: String?) -> Unit)? = null
+  var onVideoDimensions: ((width: Int, height: Int) -> Unit)? = null
 
   @Synchronized
   fun attach(value: Surface) {
     if (surface === value) return
     releaseCodec()
     needsKeyframe = true
+    clearReportedDimensions()
     surface = value
     surfaceWarnings = 0
     ensureCodec()
@@ -49,6 +53,7 @@ internal object RemoteDesktopDecoderEngine {
     if (surface !== value) return
     releaseCodec()
     needsKeyframe = true
+    clearReportedDimensions()
     surface = null
   }
 
@@ -63,6 +68,7 @@ internal object RemoteDesktopDecoderEngine {
     outputFrames = 0
     inputDrops = 0
     parameterSetFailures = 0
+    clearReportedDimensions()
     ensureCodec()
   }
 
@@ -72,6 +78,7 @@ internal object RemoteDesktopDecoderEngine {
     needsKeyframe = true
     parameterSets = null
     lastTimestampUs = 0
+    clearReportedDimensions()
     ensureCodec()
   }
 
@@ -83,6 +90,7 @@ internal object RemoteDesktopDecoderEngine {
     config = null
     parameterSets = null
     lastTimestampUs = 0
+    clearReportedDimensions()
   }
 
   @Synchronized
@@ -198,7 +206,11 @@ internal object RemoteDesktopDecoderEngine {
     while (true) {
       when (val index = decoder.dequeueOutputBuffer(info, 0)) {
         MediaCodec.INFO_TRY_AGAIN_LATER -> return
-        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Log.i(TAG, "output format changed ${decoder.outputFormat}")
+        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+          val format = decoder.outputFormat
+          reportDimensions(format)
+          Log.i(TAG, "output format changed $format")
+        }
         else -> if (index >= 0) {
           outputFrames += 1
           if (outputFrames <= 3) {
@@ -222,6 +234,28 @@ internal object RemoteDesktopDecoderEngine {
     onError?.invoke(code, message)
   }
 
+  private fun reportDimensions(format: MediaFormat) {
+    val codedWidth = format.intOrZero(MediaFormat.KEY_WIDTH)
+    val codedHeight = format.intOrZero(MediaFormat.KEY_HEIGHT)
+    if (codedWidth < 2 || codedHeight < 2) return
+    val cropLeft = format.intOrZero(MediaFormat.KEY_CROP_LEFT)
+    val cropRight = format.intOrZero(MediaFormat.KEY_CROP_RIGHT)
+    val cropTop = format.intOrZero(MediaFormat.KEY_CROP_TOP)
+    val cropBottom = format.intOrZero(MediaFormat.KEY_CROP_BOTTOM)
+    val width = if (cropRight > cropLeft) cropRight - cropLeft + 1 else codedWidth
+    val height = if (cropBottom > cropTop) cropBottom - cropTop + 1 else codedHeight
+    if (width < 2 || height < 2) return
+    if (width == lastReportedWidth && height == lastReportedHeight) return
+    lastReportedWidth = width
+    lastReportedHeight = height
+    onVideoDimensions?.invoke(width, height)
+  }
+
+  private fun clearReportedDimensions() {
+    lastReportedWidth = 0
+    lastReportedHeight = 0
+  }
+
   private fun parameterSetsFor(codecName: String, nals: List<ByteArray>): ByteArray? {
     val hevc = codecName.startsWith("hvc1") || codecName.startsWith("hev1")
     val wanted = if (hevc) setOf(32, 33, 34) else setOf(7, 8)
@@ -243,6 +277,9 @@ private fun nalType(nal: ByteArray, h264: Boolean): Int {
 }
 
 private fun withStartCode(nal: ByteArray): ByteArray = byteArrayOf(0, 0, 0, 1) + nal
+
+private fun MediaFormat.intOrZero(key: String): Int =
+  if (!containsKey(key)) 0 else runCatching { getInteger(key) }.getOrDefault(0)
 
 private fun annexBNals(data: ByteArray): List<ByteArray> {
   val starts = mutableListOf<Pair<Int, Int>>()

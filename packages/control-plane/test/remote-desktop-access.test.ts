@@ -83,6 +83,63 @@ test("signal liveness before the first component snapshot is accepted and forwar
   assert.equal(upstreamMessages.some((value) => String(value).includes("alive_b")), true);
 });
 
+test("an attach failure code reaches the viewer before the dead session closes", async () => {
+  const requests: string[] = [];
+  let relay: NodeAgentWebSocket | undefined;
+  const access = new DesktopAccess({
+    async request(_instanceId, operation) {
+      requests.push(operation);
+      if (operation === "reserve") return { type: "reserved", attachToken: "attach_a", attachExpiresAt: Date.now() + 30_000, snapshot };
+      if (operation === "stop") return { type: "stopped" };
+      throw new Error(`unexpected ${operation}`);
+    },
+    async attach(_instanceId, socket) {
+      relay = socket;
+    },
+    async renewAuthorization() { return true; },
+    issueIce() { return { iceServers: [], iceCredentialsExpiresAt: null }; },
+  });
+
+  const created = await access.create(principal, "inst_a", "node_a", "request_a", { sourceRef: "display-primary" });
+  const entry = access.consume(principal, "inst_a", created.snapshot.viewerSessionId, created.ticket);
+  const socket = new FakeSocket();
+  await access.connect(entry, socket as never);
+
+  relay!.send(JSON.stringify({ type: "error", code: "REMOTE_DESKTOP_WINDOW_UNAVAILABLE" }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const messages = socket.sent.map((value) => JSON.parse(String(value)));
+  assert.deepEqual(messages.filter((value) => value.type === "error"), [
+    { type: "error", code: "REMOTE_DESKTOP_WINDOW_UNAVAILABLE" },
+  ]);
+  assert.equal(socket.closeCode, 1000);
+  assert.equal(requests.includes("stop"), true);
+});
+
+test("an attach transport failure still reaches the viewer as a desktop error", async () => {
+  const access = new DesktopAccess({
+    async request(_instanceId, operation) {
+      if (operation === "reserve") return { type: "reserved", attachToken: "attach_a", attachExpiresAt: Date.now() + 30_000, snapshot };
+      if (operation === "stop") return { type: "stopped" };
+      throw new Error(`unexpected ${operation}`);
+    },
+    async attach() { throw new Error("Instance inst_a is not ready."); },
+    async renewAuthorization() { return true; },
+    issueIce() { return { iceServers: [], iceCredentialsExpiresAt: null }; },
+  });
+
+  const created = await access.create(principal, "inst_a", "node_a", "request_a", { sourceRef: "display-primary" });
+  const entry = access.consume(principal, "inst_a", created.snapshot.viewerSessionId, created.ticket);
+  const socket = new FakeSocket();
+  await access.connect(entry, socket as never);
+
+  const messages = socket.sent.map((value) => JSON.parse(String(value)));
+  assert.deepEqual(messages.filter((value) => value.type === "error"), [
+    { type: "error", code: "REMOTE_DESKTOP_ATTACH_FAILED" },
+  ]);
+  assert.equal(socket.closeCode, 1000);
+});
+
 test("a resumed signal ticket replaces the browser tunnel without re-attaching the component", async () => {
   let attaches = 0;
   let upstream: FakeSocket | undefined;

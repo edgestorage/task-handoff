@@ -19,5 +19,6 @@ export function remoteDesktopErrorMessage(error: RemoteDesktopError | undefined,
   if (code === 'REMOTE_DESKTOP_TURN_REQUIRED' || code === 'REMOTE_DESKTOP_TURN_UNAVAILABLE') return t('remoteDesktop.turnRequired');
   if (code === 'REMOTE_DESKTOP_TRANSPORT_DISABLED' || code === 'REMOTE_DESKTOP_TRANSPORT_UNAVAILABLE' || code === 'REMOTE_DESKTOP_ICE_TIMEOUT' || code === 'REMOTE_DESKTOP_FALLBACK_FAILED' || code === 'REMOTE_DESKTOP_ICE_FAILED' || code === 'REMOTE_DESKTOP_SIGNAL_CLOSED' || code === 'REMOTE_DESKTOP_SIGNAL_SOCKET_ERROR') return t('remoteDesktop.transportConnectionFailed');
   if (code === 'REMOTE_DESKTOP_DECODER_UNAVAILABLE') return t('remoteDesktop.nativeUnavailable');
+  if (code === 'REMOTE_DESKTOP_ATTACH_FAILED' || code === 'REMOTE_DESKTOP_ATTACH_TIMEOUT') return t('remoteDesktop.errorGeneric');
   return error.message || t('remoteDesktop.errorGeneric');
 }

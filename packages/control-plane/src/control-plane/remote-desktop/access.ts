@@ -20,6 +20,10 @@ export function desktopOwner(principal: DesktopPrincipal) {
   return { actorId, deviceSessionId: principal.deviceSessionId };
 }
 export function failure(code: string, statusCode = 409) { return Object.assign(new Error("Remote desktop operation failed."), { code, statusCode }); }
+function stableErrorCode(value: unknown) {
+  const code = value && typeof value === "object" && "code" in value ? (value as { code?: unknown }).code : undefined;
+  return typeof code === "string" && /^REMOTE_DESKTOP_[A-Z0-9_]+$/.test(code) ? code : undefined;
+}
 function isRemoteDesktopNotFound(error: unknown) {
   return Boolean(error && typeof error === "object" && (error as { code?: unknown }).code === "REMOTE_DESKTOP_NOT_FOUND");
 }
@@ -442,6 +446,10 @@ export class DesktopAccess {
             ? message.code : "REMOTE_DESKTOP_OPERATION_FAILED";
           if (message.requestId === configuring) configuring = undefined;
           if (message.requestId === negotiation) negotiation = undefined;
+          // Before the first snapshot there is no recoverable media session.
+          // Forward the component's stable code and close through the same
+          // failure path so the viewer does not retry a dead attach.
+          if (!ready) { fail(code); return; }
           // Component errors are stable codes, not malformed signaling. Keep
           // the entry alive so the viewer can switch to the fallback transport
           // on the same authoritative session.
@@ -466,7 +474,9 @@ export class DesktopAccess {
         entry.upstreamHeartbeat = setInterval(heartbeat, UPSTREAM_SIGNAL_ALIVE_MS);
         entry.upstreamHeartbeat.unref?.();
         installExpiry(entry.ice);
-      } catch { await this.close(entry); }
+      } catch (error) {
+        fail(stableErrorCode(error) ?? "REMOTE_DESKTOP_ATTACH_FAILED");
+      }
     })();
     entry.attachTask = attachTask;
     try { await attachTask; } finally { if (entry.attachTask === attachTask) entry.attachTask = undefined; }

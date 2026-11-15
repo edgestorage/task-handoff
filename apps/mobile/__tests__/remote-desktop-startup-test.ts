@@ -12,6 +12,7 @@ import {
   configureRemoteDesktopDecoder,
   decodeRemoteDesktopFrame,
   resetRemoteDesktopDecoder,
+  subscribeRemoteDesktopVideoDimensions,
 } from '../modules/task-handoff-remote-desktop/src';
 
 jest.mock('react-native-webrtc', () => ({
@@ -27,6 +28,7 @@ jest.mock('../modules/task-handoff-remote-desktop/src', () => ({
   startRemoteDesktopTextInputObservation: jest.fn(() => false),
   stopRemoteDesktopTextInputObservation: jest.fn(),
   subscribeRemoteDesktopDecoderErrors: jest.fn(() => ({ remove: jest.fn() })),
+  subscribeRemoteDesktopVideoDimensions: jest.fn(() => ({ remove: jest.fn() })),
   subscribeRemoteDesktopTextInput: jest.fn(() => ({ remove: jest.fn() })),
 }));
 
@@ -590,6 +592,23 @@ test('startup fails visibly when signaling opens but never becomes ready', async
   jest.useRealTimers();
 });
 
+test('an initialization close preserves the actionable component error', async () => {
+  const { api, controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onClose?.({ code: 1008, reason: 'REMOTE_DESKTOP_WINDOW_UNAVAILABLE' });
+  for (let index = 0; index < 20; index += 1) await Promise.resolve();
+
+  expect(controller.getSnapshot().phase).toBe('error');
+  expect(controller.getSnapshot().error?.code).toBe('REMOTE_DESKTOP_WINDOW_UNAVAILABLE');
+  expect(api.resumeSignal).not.toHaveBeenCalled();
+  expect(api.createSession).toHaveBeenCalledTimes(1);
+  expect(api.stop).toHaveBeenCalledWith('instance_1', 'rdv_1');
+
+  await controller.close();
+});
+
 test('fallback configuration keeps the decoder alive for the first keyframe', async () => {
   const configure = configureRemoteDesktopDecoder as jest.Mock;
   const decode = decodeRemoteDesktopFrame as jest.Mock;
@@ -605,7 +624,11 @@ test('fallback configuration keeps the decoder alive for the first keyframe', as
   await flushMicrotasks();
 
   const media = sockets[1];
+  const control = sockets[2];
   media.handlers.onOpen?.();
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
   media.handlers.onMessage(JSON.stringify({
     type: 'fallback.configure',
     payload: { width: 1920, height: 1080, fps: 30, bitrate: 12_000_000, codec: 'avc1.42E028' },
@@ -620,6 +643,65 @@ test('fallback configuration keeps the decoder alive for the first keyframe', as
   expect(controller.getSnapshot().videoWidth).toBe(1920);
   expect(controller.getSnapshot().videoHeight).toBe(1080);
   await controller.close();
+});
+
+test('fallback encoding survives diagnostics and decoded dimensions override the configure size', async () => {
+  jest.useFakeTimers();
+  let dimensionsListener: ((event: { width: number; height: number }) => void) | undefined;
+  (subscribeRemoteDesktopVideoDimensions as jest.Mock).mockImplementationOnce((listener) => {
+    dimensionsListener = listener;
+    return { remove: jest.fn() };
+  });
+  try {
+    const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+    await controller.start();
+    sockets[0].handlers.onOpen?.();
+    sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+    await flushMicrotasks();
+
+    const media = sockets[1];
+    const control = sockets[2];
+    media.handlers.onOpen?.();
+    media.handlers.onMessage(JSON.stringify({
+      type: 'fallback.configure',
+      payload: { width: 1280, height: 720, fps: 30, bitrate: 4_000_000, codec: 'avc1.42E01E' },
+    }));
+    expect(controller.getSnapshot().videoCodec).toBeUndefined();
+
+    control.handlers.onOpen?.();
+    control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+    await flushMicrotasks();
+    expect(controller.getSnapshot()).toEqual(expect.objectContaining({
+      videoWidth: 1280,
+      videoHeight: 720,
+      videoCodec: 'avc1.42E01E',
+      videoFrameRate: 30,
+    }));
+
+    dimensionsListener?.({ width: 960, height: 540 });
+    media.handlers.onMessage(fallbackMediaFrame());
+    await flushMicrotasks();
+    expect(controller.getSnapshot()).toEqual(expect.objectContaining({
+      videoWidth: 960,
+      videoHeight: 540,
+      videoCodec: 'avc1.42E01E',
+      videoFrameRate: 30,
+    }));
+
+    await jest.advanceTimersByTimeAsync(1_100);
+    await flushMicrotasks();
+    expect(controller.getSnapshot()).toEqual(expect.objectContaining({
+      videoWidth: 960,
+      videoHeight: 540,
+      videoCodec: 'avc1.42E01E',
+      videoFrameRate: 30,
+    }));
+    expect(controller.getSnapshot().transportDiagnostics?.path).toBe('websocket');
+
+    await controller.close();
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 test('decoder overload resumes at a fresh keyframe without replaying queued deltas or reconnecting', async () => {

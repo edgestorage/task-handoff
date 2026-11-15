@@ -119,6 +119,24 @@ test('invalid attach cannot close the valid session; disconnect during pending a
   assert.equal(calls[2].boot,'boot');
 });
 
+test('attach forwards the component failure code before closing signaling',{timeout:5000},async t=>{
+  const instance=new EventEmitter();
+  instance.componentRunning=()=>true;
+  instance.request=async(_id,command)=>command.type==='attach'
+    ?{type:'error',code:'REMOTE_DESKTOP_WINDOW_UNAVAILABLE'}
+    :{type:'acknowledged'};
+  const app=await appFor(t,instance);
+  const client=await app.injectWS('/api/internal/remote-desktop/attach',{headers});
+  const messages=[];
+  client.on('message',data=>messages.push(JSON.parse(data.toString())));
+  const closed=once(client,'close');
+  client.send(JSON.stringify({requestId:'a',owner,viewerSessionId:'viewer',captureSelection,attachToken:'valid'}));
+  const [code,reason]=await closed;
+  assert.equal(code,1008);
+  assert.equal(String(reason),'REMOTE_DESKTOP_WINDOW_UNAVAILABLE');
+  assert.deepEqual(messages.at(-1),{type:'error',requestId:'a',code:'REMOTE_DESKTOP_WINDOW_UNAVAILABLE'});
+});
+
 test('attach binding forwards configureIce and candidates to the component',{timeout:5000},async t=>{
   const instance=new EventEmitter();const calls=[];const replies=[];
   instance.componentRunning=()=>true;

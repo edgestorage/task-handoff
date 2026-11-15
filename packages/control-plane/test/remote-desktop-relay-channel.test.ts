@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { unsupportedRemoteDesktopCapabilities } from "@task-handoff/protocol/remote-desktop";
 import type { ControlPlaneActor } from "../src/control-plane/auth/authorization.ts";
+import { createBrowserChannelSocket } from "../src/control-plane/instances/browser-channel-socket.ts";
 import { openRemoteDesktopRelayChannel } from "../src/control-plane/remote-desktop/relay-channel.ts";
 
 const actor: ControlPlaneActor = {
@@ -90,6 +91,29 @@ test("relay signal channels consume the exact ticket and bridge both directions"
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(received.length, 1);
   assert.equal((received[0] as { binary: boolean }).binary, false);
+});
+
+test("a closing relay socket drains its final error frame before reporting close", async () => {
+  const delivered: string[] = [];
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  let closes = 0;
+  const { socket } = createBrowserChannelSocket({
+    async onMessage(message) {
+      delivered.push(new TextDecoder().decode(message.bytes));
+      await blocked;
+    },
+    onClose() { closes += 1; },
+  }, { drainOnClose: true });
+
+  socket.send(JSON.stringify({ type: "error", code: "REMOTE_DESKTOP_WINDOW_UNAVAILABLE" }));
+  socket.close(1008, "REMOTE_DESKTOP_WINDOW_UNAVAILABLE");
+  assert.equal(closes, 0);
+
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(delivered, [JSON.stringify({ type: "error", code: "REMOTE_DESKTOP_WINDOW_UNAVAILABLE" })]);
+  assert.equal(closes, 1);
 });
 
 test("relay fallback channels preserve role, generation and one-time ticket authority", async () => {

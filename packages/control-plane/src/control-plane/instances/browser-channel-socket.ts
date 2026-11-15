@@ -12,9 +12,10 @@ type Write = { message: BrowserChannelMessage; resolve(): void; reject(error: Er
 
 /** Adapts Relay credit to a ws-like socket. Both directions remain bounded;
  * receive credit is returned only after the bridge resumes its source. */
-export function createBrowserChannelSocket(handlers: BrowserChannelHandlers) {
+export function createBrowserChannelSocket(handlers: BrowserChannelHandlers, options: { drainOnClose?: boolean } = {}) {
   const emitter = new EventEmitter();
   let closed = false;
+  let closing = false;
   let paused = false;
   let writing = false;
   let reading = false;
@@ -38,20 +39,26 @@ export function createBrowserChannelSocket(handlers: BrowserChannelHandlers) {
   };
   const fail = (error: unknown) => finish(1011, "Relay consumer failed.", true,
     error instanceof Error ? error : browserChannelError("BROWSER_CHANNEL_CONSUMER_FAILED"));
-  const flushOutbound = async () => {
-    if (writing) return;
-    writing = true;
-    try {
-      while (!closed && outbound.length) {
-        const item = outbound[0];
-        await handlers.onMessage(item.message);
-        if (closed) return;
-        outbound.shift();
-        outboundBytes -= item.message.bytes.byteLength;
-        item.resolve();
-      }
-    } catch (error) { fail(error); }
-    finally { writing = false; }
+  let flushing: Promise<void> | undefined;
+  const flushOutbound = () => {
+    if (flushing) return flushing;
+    const promise = (async () => {
+      writing = true;
+      try {
+        while (!closed && outbound.length) {
+          const item = outbound[0];
+          await handlers.onMessage(item.message);
+          if (closed) return;
+          outbound.shift();
+          outboundBytes -= item.message.bytes.byteLength;
+          item.resolve();
+        }
+      } catch (error) { fail(error); }
+      finally { writing = false; }
+    })();
+    flushing = promise;
+    void promise.finally(() => { if (flushing === promise) flushing = undefined; });
+    return promise;
   };
   const flushInbound = () => {
     if (reading || paused || closed) return;
@@ -78,7 +85,7 @@ export function createBrowserChannelSocket(handlers: BrowserChannelHandlers) {
     pause() { paused = true; },
     resume() { paused = false; flushInbound(); },
     sendAsync(data, options) {
-      if (closed) return Promise.reject(closedError());
+      if (closed || closing) return Promise.reject(closedError());
       const bytes = typeof data === "string" ? Buffer.from(data)
         : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
           : data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array();
@@ -94,8 +101,19 @@ export function createBrowserChannelSocket(handlers: BrowserChannelHandlers) {
       void flushOutbound();
       return result;
     },
-    send(data, options) { void socket.sendAsync!(data, options).catch(fail); },
-    close(code = 1000, reason = "Relay channel closed.") { finish(code, reason, true); },
+    send(data, options) {
+      if (closed || closing) return;
+      void socket.sendAsync!(data, options).catch(fail);
+    },
+    close(code = 1000, reason = "Relay channel closed.") {
+      if (closed || closing) return;
+      if (!options.drainOnClose || (!writing && !outbound.length)) { finish(code, reason, true); return; }
+      // A closing signaling socket still owes the viewer its final control
+      // frame. Let the bounded outbound queue drain before reporting close, or
+      // Relay turns an actionable component error into a generic disconnect.
+      closing = true;
+      void flushOutbound().then(() => { if (!closed) finish(code, reason, true); });
+    },
   };
   const channel: BrowserChannel = {
     send(message) {

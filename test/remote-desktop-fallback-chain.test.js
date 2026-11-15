@@ -201,6 +201,42 @@ test("node agent rejects a fallback role/protocol mismatch before opening upstre
   assert.equal(opened, 0);
 });
 
+test("node agent preserves the instance close reason for attach signaling", async (t) => {
+  const app = Fastify({ logger: false });
+  await app.register(websocket);
+  t.after(async () => {
+    for (const socket of app.websocketServer.clients) socket.terminate();
+    await app.close();
+  });
+  let upstream;
+  registerManagedDesktopRoutes(app, {
+    instanceBase: () => "http://instance.internal",
+    instanceCredential: () => "registration-secret",
+    webSocketFactory: () => {
+      upstream = new CapturingUpstreamWebSocket();
+      return upstream;
+    },
+  });
+  await app.ready();
+
+  const client = await app.injectWS("/api/node-agent/instances/inst_remote/remote-desktop/attach");
+  client.send(JSON.stringify({
+    requestId: "attach_a",
+    owner: { actorId: "user:user_1", deviceSessionId: "device_1" },
+    viewerSessionId: "rdv_viewer",
+    captureSelection: { sourceRef: "display-primary" },
+    attachToken: "attach-token",
+  }));
+  while (!upstream) await new Promise((resolve) => setImmediate(resolve));
+  upstream.open();
+  while (!upstream.sent.length) await new Promise((resolve) => setImmediate(resolve));
+  const closed = once(client, "close");
+  upstream.emit("close", 1008, Buffer.from("REMOTE_DESKTOP_WINDOW_UNAVAILABLE"));
+  const [code, reason] = await closed;
+  assert.equal(code, 1008);
+  assert.equal(String(reason), "REMOTE_DESKTOP_WINDOW_UNAVAILABLE");
+});
+
 test("node agent rejects malformed fallback context before opening upstream", async (t) => {
   const app = Fastify({ logger: false });
   await app.register(websocket);

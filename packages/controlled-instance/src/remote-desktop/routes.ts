@@ -31,8 +31,13 @@ const SignedSignal=z.union([
 ]);
 function respondError(reply:FastifyReply,error:unknown){
   if(error instanceof z.ZodError)return reply.code(400).send({error:{code:"REMOTE_DESKTOP_INVALID_REQUEST",message:"Invalid remote desktop request."}});
-  const code=error instanceof Error && /^REMOTE_DESKTOP_[A-Z_]+$/.test(error.message)?error.message:"REMOTE_DESKTOP_COMPONENT_UNAVAILABLE";
+  const code=componentErrorCode(error)??"REMOTE_DESKTOP_COMPONENT_UNAVAILABLE";
   return reply.code(409).send({error:{code,message:"Remote desktop operation failed."}});
+}
+const DesktopErrorCode=/^REMOTE_DESKTOP_[A-Z0-9_]+$/;
+function componentErrorCode(value:unknown){
+  const code=value&&typeof value==="object"&&"code" in value?(value as {code?:unknown}).code:value instanceof Error?value.message:value;
+  return typeof code==="string"&&DesktopErrorCode.test(code)?code:undefined;
 }
 export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService,credential:()=>string|undefined){
   const boundary={config:{taskHandoffAuth:"node-agent" as const},preHandler:async(request:FastifyRequest,reply:FastifyReply)=>{
@@ -72,6 +77,7 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
     let binding:z.infer<typeof Session>|undefined;
     let closed=false,queued=0,ready=false,attached=false,lastRevision=-1;
     let bootId:string|undefined;
+    let activeRequestId:string|undefined;
     let buffered:ComponentEvent[]=[];
     let rateStart=performance.now(),messages=0;
     let chain=Promise.resolve();
@@ -85,7 +91,7 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
       if(!ready){if(buffered.length>=128)socket.close(1013,"Snapshot required.");else buffered.push(event);return;}
       if(event.snapshot.sessionRevision<=lastRevision)return;
       lastRevision=event.snapshot.sessionRevision;send({type:"snapshot",snapshot:event.snapshot});
-      if(event.snapshot.phase==="stopped"||event.snapshot.phase==="failed")socket.close(1000,"Remote desktop session ended.");
+      if(event.snapshot.phase==="stopped"||event.snapshot.phase==="failed")socket.close(1000,componentErrorCode(event.snapshot.reason)??"Remote desktop session ended.");
     };
     const cleanup=()=>{
       if(closed)return;closed=true;clearTimeout(attachDeadline);buffered=[];
@@ -93,8 +99,15 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
       // Queue behind a pending attach/offer, so a late success is still closed.
       chain.finally(async()=>{if(attached&&binding)await service.request(randomBytes(16).toString("hex"),{type:"signalClosed",owner:binding.owner,viewerSessionId:binding.viewerSessionId},bootId).catch(()=>undefined);}).catch(()=>undefined);
     };
-    const changed=()=>{if(binding&&!service.componentRunning())socket.close(1011,"Remote desktop component unavailable.");};
-    const attachDeadline=setTimeout(()=>socket.close(1008,"Attach deadline exceeded."),20_000);
+    const changed=()=>{
+      if(!binding||service.componentRunning())return;
+      send({type:"error",requestId:binding.requestId,code:"REMOTE_DESKTOP_COMPONENT_UNAVAILABLE"});
+      socket.close(1011,"REMOTE_DESKTOP_COMPONENT_UNAVAILABLE");
+    };
+    const attachDeadline=setTimeout(()=>{
+      send({type:"error",requestId:binding?.requestId,code:"REMOTE_DESKTOP_ATTACH_TIMEOUT"});
+      socket.close(1008,"REMOTE_DESKTOP_ATTACH_TIMEOUT");
+    },20_000);
     service.on("session",event);service.on("changed",changed);
     socket.on("close",cleanup);socket.on("error",cleanup);
     socket.on("message",(data,isBinary)=>{
@@ -109,10 +122,17 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
         const raw:unknown=JSON.parse(data.toString());
         if(!binding){
           const{requestId,...fields}=Attach.parse(raw);
+          activeRequestId=requestId;
           // Binding is installed before forwarding so negotiating events have a
           // bounded snapshot buffer; it contains no attach token.
           binding={requestId,owner:fields.owner,viewerSessionId:fields.viewerSessionId};
           const result=await service.request(requestId,{type:"attach",...fields});
+          if(result.type==="error"){
+            const code=componentErrorCode(result)??"REMOTE_DESKTOP_ATTACH_FAILED";
+            send({type:"error",requestId,code});
+            socket.close(1008,code);
+            return;
+          }
           if(result.type!=="snapshot")throw new Error("REMOTE_DESKTOP_ATTACH_INVALID");
           attached=true;bootId=String(result.bootId);
           clearTimeout(attachDeadline);
@@ -123,10 +143,21 @@ export function registerDesktopRoutes(app:FastifyInstance,service:DesktopService
           const input=SignedSignal.parse(raw);
           if(input.type==="acknowledged"||input.type==="iceRestarted"||input.type==="stop")return;
           const{requestId,...command}=input;
+          activeRequestId=requestId;
           const result=await service.request(requestId,{...command,owner:binding.owner,viewerSessionId:binding.viewerSessionId},bootId);
+          if(result.type==="error"){
+            const code=componentErrorCode(result)??"REMOTE_DESKTOP_OPERATION_FAILED";
+            send({type:"error",requestId,code});
+            socket.close(1008,code);
+            return;
+          }
           send({requestId,...result});
         }
-      }).catch(()=>{socket.close(1008,"Remote desktop signaling failed.");}).finally(()=>{queued--;});
+      }).catch((error)=>{
+        const code=componentErrorCode(error)??"REMOTE_DESKTOP_SIGNAL_INVALID";
+        send({type:"error",requestId:activeRequestId,code});
+        socket.close(1008,code);
+      }).finally(()=>{queued--;});
     });
   });
   app.get("/api/internal/remote-desktop/fallback/:role", { ...boundary, websocket: true }, (socket, request) => {

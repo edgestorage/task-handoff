@@ -30,11 +30,14 @@ class TaskHandoffRemoteDesktopModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("TaskHandoffRemoteDesktop")
-    Events("onRemoteDesktopDecoderError", "onRemoteDesktopTextInput")
+    Events("onRemoteDesktopDecoderError", "onRemoteDesktopVideoDimensions", "onRemoteDesktopTextInput")
 
     OnCreate {
       RemoteDesktopDecoderEngine.onError = { code, message ->
         sendEvent("onRemoteDesktopDecoderError", mapOf("code" to code, "message" to message))
+      }
+      RemoteDesktopDecoderEngine.onVideoDimensions = { width, height ->
+        sendEvent("onRemoteDesktopVideoDimensions", mapOf("width" to width, "height" to height))
       }
     }
 
@@ -125,6 +128,7 @@ class TaskHandoffRemoteDesktopModule : Module() {
     OnDestroy {
       stopTextInputObservation()
       RemoteDesktopDecoderEngine.onError = null
+      RemoteDesktopDecoderEngine.onVideoDimensions = null
       RemoteDesktopDecoderEngine.close()
     }
   }

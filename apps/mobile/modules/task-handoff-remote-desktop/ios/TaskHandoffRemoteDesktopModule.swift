@@ -60,12 +60,17 @@ public final class TaskHandoffRemoteDesktopModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("TaskHandoffRemoteDesktop")
-    Events("onRemoteDesktopDecoderError", "onRemoteDesktopTextInput")
+    Events("onRemoteDesktopDecoderError", "onRemoteDesktopVideoDimensions", "onRemoteDesktopTextInput")
 
     OnCreate { [weak self] in
       RemoteDesktopDecoderEngine.shared.onError = { [weak self] code, message in
         DispatchQueue.main.async {
           self?.sendEvent("onRemoteDesktopDecoderError", ["code": code, "message": message as Any])
+        }
+      }
+      RemoteDesktopDecoderEngine.shared.onVideoDimensions = { [weak self] width, height in
+        DispatchQueue.main.async {
+          self?.sendEvent("onRemoteDesktopVideoDimensions", ["width": width, "height": height])
         }
       }
     }
@@ -123,6 +128,7 @@ public final class TaskHandoffRemoteDesktopModule: Module {
     OnDestroy {
       self.stopTextInputObservation()
       RemoteDesktopDecoderEngine.shared.onError = nil
+      RemoteDesktopDecoderEngine.shared.onVideoDimensions = nil
       RemoteDesktopDecoderEngine.shared.close()
     }
   }

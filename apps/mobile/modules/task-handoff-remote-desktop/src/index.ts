@@ -10,6 +10,7 @@ export {
   startRemoteDesktopTextInputObservation,
   stopRemoteDesktopTextInputObservation,
   subscribeRemoteDesktopDecoderErrors,
+  subscribeRemoteDesktopVideoDimensions,
   subscribeRemoteDesktopTextInput,
   type RemoteDesktopTextInputEvent,
 } from './TaskHandoffRemoteDesktopModule';

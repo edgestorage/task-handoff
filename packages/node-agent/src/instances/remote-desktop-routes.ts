@@ -1,4 +1,4 @@
-import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
+import { bridgeWebSockets, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason } from "@task-handoff/protocol/websocket-bridge";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
 import {
@@ -84,7 +84,14 @@ export function registerManagedDesktopRoutes(app: FastifyInstance, options: {
       const base = await options.instanceBase(id); if (closed) return;
       const url = new URL("/api/internal/remote-desktop/attach", base);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      upstream = new WebSocket(url, { perMessageDeflate: false, maxPayload: 512 * 1024, headers: { authorization: `Bearer ${options.instanceCredential(id)}` } });
+      const factory = options.webSocketFactory ?? ((target, protocols, init) => protocols
+        ? new WebSocket(target, protocols, init)
+        : new WebSocket(target, init));
+      upstream = factory(url, "", {
+        perMessageDeflate: false,
+        maxPayload: 512 * 1024,
+        headers: { authorization: `Bearer ${options.instanceCredential(id)}` },
+      });
       upstream.on("open", () => {
         clearTimeout(deadline); if (closed) { upstream?.close(); return; }
         for (const frame of pending.splice(0)) upstream!.send(frame);
@@ -94,7 +101,13 @@ export function registerManagedDesktopRoutes(app: FastifyInstance, options: {
         if (binary || (Array.isArray(data) ? data.reduce((sum, chunk) => sum + chunk.byteLength, 0) : data.byteLength) > 512 * 1024 || socket.bufferedAmount > 1024 * 1024) { fail(); return; }
         socket.send(data.toString());
       });
-      upstream.on("close", () => socket.close(1000, "Remote desktop signaling ended."));
+      upstream.on("close", (code, reason) => {
+        if (closed) return;
+        socket.close(
+          normalizeWebSocketCloseCode(code) ?? 1011,
+          normalizeWebSocketCloseReason(reason) || "Remote desktop signaling ended.",
+        );
+      });
       upstream.on("error", () => socket.close(1011, "REMOTE_DESKTOP_UPSTREAM_UNAVAILABLE"));
     })().catch(() => socket.close(1011, "REMOTE_DESKTOP_UPSTREAM_UNAVAILABLE"));
   });

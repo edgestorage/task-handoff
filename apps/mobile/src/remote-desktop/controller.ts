@@ -38,6 +38,7 @@ import {
   decodeRemoteDesktopFrame,
   resetRemoteDesktopDecoder,
   subscribeRemoteDesktopDecoderErrors,
+  subscribeRemoteDesktopVideoDimensions,
 } from '../../modules/task-handoff-remote-desktop/src';
 import { diagnosticLog } from '../observability/diagnostic-logs';
 import type { MobileAuthenticatedWebSocket, MobileControlPlaneTransport } from '../control-plane/transport';
@@ -116,7 +117,9 @@ export class RemoteDesktopController {
   private fallbackLastKeyframeAt = 0;
   private fallbackCodec = '';
   private fallbackFrameRate = 0;
-  private fallbackConfigKey = '';
+  private fallbackConfiguredWidth = 0;
+  private fallbackConfiguredHeight = 0;
+  private fallbackDecodedDimensions?: { width: number; height: number };
   private fallbackUpgradeStartedAt = 0;
   private readonly fallbackRttProbe = new RemoteDesktopRttProbe();
   private readonly fallbackReceiveRate = new RemoteDesktopReceiveRateMeter();
@@ -169,6 +172,7 @@ export class RemoteDesktopController {
   private readonly decodeQueue = new RemoteDesktopDecodeQueue();
   private fallbackDiagnosticFrames = 0;
   private decoderErrorSubscription?: { remove(): void };
+  private videoDimensionsSubscription?: { remove(): void };
   private stopDecoderSubscription?: () => void;
   private videoCodecs: readonly string[];
 
@@ -197,6 +201,20 @@ export class RemoteDesktopController {
       });
     } catch {
       // The optional decoder module reports its own unavailability when a frame arrives.
+    }
+    try {
+      this.videoDimensionsSubscription = subscribeRemoteDesktopVideoDimensions((event) => {
+        if (this.destroyed || this.fallbackState === 'idle') return;
+        this.fallbackDecodedDimensions = { width: event.width, height: event.height };
+        diagnosticLog.info('remote.desktop.fallback.decoded-dimensions', {
+          width: event.width,
+          height: event.height,
+          state: this.fallbackState,
+        });
+        if (this.fallbackState === 'active') this.setVideoDimensions(event.width, event.height);
+      });
+    } catch {
+      // Decoder geometry is optional; configure dimensions remain the fallback.
     }
   }
 
@@ -285,6 +303,8 @@ export class RemoteDesktopController {
     this.stopDecoderSubscription = undefined;
     this.decoderErrorSubscription?.remove();
     this.decoderErrorSubscription = undefined;
+    this.videoDimensionsSubscription?.remove();
+    this.videoDimensionsSubscription = undefined;
     this.listeners.clear();
   }
 
@@ -589,6 +609,10 @@ export class RemoteDesktopController {
           this.stopSignalAlive();
           this.invalidateInputForSignalRecovery();
           diagnosticLog.warn('remote.desktop.signal.close', { signalingReady: this.snapshotValue.signalingReady, code: event.code, reason: event.reason });
+          if (!this.snapshotValue.signalingReady) {
+            const code = remoteDesktopCodeFromText(event.reason);
+            if (code) { void this.fail(code, event.reason || 'Remote desktop session initialization failed.'); return; }
+          }
           this.considerFallbackAfterSignalFailure('REMOTE_DESKTOP_SIGNAL_CLOSED');
         },
       });
@@ -806,6 +830,7 @@ export class RemoteDesktopController {
       return;
     }
     this.clearFallbackHeadStart();
+    this.clearFallbackVideoMetadata();
     if (!proactive) {
       this.clearNegotiationTimer();
       this.clearRecoveryTimer();
@@ -927,8 +952,10 @@ export class RemoteDesktopController {
       }
       this.fallbackCodec = codec;
       this.fallbackFrameRate = fps;
+      this.fallbackConfiguredWidth = width;
+      this.fallbackConfiguredHeight = height;
       diagnosticLog.info('remote.desktop.fallback.configure', { attempt, codec, width, height, fps, bitrate });
-      this.fallbackConfigKey = `${codec}:${width}x${height}:${fps}:${bitrate}`;
+      if (this.snapshotValue.path === 'websocket') this.applyFallbackVideoMetadata();
       this.decodeQueue.clear();
       this.fallbackAssembler.reset();
       this.fallbackNeedsKeyframe = true;
@@ -1037,7 +1064,6 @@ export class RemoteDesktopController {
           if (!this.fallbackFirstFrame) {
             this.fallbackFirstFrame = true;
             this.update({
-              videoWidth: this.fallbackWidth(), videoHeight: this.fallbackHeight(),
               videoCodec: this.fallbackCodec, videoFrameRate: this.fallbackFrameRate || undefined,
               phase: this.snapshotValue.paused ? 'paused' : 'connected',
             });
@@ -1100,6 +1126,8 @@ export class RemoteDesktopController {
     this.fallbackFirstFrame = false;
     this.update({ phase: this.snapshotValue.paused ? 'paused' : 'connected', streamURL: undefined, error: undefined });
     this.applyPath('websocket');
+    this.applyFallbackVideoMetadata();
+    if (this.fallbackDecodedDimensions) this.setVideoDimensions(this.fallbackDecodedDimensions.width, this.fallbackDecodedDimensions.height);
     this.startFallbackDiagnostics();
     this.sendVisibility();
     this.applyStreamResolution();
@@ -1185,9 +1213,7 @@ export class RemoteDesktopController {
     this.closeFallbackSockets('transport-failure');
     void resetRemoteDesktopDecoder().catch(() => undefined);
     this.fallbackFirstFrame = false;
-    this.fallbackConfigKey = '';
-    this.fallbackCodec = '';
-    this.fallbackFrameRate = 0;
+    this.clearFallbackVideoMetadata();
     this.fallbackNeedsKeyframe = true;
     this.suspendInput();
     diagnosticLog.warn('remote.desktop.fallback.transport.failed', {
@@ -1248,9 +1274,7 @@ export class RemoteDesktopController {
     this.fallbackAttempt += 1;
     this.fallbackDeadline = 0;
     this.fallbackFirstFrame = false;
-    this.fallbackCodec = '';
-    this.fallbackFrameRate = 0;
-    this.fallbackConfigKey = '';
+    this.clearFallbackVideoMetadata();
     this.fallbackNeedsKeyframe = true;
     this.update({ path: this.snapshotValue.path === 'websocket' ? undefined : this.snapshotValue.path, transportDiagnostics: undefined, streamURL: this.snapshotValue.streamURL, phase: this.snapshotValue.paused ? 'paused' : 'connected' });
     this.applyPath(this.snapshotValue.path);
@@ -1267,6 +1291,7 @@ export class RemoteDesktopController {
     this.closeFallbackSockets('attempt-cancelled');
     this.fallbackState = 'idle';
     this.fallbackDeadline = 0;
+    this.clearFallbackVideoMetadata();
     this.updateTransportState('websocket', 'idle');
   }
 
@@ -1798,8 +1823,8 @@ export class RemoteDesktopController {
     };
     const webRTCDiagnostics = path === 'p2p' || path === 'turn' ? diagnostics : undefined;
     const nextDiagnostics = path === 'websocket' || path === 'p2p' || path === 'turn' ? diagnostics : undefined;
-    const nextCodec = webRTCDiagnostics?.codec;
-    const nextFrameRate = webRTCDiagnostics?.frameRate;
+    const nextCodec = path === 'websocket' ? this.fallbackCodec || undefined : webRTCDiagnostics?.codec;
+    const nextFrameRate = path === 'websocket' ? this.fallbackFrameRate || undefined : webRTCDiagnostics?.frameRate;
     if (this.snapshotValue.path === path
       && sameTransportStates(this.snapshotValue.transportStates, states)
       && sameTransportDiagnostics(this.snapshotValue.transportDiagnostics, nextDiagnostics)
@@ -1841,9 +1866,7 @@ export class RemoteDesktopController {
     this.fallbackAttempt += 1;
     this.fallbackDeadline = 0;
     this.fallbackFirstFrame = false;
-    this.fallbackCodec = '';
-    this.fallbackFrameRate = 0;
-    this.fallbackConfigKey = '';
+    this.clearFallbackVideoMetadata();
     this.fallbackUpgradeStartedAt = 0;
     this.channels.clear();
     this.seq = 0;
@@ -1938,14 +1961,22 @@ export class RemoteDesktopController {
     this.inputResumeAckTimer = undefined;
   }
 
-  private fallbackWidth() {
-    const match = /^[^:]+:(\d+)x(\d+):/.exec(this.fallbackConfigKey);
-    return match ? Number(match[1]) : 0;
+  private applyFallbackVideoMetadata() {
+    if (!this.fallbackCodec) return;
+    this.update({
+      videoWidth: this.fallbackConfiguredWidth,
+      videoHeight: this.fallbackConfiguredHeight,
+      videoCodec: this.fallbackCodec,
+      videoFrameRate: this.fallbackFrameRate || undefined,
+    });
   }
 
-  private fallbackHeight() {
-    const match = /^[^:]+:(\d+)x(\d+):/.exec(this.fallbackConfigKey);
-    return match ? Number(match[2]) : 0;
+  private clearFallbackVideoMetadata() {
+    this.fallbackCodec = '';
+    this.fallbackFrameRate = 0;
+    this.fallbackConfiguredWidth = 0;
+    this.fallbackConfiguredHeight = 0;
+    this.fallbackDecodedDimensions = undefined;
   }
 
   private current(epoch: number) { return !this.destroyed && this.epoch === epoch; }
@@ -2039,6 +2070,10 @@ function errorCode(cause: unknown) {
 }
 function errorMessage(cause: unknown) {
   return cause instanceof Error && cause.message ? cause.message : 'Remote desktop connection failed.';
+}
+function remoteDesktopCodeFromText(value: unknown) {
+  const match = typeof value === 'string' ? /(REMOTE_DESKTOP_[A-Z0-9_]+)/.exec(value) : null;
+  return match?.[1];
 }
 function isRetryableTransportError(cause: unknown) {
   return Boolean(cause && typeof cause === 'object' && 'retryable' in cause && (cause as { retryable?: unknown }).retryable === true);

@@ -23,13 +23,16 @@ final class RemoteDesktopDecoderEngine {
   private var lastTimestampUs: Int64 = 0
   private var generation: UInt64 = 0
   private var needsKeyframe = true
+  private var lastReportedDimensions: (width: Int, height: Int)?
   var onError: ((String, String?) -> Void)?
+  var onVideoDimensions: ((Int, Int) -> Void)?
 
   func attach(_ value: AVSampleBufferDisplayLayer) {
     lock.lock(); defer { lock.unlock() }
     if layer === value { return }
     generation &+= 1
     needsKeyframe = true
+    lastReportedDimensions = nil
     layer = value
   }
 
@@ -38,6 +41,7 @@ final class RemoteDesktopDecoderEngine {
     if layer !== value { return }
     generation &+= 1
     needsKeyframe = true
+    lastReportedDimensions = nil
     layer = nil
   }
 
@@ -49,6 +53,7 @@ final class RemoteDesktopDecoderEngine {
     formatDescription = nil
     parameterSets = nil
     lastTimestampUs = 0
+    lastReportedDimensions = nil
     flushLayer()
   }
 
@@ -59,6 +64,7 @@ final class RemoteDesktopDecoderEngine {
     formatDescription = nil
     parameterSets = nil
     lastTimestampUs = 0
+    lastReportedDimensions = nil
     flushLayer()
   }
 
@@ -71,6 +77,7 @@ final class RemoteDesktopDecoderEngine {
     formatDescription = nil
     parameterSets = nil
     lastTimestampUs = 0
+    lastReportedDimensions = nil
   }
 
   func decode(_ data: Data, keyframe: Bool, timestampUs: Double) {
@@ -124,6 +131,7 @@ final class RemoteDesktopDecoderEngine {
       }
     }
     guard let formatDescription, let layer else { return nil }
+    reportDimensionsIfNeeded(formatDescription)
     let nals = Self.annexBNals(data)
     guard !nals.isEmpty else { return nil }
     var avcc = Data()
@@ -153,6 +161,21 @@ final class RemoteDesktopDecoderEngine {
 
   private func report(_ code: String, _ message: String?) {
     onError?(code, message)
+  }
+
+  private func reportDimensionsIfNeeded(_ description: CMVideoFormatDescription) {
+    let dimensions = CMVideoFormatDescriptionGetPresentationDimensions(
+      description,
+      usePixelAspectRatio: true,
+      useCleanAperture: true
+    )
+    guard dimensions.width.isFinite, dimensions.height.isFinite else { return }
+    let width = Int(dimensions.width.rounded())
+    let height = Int(dimensions.height.rounded())
+    guard width >= 2, height >= 2 else { return }
+    if lastReportedDimensions?.width == width && lastReportedDimensions?.height == height { return }
+    lastReportedDimensions = (width: width, height: height)
+    onVideoDimensions?(width, height)
   }
 
   private static func parameterSets(codec: String, nals: [Data]) -> Data? {

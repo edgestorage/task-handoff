@@ -65,4 +65,5 @@ export async function openRemoteDesktopRelayChannel(
 /** One Relay channel is one NodeAgentWebSocket in both directions. Upstream
  * frames become BrowserChannel messages; client frames are emitted to the
  * desktop access layer with their original text/binary identity. */
-export const createRemoteDesktopChannel = createBrowserChannelSocket;
+export const createRemoteDesktopChannel = (handlers: BrowserChannelHandlers) =>
+  createBrowserChannelSocket(handlers, { drainOnClose: true });

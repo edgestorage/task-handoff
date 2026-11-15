@@ -12,6 +12,11 @@ export type RemoteDesktopDecoderError = {
   message?: string;
 };
 
+export type RemoteDesktopVideoDimensions = {
+  width: number;
+  height: number;
+};
+
 export type RemoteDesktopSurfaceProps = {
   style?: import('react-native').StyleProp<import('react-native').ViewStyle>;
 };

@@ -20,6 +20,13 @@ test('distinguishes a closed window from transient source capture failures', () 
   expect(isRemoteDesktopSourceEndedError('REMOTE_DESKTOP_GEOMETRY_CHANGED')).toBe(false);
 });
 
+test('keeps attach failures generic instead of presenting them as transport errors', () => {
+  expect(remoteDesktopErrorMessage({ code: 'REMOTE_DESKTOP_ATTACH_FAILED', message: 'Remote desktop session initialization failed.' }, t))
+    .toBe('remoteDesktop.errorGeneric');
+  expect(remoteDesktopErrorMessage({ code: 'REMOTE_DESKTOP_ATTACH_TIMEOUT', message: 'Remote desktop session initialization failed.' }, t))
+    .toBe('remoteDesktop.errorGeneric');
+});
+
 test('does not present a cached source title as the current source after it ends', () => {
   const target = { kind: 'window', sourceRef: 'window-old', title: 'iPhone 17' };
   expect(remoteDesktopSourceHeaderLabel(target, true, t)).toBe('remoteDesktop.windowClosed');
