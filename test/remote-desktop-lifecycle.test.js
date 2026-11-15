@@ -101,10 +101,11 @@ test('native npm package install, real component lifecycle and uninstall share t
  await manager.refreshSnapshot();
  let app=manager.snapshot().apps[0];assert.equal(app.state,'not-installed');assert.equal(app.canInstall,true);
  await lifecycle.run('install','install');
+ assert.equal(service.settings.get().enabled,true);
+ assert.equal(service.componentRunning(),true);
  assert.equal(readManagedDesktopPackage(installBaseDir,stateDir).version,version);
  assert.equal(lifecycle.resolutions(),1);
  const checked=await manager.checkForUpdate('remote-desktop');assert.equal(checked.status,'up-to-date');assert.equal(lifecycle.resolutions(),2);
- await service.setEnabled(true);assert.equal(service.componentRunning(),true);
  lifecycle.failResolution(true);
  const unavailable=await manager.checkForUpdate('remote-desktop');assert.equal(unavailable.status,'unknown');assert.match(unavailable.reason,/unavailable/);
  const failedUpdate=await lifecycle.runFailure('update','unavailable-update');assert.equal(failedUpdate.error.code,'npm_registry_unavailable');assert.equal(lifecycle.stopCalls(),0);

@@ -5,7 +5,7 @@ use crate::{
     host::{CaptureMode, ComponentHost},
     settings::DesktopSettings,
 };
-use controlled_instance_protocol::RemoteDesktopCapabilities;
+use controlled_instance_protocol::{AppManagementOperation, RemoteDesktopCapabilities};
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
@@ -402,12 +402,20 @@ impl DesktopService {
         let _ = self.events.send(DesktopEvent::Changed);
         Ok(())
     }
-    pub async fn package_changed(&self, uninstall_succeeded: bool) -> anyhow::Result<()> {
+    pub async fn package_changed(
+        &self,
+        operation: AppManagementOperation,
+        succeeded: bool,
+    ) -> anyhow::Result<()> {
         let _host = self.host.lock().await;
         self.protocol_update_requested
             .store(false, Ordering::SeqCst);
-        if uninstall_succeeded {
-            self.settings.clear()?;
+        if succeeded {
+            match operation {
+                AppManagementOperation::Install => self.settings.set(true)?,
+                AppManagementOperation::Uninstall => self.settings.clear()?,
+                AppManagementOperation::Update => {}
+            }
         }
         let _ = self.events.send(DesktopEvent::Changed);
         Ok(())
@@ -504,7 +512,10 @@ mod tests {
         service.maybe_request_protocol_update(&mismatch);
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(requests.load(Ordering::SeqCst), 1);
-        service.package_changed(false).await.unwrap();
+        service
+            .package_changed(AppManagementOperation::Update, true)
+            .await
+            .unwrap();
         service.maybe_request_protocol_update(&mismatch);
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(requests.load(Ordering::SeqCst), 2);
@@ -552,10 +563,27 @@ mod tests {
                 .to_string(),
             "REMOTE_DESKTOP_DISABLED"
         );
-        service.set_enabled(true).await.unwrap();
-        service.package_changed(false).await.unwrap();
+        service
+            .package_changed(AppManagementOperation::Install, false)
+            .await
+            .unwrap();
+        assert!(!service.settings.enabled());
+        service
+            .package_changed(AppManagementOperation::Install, true)
+            .await
+            .unwrap();
         assert!(service.settings.enabled());
-        service.package_changed(true).await.unwrap();
+        service.set_enabled(false).await.unwrap();
+        service
+            .package_changed(AppManagementOperation::Update, true)
+            .await
+            .unwrap();
+        assert!(!service.settings.enabled());
+        service.set_enabled(true).await.unwrap();
+        service
+            .package_changed(AppManagementOperation::Uninstall, true)
+            .await
+            .unwrap();
         assert!(!service.settings.enabled());
         service.set_enabled(true).await.unwrap();
         service.close().await.unwrap();

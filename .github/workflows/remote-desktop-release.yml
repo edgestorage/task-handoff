@@ -62,6 +62,8 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#remote-desktop-v}" >> "$GITHUB_OUTPUT"
 
+      - name: Install remote desktop host build dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libxcb1-dev
       - run: cargo test --locked --manifest-path remote-desktop-rs/Cargo.toml -p desktop-streaming --no-run
       - run: node --test test/remote-desktop-packages.test.js test/registry-native-package.test.js
 

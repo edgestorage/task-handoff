@@ -1,3 +1,4 @@
+use controlled_instance_protocol::AppManagementOperation;
 use desktop_component_host::{
     contract::{Command, Reply},
     host::ComponentHost,
@@ -220,7 +221,10 @@ async fn real_service_enabled_intent_package_drain_restart_and_capability_are_bo
             .to_string(),
         "REMOTE_DESKTOP_UPDATING"
     );
-    service.package_changed(false).await.unwrap();
+    service
+        .package_changed(AppManagementOperation::Install, false)
+        .await
+        .unwrap();
     assert!(service.settings.enabled());
     admission.store(true, Ordering::SeqCst);
     service.refresh().await;
@@ -241,7 +245,10 @@ async fn real_service_enabled_intent_package_drain_restart_and_capability_are_bo
     assert_ne!(restart_boot, new_boot);
     assert!(matches!(reply, Reply::Reserved { .. }));
     restarted.before_package_change().await.unwrap();
-    restarted.package_changed(true).await.unwrap();
+    restarted
+        .package_changed(AppManagementOperation::Uninstall, true)
+        .await
+        .unwrap();
     present.store(false, Ordering::SeqCst);
     assert!(!restarted.settings.enabled());
     restarted.close().await.unwrap();

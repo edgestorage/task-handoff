@@ -208,6 +208,10 @@ export class DesktopService extends EventEmitter {
   packageChanged(operation: string, succeeded: boolean) {
     return this.serial(async () => {
       if (operation === "uninstall" && succeeded) this.settings.clear();
+      // Installation is an explicit user intent to use the component. Persist
+      // enable before the App terminal refresh starts it; updates preserve the
+      // existing intent so a manually disabled desktop stays disabled.
+      if (operation === "install" && succeeded) this.settings.set(true);
       this.protocolUpdateRequested=false;
       this.emit("changed");
     });

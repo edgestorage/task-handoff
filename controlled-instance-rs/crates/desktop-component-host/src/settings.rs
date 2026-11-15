@@ -1,5 +1,6 @@
-//! Instance-owned durable intent, independent of package installation and general
-//! config writes from N-1 clients. No session or credential is persisted.
+//! Instance-owned durable intent, independent of general config writes from N-1
+//! clients. Installation enables it; uninstall clears it. No session or credential
+//! is persisted.
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 #[derive(Clone)]
