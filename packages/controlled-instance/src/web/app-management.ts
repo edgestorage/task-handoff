@@ -25,6 +25,7 @@ import {
   managedNativeAppRoot,
   readNativeAppManifest,
   resolveApp,
+  resolveRegistryNativePackage,
   selectInstallRecipe,
 } from "@task-handoff/app-runtime";
 import type { ManagedAppOwnershipResult, ManagedAppRecipeTarget } from "@task-handoff/app-runtime";
@@ -170,6 +171,7 @@ export type AppManagementManagerOptions = {
   ownership?: (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => ManagedAppOwnershipResult | Promise<ManagedAppOwnershipResult>;
   execute?: (operation: AppManagementOperation, recipe: InstallRecipe, context: AppRecipeExecutionContext, policy?: AppInstallExecutionPolicy) => Promise<unknown>;
   updateCheck?: (recipe: InstallRecipe, context: AppUpdateCheckContext) => Promise<AppUpdateCheckResult>;
+  resolveRegistryNativePackage?: typeof resolveRegistryNativePackage;
   stopAppRuntime?: (appId: string) => void | Promise<void>;
   sessions?: () => Array<{ id: string; appId: string; status: string }>;
   publish?: (event: AppManagementEvent) => void;
@@ -191,6 +193,7 @@ export class AppManagementManager {
   private readonly ownership: NonNullable<AppManagementManagerOptions["ownership"]>;
   private readonly execute: AppManagementManagerOptions["execute"];
   private readonly updateCheck: NonNullable<AppManagementManagerOptions["updateCheck"]>;
+  private readonly resolveRegistryRecipe: NonNullable<AppManagementManagerOptions["resolveRegistryNativePackage"]>;
   private readonly stopAppRuntime: NonNullable<AppManagementManagerOptions["stopAppRuntime"]>;
   private readonly sessions: NonNullable<AppManagementManagerOptions["sessions"]>;
   private readonly publishEvent: NonNullable<AppManagementManagerOptions["publish"]>;
@@ -228,6 +231,17 @@ export class AppManagementManager {
     const defaultOwnership = (definition: ManagedAppDefinition, detection: ManagedAppDetectionResult, capabilities: FinalComputerCapabilities) => {
       const target = recipeTarget(capabilities);
       const selected = selectInstallRecipe(definition, capabilities, target).recipe;
+      const nativeManifestOwned = async (launchPath: string, detected: ManagedAppDetectionResult) => {
+        const manifest = readNativeAppManifest(options.installBaseDir, definition.launcher.id);
+        const expectedRoot = path.resolve(managedNativeAppRoot(options.installBaseDir, definition.launcher.id));
+        const expectedLauncher = path.resolve(managedNativeAppLauncher(options.installBaseDir, definition.launcher.id, launchPath));
+        if (!manifest || manifest.appId !== definition.launcher.id || path.resolve(manifest.installRoot) !== expectedRoot) return false;
+        if (path.resolve(managedNativeAppLauncher(options.installBaseDir, definition.launcher.id, manifest.launchPath)) !== expectedLauncher) return false;
+        return detected.executablePaths.length > 0 && detected.executablePaths.every((value) => {
+          const candidate = path.resolve(value);
+          return candidate === expectedLauncher && pathInside(candidate, expectedRoot);
+        });
+      };
       if (selected?.type === "node-package" && selected.managed) {
         if (detection.state !== "installed") return { source: "none" as const };
         const root = path.resolve(options.installBaseDir, "node-package", definition.launcher.id);
@@ -237,17 +251,8 @@ export class AppManagementManager {
       }
       return detectManagedAppOwnership(definition, detection, capabilities, {
         target,
-        nativeManifestOwned: async (_definition, recipe, detected) => {
-          const manifest = readNativeAppManifest(options.installBaseDir, definition.launcher.id);
-          const expectedRoot = path.resolve(managedNativeAppRoot(options.installBaseDir, definition.launcher.id));
-          const expectedLauncher = path.resolve(managedNativeAppLauncher(options.installBaseDir, definition.launcher.id, recipe.launchPath));
-          if (!manifest || manifest.appId !== definition.launcher.id || path.resolve(manifest.installRoot) !== expectedRoot) return false;
-          if (path.resolve(managedNativeAppLauncher(options.installBaseDir, definition.launcher.id, manifest.launchPath)) !== expectedLauncher) return false;
-          return detected.executablePaths.length > 0 && detected.executablePaths.every((value) => {
-            const candidate = path.resolve(value);
-            return candidate === expectedLauncher && pathInside(candidate, expectedRoot);
-          });
-        },
+        nativeManifestOwned: async (_definition, recipe, detected) => nativeManifestOwned(recipe.launchPath, detected),
+        registryNativeManifestOwned: async (_definition, recipe, detected) => nativeManifestOwned(recipe.launchPath, detected),
         archiveManifestOwned: async (_definition, recipe, detected) => {
           const expectedRoot = path.resolve(options.installBaseDir, recipe.installRoot);
           const manifestFile = path.join(options.stateDir, "manifests", `${definition.launcher.id}.json`);
@@ -274,6 +279,7 @@ export class AppManagementManager {
       stateDir: options.stateDir,
       ...(options.installEnvironment ? { installEnvironment: options.installEnvironment } : {}),
     });
+    this.resolveRegistryRecipe = options.resolveRegistryNativePackage || resolveRegistryNativePackage;
     this.packageLifecycle = options.packageLifecycle;
     this.stopAppRuntime = options.stopAppRuntime || (() => undefined);
     this.sessions = options.sessions || (() => []);
@@ -364,7 +370,11 @@ export class AppManagementManager {
     }
     let outcome: AppUpdateCheckResult;
     try {
-      outcome = await this.updateCheck(selected.recipe, { appId, capabilities, installBaseDir: this.installBaseDir });
+      const registry = this.installEnvironment?.createExecutionPolicy().npmRegistry;
+      const recipe = selected.recipe.type === "registry-native-package"
+        ? await this.resolveRegistryRecipe(selected.recipe, capabilities, registry ? { registries: [registry] } : {})
+        : selected.recipe;
+      outcome = await this.updateCheck(recipe, { appId, capabilities, installBaseDir: this.installBaseDir });
     } catch (error) {
       outcome = { status: "unknown", reason: error instanceof Error ? error.message : String(error) };
     }
@@ -517,15 +527,29 @@ export class AppManagementManager {
     this.emit(job, true);
     const lifecycle = this.packageLifecycle?.(job.appId);
     try {
-      await lifecycle?.beforeChange?.(job.operation);
+      const capabilities = this.capabilities();
       if (job.operation !== "install") {
         const active = this.sessions().filter((session) => session.appId === job.appId && ["created", "running", "stopping"].includes(session.status));
         if (active.length) throw new AppRecipeExecutionError("app_sessions_running", "The app has running sessions and cannot be changed.", true);
-        await this.stopAppRuntime(job.appId);
       }
-      await this.execute!(job.operation, recipe, {
+      let executableRecipe = recipe;
+      if (job.operation !== "uninstall" && recipe.type === "registry-native-package") {
+        try {
+          const registry = installPolicy?.npmRegistry;
+          executableRecipe = await this.resolveRegistryRecipe(recipe, capabilities, registry ? { registries: [registry] } : {});
+        } catch (error) {
+          throw new AppRecipeExecutionError(
+            "npm_registry_unavailable",
+            error instanceof Error ? error.message : String(error),
+            true,
+          );
+        }
+      }
+      await lifecycle?.beforeChange?.(job.operation);
+      if (job.operation !== "install") await this.stopAppRuntime(job.appId);
+      await this.execute!(job.operation, executableRecipe, {
         appId: job.appId,
-        capabilities: this.capabilities(),
+        capabilities,
         onPhase: (phase, progress) => {
           flushOutput();
           const current = this.getJob(jobId);

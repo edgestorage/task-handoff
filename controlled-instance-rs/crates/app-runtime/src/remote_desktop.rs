@@ -1,78 +1,39 @@
-//! Provider-owned npm package metadata and private install layout. The package
-//! version follows the controlled-instance release; npm is only the artifact
-//! source and no package lifecycle script is executed.
+//! Provider-owned npm artifact source and private install layout. The component
+//! has an independent release train; registry discovery is delayed until an
+//! explicit App operation and installation never invokes npm.
 use crate::{
     managed_native_app_launcher, managed_native_app_manifest_path, managed_native_app_root,
-    native_package::{
-        valid_native_launch_path, valid_native_package_name, valid_native_package_version,
-        ManagedAppRecipeLibc, NativePackageIntegrity,
-    },
+    native_package::{valid_native_launch_path, ManagedAppRecipeLibc},
     read_native_app_manifest, InstallRecipe, ManagedAppDefinition, ManagedAppDetectionRule,
 };
 use controlled_instance_protocol::{
     AppCatalogItem, AppInstallPrivilege, AppKind, FinalComputerArch, FinalComputerPlatform,
 };
-use serde::Deserialize;
 use std::collections::BTreeMap;
 pub const APP_ID: &str = "remote-desktop";
 pub const EXECUTABLE: &str = "bin/task-handoff-desktop-streaming";
-#[derive(Deserialize)]
-struct PackageArtifact {
-    version: String,
-    platform: FinalComputerPlatform,
-    arch: FinalComputerArch,
-    package: String,
-    integrity: String,
-}
-#[derive(Deserialize)]
-struct Release {
-    packages: Vec<PackageArtifact>,
-}
+
 pub fn definition() -> ManagedAppDefinition {
-    definition_for_version(
-        &controlled_instance_core::package_version::resolve_controlled_instance_package_version(),
-    )
-}
-pub fn definition_for_version(version: &str) -> ManagedAppDefinition {
-    let release = serde_json::from_str::<Release>(include_str!(
-        "../../../../shared/remote-desktop-packages.json"
-    ));
-    let mut recipes: Vec<InstallRecipe> = release
-        .ok()
-        .map(|r| {
-            r.packages
-                .into_iter()
-                .filter(|package| {
-                    package.version == version
-                        && matches!(
-                            package.platform,
-                            FinalComputerPlatform::Linux | FinalComputerPlatform::Darwin
-                        )
-                        && matches!(
-                            package.arch,
-                            FinalComputerArch::X64 | FinalComputerArch::Arm64
-                        )
-                        && valid_native_package_name(&package.package)
-                        && valid_native_package_version(&package.version)
-                        && valid_native_launch_path(EXECUTABLE)
-                        && NativePackageIntegrity::parse(&package.integrity).is_some()
-                })
-                .map(|package| InstallRecipe::NativePackage {
-                    platforms: vec![package.platform],
-                    arches: Some(vec![package.arch]),
-                    privilege: Some(AppInstallPrivilege::User),
-                    libc: matches!(package.platform, FinalComputerPlatform::Linux)
-                        .then_some(ManagedAppRecipeLibc::Gnu),
-                    package: package.package,
-                    package_version: package.version.clone(),
-                    version: package.version,
-                    integrity: package.integrity,
-                    launch_path: EXECUTABLE.into(),
-                    tarball_url: None,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut recipes = vec![
+        InstallRecipe::RegistryNativePackage {
+            platforms: vec![FinalComputerPlatform::Linux],
+            arches: Some(vec![FinalComputerArch::X64, FinalComputerArch::Arm64]),
+            privilege: Some(AppInstallPrivilege::User),
+            libc: Some(ManagedAppRecipeLibc::Gnu),
+            package_prefix: "@task-handoff/remote-desktop".into(),
+            dist_tag: "latest".into(),
+            launch_path: EXECUTABLE.into(),
+        },
+        InstallRecipe::RegistryNativePackage {
+            platforms: vec![FinalComputerPlatform::Darwin],
+            arches: Some(vec![FinalComputerArch::X64, FinalComputerArch::Arm64]),
+            privilege: Some(AppInstallPrivilege::User),
+            libc: None,
+            package_prefix: "@task-handoff/remote-desktop".into(),
+            dist_tag: "latest".into(),
+            launch_path: EXECUTABLE.into(),
+        },
+    ];
     recipes.push(InstallRecipe::ArchiveOwnership {
         platforms: vec![FinalComputerPlatform::Linux, FinalComputerPlatform::Darwin],
         arches: Some(vec![FinalComputerArch::X64, FinalComputerArch::Arm64]),

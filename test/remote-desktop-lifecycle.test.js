@@ -40,28 +40,31 @@ async function nativePackageFixture(dir){
  const bytes=fs.readFileSync(archive);return {bytes,archive,integrity:integrity(bytes)};
 }
 
-function desktopDefinition(packageIntegrity){
- const definition=desktopProvider([{version,platform:process.platform,arch:process.arch,package:'@task-handoff/remote-desktop-test',integrity:packageIntegrity}]).definition({env:{}});
+function desktopDefinition(){
+ const definition=desktopProvider().definition({env:{}});
  assert.equal(definition.launchable,false);
- assert.equal(definition.distribution.recipes.filter(recipe=>recipe.type==='native-package').length,1);
+ assert.equal(definition.distribution.recipes.filter(recipe=>recipe.type==='registry-native-package').length,2);
  assert.equal(definition.distribution.recipes.filter(recipe=>recipe.type==='archive-ownership').length,1);
  return definition;
 }
 
 function lifecycleManager(options){
  const {stateDir,installBaseDir,definition,bytes,service}=options;
- const completed=new Map(),waiters=new Map();
+ const completed=new Map(),waiters=new Map();let resolutions=0,failResolution=false,stopCalls=0;
  const execute=createAppRecipeExecutor({
   installBaseDir,stateDir,
   commandRunner:async command=>command.executable.endsWith('task-handoff-desktop-streaming')?{exitCode:0,stdout:`${version}\n`,stderr:''}:assert.fail('unexpected command'),
   fetcher:async()=>new Response(bytes),
  });
  const manager=new AppManagementManager({stateDir,installBaseDir,definitions:()=>[definition],capabilities:()=>({platform:process.platform,arch:process.arch,installers:[],privilege:'user'}),execute,
+  resolveRegistryNativePackage:async(recipe,capabilities)=>{resolutions++;if(failResolution)throw new Error('npm registry unavailable');return {type:'native-package',platforms:[capabilities.platform],arches:[capabilities.arch],privilege:'user',package:'@task-handoff/remote-desktop-test',packageVersion:version,version,integrity:integrity(bytes),launchPath:recipe.launchPath,tarballUrl:'https://registry.example/task-handoff-remote-desktop-test.tgz'};},
+  stopAppRuntime:()=>{stopCalls++;},
   packageLifecycle:()=>({beforeChange:()=>service.beforePackageChange(),changed:(operation,succeeded)=>{if(operation!=='uninstall'&&succeeded)removeLegacyManagedDesktopPackage(installBaseDir,stateDir);return service.packageChanged(operation,succeeded);}}),
   onTerminal:async job=>{await service.refresh();completed.set(job.id,job);waiters.get(job.id)?.(job);},
  });
  const wait=job=>completed.has(job.id)?Promise.resolve(completed.get(job.id)):new Promise(resolve=>waiters.set(job.id,resolve));
- return {manager,run:async(operation,id)=>{const job=manager.request('remote-desktop',operation,id);const result=await wait(job);assert.equal(result.state,'succeeded',JSON.stringify(result.error));return result;}};
+ const request=async(operation,id)=>{const job=manager.request('remote-desktop',operation,id);return wait(job);};
+ return {manager,resolutions:()=>resolutions,stopCalls:()=>stopCalls,failResolution:value=>{failResolution=value;},run:async(operation,id)=>{const result=await request(operation,id);assert.equal(result.state,'succeeded',JSON.stringify(result.error));return result;},runFailure:async(operation,id)=>{const result=await request(operation,id);assert.equal(result.state,'failed',JSON.stringify(result));return result;}};
 }
 
 test('package metadata version never gates a protocol-compatible component',{timeout:20000},async t=>{
@@ -90,7 +93,7 @@ test('protocol mismatch requests one App update until the package changes',{time
 test('native npm package install, real component lifecycle and uninstall share the App ownership boundary',{timeout:20000},async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-native-lifecycle-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const installBaseDir=path.join(dir,'apps'),stateDir=path.join(dir,'state');
- const fixture=await nativePackageFixture(dir),definition=desktopDefinition(fixture.integrity);
+ const fixture=await nativePackageFixture(dir),definition=desktopDefinition();
  let manager;
  const service=new DesktopService({dataDir:dir,mode:'local',installedPackage:()=>readManagedDesktopPackage(installBaseDir,stateDir),canStart:()=>!manager.hasActiveOperation('remote-desktop')});
  t.after(()=>service.close());
@@ -99,7 +102,14 @@ test('native npm package install, real component lifecycle and uninstall share t
  let app=manager.snapshot().apps[0];assert.equal(app.state,'not-installed');assert.equal(app.canInstall,true);
  await lifecycle.run('install','install');
  assert.equal(readManagedDesktopPackage(installBaseDir,stateDir).version,version);
+ assert.equal(lifecycle.resolutions(),1);
+ const checked=await manager.checkForUpdate('remote-desktop');assert.equal(checked.status,'up-to-date');assert.equal(lifecycle.resolutions(),2);
  await service.setEnabled(true);assert.equal(service.componentRunning(),true);
+ lifecycle.failResolution(true);
+ const unavailable=await manager.checkForUpdate('remote-desktop');assert.equal(unavailable.status,'unknown');assert.match(unavailable.reason,/unavailable/);
+ const failedUpdate=await lifecycle.runFailure('update','unavailable-update');assert.equal(failedUpdate.error.code,'npm_registry_unavailable');assert.equal(lifecycle.stopCalls(),0);
+ assert.equal(service.componentRunning(),true);assert.equal(readManagedDesktopPackage(installBaseDir,stateDir).version,version);
+ lifecycle.failResolution(false);
  const first=await service.request('first',{type:'reserve',owner,captureSelection:{sourceRef:'display'}});
  assert.equal(first.type,'reserved');
  await service.request('attach',{type:'attach',owner,viewerSessionId:first.snapshot.viewerSessionId,captureSelection:{sourceRef:'display'},attachToken:first.attachToken});
@@ -113,7 +123,7 @@ test('legacy archive stays detectable and updates into the native layout without
  fs.mkdirSync(path.join(legacyRoot,'bin'),{recursive:true});fs.mkdirSync(path.dirname(manifestFile),{recursive:true});
  fs.writeFileSync(path.join(legacyRoot,'bin/task-handoff-desktop-streaming'),'legacy',{mode:0o700});fs.writeFileSync(path.join(legacyRoot,'desktop-component.json'),JSON.stringify({version:'previous'}));fs.writeFileSync(path.join(legacyRoot,'user.txt'),'preserved');
  fs.writeFileSync(manifestFile,JSON.stringify({appId:'remote-desktop',installRoot:legacyRoot,files:['bin/task-handoff-desktop-streaming','desktop-component.json']}));
- const fixture=await nativePackageFixture(dir),definition=desktopDefinition(fixture.integrity);
+ const fixture=await nativePackageFixture(dir),definition=desktopDefinition();
  let manager;
  const service=new DesktopService({dataDir:dir,mode:'local',installedPackage:()=>readManagedDesktopPackage(installBaseDir,stateDir),canStart:()=>!manager.hasActiveOperation('remote-desktop')});t.after(()=>service.close());
  const lifecycle=lifecycleManager({stateDir,installBaseDir,definition,bytes:fixture.bytes,service});manager=lifecycle.manager;

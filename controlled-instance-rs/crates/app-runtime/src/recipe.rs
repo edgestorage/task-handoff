@@ -288,6 +288,43 @@ impl AppRecipeExecutor {
                 )
                 .await
             }
+            InstallRecipe::RegistryNativePackage { launch_path, .. } => {
+                if operation != AppManagementOperation::Uninstall {
+                    return Err(AppRecipeExecutionError::new(
+                        "invalid_builtin_recipe",
+                        "A registry native package must be resolved to an exact version before installation or update.",
+                        false,
+                    ));
+                }
+                let target = managed_native_app_root(&self.install_base_dir, &context.app_id);
+                let Some(manifest) =
+                    read_native_app_manifest(&self.install_base_dir, &context.app_id)
+                else {
+                    return Err(AppRecipeExecutionError::new(
+                        "ownership_manifest_missing",
+                        "The native package ownership manifest is missing or invalid.",
+                        false,
+                    ));
+                };
+                if manifest.app_id != context.app_id
+                    || manifest.install_root != target
+                    || manifest.launch_path != *launch_path
+                {
+                    return Err(AppRecipeExecutionError::new(
+                        "ownership_manifest_missing",
+                        "The native package ownership manifest is missing or invalid.",
+                        false,
+                    ));
+                }
+                fs::remove_dir_all(target).map_err(|error| {
+                    AppRecipeExecutionError::new(
+                        "uninstall_failed",
+                        format!("The native package could not be removed: {error}"),
+                        true,
+                    )
+                })?;
+                Ok(String::new())
+            }
             InstallRecipe::ArchiveOwnership { install_root, .. } => {
                 if operation != AppManagementOperation::Uninstall {
                     return Err(AppRecipeExecutionError::new(

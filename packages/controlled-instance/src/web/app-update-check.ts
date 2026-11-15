@@ -230,6 +230,7 @@ export function createAppUpdateChecker(options: AppUpdateCheckerOptions = {}) {
   return async (recipe: InstallRecipe, context: AppUpdateCheckContext): Promise<AppUpdateCheckResult> => {
     if (recipe.type === "bundled") return result("unsupported", { reason: "Bundled apps ship with the controlled computer and have no update source." });
     if (recipe.type === "archive" || recipe.type === "archive-ownership") return result("unsupported", { reason: "Archive updates are delivered with the built-in app definition." });
+    if (recipe.type === "registry-native-package") return result("unknown", { reason: "The registry native package must be resolved before checking for updates." });
     if (recipe.type === "native-package") return checkNativePackage(recipe, context);
     const policy = options.installEnvironment?.createExecutionPolicy();
     return recipe.type === "system-package"

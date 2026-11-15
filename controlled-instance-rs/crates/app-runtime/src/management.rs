@@ -26,9 +26,10 @@ use crate::{
     detect_final_computer_capabilities_sync, detect_managed_app_ownership_with_context,
     detect_managed_app_recipe_target, detect_managed_app_with_managed_root_for_target,
     install_environment::{AppInstallEnvironmentManager, AppInstallExecutionPolicy},
-    managed_app_projection, select_install_recipe, AppRecipeExecutionContext,
-    AppRecipeExecutionError, AppRecipeExecutor, AppUpdateCheckResult, AppUpdateChecker,
-    InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult, ManagedAppOwnershipContext,
+    managed_app_projection, resolve_registry_native_package, select_install_recipe,
+    AppRecipeExecutionContext, AppRecipeExecutionError, AppRecipeExecutor, AppUpdateCheckResult,
+    AppUpdateChecker, InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult,
+    ManagedAppOwnershipContext,
 };
 
 const ACTIVE_STATES: [AppManagementJobState; 2] = [
@@ -440,14 +441,39 @@ impl AppManagementManager {
             )
             .details(json!({ "reason": reason })));
         }
-        let outcome = self
-            .update_checker
-            .check_with_install_root(
-                selected.recipe.as_ref().expect("selected recipe"),
-                &capabilities,
-                Some((app_id, &self.install_base_dir)),
-            )
-            .await;
+        let selected_recipe = selected.recipe.as_ref().expect("selected recipe");
+        let install_policy = self
+            .install_environment
+            .as_ref()
+            .map(AppInstallEnvironmentManager::create_execution_policy);
+        let registry = install_policy
+            .as_ref()
+            .and_then(|policy| policy.effective.npm_registry.as_deref());
+        let outcome = if matches!(selected_recipe, InstallRecipe::RegistryNativePackage { .. }) {
+            match resolve_registry_native_package(selected_recipe, &capabilities, registry).await {
+                Ok(recipe) => {
+                    self.update_checker
+                        .check_with_install_root(
+                            &recipe,
+                            &capabilities,
+                            Some((app_id, &self.install_base_dir)),
+                        )
+                        .await
+                }
+                Err(error) => AppUpdateCheckResult::new(
+                    controlled_instance_protocol::ManagedAppUpdateStatus::Unknown,
+                )
+                .reason(error.to_string()),
+            }
+        } else {
+            self.update_checker
+                .check_with_install_root(
+                    selected_recipe,
+                    &capabilities,
+                    Some((app_id, &self.install_base_dir)),
+                )
+                .await
+        };
         let state_value = update_state(outcome);
         self.lock()
             .update_checks
@@ -780,27 +806,56 @@ impl AppManagementManager {
                 session.app_id == definition.launcher.id
                     && matches!(session.status.as_str(), "created" | "running" | "stopping")
             });
-        let lifecycle = (self.package_lifecycles)(&definition.launcher.id);
-        let preparation = if let Some(hook) = &lifecycle {
-            hook.before_change(operation).await
-        } else {
-            Ok(())
-        };
-        let result = if let Err(error) = preparation {
-            Err(error)
-        } else if busy {
+        let resolved_recipe = if busy {
             Err(AppRecipeExecutionError::new(
                 "app_sessions_running",
                 "The app has running sessions and cannot be changed.",
                 true,
             ))
-        } else {
-            if operation != AppManagementOperation::Install {
-                (self.runtime_hook)(&definition.launcher.id);
-            }
-            self.executor
-                .execute_with_policy(operation, &recipe, &context, install_policy.as_ref())
+        } else if operation != AppManagementOperation::Uninstall
+            && matches!(recipe, InstallRecipe::RegistryNativePackage { .. })
+        {
+            let registry = install_policy
+                .as_ref()
+                .and_then(|policy| policy.effective.npm_registry.as_deref());
+            resolve_registry_native_package(&recipe, &context.capabilities, registry)
                 .await
+                .map_err(|error| {
+                    AppRecipeExecutionError::new(
+                        "npm_registry_unavailable",
+                        error.to_string(),
+                        true,
+                    )
+                })
+        } else {
+            Ok(recipe)
+        };
+        let lifecycle = (self.package_lifecycles)(&definition.launcher.id);
+        let result = match resolved_recipe {
+            Err(error) => Err(error),
+            Ok(recipe) => {
+                let preparation = if let Some(hook) = &lifecycle {
+                    hook.before_change(operation).await
+                } else {
+                    Ok(())
+                };
+                match preparation {
+                    Err(error) => Err(error),
+                    Ok(()) => {
+                        if operation != AppManagementOperation::Install {
+                            (self.runtime_hook)(&definition.launcher.id);
+                        }
+                        self.executor
+                            .execute_with_policy(
+                                operation,
+                                &recipe,
+                                &context,
+                                install_policy.as_ref(),
+                            )
+                            .await
+                    }
+                }
+            }
         };
         if result.is_ok() {
             (self.runtime_hook)(&definition.launcher.id);

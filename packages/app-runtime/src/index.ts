@@ -4,5 +4,6 @@ export * from "./managed-app-definitions";
 export * from "./managed-apps";
 export * from "./managed-node-apps";
 export * from "./native-package";
+export * from "./registry-native-package";
 export * from "./runtime";
 export * from "./types";

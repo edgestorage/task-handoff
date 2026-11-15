@@ -1,8 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
-import { controlledInstancePackageVersionResolver } from "@task-handoff/core/core/package-version";
 import { z } from "zod";
-import release from "../../../../../shared/remote-desktop-packages.json";
+import path from "node:path";
 import {
   managedNativeAppManifestPath,
   managedNativeAppRoot,
@@ -15,65 +13,49 @@ export const DESKTOP_COMPONENT_APP_ID = "remote-desktop";
 export const DESKTOP_COMPONENT_EXECUTABLE = "bin/task-handoff-desktop-streaming";
 export const DESKTOP_COMPONENT_PACKAGE_PREFIX = "@task-handoff/remote-desktop";
 
-/** Release input. packageVersion is intentionally absent: the component is
- * always published with the controlled-instance version, not an independent
- * component release train. */
-const PackageArtifact = z.object({
-  version: z.string().min(1),
-  platform: z.enum(["linux", "darwin"]),
-  arch: z.enum(["x64", "arm64"]),
-  package: z.string().regex(/^(?:@[a-z0-9][a-z0-9._-]{0,99}\/)?[a-z0-9][a-z0-9._-]{0,99}$/i),
-  integrity: z.string().refine(validNativePackageIntegrity),
-}).strict();
-const Release = z.object({ packages: z.array(PackageArtifact) }).strict();
-export type DesktopPackageArtifact = z.infer<typeof PackageArtifact>;
-
-export function desktopPackageName(platform: DesktopPackageArtifact["platform"], arch: DesktopPackageArtifact["arch"]) {
-  return `${DESKTOP_COMPONENT_PACKAGE_PREFIX}-${platform}-${arch}`;
-}
-
-export function desktopProvider(packages: unknown = (release as { packages?: unknown }).packages): ManagedAppProvider {
-  const parsed = Release.safeParse({ packages });
-  const validated = parsed.success ? parsed.data.packages : [];
+/** The component release train is independent from the controlled-instance version. */
+export function desktopProvider(): ManagedAppProvider {
   return {
     id: DESKTOP_COMPONENT_APP_ID,
-    definition: ({ env }) => {
-      const version = controlledInstancePackageVersionResolver(env)();
-      return {
-        launcher: {
-          id: DESKTOP_COMPONENT_APP_ID,
-          name: "Remote Desktop",
-          kind: "tty",
-          command: DESKTOP_COMPONENT_EXECUTABLE,
-          description: "Optional instance desktop streaming component.",
-        },
-        launchable: false,
-        detection: [{ type: "launcher-executable", versionArgs: ["--version"] }],
-        distribution: {
-          recipes: [
-            ...validated.filter((entry) => entry.version === version).map((entry) => ({
-              type: "native-package" as const,
-              platforms: [entry.platform],
-              arches: [entry.arch],
-              ...(entry.platform === "linux" ? { libc: "gnu" as const } : {}),
-              privilege: "user" as const,
-              package: entry.package,
-              packageVersion: entry.version,
-              version: entry.version,
-              integrity: entry.integrity,
-              launchPath: DESKTOP_COMPONENT_EXECUTABLE,
-            })),
-            {
-              type: "archive-ownership" as const,
-              platforms: ["linux" as const, "darwin" as const],
-              arches: ["x64" as const, "arm64" as const],
-              privilege: "user" as const,
-              installRoot: DESKTOP_COMPONENT_APP_ID,
-            },
-          ],
-        },
-      };
-    },
+    definition: () => ({
+      launcher: {
+        id: DESKTOP_COMPONENT_APP_ID,
+        name: "Remote Desktop",
+        kind: "tty",
+        command: DESKTOP_COMPONENT_EXECUTABLE,
+        description: "Optional instance desktop streaming component.",
+      },
+      launchable: false,
+      detection: [{ type: "launcher-executable", versionArgs: ["--version"] }],
+      distribution: {
+        recipes: [
+          {
+            type: "registry-native-package" as const,
+            platforms: ["linux" as const],
+            arches: ["x64" as const, "arm64" as const],
+            libc: "gnu" as const,
+            privilege: "user" as const,
+            packagePrefix: DESKTOP_COMPONENT_PACKAGE_PREFIX,
+            launchPath: DESKTOP_COMPONENT_EXECUTABLE,
+          },
+          {
+            type: "registry-native-package" as const,
+            platforms: ["darwin" as const],
+            arches: ["x64" as const, "arm64" as const],
+            privilege: "user" as const,
+            packagePrefix: DESKTOP_COMPONENT_PACKAGE_PREFIX,
+            launchPath: DESKTOP_COMPONENT_EXECUTABLE,
+          },
+          {
+            type: "archive-ownership" as const,
+            platforms: ["linux" as const, "darwin" as const],
+            arches: ["x64" as const, "arm64" as const],
+            privilege: "user" as const,
+            installRoot: DESKTOP_COMPONENT_APP_ID,
+          },
+        ],
+      },
+    }),
   };
 }
 export const remoteDesktopProvider = desktopProvider();
@@ -106,7 +88,7 @@ function readNativeDesktopPackage(installBaseDir: string) {
 }
 
 /** Legacy archives remain executable and uninstallable until the same App
- * transaction replaces them with the npm-native package. */
+ * transaction replaces them with the npm-distributed native package. */
 function readArchiveDesktopPackage(installBaseDir: string, stateDir: string) {
   const root = path.resolve(installBaseDir, DESKTOP_COMPONENT_APP_ID);
   const manifestFile = path.join(stateDir, "manifests", `${DESKTOP_COMPONENT_APP_ID}.json`);

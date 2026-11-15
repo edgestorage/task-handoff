@@ -13,6 +13,7 @@ mod native_package;
 mod profiles;
 mod pty;
 mod recipe;
+mod registry_native_package;
 pub mod remote_desktop;
 mod runtime;
 mod terminal_screen;
@@ -56,6 +57,7 @@ pub use recipe::{
     run_app_recipe_command, AppRecipeCommand, AppRecipeCommandResult, AppRecipeExecutionContext,
     AppRecipeExecutionError, AppRecipeExecutor, AppRecipeHooks,
 };
+pub use registry_native_package::{resolve_registry_native_package, RegistryNativePackageError};
 pub use runtime::{
     AppProfileLocation, AppRuntime, AppRuntimeChange, AppRuntimeChangeKind, AppRuntimeError,
     AppSessionWorkspacePresence, SharedCodexConnection, SharedOpenCodeConnection, TtyAttachment,

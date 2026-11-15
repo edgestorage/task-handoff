@@ -1096,6 +1096,19 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
     if (recipe.type === "native-package") {
       return executeNativePackage(operation, recipe, context, resolved, sourcePolicy?.npmRegistry);
     }
+    if (recipe.type === "registry-native-package") {
+      if (operation !== "uninstall") {
+        throw new AppRecipeExecutionError("invalid_builtin_recipe", "A registry native package must be resolved to an exact version before installation or update.");
+      }
+      const target = nativePackageRoot(resolved.installBaseDir, context.appId);
+      const manifest = readNativeAppManifest(resolved.installBaseDir, context.appId);
+      if (!manifest || manifest.appId !== context.appId || path.resolve(manifest.installRoot) !== path.resolve(target) || manifest.launchPath !== recipe.launchPath) {
+        throw new AppRecipeExecutionError("ownership_manifest_missing", "The native package ownership manifest is missing or invalid.");
+      }
+      context.onPhase?.("uninstall-native-package");
+      fs.rmSync(target, { recursive: true, force: true });
+      return { log: "" };
+    }
     if (operation === "uninstall") uninstallArchive(recipe, context, resolved);
     else if (operation === "update") await updateArchive(recipe, context, resolved);
     else await installArchive(recipe, context, resolved);

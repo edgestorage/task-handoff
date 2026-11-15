@@ -31,7 +31,7 @@ function managedTarget(root: string, definition: ManagedAppDefinition, platform:
     installers: ["apt", "dnf", "brew", "npm"],
     privilege: "root",
   }, target).recipe;
-  if (selected?.type === "native-package") {
+  if (selected?.type === "native-package" || selected?.type === "registry-native-package") {
     const native = managedNativeAppLauncher(root, definition.launcher.id, selected.launchPath);
     if (fs.existsSync(managedNativeAppRoot(root, definition.launcher.id)) || fs.existsSync(native)) return native;
     const legacy = definition.distribution.recipes.find((recipe) => recipe.type === "archive-ownership"
@@ -75,7 +75,7 @@ export class ManagedApps {
   readonly bin: string;
 
   constructor(readonly root: string, definitions: ManagedAppDefinition[]) {
-    this.definitions = definitions.filter((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "archive" || recipe.type === "archive-ownership" || recipe.type === "native-package" || (recipe.type === "node-package" && recipe.managed)));
+    this.definitions = definitions.filter((definition) => definition.distribution.recipes.some((recipe) => recipe.type === "archive" || recipe.type === "archive-ownership" || (recipe.type === "native-package" || recipe.type === "registry-native-package") || (recipe.type === "node-package" && recipe.managed)));
     this.bin = path.join(root, "bin");
   }
 

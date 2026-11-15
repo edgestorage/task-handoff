@@ -75,20 +75,36 @@ export type NodePackageInstallRecipe = ManagedAppRecipeConstraint & {
 };
 
 /**
- * A platform-native executable distributed through the npm registry. The
- * registry is only the artifact source: installation downloads and verifies
- * the tarball without invoking npm, Node, or package lifecycle scripts.
+ * A platform-native executable distributed as a verified archive. Some apps
+ * use npm as their artifact source: installation downloads and verifies the
+ * tarball over HTTPS without invoking npm, Node, or package lifecycle scripts.
  */
 export type NativePackageInstallRecipe = ManagedAppRecipeConstraint & {
   type: "native-package";
   libc?: ManagedAppRecipeLibc;
   package: string;
   packageVersion: string;
-  /** Exact npm version exposed by the app and used by update checks. */
+  /** Exact component version used by update checks. */
   version: string;
   integrity: string;
   launchPath: string;
   tarballUrl?: string;
+};
+
+/**
+ * A platform-native npm package whose exact version and integrity are resolved
+ * for an explicit install, update, or update check. npm is only the artifact
+ * source; an executor must receive the concrete NativePackageInstallRecipe and
+ * never invoke the npm executable or package lifecycle scripts.
+ */
+export type RegistryNativePackageInstallRecipe = ManagedAppRecipeConstraint & {
+  type: "registry-native-package";
+  libc?: ManagedAppRecipeLibc;
+  /** Resolves to `<packagePrefix>-<platform>-<arch>` on npm. */
+  packagePrefix: string;
+  /** npm dist-tag used only to discover an exact version. */
+  distTag?: string;
+  launchPath: string;
 };
 
 export type ArchiveInstallRecipe = ManagedAppRecipeConstraint & {
@@ -102,7 +118,7 @@ export type ArchiveInstallRecipe = ManagedAppRecipeConstraint & {
 /** Private ownership layout; never eligible for download/install/update. */
 export type ArchiveOwnershipRecipe = ManagedAppRecipeConstraint & { type: "archive-ownership"; installRoot: string };
 
-export type InstallRecipe = ArchiveOwnershipRecipe | BundledInstallRecipe | SystemPackageInstallRecipe | NodePackageInstallRecipe | NativePackageInstallRecipe | ArchiveInstallRecipe;
+export type InstallRecipe = ArchiveOwnershipRecipe | BundledInstallRecipe | SystemPackageInstallRecipe | NodePackageInstallRecipe | NativePackageInstallRecipe | RegistryNativePackageInstallRecipe | ArchiveInstallRecipe;
 
 export type ManagedAppDefinition = {
   launcher: AppCatalogItem;

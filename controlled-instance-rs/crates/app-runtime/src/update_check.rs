@@ -48,7 +48,7 @@ pub struct AppUpdateCheckResult {
 }
 
 impl AppUpdateCheckResult {
-    fn new(status: ManagedAppUpdateStatus) -> Self {
+    pub(crate) fn new(status: ManagedAppUpdateStatus) -> Self {
         Self {
             status,
             installed_version: None,
@@ -67,7 +67,7 @@ impl AppUpdateCheckResult {
         self
     }
 
-    fn reason(mut self, value: impl Into<String>) -> Self {
+    pub(crate) fn reason(mut self, value: impl Into<String>) -> Self {
         let value = value.into();
         self.reason =
             (!value.trim().is_empty()).then(|| truncate_utf16(value.trim(), MAX_VERSION_CHARS));
@@ -325,6 +325,10 @@ impl AppUpdateChecker {
                 )
                 .await
             }
+            InstallRecipe::RegistryNativePackage { .. } => AppUpdateCheckResult::new(
+                ManagedAppUpdateStatus::Unknown,
+            )
+            .reason("The registry native package must be resolved before checking for updates."),
             InstallRecipe::NativePackage {
                 package,
                 package_version,

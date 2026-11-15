@@ -106,6 +106,18 @@ pub enum InstallRecipe {
         launch_path: String,
         tarball_url: Option<String>,
     },
+    /// A platform-native npm package resolved to NativePackage only when an
+    /// explicit install, update, or update check starts. Discovery uses plain
+    /// HTTPS and never invokes npm or npm lifecycle scripts.
+    RegistryNativePackage {
+        platforms: Vec<FinalComputerPlatform>,
+        arches: Option<Vec<FinalComputerArch>>,
+        privilege: Option<AppInstallPrivilege>,
+        libc: Option<ManagedAppRecipeLibc>,
+        package_prefix: String,
+        dist_tag: String,
+        launch_path: String,
+    },
     Archive {
         platforms: Vec<FinalComputerPlatform>,
         arches: Option<Vec<FinalComputerArch>>,
@@ -124,6 +136,7 @@ impl InstallRecipe {
             Self::SystemPackage { .. } => "system-package",
             Self::NodePackage { .. } => "node-package",
             Self::NativePackage { .. } => "native-package",
+            Self::RegistryNativePackage { .. } => "registry-native-package",
             Self::Archive { .. } => "archive",
             Self::ArchiveOwnership { .. } => "archive-ownership",
         }
@@ -135,6 +148,7 @@ impl InstallRecipe {
             | Self::SystemPackage { platforms, .. }
             | Self::NodePackage { platforms, .. }
             | Self::NativePackage { platforms, .. }
+            | Self::RegistryNativePackage { platforms, .. }
             | Self::ArchiveOwnership { platforms, .. }
             | Self::Archive { platforms, .. } => platforms,
         }
@@ -146,6 +160,7 @@ impl InstallRecipe {
             | Self::SystemPackage { arches, .. }
             | Self::NodePackage { arches, .. }
             | Self::NativePackage { arches, .. }
+            | Self::RegistryNativePackage { arches, .. }
             | Self::ArchiveOwnership { arches, .. }
             | Self::Archive { arches, .. } => arches.as_deref(),
         }
@@ -157,6 +172,7 @@ impl InstallRecipe {
             | Self::SystemPackage { privilege, .. }
             | Self::NodePackage { privilege, .. }
             | Self::NativePackage { privilege, .. }
+            | Self::RegistryNativePackage { privilege, .. }
             | Self::ArchiveOwnership { privilege, .. }
             | Self::Archive { privilege, .. } => privilege.unwrap_or(AppInstallPrivilege::User),
         }
@@ -169,6 +185,7 @@ impl InstallRecipe {
             }
             Self::Bundled { .. }
             | Self::NativePackage { .. }
+            | Self::RegistryNativePackage { .. }
             | Self::ArchiveOwnership { .. }
             | Self::Archive { .. } => None,
         }
@@ -178,7 +195,10 @@ impl InstallRecipe {
         match self {
             Self::SystemPackage { packages, .. } | Self::NodePackage { packages, .. } => packages,
             Self::NativePackage { package, .. } => std::slice::from_ref(package),
-            Self::Bundled { .. } | Self::ArchiveOwnership { .. } | Self::Archive { .. } => &[],
+            Self::Bundled { .. }
+            | Self::RegistryNativePackage { .. }
+            | Self::ArchiveOwnership { .. }
+            | Self::Archive { .. } => &[],
         }
     }
 
@@ -196,7 +216,7 @@ impl InstallRecipe {
 
     pub fn libc(&self) -> Option<ManagedAppRecipeLibc> {
         match self {
-            Self::NativePackage { libc, .. } => *libc,
+            Self::NativePackage { libc, .. } | Self::RegistryNativePackage { libc, .. } => *libc,
             _ => None,
         }
     }
@@ -954,6 +974,7 @@ pub fn managed_app_launcher_path(
                 Some(root.join(install_root).join(command))
             }
             InstallRecipe::NativePackage { launch_path, .. }
+            | InstallRecipe::RegistryNativePackage { launch_path, .. }
                 if valid_native_launch_path(launch_path) =>
             {
                 Some(managed_native_app_launcher(
@@ -1848,14 +1869,17 @@ pub async fn detect_managed_app_ownership_with_context(
             InstallRecipe::SystemPackage { .. } => {
                 system_package_owns_executable(&recipe, detection).await
             }
-            InstallRecipe::NativePackage { launch_path, .. } => context.is_some_and(|context| {
-                native_package_owns_executable(
-                    &definition.launcher.id,
-                    launch_path,
-                    detection,
-                    context,
-                )
-            }),
+            InstallRecipe::NativePackage { launch_path, .. }
+            | InstallRecipe::RegistryNativePackage { launch_path, .. } => {
+                context.is_some_and(|context| {
+                    native_package_owns_executable(
+                        &definition.launcher.id,
+                        launch_path,
+                        detection,
+                        context,
+                    )
+                })
+            }
             InstallRecipe::ArchiveOwnership { install_root, .. }
             | InstallRecipe::Archive { install_root, .. } => context.is_some_and(|context| {
                 archive_manifest_owns_executable(

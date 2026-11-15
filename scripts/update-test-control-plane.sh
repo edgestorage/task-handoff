@@ -13,9 +13,10 @@ HOST=${TASK_HANDOFF_TEST_HOST:-huadream@192.168.139.109}
 SSH_PORT=${TASK_HANDOFF_TEST_SSH_PORT:-}
 REUSE_ARTIFACTS=${TASK_HANDOFF_TEST_REUSE_ARTIFACTS:-0}
 BASE_VERSION=${TASK_HANDOFF_TEST_BASE_VERSION:-0.0.25}
-# Test/staging deployments install the desktop component from a locally packed
-# tarball because the npm native packages only exist for published runtime
-# releases. Set either variable to 0 when intentionally testing without it.
+# Test/staging deployments may install a locally packed component into the
+# selected test host. Runtime packaging no longer embeds component metadata;
+# normal App installation discovers the independently released npm package.
+# Set either variable to 0 when intentionally testing without it.
 INSTALL_REMOTE_DESKTOP=${TASK_HANDOFF_TEST_REMOTE_DESKTOP:-1}
 ENABLE_REMOTE_DESKTOP=${TASK_HANDOFF_TEST_REMOTE_DESKTOP_ENABLE:-1}
 # 成功部署后保留的 `.server-*-backup-*` 数量；旧备份自动删除，超过 7 天的
@@ -51,7 +52,6 @@ for name in "${CLOUD_ENV_VARIABLES[@]}"; do
 done
 ARTIFACT_DIR=release/npm/artifacts
 REMOTE_DESKTOP_PACKAGE_DIR=release/remote-desktop-packages
-REMOTE_DESKTOP_RELEASE_METADATA=shared/remote-desktop-packages.json
 BUILD_DATE=$(date +%Y%m%d)
 VERSION=${1:-}
 AUTO_VERSION=0
@@ -134,42 +134,6 @@ build_remote_desktop_package() {
     }
   ' "$metadata" "$VERSION" "$package_name" "$REMOTE_DESKTOP_ARCH"
   rm -rf "$build_dir"
-}
-
-restore_remote_desktop_release_metadata() {
-  [ -n "${REMOTE_DESKTOP_RELEASE_METADATA_BACKUP:-}" ] || return 0
-  if [ "${REMOTE_DESKTOP_RELEASE_METADATA_EXISTED:-0}" = 1 ]; then
-    cp "$REMOTE_DESKTOP_RELEASE_METADATA_BACKUP" "$REMOTE_DESKTOP_RELEASE_METADATA"
-  else
-    rm -f "$REMOTE_DESKTOP_RELEASE_METADATA"
-  fi
-  rm -f "$REMOTE_DESKTOP_RELEASE_METADATA_BACKUP"
-  REMOTE_DESKTOP_RELEASE_METADATA_BACKUP=
-  if [ -n "${REMOTE_DESKTOP_RELEASE_METADATA_TEMP:-}" ]; then
-    rm -rf "$REMOTE_DESKTOP_RELEASE_METADATA_TEMP"
-    REMOTE_DESKTOP_RELEASE_METADATA_TEMP=
-  fi
-}
-
-prepare_remote_desktop_release_metadata() {
-  [ "$INSTALL_REMOTE_DESKTOP" = 1 ] || return 0
-  [ "$REUSE_ARTIFACTS" != 1 ] || return 0
-  local metadata="$REMOTE_DESKTOP_PACKAGE_DIR/$REMOTE_DESKTOP_METADATA_BASENAME"
-  test -f "$metadata"
-  REMOTE_DESKTOP_RELEASE_METADATA_BACKUP=$(mktemp -t task-handoff-remote-desktop-metadata)
-  REMOTE_DESKTOP_RELEASE_METADATA_EXISTED=0
-  if [ -f "$REMOTE_DESKTOP_RELEASE_METADATA" ]; then
-    cp "$REMOTE_DESKTOP_RELEASE_METADATA" "$REMOTE_DESKTOP_RELEASE_METADATA_BACKUP"
-    REMOTE_DESKTOP_RELEASE_METADATA_EXISTED=1
-  fi
-  REMOTE_DESKTOP_RELEASE_METADATA_TEMP=$(mktemp -d -t task-handoff-remote-desktop-release)
-  trap restore_remote_desktop_release_metadata EXIT
-  cp "$metadata" "$REMOTE_DESKTOP_RELEASE_METADATA_TEMP/"
-  node scripts/remote-desktop-packages.mjs metadata \
-    --input "$REMOTE_DESKTOP_RELEASE_METADATA_TEMP" \
-    --output "$REMOTE_DESKTOP_RELEASE_METADATA"
-  rm -rf "$REMOTE_DESKTOP_RELEASE_METADATA_TEMP"
-  REMOTE_DESKTOP_RELEASE_METADATA_TEMP=
 }
 
 for command in node pnpm git ssh scp shasum; do
@@ -288,7 +252,6 @@ log "Build and verify $VERSION (agentRuns=$TASK_HANDOFF_AGENT_RUNS_ENABLED, clou
 if [ "$INSTALL_REMOTE_DESKTOP" = 1 ]; then
   log "Prepare local remote desktop package for linux-$REMOTE_DESKTOP_ARCH"
   build_remote_desktop_package
-  prepare_remote_desktop_release_metadata
 fi
 
 if [ "$REUSE_ARTIFACTS" = 1 ]; then

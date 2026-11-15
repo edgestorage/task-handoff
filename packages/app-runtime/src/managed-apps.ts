@@ -161,7 +161,7 @@ export function selectInstallRecipe(
   if (!archMatches.length) {
     return { reason: { code: "UNSUPPORTED_PLATFORM", message: `No built-in recipe supports ${capabilities.platform}/${capabilities.arch}.` } };
   }
-  const targetMatches = archMatches.filter((recipe) => recipe.type !== "native-package" || !recipe.libc || recipe.libc === target.libc);
+  const targetMatches = archMatches.filter((recipe) => (recipe.type !== "native-package" && recipe.type !== "registry-native-package") || !recipe.libc || recipe.libc === target.libc);
   if (!targetMatches.length) {
     return { reason: { code: "UNSUPPORTED_PLATFORM", message: `No built-in recipe supports ${capabilities.platform}/${capabilities.arch}${target.libc ? ` (${target.libc})` : ""}.` } };
   }
@@ -195,6 +195,7 @@ type ManagedAppOwnershipOptions = {
   readFile?: (value: string) => Promise<string>;
   archiveManifestOwned?: (definition: ManagedAppDefinition, recipe: Extract<InstallRecipe, { type: "archive" | "archive-ownership" }>, detection: ManagedAppDetectionResult) => Promise<boolean>;
   nativeManifestOwned?: (definition: ManagedAppDefinition, recipe: Extract<InstallRecipe, { type: "native-package" }>, detection: ManagedAppDetectionResult) => Promise<boolean>;
+  registryNativeManifestOwned?: (definition: ManagedAppDefinition, recipe: Extract<InstallRecipe, { type: "registry-native-package" }>, detection: ManagedAppDetectionResult) => Promise<boolean>;
   target?: ManagedAppRecipeTarget;
 };
 
@@ -338,7 +339,9 @@ export async function detectManagedAppOwnership(
         ? await systemPackageOwnsExecutable(recipe, detection, resolved)
         : recipe.type === "native-package"
           ? Boolean(options.nativeManifestOwned && await options.nativeManifestOwned(definition, recipe, detection))
-          : Boolean(options.archiveManifestOwned && await options.archiveManifestOwned(definition, recipe, detection));
+          : recipe.type === "registry-native-package"
+            ? Boolean(options.registryNativeManifestOwned && await options.registryNativeManifestOwned(definition, recipe, detection))
+            : Boolean(options.archiveManifestOwned && await options.archiveManifestOwned(definition, recipe, detection));
     if (owned) return { source: "recipe", recipe };
   }
   return { source: "external" };

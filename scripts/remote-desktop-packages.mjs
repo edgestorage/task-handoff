@@ -84,7 +84,7 @@ export async function packRemoteDesktopPackage(options) {
       files: ["bin", "README.md"],
       publishConfig: { access: "public" },
     }, null, 2)}\n`);
-    await fsp.writeFile(path.join(packageDir, "README.md"), `# ${name}\n\nNative TaskHandoff remote desktop component for ${platform}/${arch}. The managed app installer treats npm as an artifact source and does not run npm lifecycle scripts.\n`);
+    await fsp.writeFile(path.join(packageDir, "README.md"), `# ${name}\n\nNative TaskHandoff remote desktop component for ${platform}/${arch}. npm distributes this archive; the managed installer downloads and verifies it directly without invoking npm lifecycle scripts.\n`);
 
     const prefix = name.replace(/^@/, "").replace("/", "-");
     for (const entry of await fsp.readdir(outputDir)) {
@@ -151,7 +151,7 @@ async function main() {
   if (args.command === "metadata") {
     const result = await collectRemoteDesktopPackages(
       args.input ?? path.join(root, "release", "remote-desktop-packages"),
-      args.output ?? path.join(root, "shared", "remote-desktop-packages.json"),
+      args.output ?? path.join(root, "release", "remote-desktop-packages", "remote-desktop-packages.json"),
       { complete: args.complete === true },
     );
     console.log(JSON.stringify(result, null, 2));

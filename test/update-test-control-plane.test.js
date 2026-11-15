@@ -82,12 +82,9 @@ test("test deployment verifies the running component comes from the installed pa
   assert.match(deployment, /did not become ready from the installed package/);
 });
 
-test("test deployment embeds locally packed component metadata before runtime packing", () => {
-  assert.match(deployment, /prepare_remote_desktop_release_metadata\(\)/);
-  assert.match(deployment, /scripts\/remote-desktop-packages\.mjs metadata/);
-  assert.match(deployment, /--output "\$REMOTE_DESKTOP_RELEASE_METADATA"/);
-  const prepare = deployment.indexOf("prepare_remote_desktop_release_metadata\n");
-  const runtimePack = deployment.indexOf('TASK_HANDOFF_VERSION="$VERSION" pnpm run runtime:pack\n');
-  assert.ok(prepare > 0, "metadata preparation must be invoked");
-  assert.ok(runtimePack > prepare, "metadata preparation must run before runtime packing");
+test("test deployment does not embed component package metadata into runtime artifacts", () => {
+  assert.doesNotMatch(deployment, /prepare_remote_desktop_release_metadata/);
+  assert.doesNotMatch(deployment, /shared\/remote-desktop-packages\.json/);
+  assert.doesNotMatch(deployment, /scripts\/remote-desktop-packages\.mjs metadata/);
+  assert.equal(fs.existsSync(path.join(root, "shared", "remote-desktop-packages.json")), false);
 });

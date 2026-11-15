@@ -70,8 +70,11 @@ impl AppCatalogRepository {
             .into_iter()
             .filter(|definition| {
                 definition.recipes.iter().any(|recipe| {
-                    matches!(recipe, InstallRecipe::NativePackage { .. })
-                        || recipe.is_managed_node_package()
+                    matches!(
+                        recipe,
+                        InstallRecipe::NativePackage { .. }
+                            | InstallRecipe::RegistryNativePackage { .. }
+                    ) || recipe.is_managed_node_package()
                 })
             })
             .collect::<Vec<_>>();

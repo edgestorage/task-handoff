@@ -67,11 +67,7 @@ test("runtime releases map stable to latest and isolate prerelease dist-tags", (
   assert.equal((workflow.match(/publish_or_verify release\/npm\/[a-z-]+ "release\/npm\/artifacts\//g) || []).length, 5);
   assert.match(workflow, /Published \$package@\$version integrity does not match/);
   assert.match(workflow, /npm publish "\$archive" --access public --tag "\$NPM_DIST_TAG"/);
-  const publishStep = workflow.slice(
-    workflow.indexOf("- name: Publish or verify immutable npm packages"),
-    workflow.indexOf("- name: Keep prereleases out of the latest dist-tag"),
-  );
-  assert.ok(publishStep.indexOf("for metadata in release/remote-desktop-packages/*.metadata.json") < publishStep.indexOf("publish_or_verify release/npm/control-plane"));
+  assert.doesNotMatch(workflow, /remote-desktop|remote desktop/i);
   assert.doesNotMatch(workflow, /npm pack "\$directory"/);
   assert.match(workflow, /Keep prereleases out of the latest dist-tag/);
   assert.match(workflow, /if \[\[ "\$latest" == "\$RELEASE_VERSION" \]\]/);
@@ -80,35 +76,32 @@ test("runtime releases map stable to latest and isolate prerelease dist-tags", (
   assert.doesNotMatch(workflow, /npm dist-tag add .* latest/);
 });
 
-test("runtime releases sync npmmirror as a non-blocking post-publish step", () => {
-  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
-  const syncJob = workflow.slice(workflow.indexOf("  sync-npmmirror:"));
-
-  assert.ok(syncJob.length > 0);
-  assert.match(syncJob, /name: Sync npmmirror \(best effort\)/);
-  assert.match(syncJob, /needs: \[publish, runtime-packages, remote-desktop-metadata\]/);
-  assert.match(syncJob, /needs\.publish\.result == 'success' && needs\.remote-desktop-metadata\.result == 'success'/);
-  assert.match(syncJob, /continue-on-error: true/);
-  assert.match(syncJob, /node scripts\/sync-npmmirror\.mjs/);
-  assert.match(syncJob, /--version "\$RELEASE_VERSION"/);
-  assert.match(syncJob, /--dist-tag "\$NPM_DIST_TAG"/);
-  assert.match(syncJob, /--packages-file release\/remote-desktop-packages\/remote-desktop-packages\.json/);
-  assert.ok(workflow.indexOf("  publish:") < workflow.indexOf("  sync-npmmirror:"));
-});
-
-test("runtime remote desktop packages build against the current macOS SDK", () => {
-  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
-
+test("remote desktop components publish independently from runtime releases", () => {
+  const runtime = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "remote-desktop-release.yml"), "utf8");
+  assert.doesNotMatch(runtime, /remote-desktop|remote desktop/i);
+  assert.match(workflow, /- "remote-desktop-v\*"/);
+  assert.match(workflow, /^\s+needs: \[verify, packages\]$/m);
+  assert.match(workflow, /^\s+needs: \[verify, complete-set\]$/m);
+  assert.match(workflow, /metadata --complete/);
+  assert.match(workflow, /packages\.length !== 4/);
+  assert.match(workflow, /--tag remote-desktop-staging/);
+  assert.match(workflow, /npm dist-tag add "\$package@\$version" latest/);
+  assert.match(workflow, /gh release create "\$RELEASE_TAG"/);
+  assert.match(workflow, /node scripts\/sync-npmmirror\.mjs/);
   assert.match(workflow, /runner: macos-26-intel\s+platform: darwin\s+arch: x64/);
   assert.match(workflow, /runner: macos-26\s+platform: darwin\s+arch: arm64/);
   assert.doesNotMatch(workflow, /runner: macos-15(?:-intel)?\s/);
+  const normalized = workflow.toLowerCase();
+  assert.ok(normalized.indexOf("publish all four packages") < normalized.indexOf("promote latest only after every target is published"));
+  assert.ok(normalized.indexOf("promote latest only after every target is published") < normalized.indexOf("publish the independent github release"));
 });
 
 test("runtime release builds and publishes only the selected controlled instance implementation", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
   assert.match(workflow, /resolveControlledInstanceImplementation/);
-  assert.match(workflow, /controlled-instance-rust-binaries:\n\s+needs: \[runtime-selection, remote-desktop-metadata\]\n\s+if: \$\{\{ needs\.runtime-selection\.outputs\.implementation == 'rust' && needs\.remote-desktop-metadata\.result == 'success' \}\}/);
-  assert.match(workflow, /controlled-instance-artifact:\n[\s\S]*?needs: \[runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries, remote-desktop-metadata\]/);
+  assert.match(workflow, /controlled-instance-rust-binaries:\n\s+needs: \[runtime-selection\]\n\s+if: \$\{\{ needs\.runtime-selection\.outputs\.implementation == 'rust' \}\}/);
+  assert.match(workflow, /controlled-instance-artifact:\n[\s\S]*?needs: \[runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries\]/);
   assert.match(workflow, /needs\.controlled-instance-rust-binaries\.result == 'skipped'/);
   assert.match(workflow, /runtime-packages:\n\s+needs: controlled-instance-artifact/);
   assert.match(workflow, /TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: \$\{\{ needs\.controlled-instance-artifact\.outputs\.implementation \}\}/);
@@ -118,7 +111,7 @@ test("runtime release builds and publishes only the selected controlled instance
   }
   assert.match(workflow, /pnpm runtime:build -- --target controlled-instance/);
   assert.match(workflow, /pnpm runtime:artifact --/);
-  assert.match(workflow, /needs: \[controlled-instance-artifact, runtime-packages, wsl-base-template, remote-desktop-metadata\]/);
+  assert.match(workflow, /needs: \[controlled-instance-artifact, runtime-packages, wsl-base-template\]/);
   assert.doesNotMatch(workflow, /controlled-instance-rust-artifact:|rust-controlled-instance-artifacts|node-rollback-artifacts|stem-rust|stem-node/);
   assert.match(workflow, /gh release create[\s\S]*release\/runtime-artifacts\/\*/);
   assert.match(workflow, /name: wsl-base-template-\$\{\{ needs\.runtime-packages\.outputs\.version \}\}/);

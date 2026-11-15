@@ -193,20 +193,6 @@
       ]
     },
     {
-      "source": "shared/remote-desktop-packages.json",
-      "rust": [
-        "controlled-instance-rs/crates/app-runtime/src/remote_desktop.rs"
-      ],
-      "tests": [
-        "controlled-instance-rs/crates/app-runtime/src/remote_desktop.rs"
-      ],
-      "status": "implemented",
-      "verification": "unit-and-contract-tested",
-      "limitations": [
-        "Package availability parsing is shared; signed-market download and platform installation remain integration-test concerns."
-      ]
-    },
-    {
       "source": "packages/controlled-instance/src/web/{agent-run-member-bindings,agent-run-member-status,ai-session-authority-events,ai-session-message-delta-coalescer,auth,browser-tunnel,events,instance-shell,node-agent-client,server,status,story-agent-tool-bridge,story-tool-policy-cache,story-tools,web-proxy-helpers}.ts",
       "rust": [
         "controlled-instance-rs/crates/instance/src/server.rs",
@@ -302,18 +288,20 @@
       ]
     },
     {
-      "source": "packages/app-runtime/src/{catalog,codex-app-server-proxy,index,log-retention,managed-apps,managed-node-apps,native-package,runtime-utils,runtime,terminal-screen-state,types}.ts",
+      "source": "packages/app-runtime/src/{catalog,codex-app-server-proxy,index,log-retention,managed-apps,managed-node-apps,native-package,registry-native-package,runtime-utils,runtime,terminal-screen-state,types}.ts",
       "rust": [
         "controlled-instance-rs/crates/app-runtime/src/runtime.rs",
         "controlled-instance-rs/crates/app-runtime/src/managed.rs",
         "controlled-instance-rs/crates/app-runtime/src/pty.rs",
-        "controlled-instance-rs/crates/app-runtime/src/managed_node_apps.rs"
+        "controlled-instance-rs/crates/app-runtime/src/managed_node_apps.rs",
+        "controlled-instance-rs/crates/app-runtime/src/registry_native_package.rs"
       ],
       "tests": [
         "controlled-instance-rs/crates/app-runtime/src/runtime.rs",
         "controlled-instance-rs/crates/app-runtime/src/managed.rs",
         "controlled-instance-rs/crates/app-runtime/tests/codex_shared_app_server.rs",
-        "controlled-instance-rs/crates/app-runtime/src/managed_node_apps.rs"
+        "controlled-instance-rs/crates/app-runtime/src/managed_node_apps.rs",
+        "controlled-instance-rs/crates/app-runtime/src/registry_native_package.rs"
       ],
       "status": "implemented",
       "verification": "unit-tested-platform-runtime-unverified",

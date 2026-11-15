@@ -1,0 +1,326 @@
+name: Remote Desktop Component Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing remote-desktop-v* tag to publish
+        required: true
+        type: string
+  push:
+    tags:
+      - "remote-desktop-v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: remote-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify remote desktop release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      release_tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve release version from tag
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          tag="${REQUESTED_TAG:-$GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^remote-desktop-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Remote desktop release tag must use remote-desktop-v<major>.<minor>.<patch>, got: $tag"
+            exit 1
+          fi
+          if ! git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            echo "::error::Tag does not exist in the repository: $tag"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#remote-desktop-v}" >> "$GITHUB_OUTPUT"
+
+      - run: cargo test --locked --manifest-path remote-desktop-rs/Cargo.toml -p desktop-streaming --no-run
+      - run: node --test test/remote-desktop-packages.test.js test/registry-native-package.test.js
+
+  packages:
+    name: Build remote desktop ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - runner: macos-26-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-26
+            platform: darwin
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.release_tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - name: Build Linux component on the glibc baseline
+        if: matrix.platform == 'linux'
+        shell: bash
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.arch == 'x64' && 'x86_64-unknown-linux-gnu' || 'aarch64-unknown-linux-gnu' }}
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace/remote-desktop-rs \
+            -e CARGO_TARGET_DIR="target/linux-${{ matrix.arch }}" \
+            -e RUST_TOOLCHAIN="$RUST_TOOLCHAIN" \
+            rust:1.95-bookworm \
+            bash -c '
+              set -euo pipefail
+              export PATH="/usr/local/rustup/toolchains/1.95.0-${RUST_TOOLCHAIN}/bin:${PATH}"
+              cargo build --locked --release -p desktop-streaming --bin task-handoff-desktop-streaming
+              install -d -m 0755 /workspace/release/remote-desktop-packages/bin
+              install -m 0755 "$CARGO_TARGET_DIR/release/task-handoff-desktop-streaming" \
+                /workspace/release/remote-desktop-packages/bin/task-handoff-desktop-streaming
+            '
+
+      - name: Normalize Linux package artifact ownership
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" release/remote-desktop-packages
+
+      - name: Build macOS component
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          cargo +1.95.0 build --locked --release --manifest-path remote-desktop-rs/Cargo.toml \
+            -p desktop-streaming --bin task-handoff-desktop-streaming
+
+      - name: Pack the native npm artifact
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          BINARY: ${{ matrix.platform == 'linux' && 'release/remote-desktop-packages/bin/task-handoff-desktop-streaming' || 'remote-desktop-rs/target/release/task-handoff-desktop-streaming' }}
+        run: |
+          node scripts/remote-desktop-packages.mjs pack \
+            --version "$RELEASE_VERSION" \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --binary "$BINARY" \
+            --output release/remote-desktop-packages
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remote-desktop-package-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/remote-desktop-packages/*.tgz
+            release/remote-desktop-packages/*.metadata.json
+          if-no-files-found: error
+
+  complete-set:
+    name: Verify complete remote desktop target set
+    needs: [verify, packages]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.packages.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.release_tag }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: remote-desktop-package-*
+          path: release/remote-desktop-packages
+          merge-multiple: true
+
+      - name: Generate release metadata from the complete target set
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+        shell: bash
+        run: |
+          node scripts/remote-desktop-packages.mjs metadata --complete \
+            --input release/remote-desktop-packages \
+            --output release/remote-desktop-packages/remote-desktop-packages.json
+          node -e 'const {packages}=require("./release/remote-desktop-packages/remote-desktop-packages.json"); if (packages.length !== 4) throw new Error(`Expected four remote desktop packages, got ${packages.length}`); if (packages.some((entry)=>entry.version!==process.env.RELEASE_VERSION)) throw new Error("Remote desktop package versions must equal the release version.")'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remote-desktop-complete-${{ needs.verify.outputs.version }}
+          path: release/remote-desktop-packages/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish npm components and independent release
+    needs: [verify, complete-set]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.complete-set.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.release_tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Install the npm CLI that supports OIDC publication
+        run: npm install -g npm@^11.21.0
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: remote-desktop-complete-${{ needs.verify.outputs.version }}
+          path: release/remote-desktop-packages
+
+      - name: Publish all four packages under a staging dist-tag
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          publish_or_verify_package() {
+            local package="$1"
+            local archive="$2"
+            local local_integrity
+            local published_integrity
+            local_integrity="sha512-$(openssl dgst -sha512 -binary "$archive" | openssl base64 -A)"
+            published_integrity="$(npm view "$package@$RELEASE_VERSION" dist.integrity --json 2>/dev/null || true)"
+            if [[ -n "$published_integrity" ]]; then
+              published_integrity="$(node -e 'const fs=require("node:fs");const value=JSON.parse(fs.readFileSync(0,"utf8"));process.stdout.write(typeof value==="string"?value:"")' <<<"$published_integrity")"
+              if [[ "$published_integrity" != "$local_integrity" ]]; then
+                echo "::error::Published $package@$RELEASE_VERSION integrity does not match $local_integrity"
+                exit 1
+              fi
+              echo "Verified existing immutable package $package@$RELEASE_VERSION"
+            else
+              npm publish "$archive" --access public --tag remote-desktop-staging
+            fi
+          }
+          for metadata in release/remote-desktop-packages/*.metadata.json; do
+            package="$(node -p "require('./${metadata}').package")"
+            version="$(node -p "require('./${metadata}').version")"
+            prefix="${package#@}"
+            prefix="${prefix//\//-}"
+            [[ "$version" == "$RELEASE_VERSION" ]]
+            publish_or_verify_package "$package" "release/remote-desktop-packages/${prefix}-${version}.tgz"
+          done
+
+      - name: Promote latest only after every target is published
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for metadata in release/remote-desktop-packages/*.metadata.json; do
+            package="$(node -p "require('./${metadata}').package")"
+            version="$(node -p "require('./${metadata}').version")"
+            [[ "$version" == "$RELEASE_VERSION" ]]
+            npm dist-tag add "$package@$version" latest
+            latest="$(npm view "$package" dist-tags.latest)"
+            [[ "$latest" == "$version" ]] || {
+              echo "::error::$package latest is $latest, expected $version"
+              exit 1
+            }
+          done
+
+      - name: Publish the independent GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.DESKTOP_RELEASE_TOKEN || github.token }}
+          RELEASE_TAG: ${{ needs.verify.outputs.release_tag }}
+        shell: bash
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --latest=false --generate-notes \
+              --title "TaskHandoff Remote Desktop ${RELEASE_TAG#remote-desktop-v}" \
+              release/remote-desktop-packages/*
+          else
+            published_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+            for asset in release/remote-desktop-packages/*; do
+              name="$(basename "$asset")"
+              if ! grep -Fxq "$name" <<<"$published_assets"; then
+                gh release upload "$RELEASE_TAG" "$asset"
+              fi
+            done
+            gh release edit "$RELEASE_TAG" --latest=false
+          fi
+
+  sync-npmmirror:
+    name: Sync remote desktop packages to npmmirror (best effort)
+    needs: [verify, publish]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.release_tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: remote-desktop-complete-${{ needs.verify.outputs.version }}
+          path: release/remote-desktop-packages
+
+      - name: Trigger and verify npmmirror sync
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+        shell: bash
+        run: |
+          node scripts/sync-npmmirror.mjs \
+            --version "$RELEASE_VERSION" \
+            --dist-tag latest \
+            --packages-file release/remote-desktop-packages/remote-desktop-packages.json
