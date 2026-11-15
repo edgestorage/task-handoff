@@ -37,6 +37,7 @@ export type RemoteDesktopControllerConsumerState = {
 export const MAX_RETAINED_REMOTE_DESKTOP_CONTROLLERS = 2;
 
 const entries = new Map<string, Entry>();
+const listeners = new Set<() => void>();
 
 export function remoteDesktopControllerKey(
   controlPlaneId: string | undefined,
@@ -48,6 +49,19 @@ export function remoteDesktopControllerKey(
 
 function scopeKey(scope: RemoteDesktopControllerScope) {
   return remoteDesktopControllerKey(scope.controlPlaneId, scope.instanceId, scope.sessionId);
+}
+
+export function remoteDesktopControllerFor(scope: RemoteDesktopControllerScope) {
+  return entries.get(scopeKey(scope))?.controller;
+}
+
+export function subscribeRemoteDesktopControllers(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+function notifyRemoteDesktopControllers() {
+  for (const listener of listeners) listener();
 }
 
 export function acquireRemoteDesktopController(input: {
@@ -97,6 +111,7 @@ export function acquireRemoteDesktopController(input: {
     consumers: new Map(),
     lastUsedAt: Date.now(),
   });
+  notifyRemoteDesktopControllers();
   evictInactiveControllers(key);
   return controller;
 }
@@ -125,6 +140,7 @@ export function forgetRemoteDesktopController(scope: RemoteDesktopControllerScop
   const key = scopeKey(scope);
   const entry = entries.get(key);
   entries.delete(key);
+  if (entry) notifyRemoteDesktopControllers();
   if (entry && options.close !== false) void entry.controller.close();
   return entry?.controller;
 }
@@ -138,14 +154,17 @@ export function closeRemoteDesktopControllersForSession(
 }
 
 function evictInactiveControllers(keepKey: string) {
+  let evicted = false;
   while (entries.size > MAX_RETAINED_REMOTE_DESKTOP_CONTROLLERS) {
     const candidate = [...entries.entries()]
       .filter(([key, entry]) => key !== keepKey && !entry.active)
       .sort((left, right) => left[1].lastUsedAt - right[1].lastUsedAt)[0];
     if (!candidate) return;
     entries.delete(candidate[0]);
+    evicted = true;
     void candidate[1].controller.close();
   }
+  if (evicted) notifyRemoteDesktopControllers();
 }
 
 function syncEntryActivation(entry: Entry) {

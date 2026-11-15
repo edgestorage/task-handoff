@@ -216,6 +216,13 @@ function fallbackMediaFrame(keyframe = true, payloadBytes = 5, frameId = 1, time
 function installFakePeerConnection() {
   const listeners = new Map<string, Array<(event?: unknown) => void>>();
   const transceiver = { setCodecPreferences: jest.fn() };
+  const channels = new Map<string, {
+    readyState: string;
+    send: jest.Mock;
+    close: jest.Mock;
+    onopen?: () => void;
+    onmessage?: (event: { data: unknown }) => void;
+  }>();
   const peer = {
     iceConnectionState: 'new',
     connectionState: 'new',
@@ -224,7 +231,11 @@ function installFakePeerConnection() {
       listeners.set(type, [...(listeners.get(type) ?? []), listener]);
     },
     addTransceiver: jest.fn(() => transceiver),
-    createDataChannel: jest.fn(() => ({ readyState: 'connecting', send: jest.fn(), close: jest.fn() })),
+    createDataChannel: jest.fn((label: string) => {
+      const channel = { readyState: 'connecting', send: jest.fn(), close: jest.fn() };
+      channels.set(label, channel);
+      return channel;
+    }),
     createOffer: jest.fn(async () => ({ type: 'offer' as const, sdp: 'v=0\r\n' })),
     setLocalDescription: jest.fn(async (description: { type: 'offer'; sdp: string }) => { peer.localDescription = description; }),
     setRemoteDescription: jest.fn(async () => undefined),
@@ -234,7 +245,10 @@ function installFakePeerConnection() {
     close: jest.fn(),
   };
   (RTCPeerConnection as unknown as jest.Mock).mockImplementation(() => peer);
-  return { peer, transceiver };
+  const emit = (type: string, event?: unknown) => {
+    for (const listener of listeners.get(type) ?? []) listener(event);
+  };
+  return { channels, emit, peer, transceiver };
 }
 
 test('WebSocket-only startup attaches signaling before requesting fallback', async () => {
@@ -285,6 +299,45 @@ test('a signaling tunnel loss resumes the same P2P session instead of switching 
   sockets[1].handlers.onMessage(JSON.stringify({ type: 'ready' }));
   await flushMicrotasks();
   expect(controller.getSnapshot().signalingReady).toBe(true);
+  await controller.close();
+});
+
+test('a signaling tunnel loss clears and renews the input lease after reconnecting', async () => {
+  const { channels, emit, peer } = installFakePeerConnection();
+  const { controller, sockets } = setup({ p2p: true, turn: true, websocket: true });
+
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+  peer.iceConnectionState = 'connected';
+  peer.connectionState = 'connected';
+  emit('iceconnectionstatechange');
+  emit('connectionstatechange');
+
+  const control = channels.get('control');
+  expect(control).toBeDefined();
+  control!.readyState = 'open';
+  control!.onopen?.();
+  control!.onmessage?.({ data: JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 50 } }) });
+  await flushMicrotasks();
+  expect(controller.getSnapshot().inputEnabled).toBe(true);
+  control!.send.mockClear();
+
+  sockets[0].handlers.onClose?.({ code: 1006, reason: 'The Control Plane is closed.' });
+  expect(controller.getSnapshot().inputEnabled).toBe(false);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await flushMicrotasks();
+
+  sockets[1].handlers.onOpen?.();
+  sockets[1].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const resumed = control!.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .find((message) => message.type === 'input.resume');
+  expect(resumed?.payload).toEqual({ sessionRevision: 1 });
+  expect(controller.getSnapshot().inputPending).toBe(true);
   await controller.close();
 });
 

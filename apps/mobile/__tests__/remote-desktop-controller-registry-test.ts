@@ -52,6 +52,22 @@ test('reuses one controller for the same session scope', () => {
   expect(second).toBe(first);
 });
 
+test('exposes the current scope controller and notifies when it becomes available', () => {
+  const registry = loadRegistry();
+  const listener = jest.fn();
+  const unsubscribe = registry.subscribeRemoteDesktopControllers(listener);
+
+  expect(registry.remoteDesktopControllerFor(scope('session_a'))).toBeUndefined();
+  const controller = acquire(registry, 'session_a');
+  expect(registry.remoteDesktopControllerFor(scope('session_a'))).toBe(controller);
+  expect(listener).toHaveBeenCalledTimes(1);
+
+  registry.forgetRemoteDesktopController(scope('session_a'), { close: false });
+  expect(registry.remoteDesktopControllerFor(scope('session_a'))).toBeUndefined();
+  expect(listener).toHaveBeenCalledTimes(2);
+  unsubscribe();
+});
+
 test('keeps two real controller scopes and evicts the least recently used inactive scope', () => {
   let now = 1;
   jest.spyOn(Date, 'now').mockImplementation(() => now++);

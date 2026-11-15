@@ -8,6 +8,7 @@ import { mobileWebMetric } from '../components/mobile-web-typography';
 import { floatingPreviewMediaAspectRatio } from './floating-preview-layout';
 import type { RemoteDesktopSize } from './geometry';
 import type { RemoteDesktopResolution } from './preferences';
+import { remoteDesktopPreviewStatus, remoteDesktopPreviewStatusColor } from './preview-status';
 import { RemoteDesktopVideoSurface } from './RemoteDesktopVideoSurface';
 import { useRemoteDesktop } from './use-remote-desktop';
 
@@ -56,14 +57,8 @@ export function SessionRemoteDesktopInlinePreview({
     || remote.snapshot.phase === 'paused'
     || remote.snapshot.phase === 'reconnecting'
     || Boolean(remote.snapshot.path);
-  const connectionText = remote.snapshot.phase === 'error'
-    ? t('remoteDesktop.error')
-    : remote.snapshot.phase === 'stopped'
-      ? t('remoteDesktop.stopped')
-      : t('remoteDesktop.connecting');
-  const statusColor = remote.snapshot.phase === 'error' || remote.snapshot.phase === 'stopped'
-    ? colors.error
-    : '#ffb340';
+  const status = remoteDesktopPreviewStatus(remote.snapshot, t);
+  const statusColor = remoteDesktopPreviewStatusColor(status.tone, colors.error);
   const previewHeight = inlinePreviewHeight(hostWidth, mediaAspectRatio);
 
   return <Pressable
@@ -91,11 +86,11 @@ export function SessionRemoteDesktopInlinePreview({
     />
     {!hasVideo ? <View pointerEvents="none" style={styles.placeholder}>
       <Icon color="rgba(255,255,255,0.72)" name="desktop-outline" size={24} />
-      {remote.ready ? <ActivityIndicator color="rgba(255,255,255,0.78)" size="small" /> : null}
+      {remote.ready && status.tone === 'pending' ? <ActivityIndicator color="rgba(255,255,255,0.78)" size="small" /> : null}
     </View> : null}
     {remote.snapshot.phase !== 'connected' ? <View pointerEvents="none" style={styles.status} testID="session-remote-desktop-inline-status">
       <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-      <Text numberOfLines={1} style={styles.statusText}>{connectionText}</Text>
+      <Text numberOfLines={1} style={styles.statusText}>{status.label}</Text>
     </View> : null}
   </Pressable>;
 }

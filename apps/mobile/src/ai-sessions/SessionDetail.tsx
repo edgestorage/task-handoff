@@ -11,6 +11,7 @@ import { MarkdownContent } from '../components/MarkdownContent';
 import { Icon } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingState } from '../components/LoadingState';
+import { MenuView, type MenuAction } from '../components/MenuView';
 import {
   ADAPTIVE_READING_MAX_WIDTH,
   adaptiveContentContainerStyle,
@@ -105,8 +106,10 @@ export function SessionDetail({
   instanceName,
   onOpenRemoteDesktopPreview,
   onOpenRemoteDesktopDetail,
+  onChangeRemoteDesktopSource,
   onRemoveRemoteDesktop,
   remoteDesktopTarget,
+  remoteDesktopSourceEnded = false,
   renderRemoteDesktopInlinePreview,
   workspaceName,
 }: {
@@ -144,8 +147,10 @@ export function SessionDetail({
   instanceName?: string;
   onOpenRemoteDesktopPreview?(): void;
   onOpenRemoteDesktopDetail?(): void;
+  onChangeRemoteDesktopSource?(): void;
   onRemoveRemoteDesktop?(): void;
   remoteDesktopTarget?: PersistedCaptureTarget;
+  remoteDesktopSourceEnded?: boolean;
   renderRemoteDesktopInlinePreview?(input: { instanceId: string; onOpenDetail(): void; sessionId: string }): ReactNode;
   workspaceName?: string;
 }) {
@@ -399,6 +404,7 @@ export function SessionDetail({
     <SubAgents agents={session.subAgents} locale={locale} />
     {remoteDesktopTarget && onOpenRemoteDesktopPreview ? <SessionRemoteDesktopEntry
       expanded={remoteDesktopExpanded}
+      onChangeSource={onChangeRemoteDesktopSource}
       onOpenDetail={onOpenRemoteDesktopDetail}
       onPress={() => {
         if (canExpandRemoteDesktopInline) {
@@ -441,6 +447,7 @@ export function SessionDetail({
           sessionId: session.id,
         })
         : null}
+      sourceEnded={remoteDesktopSourceEnded}
       target={remoteDesktopTarget}
     /> : null}
   </View> : null;
@@ -1033,8 +1040,9 @@ function SubAgents({ agents, locale }: { agents: ControlPlaneAiSessionSummary['s
   );
 }
 
-function SessionRemoteDesktopEntry({ expanded, onOpenDetail, onPress, onRemove, onPreviewMeasured, onPreviewSettled, presentation, preview, target }: {
+function SessionRemoteDesktopEntry({ expanded, onChangeSource, onOpenDetail, onPress, onRemove, onPreviewMeasured, onPreviewSettled, presentation, preview, sourceEnded, target }: {
   expanded: boolean;
+  onChangeSource?(): void;
   onOpenDetail?(): void;
   onPress(): void;
   onRemove?(): void;
@@ -1042,12 +1050,23 @@ function SessionRemoteDesktopEntry({ expanded, onOpenDetail, onPress, onRemove, 
   onPreviewSettled?(expanded: boolean): void;
   presentation: 'floating' | 'expanded';
   preview?: ReactNode;
+  sourceEnded: boolean;
   target: PersistedCaptureTarget;
 }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const title = sourceTargetLabel(target, t);
-  const detail = target.subtitle?.trim() || sourceKindLabel(target.kind, t);
+  const title = sourceEnded ? t('remoteDesktop.sourceEnded') : sourceTargetLabel(target, t);
+  const detail = sourceEnded ? t('remoteDesktop.sourceEndedDetail') : target.subtitle?.trim() || sourceKindLabel(target.kind, t);
+  const menuActions: MenuAction[] = [
+    ...(onChangeSource ? [{ id: 'change-source', title: t('remoteDesktop.changeSource'), image: 'rectangle.on.rectangle' } satisfies MenuAction] : []),
+    ...(onOpenDetail ? [{ id: 'open-details', title: t('remoteDesktop.openDetails'), image: 'arrow.up.right.square' } satisfies MenuAction] : []),
+    ...(onRemove ? [{ id: 'remove', title: t('remoteDesktop.removeFromSession'), image: 'trash', attributes: { destructive: true } } satisfies MenuAction] : []),
+  ];
+  const runMenuAction = (id: string) => {
+    if (id === 'change-source') onChangeSource?.();
+    else if (id === 'open-details') onOpenDetail?.();
+    else if (id === 'remove') onRemove?.();
+  };
   return <View
     style={[styles.remoteDesktopEntry, {
       backgroundColor: colors.surface,
@@ -1073,31 +1092,31 @@ function SessionRemoteDesktopEntry({ expanded, onOpenDetail, onPress, onRemove, 
       <View style={styles.remoteDesktopCopy}>
         <Text numberOfLines={1} style={[styles.remoteDesktopTitle, { color: colors.text }]}>{title}</Text>
         <Text numberOfLines={1} style={[styles.remoteDesktopDetail, { color: colors.textMuted }]}>
-          {t('remoteDesktop.lastOpened')} · {detail}
+          {sourceEnded ? detail : `${t('remoteDesktop.lastOpened')} · ${detail}`}
         </Text>
       </View>
     </Pressable>
-    {onOpenDetail ? <Pressable
-      accessibilityLabel={`${t('remoteDesktop.openDetails')}: ${title}`}
+    {sourceEnded && onChangeSource ? <Pressable
+      accessibilityLabel={t('remoteDesktop.changeSource')}
       accessibilityRole="button"
       hitSlop={4}
-      onPress={onOpenDetail}
-      style={({ pressed }) => [styles.remoteDesktopAction, pressed && { backgroundColor: colors.primarySoft }]}
-      testID="session-remote-desktop-open-detail"
+      onPress={onChangeSource}
+      style={({ pressed }) => [styles.remoteDesktopChangeSource, pressed && { backgroundColor: colors.primarySoft }]}
+      testID="session-remote-desktop-change-source"
     >
-      <Icon color={colors.primary} name="open-outline" size={18} />
+      <Text style={[styles.remoteDesktopChangeSourceText, { color: colors.primary }]}>{t('remoteDesktop.changeSource')}</Text>
     </Pressable> : null}
-    {onRemove ? <Pressable
-      accessibilityHint={t('remoteDesktop.removeFromSessionHint')}
-      accessibilityLabel={`${t('remoteDesktop.removeFromSession')}: ${title}`}
-      accessibilityRole="button"
-      hitSlop={4}
-      onPress={onRemove}
-      style={({ pressed }) => [styles.remoteDesktopAction, pressed && { backgroundColor: colors.surfaceHover }]}
-      testID="session-remote-desktop-remove"
-    >
-      <Icon color={colors.textMuted} name="close-outline" size={19} />
-    </Pressable> : null}
+    {menuActions.length ? <MenuView actions={menuActions} onPressAction={({ nativeEvent }) => runMenuAction(nativeEvent.event)} title={t('remoteDesktop.title')}>
+      <Pressable
+        accessibilityLabel={t('remoteDesktop.moreActions')}
+        accessibilityRole="button"
+        hitSlop={4}
+        style={({ pressed }) => [styles.remoteDesktopAction, pressed && { backgroundColor: colors.surfaceHover }]}
+        testID="session-remote-desktop-menu"
+      >
+        <Icon color={colors.textMuted} name="ellipsis-horizontal" size={20} />
+      </Pressable>
+    </MenuView> : null}
     </View>
     {preview ? <AnimatedDisclosure
       contentRevealDelay={REMOTE_DESKTOP_CONTENT_REVEAL_DELAY_MS}
@@ -1152,6 +1171,8 @@ const styles = StyleSheet.create({
   remoteDesktopDetail: { fontSize: mobileWebType.tiny, lineHeight: mobileWebMetric(14) },
   remoteDesktopInlinePreview: { borderTopWidth: StyleSheet.hairlineWidth },
   remoteDesktopAction: { alignItems: 'center', borderRadius: 9, height: 36, justifyContent: 'center', width: 36 },
+  remoteDesktopChangeSource: { alignItems: 'center', borderRadius: 9, justifyContent: 'center', minHeight: 36, paddingHorizontal: 8 },
+  remoteDesktopChangeSourceText: { fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
   header: { gap: 12, marginBottom: 20 },
   itemSeparator: { height: mobileWebMetric(16) },
   modePicker: { alignSelf: 'center', maxWidth: '100%', width: 210 },

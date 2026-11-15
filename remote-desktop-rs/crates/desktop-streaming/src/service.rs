@@ -1760,22 +1760,44 @@ impl Service {
                         .await?;
                 }
                 Control::Alive(epoch) => {
-                    if self
-                        .registry
-                        .input_alive(&id, epoch.input_epoch, now)
-                        .is_ok()
-                    {
-                        let reply = self
-                            .input_guard
-                            .as_mut()
-                            .ok_or_else(|| anyhow::anyhow!("input guard closed"))?
-                            .call(&crate::input_guard::Command::Alive {
-                                epoch: epoch.input_epoch,
-                            })
-                            .await?;
-                        if !self.guard_state(&id, epoch.input_epoch, reply).await? {
-                            return Ok(());
+                    match self.registry.input_alive(&id, epoch.input_epoch, now) {
+                        Ok(()) => {
+                            let reply = self
+                                .input_guard
+                                .as_mut()
+                                .ok_or_else(|| anyhow::anyhow!("input guard closed"))?
+                                .call(&crate::input_guard::Command::Alive {
+                                    epoch: epoch.input_epoch,
+                                })
+                                .await?;
+                            if !self.guard_state(&id, epoch.input_epoch, reply).await? {
+                                return Ok(());
+                            }
                         }
+                        Err(crate::session::Error::StaleEpoch) => {
+                            // Input liveness is intentionally short. Expiry must
+                            // release the stored authority before publishing the
+                            // suspension; otherwise the follow-up resume sees the
+                            // expired epoch as merely present and cannot rearm.
+                            if self.registry.live_input_epoch(&id, now).is_none() {
+                                let effects = self.registry.suspend_input(&id)?;
+                                self.effects(&id, effects).await;
+                            }
+                            let session_revision =
+                                self.registry.snapshot(&id, &owner)?.session_revision;
+                            self.live
+                                .get_mut(&id)
+                                .ok_or_else(|| anyhow::anyhow!("peer closed"))?
+                                .reply(
+                                    Channel::Control,
+                                    input_suspended_notice(
+                                        crate::error::BackendError::InputLeaseExpired,
+                                        session_revision,
+                                    ),
+                                )
+                                .await?;
+                        }
+                        Err(error) => return Err(error.into()),
                     }
                 }
                 Control::Visibility { hidden } => {
@@ -2405,6 +2427,18 @@ mod tests {
     }
 
     #[test]
+    fn expired_input_lease_is_recoverable_with_authoritative_revision() {
+        let notice = input_suspended_notice(crate::error::BackendError::InputLeaseExpired, 23);
+        assert_eq!(notice["type"], "input.suspended");
+        assert_eq!(
+            notice["payload"]["cause"],
+            "REMOTE_DESKTOP_INPUT_LEASE_EXPIRED"
+        );
+        assert_eq!(notice["payload"]["recoverable"], true);
+        assert_eq!(notice["payload"]["sessionRevision"], 23);
+    }
+
+    #[test]
     fn guard_failure_suspension_is_recoverable_with_authoritative_revision() {
         let notice = input_suspended_notice(crate::error::BackendError::InputGuardFailed, 21);
         assert_eq!(notice["type"], "input.suspended");
@@ -2522,6 +2556,110 @@ mod tests {
             .await
             .unwrap());
         assert!(control_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn stale_input_alive_notifies_controller_with_a_recoverable_suspension() {
+        let (events, _events_rx) = mpsc::channel(16);
+        let mut service = Service {
+            registry: Registry::new(),
+            live: HashMap::new(),
+            input_guard: None,
+            input_guard_backend: None,
+            mode: crate::capture::Mode::Synthetic,
+            show_cursor: true,
+            source_salt: crate::session::secret(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            catalog: None,
+            display_catalog: None,
+            pending_source: HashMap::new(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            selected_source: HashMap::new(),
+            #[cfg(target_os = "linux")]
+            surface: None,
+            events: events.clone(),
+            fallbacks: HashMap::new(),
+        };
+        let owner = Owner {
+            actor_id: "fixture".into(),
+            device_session_id: "device".into(),
+        };
+        let target = crate::session::CaptureSelection {
+            source_ref: "display".into(),
+            stream_region: None,
+            control_region: None,
+        };
+        let now = Instant::now();
+        let (snapshot, token) = service
+            .registry
+            .reserve("stale-alive", owner.clone(), target.clone(), now)
+            .unwrap();
+        let viewer = snapshot.viewer_session_id;
+        service
+            .registry
+            .attach(&viewer, &owner, &target, &token, now)
+            .unwrap();
+        let peer = MediaPeer::new(viewer.clone(), events).await.unwrap();
+        let control = peer.control();
+        service.live.insert(
+            viewer.clone(),
+            LivePeer {
+                id: viewer.clone(),
+                owner: owner.clone(),
+                input_backend: None,
+                pointer_mapping: None,
+                peer,
+                control,
+                channels: HashMap::new(),
+                decoder: Decoder::default(),
+                reply_seq: 0,
+                clipboard_enabled: false,
+                clipboard: String::new(),
+                native_clipboard: None,
+                ice_expires_at: None,
+                pending_ice_expires_at: None,
+                ice_restart_pending: false,
+                fallback_generation: None,
+                fallback_active: false,
+                fallback_control: None,
+                webrtc_connected: false,
+            },
+        );
+        service.registry.fallback_activated(&viewer).unwrap();
+        let expired_at = now - crate::session::INPUT_LIVENESS - Duration::from_millis(1);
+        let epoch = service.registry.resume_input(&viewer, expired_at).unwrap();
+        let (control_tx, mut control_rx) = mpsc::channel(4);
+        service.live.get_mut(&viewer).unwrap().fallback_control = Some(control_tx);
+
+        service
+            .message(
+                viewer.clone(),
+                Message::Control(Control::Alive(crate::channel::Epoch { input_epoch: epoch })),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let expected_revision = service
+            .registry
+            .snapshot(&viewer, &owner)
+            .unwrap()
+            .session_revision;
+        let message: serde_json::Value =
+            serde_json::from_str(&control_rx.try_recv().unwrap()).unwrap();
+        assert_eq!(message["type"], "input.suspended");
+        assert_eq!(
+            message["payload"]["cause"],
+            "REMOTE_DESKTOP_INPUT_LEASE_EXPIRED"
+        );
+        assert_eq!(message["payload"]["recoverable"], true);
+        assert_eq!(message["payload"]["sessionRevision"], expected_revision);
+        assert!(service
+            .registry
+            .snapshot(&viewer, &owner)
+            .unwrap()
+            .input_epoch
+            .is_none());
     }
 
     #[tokio::test]

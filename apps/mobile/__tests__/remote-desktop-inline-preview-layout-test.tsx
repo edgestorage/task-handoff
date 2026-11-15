@@ -24,12 +24,14 @@ jest.mock('../src/remote-desktop/RemoteDesktopVideoSurface', () => ({
   RemoteDesktopVideoSurface: () => null,
 }));
 
-let mockRemoteDesktopPhase: 'connecting' | 'connected' = 'connecting';
+let mockRemoteDesktopPhase: 'connecting' | 'connected' | 'error' = 'connecting';
+let mockRemoteDesktopError: { code: string; message: string } | undefined;
 jest.mock('../src/remote-desktop/use-remote-desktop', () => ({
   useRemoteDesktop: () => ({
     controller: undefined,
     ready: true,
     snapshot: {
+      error: mockRemoteDesktopError,
       path: null,
       phase: mockRemoteDesktopPhase,
       target: { height: 720, kind: 'window', sourceRef: 'window-1', width: 1280 },
@@ -66,6 +68,21 @@ test('connected inline previews omit the redundant connection badge', async () =
 
   expect(screen.queryByTestId('session-remote-desktop-inline-status')).toBeNull();
   mockRemoteDesktopPhase = 'connecting';
+});
+
+test('source-ended inline previews identify the unavailable source instead of reporting a connection error', async () => {
+  mockRemoteDesktopPhase = 'error';
+  mockRemoteDesktopError = { code: 'REMOTE_DESKTOP_WINDOW_UNAVAILABLE', message: 'window closed' };
+  const screen = await render(<SessionRemoteDesktopInlinePreview
+    instanceId="instance-1"
+    onOpenDetail={jest.fn()}
+    sessionId="session-1"
+  />);
+
+  expect(screen.getByText('remoteDesktop.windowClosed')).toBeTruthy();
+  expect(screen.queryByText('remoteDesktop.error')).toBeNull();
+  mockRemoteDesktopPhase = 'connecting';
+  mockRemoteDesktopError = undefined;
 });
 
 test('caps tall inline previews while keeping the card full width', async () => {

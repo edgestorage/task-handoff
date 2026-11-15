@@ -16,6 +16,8 @@ pub enum BackendError {
     InputPermissionRequired,
     #[error("REMOTE_DESKTOP_INPUT_GUARD_FAILED")]
     InputGuardFailed,
+    #[error("REMOTE_DESKTOP_INPUT_LEASE_EXPIRED")]
+    InputLeaseExpired,
     #[error("REMOTE_DESKTOP_WAYLAND_UNSUPPORTED")]
     WaylandUnsupported,
     #[error("REMOTE_DESKTOP_WSL_UNSUPPORTED")]

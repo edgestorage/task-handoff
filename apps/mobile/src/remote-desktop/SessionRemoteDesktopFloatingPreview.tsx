@@ -42,6 +42,7 @@ import {
 } from './floating-preview-presence';
 import type { RemoteDesktopSize } from './geometry';
 import type { RemoteDesktopResolution } from './preferences';
+import { remoteDesktopPreviewStatus, remoteDesktopPreviewStatusColor } from './preview-status';
 import { RemoteDesktopVideoSurface } from './RemoteDesktopVideoSurface';
 import {
   updateSessionFloatingPreviewPreference,
@@ -387,16 +388,8 @@ function FloatingPreviewContent({
     || remote.snapshot.phase === 'paused'
     || remote.snapshot.phase === 'reconnecting'
     || Boolean(remote.snapshot.path);
-  const connectionText = remote.snapshot.phase === 'error'
-    ? t('remoteDesktop.error')
-    : remote.snapshot.phase === 'stopped'
-      ? t('remoteDesktop.stopped')
-      : remote.snapshot.phase === 'connected'
-        ? t('remoteDesktop.connected')
-        : t('remoteDesktop.connecting');
-  const statusColor = remote.snapshot.phase === 'error' || remote.snapshot.phase === 'stopped'
-    ? colors.error
-    : remote.snapshot.phase === 'connected' ? '#34c759' : '#ffb340';
+  const status = remoteDesktopPreviewStatus(remote.snapshot, t);
+  const statusColor = remoteDesktopPreviewStatusColor(status.tone, colors.error);
   const presenceScale = presence.interpolate({
     inputRange: [0, 1],
     outputRange: [FLOATING_PREVIEW_PRESENCE_SCALE, 1],
@@ -464,11 +457,11 @@ function FloatingPreviewContent({
           />
           {!hasVideo ? <View pointerEvents="none" style={styles.placeholder}>
             <Icon color="rgba(255,255,255,0.72)" name="desktop-outline" size={24} />
-            {remote.ready ? <ActivityIndicator color="rgba(255,255,255,0.78)" size="small" /> : null}
+            {remote.ready && status.tone === 'pending' ? <ActivityIndicator color="rgba(255,255,255,0.78)" size="small" /> : null}
           </View> : null}
           <View pointerEvents="none" style={styles.status}>
             <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-            <Text numberOfLines={1} style={styles.statusText}>{connectionText}</Text>
+            <Text numberOfLines={1} style={styles.statusText}>{status.label}</Text>
           </View>
         </View>
         <View style={styles.captureRow}>

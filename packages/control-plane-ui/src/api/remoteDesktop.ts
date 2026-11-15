@@ -7,6 +7,7 @@ import {
   DesktopFallbackSessionSchema,
   DesktopNativePermissionsSchema,
   DesktopSessionSnapshotSchema,
+  DesktopSignalTicketSchema,
   DesktopSourcesSchema,
   type DesktopCaptureSelection,
   type DesktopSource,
@@ -14,12 +15,14 @@ import {
   type DesktopNativePermissionKind,
   type DesktopNativePermissions,
   type DesktopSessionSnapshot,
+  type DesktopSignalTicket,
 } from "@task-handoff/protocol/remote-desktop";
 import { deleteApiData, getApiData, postApiData, putApiData } from "./client";
 import { createBrowserUuid } from "../lib/random-id";
 
 export type RemoteDesktopSource = DesktopSource;
 export type RemoteDesktopCreated = z.infer<typeof DesktopCreatedSchema>;
+export type RemoteDesktopSignalTicket = z.infer<typeof DesktopSignalTicketSchema>;
 
 export async function listRemoteDesktopSources(instanceId: string, signal?: AbortSignal) {
   const value = await getApiData<{ sources: RemoteDesktopSource[] }>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop/sources`, { signal });
@@ -30,6 +33,9 @@ export function createRemoteDesktopSession(instanceId: string, selection: Deskto
 }
 export function stopRemoteDesktopSession(instanceId: string, viewerSessionId: string) {
   return deleteApiData<{ stopped: boolean }>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop-sessions/${encodeURIComponent(viewerSessionId)}`, { requestId: createBrowserUuid() });
+}
+export function resumeRemoteDesktopSignal(instanceId: string, viewerSessionId: string) {
+  return postApiData<RemoteDesktopSignalTicket>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop-sessions/${encodeURIComponent(viewerSessionId)}/signal`, { requestId: createBrowserUuid() }).then(value => DesktopSignalTicketSchema.parse(value));
 }
 export function recoverRemoteDesktopSession(instanceId: string, viewerSessionId: string) {
   return getApiData<DesktopSessionSnapshot>(`controlled-instances/${encodeURIComponent(instanceId)}/remote-desktop-sessions/${encodeURIComponent(viewerSessionId)}`).then(value => DesktopSessionSnapshotSchema.parse(value));

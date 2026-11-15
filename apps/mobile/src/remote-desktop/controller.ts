@@ -246,7 +246,7 @@ export class RemoteDesktopController {
         this.clearStartupTimeout();
         this.update({
           phase: 'error',
-          error: { code: 'REMOTE_DESKTOP_SOURCE_SELECTION_REQUIRED', message: 'Select a capture source before connecting.' },
+          error: { code: 'REMOTE_DESKTOP_SOURCE_SELECTION_REQUIRED', message: 'Select a view before connecting.' },
           paused: false,
         });
         return;
@@ -514,6 +514,7 @@ export class RemoteDesktopController {
           if (!this.current(epoch)) return;
           this.signalOpen = false;
           this.stopSignalAlive();
+          this.invalidateInputForSignalRecovery();
           diagnosticLog.warn('remote.desktop.signal.error', { signalingReady: this.snapshotValue.signalingReady });
           this.considerFallbackAfterSignalFailure('REMOTE_DESKTOP_SIGNAL_SOCKET_ERROR');
         },
@@ -521,6 +522,7 @@ export class RemoteDesktopController {
           if (!this.current(epoch)) return;
           this.signalOpen = false;
           this.stopSignalAlive();
+          this.invalidateInputForSignalRecovery();
           diagnosticLog.warn('remote.desktop.signal.close', { signalingReady: this.snapshotValue.signalingReady, code: event.code, reason: event.reason });
           this.considerFallbackAfterSignalFailure('REMOTE_DESKTOP_SIGNAL_CLOSED');
         },
@@ -561,6 +563,7 @@ export class RemoteDesktopController {
           } else {
             void this.beginFallback('ice-failed', 'REMOTE_DESKTOP_ALL_WEBRTC_TRANSPORTS_DISABLED', false);
           }
+          if (this.active && this.snapshotValue.inputRequested && !this.snapshotValue.inputEnabled) this.resumeWanted();
         } else if (value?.type === 'answer') {
           if (!this.current(epoch) || !this.peer || typeof value.sdp !== 'string') return;
           try { await this.peer.setRemoteDescription({ type: 'answer', sdp: value.sdp }); }
@@ -1372,6 +1375,15 @@ export class RemoteDesktopController {
       });
     this.inputResumeRefresh = refresh;
     return refresh;
+  }
+
+  private invalidateInputForSignalRecovery() {
+    if (!this.snapshotValue.inputEnabled && !this.snapshotValue.inputPending) return;
+    diagnosticLog.info('remote.desktop.input.rearm.pending', {
+      inputEpoch: this.inputEpoch,
+      inputPending: this.snapshotValue.inputPending,
+    });
+    this.releaseInputState();
   }
 
   private suspendInput() {

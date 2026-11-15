@@ -87,9 +87,11 @@ export function SessionWorkspace({
   onOpenFile,
   onOpenRemoteDesktopPreview,
   onOpenRemoteDesktopDetail,
+  onChangeRemoteDesktopSource,
   onRemoveRemoteDesktop,
   onOpenSession,
   remoteDesktopTarget,
+  remoteDesktopSourceEnded,
   renderRemoteDesktopInlinePreview,
   detailMode: controlledDetailMode,
   onDetailModeChange,
@@ -119,9 +121,11 @@ export function SessionWorkspace({
   onOpenFile?(href: string): void | Promise<void>;
   onOpenRemoteDesktopPreview?(): void;
   onOpenRemoteDesktopDetail?(): void;
+  onChangeRemoteDesktopSource?(): void;
   onRemoveRemoteDesktop?(): void;
   onOpenSession?(sessionId: string): void;
   remoteDesktopTarget?: import('../remote-desktop/preferences').PersistedCaptureTarget;
+  remoteDesktopSourceEnded?: boolean;
   renderRemoteDesktopInlinePreview?(input: { instanceId: string; onOpenDetail(): void; sessionId: string }): ReactNode;
   detailMode?: SessionDetailMode;
   onDetailModeChange?(mode: SessionDetailMode): void;
@@ -954,6 +958,7 @@ export function SessionWorkspace({
           onOpenFile={onOpenFile}
           onOpenRemoteDesktopPreview={onOpenRemoteDesktopPreview}
           onOpenRemoteDesktopDetail={onOpenRemoteDesktopDetail}
+          onChangeRemoteDesktopSource={onChangeRemoteDesktopSource}
           onRemoveRemoteDesktop={onRemoveRemoteDesktop}
           onRetryTimeline={(turn) => {
             if (selectedTurnBodyFailure) {
@@ -968,6 +973,7 @@ export function SessionWorkspace({
           onTurnIndexChange={requestTurnSelection}
           pendingTurnIndex={pendingTurnIndex}
           remoteDesktopTarget={remoteDesktopTarget}
+          remoteDesktopSourceEnded={remoteDesktopSourceEnded}
           renderRemoteDesktopInlinePreview={renderRemoteDesktopInlinePreview}
           session={session}
           showModePicker={controlledDetailMode === undefined}

@@ -25,6 +25,25 @@ import { mobileWebMetric, mobileWebType } from '../src/components/mobile-web-typ
 import { mobileLightColors } from '../src/components/theme';
 import { setSessionPreviewPresentation } from '../src/remote-desktop/session-preview-presentation';
 
+jest.mock('../src/components/MenuView', () => {
+  const { Children, cloneElement, isValidElement } = require('react');
+  const { Pressable, Text, View } = require('react-native');
+  return {
+    MenuView: ({ actions, children, onPressAction }: {
+      actions: Array<{ id: string; title: string }>;
+      children: unknown;
+      onPressAction?(input: { nativeEvent: { event: string } }): void;
+    }) => <View testID="menu-view">
+      {Children.count(children) === 1 && isValidElement(children)
+        ? cloneElement(children as never, { onPress: () => undefined } as never)
+        : children as never}
+      {actions.map((action) => <Pressable key={action.id} onPress={() => onPressAction?.({ nativeEvent: { event: action.id } })} testID={`menu-action-${action.id}`}>
+        <Text>{action.title}</Text>
+      </Pressable>)}
+    </View>,
+  };
+});
+
 const session = ControlPlaneAiSessionSummarySchema.parse({
   id: 'session-1', agent: 'codex', title: 'Long session', status: 'running', phase: 'tool',
   currentTool: { name: 'shell', inputPreview: 'pnpm test' },
@@ -60,11 +79,13 @@ test('session footer opens the saved remote desktop preview after tool activity'
 });
 
 test('session remote desktop card separates preview, details, and removal actions', async () => {
+  const onChangeRemoteDesktopSource = jest.fn();
   const onOpenRemoteDesktopPreview = jest.fn();
   const onOpenRemoteDesktopDetail = jest.fn();
   const onRemoveRemoteDesktop = jest.fn();
   const screen = await render(<SessionDetail
     messages={[]}
+    onChangeRemoteDesktopSource={onChangeRemoteDesktopSource}
     onOpenRemoteDesktopDetail={onOpenRemoteDesktopDetail}
     onOpenRemoteDesktopPreview={onOpenRemoteDesktopPreview}
     onRemoveRemoteDesktop={onRemoveRemoteDesktop}
@@ -74,18 +95,46 @@ test('session remote desktop card separates preview, details, and removal action
 
   await fireEvent.press(screen.getByTestId('session-remote-desktop-entry'));
   expect(onOpenRemoteDesktopPreview).toHaveBeenCalledTimes(1);
+  expect(onChangeRemoteDesktopSource).not.toHaveBeenCalled();
   expect(onOpenRemoteDesktopDetail).not.toHaveBeenCalled();
   expect(onRemoveRemoteDesktop).not.toHaveBeenCalled();
 
-  await fireEvent.press(screen.getByTestId('session-remote-desktop-open-detail'));
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-menu'));
+  expect(screen.getByTestId('menu-action-change-source')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('menu-action-change-source'));
+  expect(onChangeRemoteDesktopSource).toHaveBeenCalledTimes(1);
+  expect(onOpenRemoteDesktopDetail).not.toHaveBeenCalled();
+  expect(onRemoveRemoteDesktop).not.toHaveBeenCalled();
+
+  await fireEvent.press(screen.getByTestId('menu-action-open-details'));
   expect(onOpenRemoteDesktopPreview).toHaveBeenCalledTimes(1);
   expect(onOpenRemoteDesktopDetail).toHaveBeenCalledTimes(1);
   expect(onRemoveRemoteDesktop).not.toHaveBeenCalled();
 
-  await fireEvent.press(screen.getByTestId('session-remote-desktop-remove'));
+  await fireEvent.press(screen.getByTestId('menu-action-remove'));
   expect(onOpenRemoteDesktopPreview).toHaveBeenCalledTimes(1);
   expect(onOpenRemoteDesktopDetail).toHaveBeenCalledTimes(1);
   expect(onRemoveRemoteDesktop).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+});
+
+test('source-ended remote desktop cards expose a direct view switch action', async () => {
+  const onChangeRemoteDesktopSource = jest.fn();
+  const screen = await render(<SessionDetail
+    messages={[]}
+    onChangeRemoteDesktopSource={onChangeRemoteDesktopSource}
+    onOpenRemoteDesktopPreview={jest.fn()}
+    remoteDesktopSourceEnded
+    remoteDesktopTarget={{ kind: 'window', sourceRef: 'window_1', subtitle: 'Preview', title: 'Editor' }}
+    session={ControlPlaneAiSessionSummarySchema.parse({ ...session, currentTool: undefined, phase: 'thinking', status: 'idle', subAgents: [] })}
+  />);
+
+  expect(screen.getByText('View unavailable')).toBeTruthy();
+  expect(screen.queryByText('Editor')).toBeNull();
+  expect(screen.getByText('The current view is no longer available. Switch to another view to continue.')).toBeTruthy();
+  expect(screen.queryByText(/Last opened/)).toBeNull();
+  await fireEvent.press(screen.getByTestId('session-remote-desktop-change-source'));
+  expect(onChangeRemoteDesktopSource).toHaveBeenCalledTimes(1);
   await screen.unmount();
 });
 

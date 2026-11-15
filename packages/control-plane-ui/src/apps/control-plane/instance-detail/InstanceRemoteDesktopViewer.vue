@@ -623,10 +623,11 @@ import {
   type DesktopSessionSnapshot,
 } from "@task-handoff/protocol/remote-desktop";
 import { isRemoteDesktopSourceEndedError } from "@task-handoff/control-plane-client";
-import { createRemoteDesktopSession, forceStopRemoteDesktopSession, listRemoteDesktopSources, requestRemoteDesktopFallback, stopRemoteDesktopSession, type RemoteDesktopCreated, type RemoteDesktopSource } from "../../../api/remoteDesktop";
+import { createRemoteDesktopSession, forceStopRemoteDesktopSession, listRemoteDesktopSources, recoverRemoteDesktopSession, requestRemoteDesktopFallback, resumeRemoteDesktopSignal, stopRemoteDesktopSession, type RemoteDesktopCreated, type RemoteDesktopSource } from "../../../api/remoteDesktop";
 import { useControlPlaneSettingsQuery } from "../../../api/queries";
 import { translateApiError } from "../../../i18n/apiError";
 import { parseInputSuspension, shouldResumeAfterInputError, shouldResumeAfterInputSuspension } from "./remoteDesktopInputSuspension";
+import { isLostRemoteDesktopSessionError, isRetryableRemoteDesktopSignalResumeError, remoteDesktopSignalResumeRetryDelayMs, REMOTE_DESKTOP_SIGNAL_RESUME_WINDOW_MS } from "./remoteDesktopSignalRecovery";
 import { createRemoteDesktopDiagnostics, remoteDesktopErrorFields } from "./remoteDesktopDiagnostics";
 import { parseSelectedSourceIdentity, resolveRefreshedSource, selectedSourceIdentity as toSelectedSourceIdentity, type SelectedSourceIdentity } from "./remoteDesktopSourceSelection";
 import {
@@ -763,6 +764,7 @@ const controlRequestPending = ref(false);
 const controlHintVisible = ref(false);
 const streamReady = ref(false);
 const signalingReady = ref(false);
+const signalReconnecting = ref(false);
 const switchingScope = ref(false);
 const scopeMenuOpen = ref(false);
 const forceStopOpen = ref(false);
@@ -830,6 +832,11 @@ let seq = 0;
 let epoch = 0;
 let inputAliveTimer: ReturnType<typeof setInterval> | undefined;
 let signalAliveTimer: ReturnType<typeof setInterval> | undefined;
+let signalReadyTimer: ReturnType<typeof setTimeout> | undefined;
+let signalResumeTimer: ReturnType<typeof setTimeout> | undefined;
+let signalResumeAttempt = 0;
+let signalResumeDeadline = 0;
+let signalResumeInFlight = false;
 let pointerFrame: number | undefined;
 let wheelFrame: number | undefined;
 let webRTCReceiveSample: RemoteDesktopWebRTCReceiveSample | undefined;
@@ -848,6 +855,7 @@ let inputResumePending = false;
 let inputResumeAckTimer: ReturnType<typeof setTimeout> | undefined;
 let inputResumeRetryTimer: ReturnType<typeof setTimeout> | undefined;
 let inputResumeRetryCount = 0;
+let inputResumeRefresh: Promise<void> | undefined;
 let visibilityResumePending = false;
 let visibilityResumeRevision: number | undefined;
 let inputResumeGeneration = 0;
@@ -956,7 +964,7 @@ function remoteDesktopParseErrorFields(error: unknown) {
 const FALLBACK_HEAD_START_MS = 500;
 const FALLBACK_UPGRADE_RETRY_MS = 500;
 const FALLBACK_UPGRADE_TIMEOUT_MS = 5_000;
-
+const SIGNAL_READY_TIMEOUT_MS = 8_000;
 const fallbackActive = computed(() => fallbackState.value === "active");
 const fallbackSwitching = computed(() => fallbackState.value === "switching" || fallbackState.value === "reconnecting" || transportUpgrading.value);
 const connectionOptionsQuery = useQuery({
@@ -1296,6 +1304,7 @@ watch([canConnect, sourcesLoading], ([ready, loading]) => {
 }, { flush: "post" });
 const connectionTone = computed(() => {
   if (!session.value) return "neutral";
+  if (signalReconnecting.value) return "warning";
   if (fallbackState.value === "active") return "active";
   if (fallbackSwitching.value) return "warning";
   if (fallbackState.value === "failed") return "danger";
@@ -1305,6 +1314,7 @@ const connectionTone = computed(() => {
 });
 const connectionLabel = computed(() => {
   if (!session.value) return "";
+  if (signalReconnecting.value) return t("instances.remoteDesktop.reconnecting");
   if (fallbackState.value === "active") return t("instances.remoteDesktop.connected");
   if (fallbackState.value === "switching") return t("instances.remoteDesktop.switchingFallback");
   if (fallbackState.value === "reconnecting") return t("instances.remoteDesktop.reconnectingFallback");
@@ -1537,6 +1547,8 @@ async function connect() {
   clipboardStatus.value = "";
   streamReady.value = false;
   signalingReady.value = false;
+  signalReconnecting.value = false;
+  stopSignalResume();
   inputRequested.value = !props.preview;
   inputResumeGeneration += 1;
   inputResumePending = false;
@@ -1556,40 +1568,7 @@ async function connect() {
       return;
     }
     session.value = created;
-    const socket = new WebSocket(new URL(created.signalUrl, window.location.href), REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL);
-    ws = socket;
-    socket.binaryType = "arraybuffer";
-    socket.onmessage = event => { if (ws === socket) void message(event); };
-    socket.onopen = () => {
-      if (ws !== socket) return;
-      signalingReady.value = false;
-      recordRemoteDesktopDiagnostic("signal.open");
-    };
-    socket.onerror = () => {
-      if (ws !== socket) return;
-      recordRemoteDesktopDiagnostic("signal.error", { reason: "websocket-error" });
-      error.value = t("instances.remoteDesktop.signalingFailed");
-    };
-    socket.onclose = (event) => {
-      if (ws !== socket) return;
-      recordRemoteDesktopDiagnostic("signal.close", { closeCode: event.code, closeReason: event.reason.slice(0, 200), clean: event.wasClean, closingSession });
-      const closedSession = session.value;
-      if (!closedSession) return;
-      if (closingSession) {
-        cleanup();
-        return;
-      }
-      const message = error.value || t("instances.remoteDesktop.closed");
-      stopSignalAlive();
-      stopInputAlive();
-      signalingReady.value = false;
-      connectionState.value = "closed";
-      clipboardBusy.value = false;
-      clipboardRequested = false;
-      void stopRemoteDesktopSession(props.instanceId, closedSession.snapshot.viewerSessionId).catch(() => undefined);
-      cleanup();
-      error.value = message;
-    };
+    openSignal(created.signalUrl);
   } catch (reason) {
     recordRemoteDesktopDiagnostic("session.open.failed", {}, reason);
     error.value = translateApiError(reason, t, t("instances.remoteDesktop.openFailed"));
@@ -1597,6 +1576,59 @@ async function connect() {
   } finally {
     connecting.value = false;
   }
+}
+
+function openSignal(signalUrl: string) {
+  const socket = new WebSocket(new URL(signalUrl, window.location.href), REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL);
+  ws = socket;
+  socket.binaryType = "arraybuffer";
+  socket.onmessage = event => { if (ws === socket) void message(event); };
+  socket.onopen = () => {
+    if (ws !== socket) return;
+    clearSignalReadyTimer();
+    signalReadyTimer = setTimeout(() => {
+      signalReadyTimer = undefined;
+      if (ws !== socket || signalingReady.value) return;
+      recordRemoteDesktopDiagnostic("signal.ready.timeout", { reconnecting: signalReconnecting.value });
+      socket.close();
+    }, SIGNAL_READY_TIMEOUT_MS);
+    recordRemoteDesktopDiagnostic("signal.open", { resume: signalReconnecting.value });
+  };
+  socket.onerror = () => {
+    if (ws !== socket) return;
+    recordRemoteDesktopDiagnostic("signal.error", { reason: "websocket-error", reconnecting: signalReconnecting.value });
+  };
+  socket.onclose = (event) => {
+    if (ws !== socket) return;
+    ws = undefined;
+    clearSignalReadyTimer();
+    recordRemoteDesktopDiagnostic("signal.close", {
+      closeCode: event.code,
+      closeReason: (event.reason || "").slice(0, 200),
+      clean: event.wasClean,
+      closingSession,
+      reconnecting: signalReconnecting.value,
+    });
+    const closedSession = session.value;
+    if (!closedSession || closingSession || disposed) {
+      if (closingSession) cleanup();
+      return;
+    }
+    stopSignalAlive();
+    signalingReady.value = false;
+    signalReconnecting.value = true;
+    error.value = "";
+    // The WebRTC media/control path can outlive the signaling tunnel. Keep it
+    // alive, but discard the input lease so the component cannot keep rejecting
+    // stale epochs after the replacement tunnel becomes ready.
+    suspend();
+    recordRemoteDesktopDiagnostic("signal.recover", {
+      closeCode: event.code,
+      mediaState: pc?.connectionState,
+      iceState: pc?.iceConnectionState,
+    });
+    scheduleSignalResume("REMOTE_DESKTOP_SIGNAL_CLOSED", true);
+  };
 }
 
 function setConnectionMethodEnabled(key: ConnectionMethodKey, enabled: boolean) {
@@ -1623,6 +1655,53 @@ function messageByteLength(event: MessageEvent) {
   return undefined;
 }
 
+async function applyRemoteDesktopSnapshot(next: DesktopSessionSnapshot) {
+  const previousTransport = snapshot.value?.transport;
+  snapshot.value = next;
+  if (session.value) session.value = { ...session.value, snapshot: next };
+  if (next.phase === "stopped" || next.phase === "failed") {
+    const sourceEnded = isRemoteDesktopSourceEndedError(next.reason);
+    if (sourceEnded) {
+      sourceEndedNotice.value = translateApiError({ code: next.reason }, t, t("instances.remoteDesktop.closed"));
+      error.value = "";
+    } else {
+      error.value = translateApiError({ code: next.reason }, t, t("instances.remoteDesktop.closed"));
+    }
+    cleanup();
+    if (sourceEnded) void loadSources();
+    return;
+  }
+  if (!next.isController) {
+    visibilityResumePending = false;
+    visibilityResumeRevision = undefined;
+    releaseInputState();
+    controlRequestPending.value = false;
+  }
+  if (next.isController && controlRequestPending.value) {
+    controlRequestPending.value = false;
+    inputRequested.value = true;
+    resumeWanted();
+  }
+  if (
+    visibilityResumePending
+    && next.phase === "active"
+    && !next.mediaPaused
+    && (visibilityResumeRevision === undefined || next.sessionRevision > visibilityResumeRevision)
+  ) {
+    visibilityResumePending = false;
+    visibilityResumeRevision = undefined;
+    resumeWanted();
+  }
+  resumeWanted();
+  enableClipboardByDefault();
+  if (
+    next.transport === "webrtc"
+    && fallbackState.value !== "idle"
+    && (previousTransport === "websocket-fallback" || transportUpgrading.value)
+  ) commitTransportUpgrade();
+  if (!pc && fallbackState.value === "idle" && webRTCTransportEnabled.value) await setupPeer();
+}
+
 async function message(event: MessageEvent) {
   const dataKind = typeof event.data === "string" ? "text" : event.data instanceof ArrayBuffer ? "arraybuffer" : typeof event.data;
   const bytes = messageByteLength(event);
@@ -1632,57 +1711,20 @@ async function message(event: MessageEvent) {
     signalType = typeof value?.type === "string" ? value.type : "unknown";
     rememberRemoteDesktopFrame({ direction: "receive", channel: "signal", type: signalType, sequence: typeof value?.seq === "number" ? value.seq : undefined, bytes: bytes ?? 0 });
     if (value.type === "snapshot") {
-      const next = DesktopSessionSnapshotSchema.parse(value.snapshot);
-      const previousTransport = snapshot.value?.transport;
-      snapshot.value = next;
-      if (snapshot.value.phase === "stopped" || snapshot.value.phase === "failed") {
-        const sourceEnded = isRemoteDesktopSourceEndedError(snapshot.value.reason);
-        if (sourceEnded) {
-          sourceEndedNotice.value = translateApiError({ code: snapshot.value.reason }, t, t("instances.remoteDesktop.closed"));
-          error.value = "";
-        } else {
-          error.value = translateApiError({ code: snapshot.value.reason }, t, t("instances.remoteDesktop.closed"));
-        }
-        cleanup();
-        if (sourceEnded) void loadSources();
-        return;
-      }
-      if (!next.isController) {
-        visibilityResumePending = false;
-        visibilityResumeRevision = undefined;
-        releaseInputState();
-        controlRequestPending.value = false;
-      }
-      if (next.isController && controlRequestPending.value) {
-        controlRequestPending.value = false;
-        inputRequested.value = true;
-        resumeWanted();
-      }
-      if (
-        visibilityResumePending
-        && next.phase === "active"
-        && !next.mediaPaused
-        && (visibilityResumeRevision === undefined || next.sessionRevision > visibilityResumeRevision)
-      ) {
-        visibilityResumePending = false;
-        visibilityResumeRevision = undefined;
-        resumeWanted();
-      }
-      resumeWanted();
-      enableClipboardByDefault();
-      if (
-        next.transport === "webrtc"
-        && fallbackState.value !== "idle"
-        && (previousTransport === "websocket-fallback" || transportUpgrading.value)
-      ) commitTransportUpgrade();
-      if (!pc && fallbackState.value === "idle" && webRTCTransportEnabled.value) await setupPeer();
+      await applyRemoteDesktopSnapshot(DesktopSessionSnapshotSchema.parse(value.snapshot));
     } else if (value.type === "configureIce") {
       if (!pc) return;
       await pc.setConfiguration(iceConfiguration(value.iceServers));
     } else if (value.type === "answer" && pc) {
       await pc.setRemoteDescription({ type: "answer", sdp: value.sdp });
     } else if (value.type === "ready") {
+      const resumed = signalReconnecting.value;
       signalingReady.value = true;
+      signalReconnecting.value = false;
+      clearSignalReadyTimer();
+      stopSignalResume();
+      signalResumeAttempt = 0;
+      signalResumeDeadline = 0;
       startSignalAlive();
       applyTransportResolution();
       enableClipboardByDefault();
@@ -1694,6 +1736,14 @@ async function message(event: MessageEvent) {
         await setupPeer();
       }
       if (pc && !pc.localDescription) await startOffer(false);
+      else if (
+        resumed
+        && pc
+        && pc.connectionState !== "connected"
+        && pc.iceConnectionState !== "connected"
+        && pc.iceConnectionState !== "completed"
+      ) await startOffer(true);
+      resumeWanted();
     } else if (value.type === "iceConfiguration" && pc) {
       await pc.setConfiguration(iceConfiguration(value.iceServers));
       awaitingRestart = true;
@@ -2718,7 +2768,8 @@ function handleControlValue(value: any, channel = "control") {
         controlCode: code,
         sessionRevision: snapshot.value?.sessionRevision,
       });
-      scheduleInputResumeRetry(code);
+      if (code === "REMOTE_DESKTOP_STALE_EPOCH") void refreshInputResumeSnapshot(code);
+      else scheduleInputResumeRetry(code);
       return;
     }
     inputResumePending = false;
@@ -2957,6 +3008,35 @@ function armInputResumeAckTimeout() {
   }, REMOTE_DESKTOP_INPUT_RESUME_ACK_TIMEOUT_MS);
 }
 
+function refreshInputResumeSnapshot(reason: string) {
+  if (inputResumeRefresh) return inputResumeRefresh;
+  const current = session.value;
+  if (!current || disposed) return Promise.resolve();
+  recordRemoteDesktopDiagnostic("input.resume.refresh", {
+    reason,
+    sessionRevision: current.snapshot.sessionRevision,
+  });
+  const refresh = recoverRemoteDesktopSession(props.instanceId, current.snapshot.viewerSessionId)
+    .then(async (recovered) => {
+      if (disposed || session.value?.snapshot.viewerSessionId !== current.snapshot.viewerSessionId) return;
+      session.value = { ...current, snapshot: recovered };
+      await applyRemoteDesktopSnapshot(recovered);
+    })
+    .catch((cause) => {
+      if (disposed || session.value?.snapshot.viewerSessionId !== current.snapshot.viewerSessionId) return;
+      recordRemoteDesktopDiagnostic("input.resume.refresh.failed", {
+        reason,
+        ...remoteDesktopErrorFields(cause),
+      }, cause);
+      scheduleInputResumeRetry(reason);
+    })
+    .finally(() => {
+      if (inputResumeRefresh === refresh) inputResumeRefresh = undefined;
+    });
+  inputResumeRefresh = refresh;
+  return refresh;
+}
+
 function scheduleInputResumeRetry(reason: string) {
   if (
     inputResumeRetryTimer !== undefined
@@ -3064,6 +3144,113 @@ function startInputAlive() {
 function stopInputAlive() {
   if (inputAliveTimer !== undefined) clearInterval(inputAliveTimer);
   inputAliveTimer = undefined;
+}
+
+function clearSignalReadyTimer() {
+  if (signalReadyTimer !== undefined) clearTimeout(signalReadyTimer);
+  signalReadyTimer = undefined;
+}
+
+function clearSignalResumeTimer() {
+  if (signalResumeTimer !== undefined) clearTimeout(signalResumeTimer);
+  signalResumeTimer = undefined;
+}
+
+function stopSignalResume(reset = true) {
+  clearSignalResumeTimer();
+  signalResumeInFlight = false;
+  if (reset) {
+    signalResumeAttempt = 0;
+    signalResumeDeadline = 0;
+  }
+}
+
+function scheduleSignalResume(code: string, immediate = false) {
+  if (disposed || closingSession || !session.value || signalResumeTimer !== undefined || signalResumeInFlight) return;
+  if (signalResumeDeadline === 0) signalResumeDeadline = Date.now() + REMOTE_DESKTOP_SIGNAL_RESUME_WINDOW_MS;
+  if (Date.now() >= signalResumeDeadline) {
+    finishSignalResumeFailure(code);
+    return;
+  }
+  const delayMs = immediate ? 0 : remoteDesktopSignalResumeRetryDelayMs(signalResumeAttempt);
+  recordRemoteDesktopDiagnostic("signal.resume.retry", {
+    attempt: signalResumeAttempt + 1,
+    delayMs,
+    code,
+  });
+  signalResumeTimer = setTimeout(() => {
+    signalResumeTimer = undefined;
+    void resumeSignal(code);
+  }, delayMs);
+}
+
+async function resumeSignal(code: string) {
+  const current = session.value;
+  if (disposed || closingSession || !current || signalResumeInFlight) return;
+  if (signalResumeDeadline !== 0 && Date.now() >= signalResumeDeadline) {
+    finishSignalResumeFailure(code);
+    return;
+  }
+  signalResumeInFlight = true;
+  signalResumeAttempt += 1;
+  let retry = false;
+  recordRemoteDesktopDiagnostic("signal.resume.begin", {
+    attempt: signalResumeAttempt,
+    code,
+    viewerSessionId: current.snapshot.viewerSessionId,
+  });
+  try {
+    const ticket = await resumeRemoteDesktopSignal(props.instanceId, current.snapshot.viewerSessionId);
+    if (disposed || closingSession || session.value?.snapshot.viewerSessionId !== current.snapshot.viewerSessionId) return;
+    session.value = { ...current, signalUrl: ticket.signalUrl, ticketExpiresAt: ticket.ticketExpiresAt };
+    openSignal(ticket.signalUrl);
+    recordRemoteDesktopDiagnostic("signal.resume.ticket", {
+      attempt: signalResumeAttempt,
+      ticketExpiresAt: ticket.ticketExpiresAt,
+    });
+  } catch (cause) {
+    if (disposed || closingSession || session.value?.snapshot.viewerSessionId !== current.snapshot.viewerSessionId) return;
+    recordRemoteDesktopDiagnostic("signal.resume.failed", {
+      attempt: signalResumeAttempt,
+      ...remoteDesktopErrorFields(cause),
+    }, cause);
+    if (isLostRemoteDesktopSessionError(cause)) {
+      try {
+        const recovered = await recoverRemoteDesktopSession(props.instanceId, current.snapshot.viewerSessionId);
+        if (!disposed && session.value?.snapshot.viewerSessionId === current.snapshot.viewerSessionId) {
+          session.value = { ...current, snapshot: recovered };
+          await applyRemoteDesktopSnapshot(recovered);
+          retry = recovered.phase === "active";
+        }
+      } catch (refreshCause) {
+        retry = isRetryableRemoteDesktopSignalResumeError(refreshCause) && Date.now() < signalResumeDeadline;
+      }
+    } else if (isRetryableRemoteDesktopSignalResumeError(cause) && Date.now() < signalResumeDeadline) {
+      retry = true;
+    }
+    if (!retry) {
+      signalResumeInFlight = false;
+      finishSignalResumeFailure(code, cause);
+      return;
+    }
+  } finally {
+    signalResumeInFlight = false;
+    if (retry) scheduleSignalResume(code);
+  }
+}
+
+function finishSignalResumeFailure(code: string, cause?: unknown) {
+  const current = session.value;
+  stopSignalResume();
+  signalReconnecting.value = false;
+  const message = translateApiError(
+    cause && typeof cause === "object" ? cause : { code },
+    t,
+    t("instances.remoteDesktop.signalingFailed"),
+  );
+  cleanup();
+  error.value = message;
+  if (current) void stopRemoteDesktopSession(props.instanceId, current.snapshot.viewerSessionId).catch(() => undefined);
 }
 
 function signalAliveNow() {
@@ -3356,6 +3543,10 @@ function cleanup() {
   if (element) element.srcObject = null;
   stopInputAlive();
   stopSignalAlive();
+  clearSignalReadyTimer();
+  stopSignalResume();
+  signalReconnecting.value = false;
+  inputResumeRefresh = undefined;
   stopPointerMove();
   stopWheelPump();
   pressedButtons.clear();

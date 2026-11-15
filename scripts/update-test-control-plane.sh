@@ -111,9 +111,13 @@ build_remote_desktop_package() {
       mkdir -p "$HOME" "$CARGO_HOME"
       export PATH="/usr/local/rustup/toolchains/1.95.0-${RUST_TOOLCHAIN}/bin:${PATH}"
       cargo build --locked --release -p desktop-streaming --bin task-handoff-desktop-streaming
-      install -d -m 0755 "/workspace/release/remote-desktop-packages/.build-linux-${REMOTE_DESKTOP_ARCH}/bin"
-      install -m 0755 "$CARGO_TARGET_DIR/release/task-handoff-desktop-streaming" \
-        "/workspace/release/remote-desktop-packages/.build-linux-${REMOTE_DESKTOP_ARCH}/bin/task-handoff-desktop-streaming"
+      build_bin="/workspace/release/remote-desktop-packages/.build-linux-${REMOTE_DESKTOP_ARCH}/bin"
+      mkdir -p "$build_bin"
+      # Docker Desktop shared-volume filesystems can reject install command
+      # ownership and deallocation handling even for writable destinations.
+      cat "$CARGO_TARGET_DIR/release/task-handoff-desktop-streaming" \
+        > "$build_bin/task-handoff-desktop-streaming"
+      chmod 0755 "$build_bin/task-handoff-desktop-streaming"
     '
   node scripts/remote-desktop-packages.mjs pack \
     --version "$VERSION" \

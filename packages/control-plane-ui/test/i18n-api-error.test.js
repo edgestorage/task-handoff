@@ -31,7 +31,7 @@ test("remote desktop failures use actionable localized messages", () => {
     ["REMOTE_DESKTOP_SIGNAL_ORIGIN", "The remote desktop signaling connection was rejected. Use the configured HTTPS address, or ask an administrator to enable private-network HTTP access.", "远程桌面信令连接被拒绝，请使用配置的 HTTPS 地址，或由管理员启用局域网 HTTP 访问。"],
     ["REMOTE_DESKTOP_NOT_INSTALLED", "The remote desktop component is not installed on this instance.", "此实例尚未安装远程桌面组件。"],
     ["REMOTE_DESKTOP_PROTOCOL_MISMATCH", "The remote desktop component uses an incompatible protocol. Update the component, then try again.", "远程桌面组件协议不兼容，请更新组件后重试。"],
-    ["REMOTE_DESKTOP_WINDOW_UNAVAILABLE", "The selected window was closed or is no longer available. Choose another source, then reconnect.", "所选窗口已关闭或已不可用，请选择其他采集源后重新连接。"],
+    ["REMOTE_DESKTOP_WINDOW_UNAVAILABLE", "The selected window was closed or is no longer available. Switch to another view, then reconnect.", "所选窗口已关闭或已不可用，请切换其他画面后重新连接。"],
   ];
 
   for (const [code, englishMessage, chineseMessage] of cases) {

@@ -30,11 +30,15 @@ import { deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@t
 import { directoryAiSessionProviderCapability, directoryRemoteDesktopCapabilities } from '@task-handoff/protocol/control-plane-directory';
 import { createMobileControlPlaneClient } from '../control-plane/client';
 import { PaneHeaderRestore } from '../master-detail/use-pane-header-restore';
-import { closeRemoteDesktopControllersForSession } from '../remote-desktop/controller-registry';
+import { closeRemoteDesktopControllersForSession, remoteDesktopControllerFor } from '../remote-desktop/controller-registry';
+import { isRemoteDesktopSourceEndedError } from '../remote-desktop/errors';
 import { SessionRemoteDesktopFloatingPreview } from '../remote-desktop/SessionRemoteDesktopFloatingPreview';
 import { SessionRemoteDesktopInlinePreview } from '../remote-desktop/SessionRemoteDesktopInlinePreview';
+import { RemoteDesktopSourcePicker } from '../remote-desktop/RemoteDesktopSourcePicker';
+import type { PersistedCaptureTarget } from '../remote-desktop/preferences';
 import { useSessionPreviewPresentation } from '../remote-desktop/session-preview-presentation';
-import { removeSessionRemoteDesktopLink, useSessionRemoteDesktopLink } from '../remote-desktop/session-links';
+import { rememberSessionRemoteDesktopLink, removeSessionRemoteDesktopLink, useSessionRemoteDesktopLink } from '../remote-desktop/session-links';
+import { useSessionRemoteDesktopStatus } from '../remote-desktop/use-session-remote-desktop-status';
 import { floatingSessionMenuActions, nativeSessionMenuItems, type SessionMenuAction, type SessionMenuGroup, type SessionMenuItem } from './session-menu-model';
 
 export function AiSessionDetailScreen({
@@ -123,6 +127,7 @@ export function AiSessionDetailScreen({
   const [renaming, setRenaming] = useState(false);
   const [renameRequestId, setRenameRequestId] = useState(() => Crypto.randomUUID());
   const [remoteDesktopPreview, setRemoteDesktopPreview] = useState({ open: false, sessionId });
+  const [remoteDesktopSourcePickerOpen, setRemoteDesktopSourcePickerOpen] = useState(false);
   const sessionPreviewPresentation = useSessionPreviewPresentation();
   const remoteDesktopPreviewOpen = remoteDesktopPreview.open
     && remoteDesktopPreview.sessionId === sessionId
@@ -130,21 +135,36 @@ export function AiSessionDetailScreen({
   const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
   const defaultPermissionMode = instance?.config.defaultCodexPermissionMode;
   const remoteDesktopLink = useSessionRemoteDesktopLink(controlPlaneId, instanceId, sessionId);
+  const remoteDesktopStatus = useSessionRemoteDesktopStatus({ controlPlaneId, instanceId, sessionId });
   // iOS 26+ defaults to content-wide back swipes, which compete with preview
   // dragging. While the preview is visible, keep only the native edge swipe.
   const fullScreenGestureEnabled = screenFocused && remoteDesktopLink && remoteDesktopPreviewOpen ? false : undefined;
-  const remoteDesktopAvailable = directoryRemoteDesktopCapabilities(instance?.capabilities)?.available !== false;
+  const remoteDesktopCapability = directoryRemoteDesktopCapabilities(instance?.capabilities);
+  const remoteDesktopAvailable = remoteDesktopCapability?.available !== false;
+  const remoteDesktopSourceEnded = isRemoteDesktopSourceEndedError(remoteDesktopStatus.error?.code);
+  const loadRemoteDesktopSources = useCallback(async (signal?: AbortSignal) => {
+    if (!client) throw new Error('The active Control Plane client is unavailable.');
+    return (await client.remoteDesktop.sources(instanceId, signal)).sources;
+  }, [client, instanceId]);
+  const changeRemoteDesktopSource = useCallback(() => setRemoteDesktopSourcePickerOpen(true), [setRemoteDesktopSourcePickerOpen]);
+  const selectRemoteDesktopSource = useCallback((target: PersistedCaptureTarget) => {
+    rememberSessionRemoteDesktopLink({ controlPlaneId, instanceId, sessionId, target });
+    remoteDesktopControllerFor({ controlPlaneId, instanceId, sessionId })?.switchTarget(target);
+    setRemoteDesktopSourcePickerOpen(false);
+  }, [controlPlaneId, instanceId, sessionId, setRemoteDesktopSourcePickerOpen]);
   const openRemoteDesktopDetails = useCallback(() => {
+    setRemoteDesktopSourcePickerOpen(false);
     router.push({
       pathname: '/remote-desktop/[instanceId]' as never,
       params: { instanceId, origin: 'session-card', sessionId },
     });
-  }, [instanceId, router, sessionId]);
+  }, [instanceId, router, sessionId, setRemoteDesktopSourcePickerOpen]);
   const removeRemoteDesktopFromSession = useCallback(() => {
+    setRemoteDesktopSourcePickerOpen(false);
     setRemoteDesktopPreview({ open: false, sessionId });
     removeSessionRemoteDesktopLink(controlPlaneId, instanceId, sessionId);
     closeRemoteDesktopControllersForSession(controlPlaneId, instanceId, sessionId);
-  }, [controlPlaneId, instanceId, sessionId, setRemoteDesktopPreview]);
+  }, [controlPlaneId, instanceId, sessionId, setRemoteDesktopPreview, setRemoteDesktopSourcePickerOpen]);
   const markVisible = useCallback(() => {
     if (!client || !controlPlaneId || !session?.unread) return;
     void client.aiSessions.markRead(instanceId, sessionId).catch(() => undefined);
@@ -400,6 +420,7 @@ export function AiSessionDetailScreen({
     onOpenFile={openFileInResources}
     onOpenRemoteDesktopPreview={() => setRemoteDesktopPreview({ open: true, sessionId })}
     onOpenRemoteDesktopDetail={openRemoteDesktopDetails}
+    onChangeRemoteDesktopSource={changeRemoteDesktopSource}
     onRemoveRemoteDesktop={removeRemoteDesktopFromSession}
     renderRemoteDesktopInlinePreview={({ instanceId: previewInstanceId, onOpenDetail, sessionId: previewSessionId }) => (
       <SessionRemoteDesktopInlinePreview
@@ -416,6 +437,7 @@ export function AiSessionDetailScreen({
     loadError={loadError}
     onRetryLoad={sessionView.retryReads}
     remoteDesktopTarget={remoteDesktopLink?.target}
+    remoteDesktopSourceEnded={remoteDesktopSourceEnded}
     session={session}
     syncPhase={sessionView.syncPhase}
     timelines={sessionView.timelines}
@@ -453,6 +475,14 @@ export function AiSessionDetailScreen({
       sessionId={sessionId}
       topInset={sessionResourceTopInset(Platform.OS, headerHeight)}
       visible={remoteDesktopPreviewOpen}
+    /> : null}
+    {remoteDesktopLink && remoteDesktopAvailable ? <RemoteDesktopSourcePicker
+      capability={remoteDesktopCapability}
+      loadSources={loadRemoteDesktopSources}
+      onClose={() => setRemoteDesktopSourcePickerOpen(false)}
+      onSelect={selectRemoteDesktopSource}
+      target={remoteDesktopLink.target}
+      visible={remoteDesktopSourcePickerOpen}
     /> : null}
   </View>;
 }
