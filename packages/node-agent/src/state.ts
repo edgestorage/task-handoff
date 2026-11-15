@@ -671,6 +671,22 @@ export class NodeAgentState {
     return this.modelRegistry.resolvedEnvironment(instanceId);
   }
 
+  materializeInstancePrivateConfig(
+    instance: ControlledInstance,
+    modelEnvironment: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id),
+  ) {
+    return this.instancePrivateConfigs.materialize(
+      instance.id,
+      instance.registrationToken,
+      {
+        ...modelEnvironment,
+        TASK_HANDOFF_RUNTIME_KIND: this.requireRuntime(instance.runtimeId).type,
+      },
+      this.modelRegistry.privateCatalog(instance.id),
+      instance.config.codexSettings,
+    );
+  }
+
   createInstance(input: z.infer<typeof CreateNodeInstanceSchema>) {
     const runtime = this.requireRuntime(input.runtimeId);
     const timestamp = now();
@@ -820,13 +836,7 @@ export class NodeAgentState {
       }
       return committed;
     });
-    this.instancePrivateConfigs.materialize(
-      stored.id,
-      stored.registrationToken,
-      this.resolvedAssignedModelEnvironment(stored.id),
-      this.modelRegistry.privateCatalog(stored.id),
-      stored.config.codexSettings,
-    );
+    this.materializeInstancePrivateConfig(stored);
     return stored;
   }
 
@@ -1015,13 +1025,7 @@ export class NodeAgentState {
   context(instance: ControlledInstance, modelEnv: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id)): ExecutorContext {
     const effectiveModelEnv = modelEnv;
     const image = instance.imageSnapshot || InstanceImageSnapshotSchema.parse({ id: "img_localhost", origin: "custom", name: "Localhost", repository: "localhost", tag: "local", requestedReference: "localhost:local", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
-    const privateConfig = this.instancePrivateConfigs.materialize(
-      instance.id,
-      instance.registrationToken,
-      effectiveModelEnv,
-      this.modelRegistry.privateCatalog(instance.id),
-      instance.config.codexSettings,
-    );
+    const privateConfig = this.materializeInstancePrivateConfig(instance, effectiveModelEnv);
     const gitWorkspaceProvisioning = this.gitWorkspaceProvisioningFor(instance);
     return {
       project: projectForInstance(instance),

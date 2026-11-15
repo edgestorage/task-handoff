@@ -74,6 +74,32 @@ test("template-derived instances combine with independent Git and local workspac
   assert.ok(localRunArgs.includes("/tmp/local-project:/workspace:rw"));
 });
 
+test("instance private config projects the authoritative runtime kind", (t) => {
+  const { dataDir, state } = fixture();
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+
+  const docker = state.createInstance(createInput("inst_private_docker", { type: "local-folder", path: "/tmp/docker-project" }));
+  assert.equal(state.instancePrivateConfigs.inspectMaterialized(docker.id).environment.TASK_HANDOFF_RUNTIME_KIND, "docker");
+  assert.equal(dockerRunArgs(state.context(docker), "task-handoff-inst_private_docker").includes("TASK_HANDOFF_RUNTIME_KIND=docker"), false);
+
+  state.materializeInstancePrivateConfig(docker, {
+    OPENAI_API_KEY: "synced-secret",
+    TASK_HANDOFF_RUNTIME_KIND: "local",
+  });
+  let materialized = state.instancePrivateConfigs.inspectMaterialized(docker.id);
+  assert.equal(materialized.environment.OPENAI_API_KEY, "synced-secret");
+  assert.equal(materialized.environment.TASK_HANDOFF_RUNTIME_KIND, "docker");
+
+  state.context(docker, {});
+  materialized = state.instancePrivateConfigs.inspectMaterialized(docker.id);
+  assert.equal("OPENAI_API_KEY" in materialized.environment, false);
+  assert.equal(materialized.environment.TASK_HANDOFF_RUNTIME_KIND, "docker");
+
+  const localRuntime = state.nodeRuntimes.list().find((runtime) => runtime.type === "local");
+  const local = state.createInstance({ id: "inst_private_local", runtimeId: localRuntime.id, source: { type: "local-folder", path: "/tmp/local-project" } });
+  assert.equal(state.instancePrivateConfigs.inspectMaterialized(local.id).environment.TASK_HANDOFF_RUNTIME_KIND, "local");
+});
+
 test("template instance creation rejects missing, non-ready, cross-node, and non-Docker templates", (t) => {
   const { dataDir, state } = fixture();
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));

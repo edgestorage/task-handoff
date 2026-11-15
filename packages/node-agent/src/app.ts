@@ -486,7 +486,7 @@ export async function syncAssignedModelEnvironment(
   const instance = state.requireInstance(instanceId);
   const modelEnvironment = state.resolvedAssignedModelEnvironment(instanceId);
   const modelCatalog = state.modelRegistry.privateCatalog(instanceId);
-  state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnvironment, modelCatalog, instance.config.codexSettings);
+  state.materializeInstancePrivateConfig(instance, modelEnvironment);
   // Materializing the private config is what applies a model change on the next
   // instance start. The live push instead makes the instance rebuild its shared
   // codex/opencode app-server, so it is withheld while sessions are bound to that
@@ -1000,13 +1000,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   };
   const syncCodexManagedSettings = async (id: string) => {
     const instance = state.requireInstance(id);
-    state.instancePrivateConfigs.materialize(
-      instance.id,
-      instance.registrationToken,
-      state.resolvedAssignedModelEnvironment(id),
-      state.modelRegistry.privateCatalog(id),
-      instance.config.codexSettings,
-    );
+    state.materializeInstancePrivateConfig(instance);
     if (!instance.config.codexSettings) return true;
     if (instance.targetStatus !== "reachable"
       || !instance.registrationToken) return false;

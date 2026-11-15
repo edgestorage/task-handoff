@@ -339,6 +339,10 @@ test("node model assignment persists private config when live environment sync c
     app.nodeAgentState.instancePrivateConfigs.inspectMaterialized("inst_offline_assignment").environment.OPENAI_API_KEY,
     "offline-instance-secret",
   );
+  assert.equal(
+    app.nodeAgentState.instancePrivateConfigs.inspectMaterialized("inst_offline_assignment").environment.TASK_HANDOFF_RUNTIME_KIND,
+    "docker",
+  );
   assert.equal(fetchCalls, 0, "v0.0.23 controlled instances must not receive the private catalog endpoint call");
 });
 
