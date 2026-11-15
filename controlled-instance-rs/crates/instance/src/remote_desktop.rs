@@ -45,7 +45,7 @@ impl AppPackageLifecycle for DesktopLifecycle {
             );
         }
         self.service
-            .package_changed(operation == AppManagementOperation::Uninstall && succeeded)
+            .package_changed(operation, succeeded)
             .await
             .map_err(|_| {
                 AppRecipeExecutionError::new(

@@ -25,20 +25,38 @@ function instanceState(instance = {}) {
     connectionStatus: "offline",
     target: { web: "http://127.0.0.1:19999" },
     capabilities: { features: { privateModelCatalog: true } },
+    runtimeId: "rt_local",
     config: { codexSettings: {} },
     ...instance,
   };
-  return {
+  const state = {
     instance: resolved,
     materialized,
     requireInstance(id) {
       assert.equal(id, resolved.id);
       return resolved;
     },
+    requireRuntime(id) {
+      assert.equal(id, "rt_local");
+      return { type: "node" };
+    },
     resolvedAssignedModelEnvironment: () => ({ TASK_HANDOFF_CODEX_MODEL: "gpt-5.6-sol" }),
     modelRegistry: { privateCatalog: () => catalog },
     instancePrivateConfigs: { materialize: (...args) => materialized.push(args) },
+    materializeInstancePrivateConfig(instance, modelEnvironment = state.resolvedAssignedModelEnvironment(instance.id)) {
+      return state.instancePrivateConfigs.materialize(
+        instance.id,
+        instance.registrationToken,
+        {
+          ...modelEnvironment,
+          TASK_HANDOFF_RUNTIME_KIND: state.requireRuntime(instance.runtimeId).type,
+        },
+        state.modelRegistry.privateCatalog(instance.id),
+        instance.config.codexSettings,
+      );
+    },
   };
+  return state;
 }
 
 function jsonResponse(payload, status = 200) {
@@ -91,6 +109,7 @@ test("the live model environment is projected with the current schema", async ()
     TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: openCodeConfig,
   }]);
   assert.equal(state.materialized[0][2].TASK_HANDOFF_OPENCODE_CONFIG_CONTENT, openCodeConfig);
+  assert.equal(state.materialized[0][2].TASK_HANDOFF_RUNTIME_KIND, "node");
 });
 
 test("a failed catalog push reports the snapshot the instance actually holds", async () => {

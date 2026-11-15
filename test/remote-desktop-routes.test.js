@@ -81,6 +81,10 @@ test('no package, disabled state, uninstall and drain never spawn an implicit co
   await assert.rejects(instance.request('r',command),/NOT_INSTALLED/);
   installed={binary:'/must-not-be-executed',version:'1'};
   await assert.rejects(instance.request('r',command),/DISABLED/);
+  await instance.packageChanged('update',true);assert.equal(instance.settings.get().enabled,false);
+  await instance.packageChanged('install',false);assert.equal(instance.settings.get().enabled,false);
+  await instance.packageChanged('install',true);assert.equal(instance.settings.get().enabled,true);
+  await instance.setEnabled(false);
   await instance.setEnabled(true);
   await instance.packageChanged('uninstall',false);assert.equal(instance.settings.get().enabled,true);
   await instance.packageChanged('uninstall',true);assert.equal(instance.settings.get().enabled,false);
