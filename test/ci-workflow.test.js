@@ -43,11 +43,18 @@ test("CI splits quality checks into parallel jobs behind the aggregate gate", ()
 
 test("CI caches the Rust release target and cargo registry per architecture", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
-  assert.match(workflow, /uses: actions\/cache@v6/);
-  assert.match(workflow, /controlled-instance-rs\/target\/linux-\$\{\{ matrix\.arch \}\}/);
-  assert.match(workflow, /hashFiles\('controlled-instance-rs\/Cargo\.lock'\)/);
-  assert.match(workflow, /CARGO_HOME=\/cargo-home/);
-  assert.match(workflow, /--user "\$\(id -u\):\$\(id -g\)"/);
+  const job = /^  controlled-instance-rust-binaries:\n([\s\S]*?)(?=^  [a-zA-Z0-9-]+:)/m.exec(workflow)?.[1];
+  assert.ok(job, "controlled-instance-rust-binaries job must exist");
+  assert.match(job, /fetch-depth: 0/);
+  assert.match(job, /id: rust-release-cache/);
+  assert.match(job, /uses: actions\/cache@v6/);
+  assert.match(job, /controlled-instance-rs\/target\/linux-\$\{\{ matrix\.arch \}\}/);
+  assert.match(job, /hashFiles\('controlled-instance-rs\/Cargo\.lock'\)/);
+  assert.match(job, /if: steps\.rust-release-cache\.outputs\.cache-hit == 'true'/);
+  assert.match(job, /chetan\/git-restore-mtime-action@d186aca54f8760da4dec55313195e51ed3ebb0b3/);
+  assert.match(job, /args: '--quiet controlled-instance-rs remote-desktop-rs'/);
+  assert.match(job, /CARGO_HOME=\/cargo-home/);
+  assert.match(job, /--user "\$\(id -u\):\$\(id -g\)"/);
 });
 
 test("CI shards Node tests and caches the remote desktop build", () => {
