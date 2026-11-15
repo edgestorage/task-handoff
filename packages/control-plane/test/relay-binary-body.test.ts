@@ -72,7 +72,7 @@ function harness(bridge: unknown, key = nacl.randomBytes(32)) {
 }
 
 test("request envelopes forward the HTTP body without leaking routing metadata into it", async () => {
-  let seen: { path?: string; method?: string; headers?: Record<string, string>; body?: unknown } | undefined;
+  let seen: { path?: string; method?: string; headers?: Record<string, string>; body?: unknown; signal?: AbortSignal } | undefined;
   const bridge = {
     async request(_actor: unknown, input: typeof seen) {
       seen = input;
@@ -86,7 +86,9 @@ test("request envelopes forward the HTTP body without leaking routing metadata i
     body: { path: "/api/example", method: "POST", headers: { "content-type": "application/json", "x-test": "yes" }, body: { message: "hello" }, responseBinary: true },
   });
   await waitFor(() => decodeSent().some((value) => value.type === "response"));
-  assert.deepEqual(seen, {
+  assert.equal(seen?.signal instanceof AbortSignal, true);
+  const { signal: _signal, ...input } = seen!;
+  assert.deepEqual(input, {
     path: "/api/example",
     method: "POST",
     headers: { "content-type": "application/json", "x-test": "yes" },
@@ -230,6 +232,33 @@ test("a cancelled response releases the shared window to waiting transfers", asy
   session.close("test-complete");
 });
 
+test("cancelling an in-flight request suppresses its late response", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  let signal: AbortSignal | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const requestStarted = new Promise<void>((resolve) => { started = resolve; });
+  const bridge = {
+    async request(_actor: unknown, input: { signal?: AbortSignal }) {
+      signal = input.signal;
+      started();
+      await gate;
+      return { status: 200, binary: { bytes: Buffer.alloc(1669, 3), contentType: "application/octet-stream" } };
+    },
+  };
+  const { deliver, decodeSent, closed, session } = harness(bridge);
+  deliver({ type: "request", id: "request_cancelled", body: { path: "/slow", method: "GET", headers: {}, responseBinary: true } });
+  await requestStarted;
+  deliver({ type: "cancel", id: "request_cancelled" });
+  assert.equal(signal?.aborted, true, "cancel aborts the downstream request");
+
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(decodeSent().some((value) => value.type === "response" || value.type === "response-frame"), false);
+  assert.deepEqual(closed, []);
+  session.close("test-complete");
+});
+
 test("a duplicate chunk offset fails instead of being re-acknowledged", async () => {
   const received: Buffer[] = [];
   const bridge = {
@@ -259,21 +288,25 @@ test("an offset gap fails the channel instead of corrupting the body", async () 
   assert.equal(closed[0]?.code, 4400);
 });
 
-test("cancel unwinds a half-received body and reports the failure back to the client", async () => {
+test("cancel unwinds a half-received body without sending a late response", async () => {
   let streamFailure: unknown;
+  let signal: AbortSignal | undefined;
   const bridge = {
-    async request(_actor: unknown, input: { bodyStream?: AsyncIterable<Uint8Array> }) {
+    async request(_actor: unknown, input: { bodyStream?: AsyncIterable<Uint8Array>; signal?: AbortSignal }) {
+      signal = input.signal;
       try { for await (const _chunk of input.bodyStream!) { /* consume until aborted */ } }
       catch (error) { streamFailure = error; throw error; }
       return { status: 200, body: {} };
     },
   };
-  const { deliver, deliverChunk, decodeSent, waitFor } = harness(bridge);
+  const { deliver, deliverChunk, decodeSent, waitFor, closed, session } = harness(bridge);
   deliver({ type: "request", id: "request_1", body: { path: "/api/upload", method: "POST", headers: {}, binaryBody: { bodyId: 6, size: 6 } } });
   deliverChunk({ bodyId: 6, offset: 0, bytes: new Uint8Array([1, 2, 3]), final: false });
   deliver({ type: "cancel", id: "request_1" });
-  await waitFor(() => decodeSent().some((value) => value.type === "response"));
+  await waitFor(() => Boolean(streamFailure));
   assert.ok(streamFailure, "the stream is destroyed so the route unwinds");
-  const response = decodeSent().find((value) => value.type === "response");
-  assert.equal(response.status, 500);
+  assert.equal(signal?.aborted, true);
+  assert.equal(decodeSent().some((value) => value.type === "response"), false);
+  assert.deepEqual(closed, []);
+  session.close("test-complete");
 });

@@ -562,7 +562,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     ...options.service,
     database,
     secrets,
-    logger: diagnosticLogger,
+    logger: { info: (data, message) => app.log.info(data, message), warn: (data, message) => app.log.warn(data, message) },
     nodeConnectionRuntime,
     onFleetStateChanged: (state) => {
       options.service?.onFleetStateChanged?.(state);
@@ -652,7 +652,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     openBrowser: (actor: ControlPlaneActor, instanceId: string, handlers: import("@task-handoff/protocol/relay-browser-channel").BrowserChannelHandlers) => browserRelay.open(actor, instanceId, handlers),
     openRemoteDesktop: (actor: ControlPlaneActor, input: { path: string; protocols: string[] }, handlers: import("@task-handoff/protocol/relay-browser-channel").BrowserChannelHandlers) =>
       openRemoteDesktopRelayChannel({ service, access: () => desktopAccess }, actor, input, handlers),
-    async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean }) {
+    async request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean; signal?: AbortSignal }) {
       const method = String(input?.method || "GET").toUpperCase();
       const requestPath = String(input?.path || "");
       const authorization = routeAuthorization(method, requestPath);
@@ -671,7 +671,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
           return !isControlPlaneCredentialHeader(lower) && !["host", "connection", "upgrade", CLOUD_INTERNAL_ACTOR_HEADER].includes(lower) && !dropped.includes(lower);
         }).map(([name, value]) => [name, String(value)]));
         const requestBody = input.bodyStream ?? decodeCloudRelayRequestBody(input.body);
-        const response = await app.inject({ method: method as any, url: requestPath, headers: { ...headers, [CLOUD_INTERNAL_ACTOR_HEADER]: token }, ...(requestBody === undefined ? {} : { payload: requestBody as any }) });
+        const response = await app.inject({ method: method as any, url: requestPath, headers: { ...headers, [CLOUD_INTERNAL_ACTOR_HEADER]: token }, signal: input.signal, ...(requestBody === undefined ? {} : { payload: requestBody as any }) });
         if (input.binaryResponse && response.statusCode < 400) {
           const contentType = response.headers["content-type"];
           const filename = cloudRelayResponseFilename(response.headers["content-disposition"]);
@@ -810,7 +810,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     deviceTrust: cloudDeviceTrust,
     trustedDeviceSessions,
     roleCatalog: () => auth.users.roleCatalog(),
-    logger: { info: (data, message) => app.log.info(data, message), warn: (data, message) => app.log.warn(data, message) },
+    logger: diagnosticLogger,
     fetch: options.cloudAccountFetch, relayTrace: relayTraceFromEnvironment(process.env, paths.dataDir),
     cloudRelaySessionsPath: paths.cloudRelaySessionsPath, coordinatorOrigins: cloudServiceOrigins,
     ...(cloudDiscovery ? { cloudDiscovery } : {}),

@@ -49,7 +49,7 @@ type RelayEnvelope = { type: string; id?: string; status?: number; body?: any; b
 export type RelaySessionBridge = {
   openBrowser?(actor: ControlPlaneActor, instanceId: string, handlers: BrowserChannelHandlers): Promise<BrowserChannel>;
   openRemoteDesktop?(actor: ControlPlaneActor, input: { path: string; protocols: string[] }, handlers: BrowserChannelHandlers): Promise<BrowserChannel>;
-  request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean }): Promise<{ status: number; body?: unknown; binary?: { bytes: Uint8Array; contentType?: string; filename?: string } }>;
+  request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown; bodyStream?: Readable; binaryResponse?: boolean; signal?: AbortSignal }): Promise<{ status: number; body?: unknown; binary?: { bytes: Uint8Array; contentType?: string; filename?: string } }>;
   subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: EventEnvelope) => void, aiSessionTransient?: AiSessionTransientSubscription, resourceMetricInstanceIds?: string[]): () => void;
   openTty?(actor: ControlPlaneActor, input: { instanceId: string; sessionId: string }, listener: (message: RelayEnvelope) => void): Promise<{ send(data: string): void; resize(cols: number, rows: number): void; close(): void }>;
 };
@@ -81,6 +81,11 @@ type PendingRelayResponse = {
   resolve(): void;
   reject(error: unknown): void;
   timer?: ReturnType<typeof setTimeout>;
+};
+
+type ActiveRelayRequest = {
+  cancelled: boolean;
+  abortController: AbortController;
 };
 
 /** How long a partially received body may sit idle before the Control Plane aborts it. */
@@ -564,6 +569,7 @@ export class EncryptedControlPlaneRelaySession {
   private readonly ttys = new Map<string, { send(data: string): void; resize(cols: number, rows: number): void; close(): void }>();
   private readonly bodies = new Map<number, RelayBodyAssembly>();
   private readonly bodyByRequest = new Map<string, number>();
+  private readonly activeRequests = new Map<string, ActiveRelayRequest>();
   private readonly responses = new Map<number, PendingRelayResponse>();
   private readonly responseByRequest = new Map<string, number>();
   private readonly socket: WebSocket;
@@ -633,6 +639,7 @@ export class EncryptedControlPlaneRelaySession {
       });
       this.unsubscribeSafely();
       this.closeTtys();
+      this.abortActiveRequests();
       this.browser.close();
       for (const assembly of [...this.bodies.values()]) this.abortBody(assembly, "RELAY_CHANNEL_CLOSED");
       for (const response of [...this.responses.values()]) this.abortResponse(response, relayError("RELAY_CHANNEL_CLOSED"));
@@ -642,6 +649,7 @@ export class EncryptedControlPlaneRelaySession {
     this.closing = true;
     this.unsubscribeSafely();
     this.closeTtys();
+    this.abortActiveRequests();
     this.browser.close();
     for (const assembly of [...this.bodies.values()]) this.abortBody(assembly, "RELAY_CHANNEL_CLOSED");
     for (const response of [...this.responses.values()]) this.abortResponse(response, relayError("RELAY_CHANNEL_CLOSED"));
@@ -711,6 +719,9 @@ export class EncryptedControlPlaneRelaySession {
       return;
     }
     if (value.type === "request" && value.id) {
+      if (this.activeRequests.has(value.id)) throw relayError("RELAY_REQUEST_DUPLICATE");
+      const request: ActiveRelayRequest = { cancelled: false, abortController: new AbortController() };
+      this.activeRequests.set(value.id, request);
       const binaryBody = value.body?.binaryBody === undefined ? undefined : RelayBinaryBodySchema.parse(value.body.binaryBody);
       // Register the assembly before the first await so chunks that arrive while
       // the route is still starting up are accepted in order.
@@ -722,8 +733,10 @@ export class EncryptedControlPlaneRelaySession {
           method: String(value.body?.method ?? "GET"),
           headers: (value.body?.headers ?? {}) as Record<string, string>,
           binaryResponse: value.body?.responseBinary === true,
+          signal: request.abortController.signal,
           ...(assembly ? { bodyStream: assembly.stream } : { body: value.body?.body }),
         });
+        if (request.cancelled) return;
         if (assembly) this.flushBodyAck(assembly);
         if (result.binary) {
           responseStarted = true;
@@ -734,8 +747,9 @@ export class EncryptedControlPlaneRelaySession {
       }
       catch (error) {
         const detail = error && typeof error === "object" ? error as { statusCode?: unknown; code?: unknown; message?: unknown; retryable?: unknown } : {};
+        if (request.cancelled || detail.code === "RELAY_RESPONSE_CANCELLED") return;
         if (responseStarted) {
-          if (detail.code !== "RELAY_RESPONSE_CANCELLED" && this.socket.readyState < WebSocket.CLOSING) this.socket.close(4413, "response-transfer-failed");
+          if (this.socket.readyState < WebSocket.CLOSING) this.socket.close(4413, "response-transfer-failed");
         } else {
           this.send({
             type: "response",
@@ -751,7 +765,10 @@ export class EncryptedControlPlaneRelaySession {
           });
         }
       }
-      finally { if (assembly) this.closeBody(assembly); }
+      finally {
+        if (this.activeRequests.get(value.id!) === request) this.activeRequests.delete(value.id!);
+        if (assembly) this.closeBody(assembly);
+      }
       return;
     }
     if (value.type === "event-subscribe") {
@@ -790,6 +807,11 @@ export class EncryptedControlPlaneRelaySession {
     // A client that aborts an upload sends `cancel`; unwinding the stream stops
     // the local route (and its controlled-instance draft) immediately.
     if (value.type === "cancel" && value.id) {
+      const request = this.activeRequests.get(value.id);
+      if (request) {
+        request.cancelled = true;
+        request.abortController.abort(relayError("RELAY_REQUEST_CANCELLED"));
+      }
       const bodyId = this.bodyByRequest.get(value.id);
       const assembly = bodyId === undefined ? undefined : this.bodies.get(bodyId);
       if (assembly) this.abortBody(assembly, "RELAY_BODY_CANCELLED");
@@ -860,6 +882,12 @@ export class EncryptedControlPlaneRelaySession {
     this.ttys.clear();
     for (const tty of ttys) {
       try { tty.close(); } catch { /* The Relay channel is already closing. */ }
+    }
+  }
+  private abortActiveRequests() {
+    for (const request of this.activeRequests.values()) {
+      request.cancelled = true;
+      request.abortController.abort(relayError("RELAY_CHANNEL_CLOSED"));
     }
   }
   private sendBinaryResponse(requestId: string, status: number, binary: { bytes: Uint8Array; contentType?: string; filename?: string }) {
