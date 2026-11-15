@@ -19,7 +19,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
+  quality-node:
+    name: Quality / Node tests
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -45,16 +46,69 @@ jobs:
         run: cargo build --manifest-path remote-desktop-rs/Cargo.toml -p desktop-streaming --bin task-handoff-desktop-streaming
       - name: Test Node packages
         run: pnpm run test:node
+
+  quality-client:
+    name: Quality / Client and mobile tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
       - name: Test Control Plane client
         run: pnpm --filter @task-handoff/control-plane-client test
       - name: Test Control Plane UI
         run: pnpm --filter @task-handoff/control-plane-ui test
       - name: Test mobile
         run: pnpm --filter @task-handoff/mobile test
+
+  quality-static:
+    name: Quality / Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm web:typecheck
       - name: Check controlled instance Rust migration boundary
         run: node scripts/check-controlled-instance-rust-migration.mjs
+
+  quality:
+    needs: [quality-node, quality-client, quality-static]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify all quality jobs succeeded
+        env:
+          NODE_RESULT: ${{ needs['quality-node'].result }}
+          CLIENT_RESULT: ${{ needs['quality-client'].result }}
+          STATIC_RESULT: ${{ needs['quality-static'].result }}
+        run: |
+          printf 'quality-node=%s quality-client=%s quality-static=%s\n' "$NODE_RESULT" "$CLIENT_RESULT" "$STATIC_RESULT"
+          test "$NODE_RESULT" = success
+          test "$CLIENT_RESULT" = success
+          test "$STATIC_RESULT" = success
 
   rust-controlled-instance:
     runs-on: ubuntu-latest
@@ -173,14 +227,28 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Restore Rust release cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            controlled-instance-rs/target/linux-${{ matrix.arch }}
+            ${{ runner.temp }}/cargo-home
+          key: rust-release-${{ runner.os }}-${{ matrix.arch }}-1.95.0-${{ hashFiles('controlled-instance-rs/Cargo.lock') }}
+
       - name: Build on the glibc baseline
         shell: bash
         env:
+          CARGO_HOME_CACHE: ${{ runner.temp }}/cargo-home
           RUST_TOOLCHAIN: ${{ matrix.arch == 'x64' && 'x86_64-unknown-linux-gnu' || 'aarch64-unknown-linux-gnu' }}
         run: |
+          mkdir -p "$CARGO_HOME_CACHE"
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
             -v "$PWD:/workspace" \
+            -v "$CARGO_HOME_CACHE:/cargo-home" \
             -w /workspace/controlled-instance-rs \
+            -e CARGO_HOME=/cargo-home \
+            -e HOME=/cargo-home \
             -e CARGO_TARGET_DIR="target/linux-${{ matrix.arch }}" \
             -e RUST_TOOLCHAIN="$RUST_TOOLCHAIN" \
             rust:1.95-bookworm \
@@ -246,8 +314,8 @@ jobs:
           pnpm runtime:artifact -- --version "$version" --prebuilds-dir release/node-pty-prebuilds
           node -e 'import("./scripts/controlled-instance-artifact-check.mjs").then(async ({ checkControlledInstanceArtifact }) => console.log(JSON.stringify(await checkControlledInstanceArtifact("release/runtime-artifacts"))))'
 
-      - name: Build and pack selected runtime packages
-        run: pnpm runtime:pack
+      - name: Build and pack selected runtime package
+        run: pnpm runtime:pack:controlled-instance
 
       - name: Verify selected controlled instance artifact
         run: node -e 'import("./scripts/controlled-instance-artifact-check.mjs").then(async ({ checkControlledInstanceArtifact }) => console.log(JSON.stringify(await checkControlledInstanceArtifact("release/runtime-artifacts"))))'
