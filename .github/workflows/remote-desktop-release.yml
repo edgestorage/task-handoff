@@ -229,22 +229,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          remote_integrity() {
+            local package="$1"
+            local version="$2"
+            local encoded
+            local body
+            local status
+            encoded="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$package")"
+            body="$(mktemp)"
+            status="$(curl --silent --show-error --location \
+              --output "$body" --write-out '%{http_code}' \
+              "https://registry.npmjs.org/${encoded}/${version}")"
+            case "$status" in
+              200)
+                node -e 'const fs=require("node:fs");const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const integrity=value?.dist?.integrity;if(typeof integrity!=="string"||!integrity)process.exit(2);process.stdout.write(integrity)' "$body"
+                ;;
+              404)
+                printf 'missing'
+                ;;
+              *)
+                echo "Registry query for $package@$version returned HTTP $status" >&2
+                cat "$body" >&2
+                return 1
+                ;;
+            esac
+          }
           publish_or_verify_package() {
             local package="$1"
-            local archive="$2"
+            local version="$2"
+            local archive="$3"
             local local_integrity
             local published_integrity
             local_integrity="sha512-$(openssl dgst -sha512 -binary "$archive" | openssl base64 -A)"
-            published_integrity="$(npm view "$package@$RELEASE_VERSION" dist.integrity --json 2>/dev/null || true)"
-            if [[ -n "$published_integrity" ]]; then
-              published_integrity="$(node -e 'const fs=require("node:fs");const value=JSON.parse(fs.readFileSync(0,"utf8"));process.stdout.write(typeof value==="string"?value:"")' <<<"$published_integrity")"
-              if [[ "$published_integrity" != "$local_integrity" ]]; then
-                echo "::error::Published $package@$RELEASE_VERSION integrity does not match $local_integrity"
-                exit 1
-              fi
-              echo "Verified existing immutable package $package@$RELEASE_VERSION"
-            else
+            published_integrity="$(remote_integrity "$package" "$version")"
+            if [[ "$published_integrity" == "missing" ]]; then
+              echo "Publishing $package@$version"
               npm publish "$archive" --access public --tag remote-desktop-staging
+            elif [[ "$published_integrity" == "$local_integrity" ]]; then
+              echo "Verified existing immutable package $package@$version"
+            else
+              echo "::error::Published $package@$version integrity $published_integrity does not match $local_integrity"
+              return 1
             fi
           }
           for metadata in release/remote-desktop-packages/*.metadata.json; do
@@ -253,7 +278,34 @@ jobs:
             prefix="${package#@}"
             prefix="${prefix//\//-}"
             [[ "$version" == "$RELEASE_VERSION" ]]
-            publish_or_verify_package "$package" "release/remote-desktop-packages/${prefix}-${version}.tgz"
+            publish_or_verify_package "$package" "$version" "release/remote-desktop-packages/${prefix}-${version}.tgz"
+          done
+
+          for metadata in release/remote-desktop-packages/*.metadata.json; do
+            package="$(node -p "require('./${metadata}').package")"
+            version="$(node -p "require('./${metadata}').version")"
+            prefix="${package#@}"
+            prefix="${prefix//\//-}"
+            archive="release/remote-desktop-packages/${prefix}-${version}.tgz"
+            local_integrity="sha512-$(openssl dgst -sha512 -binary "$archive" | openssl base64 -A)"
+            verified=false
+            for ((attempt = 1; attempt <= 40; attempt++)); do
+              published_integrity="$(remote_integrity "$package" "$version")"
+              if [[ "$published_integrity" == "$local_integrity" ]]; then
+                verified=true
+                break
+              fi
+              if [[ "$published_integrity" != "missing" ]]; then
+                echo "::error::Published $package@$version integrity $published_integrity does not match $local_integrity"
+                exit 1
+              fi
+              sleep 3
+            done
+            [[ "$verified" == true ]] || {
+              echo "::error::$package@$version did not become available with the expected integrity"
+              exit 1
+            }
+            echo "Verified $package@$version"
           done
 
       - name: Promote latest only after every target is published
