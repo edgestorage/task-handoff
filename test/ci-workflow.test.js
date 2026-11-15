@@ -50,6 +50,19 @@ test("CI caches the Rust release target and cargo registry per architecture", ()
   assert.match(workflow, /--user "\$\(id -u\):\$\(id -g\)"/);
 });
 
+test("CI shards Node tests and caches the remote desktop build", () => {
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  assert.match(workflow, /shard: \[1, 2\]/);
+  assert.match(workflow, /name: Quality \/ Node tests \(\$\{\{ matrix\.shard \}\}\/2\)/);
+  assert.match(workflow, /remote-desktop-host-\$\{\{ runner\.os \}\}-1\.95\.0-\$\{\{ hashFiles\('remote-desktop-rs\/Cargo\.lock'\) \}\}/);
+  assert.match(workflow, /remote-desktop-rs\/target/);
+  assert.match(workflow, /~\/\.cargo\/registry/);
+  assert.match(workflow, /TASK_HANDOFF_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2/);
+  assert.match(workflow, /run: pnpm run test:node/);
+  assert.equal(packageJson.scripts["test:node"], "node scripts/run-node-tests.mjs");
+});
+
 test("CI uses the installed Rust toolchain for cross-target checks and linting", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
   const toolchain = fs.readFileSync(path.join(root, "controlled-instance-rs", "rust-toolchain.toml"), "utf8");
