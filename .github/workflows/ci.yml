@@ -20,13 +20,25 @@ concurrency:
 
 jobs:
   quality-node:
-    name: Quality / Node tests
+    name: Quality / Node tests (${{ matrix.shard }}/2)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Restore remote desktop build cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            remote-desktop-rs/target
+            ~/.cargo/registry
+          key: remote-desktop-host-${{ runner.os }}-1.95.0-${{ hashFiles('remote-desktop-rs/Cargo.lock') }}
 
       - uses: pnpm/action-setup@v6
         with:
@@ -44,7 +56,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libxcb1-dev
       - name: Build remote desktop host test binary
         run: cargo build --manifest-path remote-desktop-rs/Cargo.toml -p desktop-streaming --bin task-handoff-desktop-streaming
-      - name: Test Node packages
+      - name: Test Node packages (${{ matrix.shard }}/2)
+        env:
+          TASK_HANDOFF_TEST_SHARD: ${{ matrix.shard }}/2
         run: pnpm run test:node
 
   quality-client:
