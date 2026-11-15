@@ -21,6 +21,27 @@ test("node groups expose disconnect, reconnect, and connection check actions", (
   assert.match(instanceList, /checkNode: \[node: Node\]/);
 });
 
+test("node group menu exposes node settings, rename, and copy actions", () => {
+  const nodeMenu = instanceList.match(/<ContextMenuContent v-if="group\.node" class="instance-action-menu">[\s\S]*?<\/ContextMenuContent>/)?.[0] || "";
+
+  assert.match(nodeMenu, /@select="requestNodeSettings\(group\.node\)"/);
+  assert.match(nodeMenu, /@select="requestNodeSettings\(group\.node, 'rename'\)"/);
+  assert.match(nodeMenu, /@select="requestNodeCopy\(group\.node, 'id'\)"/);
+  assert.match(nodeMenu, /@select="requestNodeCopy\(group\.node, 'endpoint'\)"/);
+  assert.match(nodeMenu, /instances\.nodeActions\.openSettings/);
+  assert.match(nodeMenu, /instances\.nodeActions\.rename/);
+  assert.match(nodeMenu, /instances\.nodeActions\.copyId/);
+  assert.match(nodeMenu, /instances\.nodeActions\.copyEndpoint/);
+  assert.match(instanceList, /openNodeSettings: \[node: Node, action\?: "rename"\]/);
+  assert.match(instanceList, /copyNodeValue: \[node: Node, field: "id" \| "endpoint"\]/);
+  assert.match(workbench, /@open-node-settings="openNodeSettings"/);
+  assert.match(workbench, /@copy-node-value="copyNodeValue"/);
+  assert.match(workbench, /:initial-node-action="settingsNodeAction"/);
+  assert.match(workbench, /:initial-node-id="settingsNodeId"/);
+  assert.match(settingsModal, /initialNodeAction\?: "rename"/);
+  assert.match(settingsModal, /openNodeRename\(target\)/);
+});
+
 test("disabled nodes hide transport failures behind the authoritative local connection state", () => {
   assert.match(instanceList, /const disconnected = node\.connectionEnabled === false/);
   assert.match(instanceList, /const connectionLabel = disconnected[\s\S]*?t\("instances\.list\.nodeDisconnected"\)/);
@@ -148,7 +169,15 @@ test("node connection actions and feedback are localized", () => {
   assert.equal(english("instances.nodeConnection.disconnect"), "Disconnect");
   assert.equal(english("instances.nodeConnection.reconnect"), "Reconnect");
   assert.equal(english("instances.nodeConnection.check"), "Check connection");
+  assert.equal(english("instances.nodeActions.openSettings"), "Open node settings");
+  assert.equal(english("instances.nodeActions.rename"), "Rename node");
+  assert.equal(english("instances.nodeActions.copyId"), "Copy node ID");
+  assert.equal(english("instances.nodeActions.copyEndpoint"), "Copy connection address");
   assert.equal(chinese("instances.nodeConnection.disconnect"), "断开连接");
   assert.equal(chinese("instances.nodeConnection.reconnect"), "重新连接");
+  assert.equal(chinese("instances.nodeActions.openSettings"), "打开节点设置");
+  assert.equal(chinese("instances.nodeActions.rename"), "重命名节点");
+  assert.equal(chinese("instances.nodeActions.copyId"), "复制节点 ID");
+  assert.equal(chinese("instances.nodeActions.copyEndpoint"), "复制连接地址");
   assert.equal(chinese("instances.list.nodeDisconnected"), "已断开");
 });

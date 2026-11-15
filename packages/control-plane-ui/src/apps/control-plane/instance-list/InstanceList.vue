@@ -37,11 +37,13 @@
           @new-instance="openNewInstanceFromTemporaryList"
           @open-settings="(instanceId) => $emit('openSettings', instanceId)"
           @open-window="(instance) => $emit('openWindow', instance)"
+          @open-node-settings="(node, action) => $emit('openNodeSettings', node, action)"
           @save-template="(instance) => $emit('saveTemplate', instance)"
           @resize-start="$emit('resizeStart', $event)"
           @run-action="(action, instance) => $emit('runAction', action, instance)"
           @close-all-sessions="(instance) => $emit('closeAllSessions', instance)"
           @check-node="(node) => $emit('checkNode', node)"
+          @copy-node-value="(node, field) => $emit('copyNodeValue', node, field)"
           @open-config-sync="(direction, instance) => $emit('openConfigSync', direction, instance)"
           @select-instance="selectTemporaryInstance"
           @set-node-connection="(node, enabled) => $emit('setNodeConnection', node, enabled)"
@@ -121,6 +123,24 @@
               <ContextMenuItem class="instance-action-item" :disabled="group.disconnected || group.busy" @select="requestNodeCheck(group.node)">
                 <RefreshCw :size="14" />
                 <span>{{ t("instances.nodeConnection.check") }}</span>
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem class="instance-action-item" @select="requestNodeSettings(group.node)">
+                <Settings :size="14" />
+                <span>{{ t("instances.nodeActions.openSettings") }}</span>
+              </ContextMenuItem>
+              <ContextMenuItem class="instance-action-item" :disabled="group.busy" @select="requestNodeSettings(group.node, 'rename')">
+                <Pencil :size="14" />
+                <span>{{ t("instances.nodeActions.rename") }}</span>
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem class="instance-action-item" @select="requestNodeCopy(group.node, 'id')">
+                <Copy :size="14" />
+                <span>{{ t("instances.nodeActions.copyId") }}</span>
+              </ContextMenuItem>
+              <ContextMenuItem class="instance-action-item" :disabled="!group.node.endpoint" @select="requestNodeCopy(group.node, 'endpoint')">
+                <Link :size="14" />
+                <span>{{ t("instances.nodeActions.copyEndpoint") }}</span>
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
@@ -207,7 +227,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, ChevronRight, Container, Laptop, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plug, Plus, RefreshCw, Search, Server, Terminal, Unplug } from "@lucide/vue";
+import { Boxes, ChevronRight, Container, Copy, Laptop, Link, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plug, Plus, RefreshCw, Search, Server, Settings, Terminal, Unplug } from "@lucide/vue";
 import type { InstanceBoardItem, Node, NodeFleetResourceState } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Button } from "../../../components/ui/button";
@@ -276,6 +296,8 @@ const emit = defineEmits<{
   closeAllSessions: [instance: InstanceBoardItem];
   openConfigSync: [direction: ConfigSyncDirection, instance: InstanceBoardItem];
   checkNode: [node: Node];
+  copyNodeValue: [node: Node, field: "id" | "endpoint"];
+  openNodeSettings: [node: Node, action?: "rename"];
   selectInstance: [instanceId: string, source?: "click" | "contextmenu"];
   setNodeConnection: [node: Node, enabled: boolean];
   setMenuOpen: [instanceId: string, open: boolean];
@@ -407,6 +429,14 @@ function requestNodeConnection(node: Node | undefined, enabled: boolean) {
 
 function requestNodeCheck(node: Node | undefined) {
   if (node) emit("checkNode", node);
+}
+
+function requestNodeSettings(node: Node | undefined, action?: "rename") {
+  if (node) emit("openNodeSettings", node, action);
+}
+
+function requestNodeCopy(node: Node | undefined, field: "id" | "endpoint") {
+  if (node) emit("copyNodeValue", node, field);
 }
 
 function selectTemporaryInstance(instanceId: string, source?: "click" | "contextmenu") {

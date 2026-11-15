@@ -559,6 +559,8 @@ type NodeDiagnosticLog = {
 
 const props = defineProps<{
   chooseProjectFolder?: () => Promise<string | { path: string; ownerNodeId?: string } | undefined>;
+  initialNodeAction?: "rename";
+  initialNodeId?: string;
   initialSection?: SettingsSection;
   instances: InstanceBoardItem[];
   nodeJoinedEvent?: NodeJoinedEvent;
@@ -1499,6 +1501,26 @@ watch(
     if (nodeId) {
       void loadControlPlaneAccess(nodeId);
       void loadManagedUpdateJobs(nodeId);
+    }
+  },
+  { immediate: true },
+);
+
+const handledInitialNodeIntent = ref("");
+watch(
+  () => [props.initialNodeId || "", props.initialNodeAction || "", nodes.data.value] as const,
+  ([nodeId, action, nodeItems]) => {
+    if (!nodeId) return;
+    const intentKey = `${nodeId}:${action}`;
+    if (handledInitialNodeIntent.value === intentKey) return;
+    const target = (nodeItems || []).find((node) => node.id === nodeId);
+    if (!target) return;
+    handledInitialNodeIntent.value = intentKey;
+    selectRegistryNode(nodeId);
+    if (action === "rename") {
+      void nextTick(() => {
+        if (selectedNode.value?.id === nodeId) openNodeRename(target);
+      });
     }
   },
   { immediate: true },

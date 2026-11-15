@@ -237,6 +237,15 @@ export const instances = {
     offline: "Could not reach {name}: {message}",
     unknownError: "No response details were returned.",
   },
+  nodeActions: {
+    openSettings: "Open node settings",
+    rename: "Rename node",
+    copyId: "Copy node ID",
+    copyEndpoint: "Copy connection address",
+    idCopied: "Node ID copied.",
+    endpointCopied: "Connection address copied.",
+    copyFailed: "Could not copy the value.",
+  },
   actions: {
     start: "Start",
     stop: "Stop",

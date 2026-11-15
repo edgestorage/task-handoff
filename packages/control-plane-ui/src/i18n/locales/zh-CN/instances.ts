@@ -240,6 +240,15 @@ export const instances = {
     offline: "无法连接 {name}：{message}",
     unknownError: "未返回响应详情。",
   },
+  nodeActions: {
+    openSettings: "打开节点设置",
+    rename: "重命名节点",
+    copyId: "复制节点 ID",
+    copyEndpoint: "复制连接地址",
+    idCopied: "节点 ID 已复制。",
+    endpointCopied: "连接地址已复制。",
+    copyFailed: "无法复制该内容。",
+  },
   actions: {
     start: "启动",
     stop: "停止",
