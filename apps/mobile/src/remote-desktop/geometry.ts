@@ -12,6 +12,9 @@ export const REMOTE_DESKTOP_MIN_VISIBLE_EDGE = 24;
 export const REMOTE_DESKTOP_TRACKPAD_EDGE_INSET = 20;
 const MULTITOUCH_TAP_TRAVEL_PX = 8;
 const MULTITOUCH_TAP_SPREAD_PX = 10;
+const MULTITOUCH_PINCH_OPPOSITION_PX = 6;
+const MULTITOUCH_SCROLL_CONFIRM_TRAVEL_PX = 12;
+const MULTITOUCH_SCROLL_MIN_FINGER_TRAVEL_PX = 3;
 
 /** The visible video rectangle produced by `objectFit: contain`. */
 export function remoteDesktopContainRect(viewport: RemoteDesktopSize, content: RemoteDesktopSize): RemoteDesktopRect {
@@ -127,10 +130,6 @@ export function remoteDesktopTouchMidpoint(a: RemoteDesktopPoint, b: RemoteDeskt
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
-export function remoteDesktopTouchOrientation(a: RemoteDesktopPoint, b: RemoteDesktopPoint): 'horizontal' | 'vertical' {
-  return Math.abs(a.x - b.x) >= Math.abs(a.y - b.y) ? 'horizontal' : 'vertical';
-}
-
 export function remoteDesktopMultiTouchInTapDeadZone(
   startMidpoint: RemoteDesktopPoint,
   currentMidpoint: RemoteDesktopPoint,
@@ -230,20 +229,42 @@ function remoteDesktopCursorViewPoint(
 }
 
 /**
- * Classifies the first meaningful movement of a two-finger gesture. Fingers
- * moving together are a scroll; changing spacing is a pinch. Keeping the
- * decision latched for the rest of the gesture avoids wheel/zoom oscillation.
+ * Classifies the first directionally clear movement of a two-finger gesture.
+ * Scroll requires both fingers to travel in the same direction. Opposing
+ * movement along their initial separation is a pinch even when the pair also
+ * pans, so zooming does not turn into a wheel gesture. Keeping the decision
+ * latched for the rest of the gesture avoids wheel/zoom oscillation.
  */
 export function remoteDesktopMultiTouchIntent(
-  startMidpoint: RemoteDesktopPoint,
-  currentMidpoint: RemoteDesktopPoint,
-  startDistance: number,
-  currentDistance: number,
-  startOrientation: 'horizontal' | 'vertical' = 'horizontal',
+  startFirst: RemoteDesktopPoint,
+  startSecond: RemoteDesktopPoint,
+  currentFirst: RemoteDesktopPoint,
+  currentSecond: RemoteDesktopPoint,
 ): 'pending' | 'scroll' | 'pinch' {
+  const startMidpoint = remoteDesktopTouchMidpoint(startFirst, startSecond);
+  const currentMidpoint = remoteDesktopTouchMidpoint(currentFirst, currentSecond);
+  const startDistance = remoteDesktopTouchDistance(startFirst, startSecond);
+  const currentDistance = remoteDesktopTouchDistance(currentFirst, currentSecond);
   const travel = remoteDesktopTouchDistance(startMidpoint, currentMidpoint);
-  const spread = Math.abs(currentDistance - startDistance);
   if (remoteDesktopMultiTouchInTapDeadZone(startMidpoint, currentMidpoint, startDistance, currentDistance)) return 'pending';
-  if (spread >= Math.max(12, travel)) return 'pinch';
-  return startOrientation === 'horizontal' ? 'scroll' : 'pending';
+
+  const firstMove = { x: currentFirst.x - startFirst.x, y: currentFirst.y - startFirst.y };
+  const secondMove = { x: currentSecond.x - startSecond.x, y: currentSecond.y - startSecond.y };
+  const separationX = startSecond.x - startFirst.x;
+  const separationY = startSecond.y - startFirst.y;
+  if (startDistance > 0) {
+    const firstAxisMove = (firstMove.x * separationX + firstMove.y * separationY) / startDistance;
+    const secondAxisMove = (secondMove.x * separationX + secondMove.y * separationY) / startDistance;
+    const opposingAxisTravel = Math.abs(firstAxisMove - secondAxisMove);
+    if (firstAxisMove * secondAxisMove < 0 && opposingAxisTravel >= MULTITOUCH_PINCH_OPPOSITION_PX) return 'pinch';
+  }
+
+  const firstTravel = Math.hypot(firstMove.x, firstMove.y);
+  const secondTravel = Math.hypot(secondMove.x, secondMove.y);
+  const sameDirection = firstTravel >= MULTITOUCH_SCROLL_MIN_FINGER_TRAVEL_PX
+    && secondTravel >= MULTITOUCH_SCROLL_MIN_FINGER_TRAVEL_PX
+    && firstMove.x * secondMove.x + firstMove.y * secondMove.y > 0;
+  if (sameDirection && travel >= MULTITOUCH_SCROLL_CONFIRM_TRAVEL_PX) return 'scroll';
+  if (Math.abs(currentDistance - startDistance) >= 12) return 'pinch';
+  return 'pending';
 }

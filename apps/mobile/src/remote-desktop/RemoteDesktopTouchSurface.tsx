@@ -21,7 +21,6 @@ import {
   remoteDesktopScrollAnchor,
   remoteDesktopTouchDistance,
   remoteDesktopTouchMidpoint,
-  remoteDesktopTouchOrientation,
   remoteDesktopTrackpadMove,
   type RemoteDesktopPoint,
   type RemoteDesktopSize,
@@ -98,9 +97,12 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
   const [trackpadDragging, setTrackpadDragging] = useState(false);
   const multiTouchRef = useRef<{
     start: RemoteDesktopTransform;
+    firstIdentifier: string;
+    secondIdentifier: string;
+    startFirst: RemoteDesktopPoint;
+    startSecond: RemoteDesktopPoint;
     startMidpoint: RemoteDesktopPoint;
     startDistance: number;
-    startOrientation: 'horizontal' | 'vertical';
     lastMidpoint: RemoteDesktopPoint;
     scrollPoint: RemoteDesktopPoint;
     intent: 'pending' | 'scroll' | 'pinch';
@@ -239,9 +241,12 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
     const directPoint = mapViewportPoint(midpoint, true);
     multiTouchRef.current = {
       start: transformRef.current,
+      firstIdentifier: first.identifier,
+      secondIdentifier: second.identifier,
+      startFirst: firstPoint,
+      startSecond: secondPoint,
       startMidpoint: midpoint,
       startDistance: remoteDesktopTouchDistance(firstPoint, secondPoint),
-      startOrientation: remoteDesktopTouchOrientation(firstPoint, secondPoint),
       lastMidpoint: midpoint,
       scrollPoint: remoteDesktopScrollAnchor(mouseModeRef.current, cursorRef.current, lastMappedRef.current),
       intent: 'pending',
@@ -260,19 +265,20 @@ export function RemoteDesktopTouchSurface({ controller, mouseMode, snapshot }: P
 
   const updateMultiTouch = useCallback((touches: readonly NativeTouchEvent[]) => {
     const multiTouch = multiTouchRef.current;
-    const [first, second] = touches;
-    if (!multiTouch || !first || !second) return;
+    if (!multiTouch) return;
+    const first = touches.find((touch) => touch.identifier === multiTouch.firstIdentifier);
+    const second = touches.find((touch) => touch.identifier === multiTouch.secondIdentifier);
+    if (!first || !second) return;
     const firstPoint = { x: first.locationX, y: first.locationY };
     const secondPoint = { x: second.locationX, y: second.locationY };
     const midpoint = remoteDesktopTouchMidpoint(firstPoint, secondPoint);
     const distance = remoteDesktopTouchDistance(firstPoint, secondPoint);
     if (multiTouch.intent === 'pending') {
       multiTouch.intent = remoteDesktopMultiTouchIntent(
-        multiTouch.startMidpoint,
-        midpoint,
-        multiTouch.startDistance,
-        distance,
-        multiTouch.startOrientation,
+        multiTouch.startFirst,
+        multiTouch.startSecond,
+        firstPoint,
+        secondPoint,
       );
     }
     const tapCandidate = multiTouchTapRef.current;

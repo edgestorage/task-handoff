@@ -11,7 +11,6 @@ import {
   remoteDesktopPinchTransform,
   remoteDesktopPointForTouch,
   remoteDesktopScrollAnchor,
-  remoteDesktopTouchOrientation,
   remoteDesktopTrackpadMove,
   type RemoteDesktopPoint,
   type RemoteDesktopSize,
@@ -146,27 +145,74 @@ test('phone-sized window streaming keeps a practical 3x vertical pan range', () 
 });
 
 test('classifies two-finger movement as scroll or pinch after a small dead zone', () => {
-  expect(remoteDesktopMultiTouchIntent({ x: 100, y: 100 }, { x: 102, y: 101 }, 200, 203)).toBe('pending');
-  expect(remoteDesktopMultiTouchIntent({ x: 100, y: 100 }, { x: 100, y: 70 }, 200, 204)).toBe('scroll');
-  expect(remoteDesktopMultiTouchIntent({ x: 100, y: 100 }, { x: 100, y: 70 }, 200, 214)).toBe('scroll');
-  expect(remoteDesktopMultiTouchIntent({ x: 100, y: 100 }, { x: 100, y: 96 }, 200, 240)).toBe('pinch');
+  const startFirst = { x: 100, y: 100 };
+  const startSecond = { x: 200, y: 100 };
+  expect(remoteDesktopMultiTouchIntent(
+    startFirst,
+    startSecond,
+    { x: 102, y: 101 },
+    { x: 202, y: 101 },
+  )).toBe('pending');
+  expect(remoteDesktopMultiTouchIntent(
+    startFirst,
+    startSecond,
+    { x: 100, y: 70 },
+    { x: 200, y: 70 },
+  )).toBe('scroll');
+  expect(remoteDesktopMultiTouchIntent(
+    startFirst,
+    startSecond,
+    { x: 90, y: 100 },
+    { x: 210, y: 100 },
+  )).toBe('pinch');
 });
 
-test('only classifies a horizontally aligned two-finger gesture as scroll', () => {
-  const horizontalStart = { x: 100, y: 100 };
-  const horizontalSecond = { x: 200, y: 104 };
-  const verticalSecond = { x: 104, y: 200 };
-  expect(remoteDesktopTouchOrientation(horizontalStart, horizontalSecond)).toBe('horizontal');
-  expect(remoteDesktopTouchOrientation(horizontalStart, verticalSecond)).toBe('vertical');
-  expect(remoteDesktopMultiTouchIntent({ x: 150, y: 102 }, { x: 150, y: 72 }, 100, 104, 'horizontal')).toBe('scroll');
-  expect(remoteDesktopMultiTouchIntent({ x: 102, y: 150 }, { x: 102, y: 120 }, 100, 104, 'vertical')).toBe('pending');
+test('scrolls only when both fingers move in the same direction', () => {
+  expect(remoteDesktopMultiTouchIntent(
+    { x: 100, y: 100 },
+    { x: 200, y: 100 },
+    { x: 100, y: 70 },
+    { x: 200, y: 70 },
+  )).toBe('scroll');
+  expect(remoteDesktopMultiTouchIntent(
+    { x: 100, y: 100 },
+    { x: 100, y: 200 },
+    { x: 100, y: 70 },
+    { x: 100, y: 170 },
+  )).toBe('scroll');
+  expect(remoteDesktopMultiTouchIntent(
+    { x: 100, y: 100 },
+    { x: 200, y: 100 },
+    { x: 100, y: 70 },
+    { x: 200, y: 130 },
+  )).toBe('pinch');
 });
 
-test('vertical movement leaves the multitouch tap dead zone without becoming scroll', () => {
-  const start = { x: 100, y: 100 };
-  const moved = { x: 100, y: 130 };
-  expect(remoteDesktopMultiTouchInTapDeadZone(start, moved, 80, 80)).toBe(false);
-  expect(remoteDesktopMultiTouchIntent(start, moved, 80, 80, 'vertical')).toBe('pending');
+test('a pinch remains a pinch while both fingers also pan', () => {
+  expect(remoteDesktopMultiTouchIntent(
+    { x: 100, y: 200 },
+    { x: 200, y: 200 },
+    { x: 85, y: 160 },
+    { x: 225, y: 160 },
+  )).toBe('pinch');
+});
+
+test('a pinch with one nearly stationary finger still becomes pinch', () => {
+  expect(remoteDesktopMultiTouchIntent(
+    { x: 100, y: 100 },
+    { x: 200, y: 100 },
+    { x: 100, y: 100 },
+    { x: 230, y: 100 },
+  )).toBe('pinch');
+});
+
+test('minor separation drift does not turn a two-finger scroll into pinch', () => {
+  expect(remoteDesktopMultiTouchIntent(
+    { x: 100, y: 100 },
+    { x: 200, y: 100 },
+    { x: 102, y: 70 },
+    { x: 198, y: 70 },
+  )).toBe('scroll');
 });
 
 test('small two-finger drift remains eligible for a tap', () => {
