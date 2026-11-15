@@ -91,6 +91,14 @@ test("runtime releases sync npmmirror as a non-blocking post-publish step", () =
   assert.ok(workflow.indexOf("  publish:") < workflow.indexOf("  sync-npmmirror:"));
 });
 
+test("runtime remote desktop packages build against the current macOS SDK", () => {
+  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
+
+  assert.match(workflow, /runner: macos-26-intel\s+platform: darwin\s+arch: x64/);
+  assert.match(workflow, /runner: macos-26\s+platform: darwin\s+arch: arm64/);
+  assert.doesNotMatch(workflow, /runner: macos-15(?:-intel)?\s/);
+});
+
 test("runtime release builds and publishes only the selected controlled instance implementation", () => {
   const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "runtime-release.yml"), "utf8");
   assert.match(workflow, /resolveControlledInstanceImplementation/);
