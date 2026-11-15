@@ -1,0 +1,322 @@
+name: Desktop Staging Build
+
+# This workflow is intentionally isolated to the staging branch. It only
+# produces workflow artifacts: it never creates a tag, uploads to a GitHub
+# Release, or asks for contents write permission.
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional exact semver version; defaults to <package version>-staging.<run>.<attempt>"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: ${{ vars.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED || vars.TASK_HANDOFF_CLOUD_RELAY_ENABLED || '1' }}
+  TASK_HANDOFF_AGENT_RUNS_ENABLED: ${{ vars.TASK_HANDOFF_AGENT_RUNS_ENABLED || '0' }}
+  TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED: ${{ vars.TASK_HANDOFF_BUILTIN_PROJECTS_ENABLED || '0' }}
+  TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY: ${{ vars.TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY }}
+  TASK_HANDOFF_CLOUD_ENV: staging
+  TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: https://th.aaasu.com
+  TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES: th.aaasu.com
+  TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES: relay.aaasu.com,r.xpbox.cn,relay.thandoff.com
+  TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY: "0"
+  TASK_HANDOFF_CLOUD_DISCOVERY_RECORD: _cloud.aaasu.com
+  TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN: https://th.aaasu.com
+
+jobs:
+  guard:
+    name: Require staging branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Reject non-staging refs
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "staging" ]]; then
+            echo "::error::Desktop staging builds only run from the staging branch."
+            exit 1
+          fi
+
+  runtime-selection:
+    name: Resolve controlled instance implementation
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      implementation: ${{ steps.runtime.outputs.implementation }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Resolve controlled instance implementation
+        id: runtime
+        shell: bash
+        env:
+          REQUESTED_IMPLEMENTATION: ${{ vars.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION }}
+        run: |
+          if [[ -n "$REQUESTED_IMPLEMENTATION" && "$REQUESTED_IMPLEMENTATION" != auto ]]; then
+            export TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION="$REQUESTED_IMPLEMENTATION"
+          fi
+          node --input-type=module -e 'import { resolveControlledInstanceImplementation } from "./runtime-packages.config.mjs"; console.log(`implementation=${resolveControlledInstanceImplementation()}`)' >> "$GITHUB_OUTPUT"
+
+  controlled-instance-rust-binaries:
+    needs: runtime-selection
+    if: needs.runtime-selection.outputs.implementation == 'rust'
+    name: Rust controlled instance binary (linux-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Build on the glibc baseline
+        shell: bash
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.arch == 'x64' && 'x86_64-unknown-linux-gnu' || 'aarch64-unknown-linux-gnu' }}
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace/controlled-instance-rs \
+            -e CARGO_TARGET_DIR="target/linux-${{ matrix.arch }}" \
+            -e RUST_TOOLCHAIN="$RUST_TOOLCHAIN" \
+            rust:1.95-bookworm \
+            bash -c '
+              set -euo pipefail
+              export PATH="/usr/local/rustup/toolchains/1.95.0-${RUST_TOOLCHAIN}/bin:${PATH}"
+              cargo build --locked --release -p controlled-instance-cli
+              install -d -m 0755 /workspace/release/rust-controlled-instance-binaries
+              install -m 0755 "$CARGO_TARGET_DIR/release/controlled-instance-rs" \
+                "/workspace/release/rust-controlled-instance-binaries/controlled-instance-linux-${{ matrix.arch }}"
+            '
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-staging-rust-controlled-instance-linux-${{ matrix.arch }}
+          path: release/rust-controlled-instance-binaries/*
+          if-no-files-found: error
+          retention-days: 14
+
+  node-pty-prebuilds:
+    name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build and collect Linux node-pty prebuild on the glibc baseline
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            node:24-bullseye \
+            bash -lc 'set -euo pipefail; cd node_modules/node-pty; rm -rf build; npm_config_nodedir=/usr/local node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild; cd /workspace; node scripts/node-pty-prebuild.mjs build --output release/node-pty-prebuilds --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}"'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-staging-node-pty-prebuild-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/node-pty-prebuilds/*
+          if-no-files-found: error
+          retention-days: 14
+
+  controlled-instance-artifact:
+    name: Linux controlled instance artifact
+    needs: [runtime-selection, node-pty-prebuilds, controlled-instance-rust-binaries]
+    if: ${{ !cancelled() && needs.runtime-selection.result == 'success' && needs.node-pty-prebuilds.result == 'success' && (needs.controlled-instance-rust-binaries.result == 'success' || needs.controlled-instance-rust-binaries.result == 'skipped') }}
+    env:
+      TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: ${{ needs.runtime-selection.outputs.implementation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve staging version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -n "$INPUT_VERSION" ]]; then
+            version="$INPUT_VERSION"
+          else
+            base="$(node -p 'require("./package.json").version')"
+            version="${base}-staging.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          fi
+          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: desktop-staging-node-pty-prebuild-*
+          path: release/node-pty-prebuilds
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        if: env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION == 'rust'
+        with:
+          pattern: desktop-staging-rust-controlled-instance-linux-*
+          path: release/rust-controlled-instance-binaries
+          merge-multiple: true
+
+      - name: Build Linux controlled instance staging runtime
+        shell: bash
+        env:
+          TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          pnpm runtime:build -- --target controlled-instance
+          pnpm runtime:artifact -- --version "$TASK_HANDOFF_VERSION" --prebuilds-dir release/node-pty-prebuilds
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-staging-controlled-instance-runtime-${{ steps.version.outputs.value }}
+          path: release/runtime-artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  build-windows:
+    name: Windows x64 staging installer
+    needs: [runtime-selection, controlled-instance-artifact]
+    if: ${{ !cancelled() && needs.controlled-instance-artifact.result == 'success' }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION: ${{ needs.runtime-selection.outputs.implementation }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v7
+        if: env.TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION == 'rust'
+        with:
+          pattern: desktop-staging-rust-controlled-instance-linux-*
+          path: release/rust-controlled-instance-binaries
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: desktop-staging-controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}
+          path: release/runtime-artifacts
+
+      - name: Prepare staging desktop resources
+        shell: bash
+        env:
+          TASK_HANDOFF_VERSION: ${{ needs.controlled-instance-artifact.outputs.version }}
+        run: pnpm desktop:prepare
+
+      - name: Verify baked staging cloud identity
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const environment = require("./build/desktop-cloud-environment.cjs");
+          const expected = {
+            TASK_HANDOFF_CLOUD_ENV: "staging",
+            TASK_HANDOFF_CLOUD_SERVICE_ORIGIN: "https://th.aaasu.com",
+            TASK_HANDOFF_CLOUD_COORDINATOR_HOST_SUFFIXES: "th.aaasu.com",
+            TASK_HANDOFF_CLOUD_RELAY_HOST_SUFFIXES: "relay.aaasu.com,r.xpbox.cn,relay.thandoff.com",
+            TASK_HANDOFF_CLOUD_ALLOW_INSECURE_RELAY: "0",
+            TASK_HANDOFF_CLOUD_DISCOVERY_RECORD: "_cloud.aaasu.com",
+            TASK_HANDOFF_CLOUD_DISCOVERY_FALLBACK_ORIGIN: "https://th.aaasu.com",
+          };
+          for (const [key, value] of Object.entries(expected)) {
+            if (environment[key] !== value) {
+              console.error(`Baked cloud setting ${key} is ${JSON.stringify(environment[key])}, expected ${JSON.stringify(value)}`);
+              process.exit(1);
+            }
+          }
+          console.log("Baked staging cloud identity verified.");
+          NODE
+
+      - name: Build unsigned Windows staging installer
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: pnpm exec electron-builder --win --x64 --publish never --config.extraMetadata.version=${{ needs.controlled-instance-artifact.outputs.version }} --config.publish.channel=staging
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-staging-windows-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            release/*.exe
+            release/*.zip
+            release/*.blockmap
+            release/*.yml
