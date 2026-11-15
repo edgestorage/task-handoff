@@ -43,7 +43,7 @@
           @run-action="(action, instance) => $emit('runAction', action, instance)"
           @close-all-sessions="(instance) => $emit('closeAllSessions', instance)"
           @check-node="(node) => $emit('checkNode', node)"
-          @copy-node-value="(node, field) => $emit('copyNodeValue', node, field)"
+          @copy-node-id="(node) => $emit('copyNodeId', node)"
           @open-config-sync="(direction, instance) => $emit('openConfigSync', direction, instance)"
           @select-instance="selectTemporaryInstance"
           @set-node-connection="(node, enabled) => $emit('setNodeConnection', node, enabled)"
@@ -134,13 +134,9 @@
                 <span>{{ t("instances.nodeActions.rename") }}</span>
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem class="instance-action-item" @select="requestNodeCopy(group.node, 'id')">
+              <ContextMenuItem class="instance-action-item" @select="requestNodeCopyId(group.node)">
                 <Copy :size="14" />
                 <span>{{ t("instances.nodeActions.copyId") }}</span>
-              </ContextMenuItem>
-              <ContextMenuItem class="instance-action-item" :disabled="!group.node.endpoint" @select="requestNodeCopy(group.node, 'endpoint')">
-                <Link :size="14" />
-                <span>{{ t("instances.nodeActions.copyEndpoint") }}</span>
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
@@ -227,7 +223,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, ChevronRight, Container, Copy, Laptop, Link, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plug, Plus, RefreshCw, Search, Server, Settings, Terminal, Unplug } from "@lucide/vue";
+import { Boxes, ChevronRight, Container, Copy, Laptop, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plug, Plus, RefreshCw, Search, Server, Settings, Terminal, Unplug } from "@lucide/vue";
 import type { InstanceBoardItem, Node, NodeFleetResourceState } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Button } from "../../../components/ui/button";
@@ -296,7 +292,7 @@ const emit = defineEmits<{
   closeAllSessions: [instance: InstanceBoardItem];
   openConfigSync: [direction: ConfigSyncDirection, instance: InstanceBoardItem];
   checkNode: [node: Node];
-  copyNodeValue: [node: Node, field: "id" | "endpoint"];
+  copyNodeId: [node: Node];
   openNodeSettings: [node: Node, action?: "rename"];
   selectInstance: [instanceId: string, source?: "click" | "contextmenu"];
   setNodeConnection: [node: Node, enabled: boolean];
@@ -435,8 +431,8 @@ function requestNodeSettings(node: Node | undefined, action?: "rename") {
   if (node) emit("openNodeSettings", node, action);
 }
 
-function requestNodeCopy(node: Node | undefined, field: "id" | "endpoint") {
-  if (node) emit("copyNodeValue", node, field);
+function requestNodeCopyId(node: Node | undefined) {
+  if (node) emit("copyNodeId", node);
 }
 
 function selectTemporaryInstance(instanceId: string, source?: "click" | "contextmenu") {

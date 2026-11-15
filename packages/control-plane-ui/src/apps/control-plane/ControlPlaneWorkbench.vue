@@ -383,7 +383,7 @@
         @run-action="runRowInstanceAction"
         @close-all-sessions="confirmCloseAllInstanceSessions"
         @check-node="checkInstanceNodeConnection"
-        @copy-node-value="copyNodeValue"
+        @copy-node-id="copyNodeId"
         @open-config-sync="openConfigSync"
         @open-node-settings="openNodeSettings"
         @select-instance="selectInstance"
@@ -766,7 +766,6 @@ import NewInstanceModal from "./NewInstanceModal.vue";
 import AccountSecurityDialog from "./settings/AccountSecurityDialog.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
 import { buildSettingsSections, type SettingsSection } from "./settings/settingsSections";
-import { nodeEndpointDisplay } from "./settings/nodeEndpointDisplay";
 import { type NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { Story, StoryAction, StoryDecision } from "@task-handoff/protocol/stories";
@@ -2247,8 +2246,8 @@ function openNodeSettings(node: Node, action?: "rename") {
   openSettings("nodes", { action, nodeId: node.id });
 }
 
-async function copyNodeValue(node: Node, field: "id" | "endpoint") {
-  const value = (field === "id" ? node.id : nodeEndpointDisplay(node.endpoint)).trim();
+async function copyNodeId(node: Node) {
+  const value = node.id.trim();
   if (!value) return;
   if (!navigator.clipboard?.writeText) {
     showToast(t("instances.nodeActions.copyFailed"), errorToast);
@@ -2256,7 +2255,7 @@ async function copyNodeValue(node: Node, field: "id" | "endpoint") {
   }
   try {
     await copyText(value);
-    showToast(t(field === "id" ? "instances.nodeActions.idCopied" : "instances.nodeActions.endpointCopied"), successToast);
+    showToast(t("instances.nodeActions.idCopied"), successToast);
   } catch {
     showToast(t("instances.nodeActions.copyFailed"), errorToast);
   }

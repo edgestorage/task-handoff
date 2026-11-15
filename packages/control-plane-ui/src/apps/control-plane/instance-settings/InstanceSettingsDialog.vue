@@ -48,6 +48,7 @@
         </div>
         <ScrollArea v-else class="instance-settings-scroll">
           <h2 class="instance-settings-content-title">{{ activeSectionLabel }}</h2>
+          <p v-if="section === 'apps'" class="instance-settings-content-description">{{ t("instances.settings.managedAppsDescription") }}</p>
           <TabsContent value="general" class="instance-settings-section">
             <section class="instance-settings-card instance-settings-group">
               <div class="instance-settings-section-heading">
@@ -330,32 +331,27 @@
 
           <TabsContent value="apps" class="instance-settings-section">
             <section class="instance-settings-card instance-settings-group">
-              <div class="instance-app-heading">
-                <div class="instance-settings-section-heading">
-                  <h3>{{ t("instances.settings.managedApps") }}</h3>
-                  <p>{{ t("instances.settings.managedAppsDescription") }}</p>
-                </div>
-                <div v-if="appManagement" class="instance-app-heading-actions">
-                  <Badge variant="secondary">{{ appManagement.capabilities.platform }} · {{ appManagement.capabilities.arch }}</Badge>
-                  <Button size="icon" variant="ghost" :aria-label="t('instances.settings.refreshApps')" :disabled="appManagementLoading" @click="refreshApps">
-                    <RefreshCw :class="{ 'animate-spin motion-reduce:animate-none': appManagementLoading }" :size="14" />
-                  </Button>
-                </div>
-              </div>
-              <p v-if="appManagement" class="instance-settings-observed">{{ t("instances.settings.observed", { time: formatObservedAt(appManagement.observedAt), privilege: appManagement.capabilities.privilege }) }}</p>
-              <div class="instance-app-directory instance-settings-surface">
-                <div v-if="appManagementLoading && !appManagement" class="instance-settings-state">{{ t("instances.settings.appsLoading") }}</div>
-                <div v-else-if="appManagementError" class="instance-settings-state instance-settings-state-error" role="alert">
-                  <span>{{ t("instances.settings.appsUnavailable") }} · {{ appManagementError }}</span>
-                  <Button size="sm" variant="outline" @click="refreshApps">{{ t("instances.settings.retry") }}</Button>
-                </div>
-                <div v-else-if="!appManagement" class="instance-settings-state">{{ t("instances.settings.noSnapshot") }}</div>
-                <Tabs v-else v-model="appView" class="instance-app-views">
-                  <TabsList class="instance-app-view-tabs" :aria-label="t('instances.settings.appViews')">
+              <Tabs v-model="appView" class="instance-app-views">
+                <div class="instance-app-header">
+                  <TabsList v-if="appManagement" class="instance-app-view-tabs" :aria-label="t('instances.settings.appViews')">
                     <TabsTrigger value="catalog">{{ t("instances.settings.appCatalog") }}<span class="instance-app-task-count">{{ visibleManagedApps.length }}</span></TabsTrigger>
                     <TabsTrigger ref="appTasksTab" value="tasks">{{ t("instances.settings.appTasks") }}<span v-if="appManagement.activeJobs.length" class="instance-app-task-count">{{ appManagement.activeJobs.length }}</span></TabsTrigger>
                     <TabsTrigger v-if="installEnvironmentSupported" ref="appEnvironmentTab" value="environment">{{ t("instances.settings.installSettings") }}</TabsTrigger>
                   </TabsList>
+                  <div class="instance-app-heading-actions">
+                    <Badge v-if="appManagement" variant="secondary">{{ appManagement.capabilities.platform }} · {{ appManagement.capabilities.arch }}</Badge>
+                    <Button size="icon" variant="ghost" :aria-label="t('instances.settings.refreshApps')" :disabled="appManagementLoading" @click="refreshApps">
+                      <RefreshCw :class="{ 'animate-spin motion-reduce:animate-none': appManagementLoading }" :size="14" />
+                    </Button>
+                  </div>
+                </div>
+                <div v-if="appManagementLoading && !appManagement" class="instance-app-directory instance-settings-surface instance-settings-state">{{ t("instances.settings.appsLoading") }}</div>
+                <div v-else-if="appManagementError" class="instance-app-directory instance-settings-surface instance-settings-state instance-settings-state-error" role="alert">
+                  <span>{{ t("instances.settings.appsUnavailable") }} · {{ appManagementError }}</span>
+                  <Button size="sm" variant="outline" @click="refreshApps">{{ t("instances.settings.retry") }}</Button>
+                </div>
+                <div v-else-if="!appManagement" class="instance-app-directory instance-settings-surface instance-settings-state">{{ t("instances.settings.noSnapshot") }}</div>
+                <div v-else class="instance-app-directory instance-settings-surface">
                   <TabsContent value="catalog" class="instance-app-view-content">
                     <div v-if="primaryAppTask" class="instance-app-task-summary">
                       <LoaderCircle v-if="primaryAppTask.state === 'running'" class="animate-spin motion-reduce:animate-none" :size="14" aria-hidden="true" />
@@ -432,8 +428,8 @@
                       />
                     </div>
                   </TabsContent>
-                </Tabs>
-              </div>
+                </div>
+              </Tabs>
             </section>
 
           </TabsContent>
@@ -496,8 +492,6 @@ import AppInstallEnvironmentCard from "./AppInstallEnvironmentCard.vue";
 import AppManagementTasks from "./AppManagementTasks.vue";
 import { appTaskGroups, appTaskStatusKey, retryableAppTask } from "./appTaskPresentation";
 import ModelEntitySelection from "../../../components/models/ModelEntitySelection.vue";
-import { useControlPlaneLocale } from "../../../i18n/index";
-import { formatDateTime } from "../../../i18n/presentation";
 import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { authorizeInstanceGitCredential, revokeInstanceGitCredential, useGitCredentialsQuery, useInstanceGitCredentialAssignmentsQuery } from "../../../api/queries";
@@ -509,7 +503,6 @@ import { getRemoteDesktopPermissions, getRemoteDesktopSettings, requestRemoteDes
 import type { DesktopNativePermissionKind, DesktopNativePermissionStatus, DesktopNativePermissions } from "@task-handoff/protocol/remote-desktop";
 
 const { t } = useI18n();
-const { locale } = useControlPlaneLocale();
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
 type InstanceSettingsSection = "general" | "ai" | "browser" | "codex" | "models" | "git-credentials" | "remote-desktop" | "apps";
@@ -1097,11 +1090,6 @@ async function saveModels() {
   }
 }
 
-function formatObservedAt(value: string) {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : formatDateTime(parsed, locale.value);
-}
-
 function refreshApps() {
   if (props.instance) void props.refreshAppManagement(props.instance.id);
 }
@@ -1391,6 +1379,13 @@ async function confirmAppOperation() {
   font-weight: 600;
 }
 
+.instance-settings-content-description {
+  margin: -5px 16px 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .instance-settings-section {
   display: grid;
   gap: 18px;
@@ -1407,8 +1402,7 @@ async function confirmAppOperation() {
   gap: 12px;
 }
 
-.instance-settings-card h3,
-.instance-app-heading h3 {
+.instance-settings-card h3 {
   margin: 0;
   color: var(--text-strong);
   font-size: 14px;
@@ -1530,8 +1524,7 @@ async function confirmAppOperation() {
 .instance-settings-select-control small,
 .instance-model-grid small,
 .instance-app-row small,
-.instance-settings-help,
-.instance-settings-observed {
+.instance-settings-help {
   margin: 0;
   color: var(--text-muted);
   font-size: 12px;
@@ -1687,12 +1680,20 @@ async function confirmAppOperation() {
 }
 
 
-.instance-app-heading,
 .instance-app-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.instance-app-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px;
 }
 
 .instance-app-heading-actions {
@@ -1707,12 +1708,8 @@ async function confirmAppOperation() {
   height: 28px;
 }
 
-.instance-app-heading > .instance-settings-section-heading {
-  min-width: 0;
-}
-
-.instance-app-views { min-width: 0; }
-.instance-app-view-tabs { display: inline-flex; flex-wrap: nowrap; align-items: center; width: fit-content; max-width: calc(100% - 24px); height: 32px; min-height: 32px; margin: 10px 12px; padding: 2px; overflow-x: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-inset); scrollbar-width: none; }
+.instance-app-views { display: grid; min-width: 0; gap: 8px; }
+.instance-app-view-tabs { display: inline-flex; flex: 0 1 auto; flex-wrap: nowrap; align-items: center; width: fit-content; max-width: 100%; height: 32px; min-height: 32px; margin: 0; padding: 2px; overflow-x: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-inset); scrollbar-width: none; }
 .instance-app-view-tabs::-webkit-scrollbar { display: none; }
 .instance-app-view-tabs :deep(button) { flex: 0 0 auto; min-width: 0; height: 26px; min-height: 26px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 500; white-space: nowrap; box-shadow: none; }
 .instance-app-view-tabs :deep(button:not([data-state="active"]):hover) { background: var(--surface-hover); color: var(--text-strong); }
@@ -2037,7 +2034,7 @@ async function confirmAppOperation() {
 }
 
 @media (max-width: 680px) {
-  .instance-app-view-tabs { max-width: calc(100% - 20px); margin: 10px; }
+  .instance-app-header { align-items: flex-start; }
   .instance-app-environment-content { padding: 12px; }
   .remote-desktop-component-main,
   .remote-desktop-component-note,
@@ -2118,6 +2115,10 @@ async function confirmAppOperation() {
 
   .instance-settings-content-title {
     margin: 14px 14px 12px;
+  }
+
+  .instance-settings-content-description {
+    margin: -4px 14px 12px;
   }
 
   .instance-settings-section {

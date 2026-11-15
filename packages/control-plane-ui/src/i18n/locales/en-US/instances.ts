@@ -241,9 +241,7 @@ export const instances = {
     openSettings: "Open node settings",
     rename: "Rename node",
     copyId: "Copy node ID",
-    copyEndpoint: "Copy connection address",
     idCopied: "Node ID copied.",
-    endpointCopied: "Connection address copied.",
     copyFailed: "Could not copy the value.",
   },
   actions: {
@@ -689,7 +687,6 @@ export const instances = {
     noEnabledGlobalModel: "No enabled global model",
     saveModels: "Save model settings",
     modelsSaved: "Model settings saved. They will apply on the next start or restart.",
-    managedApps: "Managed apps",
     managedAppsDescription: "Install, update, and remove trusted built-in apps on this controlled computer.", remoteDesktopEnable: "Enable desktop", remoteDesktopDisable: "Disable desktop", remoteDesktopSettingsFailed: "The desktop setting could not be updated.",
     remoteDesktopPage: {
       title: "Remote desktop", componentTitle: "Remote desktop component", componentDescription: "Manage this instance's desktop streaming component and enablement.",
@@ -763,7 +760,6 @@ export const instances = {
     noSnapshot: "No authoritative app management snapshot is available",
     noManagedApps: "This controlled instance does not publish any managed apps",
     appFilters: "Managed app filters",
-    observed: "Observed {time} · Privilege {privilege}",
     readyToInstall: "{count} ready to install",
     noInstalls: "No installs available",
     noFilterMatches: "No apps match this filter",

@@ -244,9 +244,7 @@ export const instances = {
     openSettings: "打开节点设置",
     rename: "重命名节点",
     copyId: "复制节点 ID",
-    copyEndpoint: "复制连接地址",
     idCopied: "节点 ID 已复制。",
-    endpointCopied: "连接地址已复制。",
     copyFailed: "无法复制该内容。",
   },
   actions: {
@@ -592,7 +590,7 @@ export const instances = {
     modelSelectionDescription: "分配前会将控制面板模型部署到此实例的节点；节点本地模型仅在所属节点可用。更改会在下次启动或重启时生效。",
     noModel: "不使用模型", globalDefault: "全局默认", invalidModel: "保存的选择已删除、已禁用或属于其他应用。请选择模型或全局默认。", unavailableModel: "不可用 · {id}", effectiveModel: "当前生效：{name}",
     noEnabledGlobalModel: "没有已启用的全局模型", saveModels: "保存模型设置", modelsSaved: "模型设置已保存，将在下次启动或重启时生效。",
-    managedApps: "托管应用", managedAppsDescription: "在此受控计算机上安装、更新和移除可信的内置应用。", remoteDesktopEnable: "启用桌面", remoteDesktopDisable: "停用桌面", remoteDesktopSettingsFailed: "无法更新桌面设置。", refreshApps: "刷新托管应用",
+    managedAppsDescription: "在此受控计算机上安装、更新和移除可信的内置应用。", remoteDesktopEnable: "启用桌面", remoteDesktopDisable: "停用桌面", remoteDesktopSettingsFailed: "无法更新桌面设置。", refreshApps: "刷新托管应用",
     remoteDesktopPage: {
       title: "远程桌面", componentTitle: "远程桌面组件", componentDescription: "管理此实例的桌面串流组件和启用状态。",
       loadingComponent: "正在加载组件状态…", componentUnavailable: "无法加载远程桌面组件状态。", componentMissing: "组件目录中没有远程桌面组件", componentTaskRunning: "组件任务 · {status}",
@@ -625,7 +623,7 @@ export const instances = {
     installSourceChecks: "连接检查", installSourceChecksEmpty: "未配置显式端点，实例将使用现有环境配置。", installSourceCheckOk: "可访问", installSourceCheckFailed: "不可访问",
     installSourceRevision: "设置 revision {revision}",
     appsLoading: "正在加载受控计算机的应用能力…", appsUnavailable: "应用管理不可用", retry: "重试", noSnapshot: "没有可用的权威应用管理快照",
-    noManagedApps: "此受管实例未发布任何托管应用", appFilters: "托管应用筛选", observed: "观测于 {time} · 权限 {privilege}", readyToInstall: "{count} 个可安装", noInstalls: "没有可安装项",
+    noManagedApps: "此受管实例未发布任何托管应用", appFilters: "托管应用筛选", readyToInstall: "{count} 个可安装", noInstalls: "没有可安装项",
     noFilterMatches: "没有符合筛选条件的应用", installing: "正在安装", updating: "正在更新", uninstalling: "正在卸载", install: "安装", update: "更新", uninstall: "卸载",
     appViews: "应用视图",
     appCatalog: "应用列表",
