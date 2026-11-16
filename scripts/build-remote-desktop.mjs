@@ -8,13 +8,13 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as tar from "tar";
-import { packRemoteDesktopPackage } from "./remote-desktop-packages.mjs";
+import { packRemoteDesktopPackage, remoteDesktopExecutablePath } from "./remote-desktop-packages.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const APP_ID = "remote-desktop";
-const EXECUTABLE = "bin/task-handoff-desktop-streaming";
-const COMPONENT_BINARY = "task-handoff-desktop-streaming";
-const SUPPORTED_PLATFORMS = new Set(["darwin", "linux"]);
+const COMPONENT_BIN = "task-handoff-desktop-streaming";
+const COMPONENT_BINARY = process.platform === "win32" ? `${COMPONENT_BIN}.exe` : COMPONENT_BIN;
+const SUPPORTED_PLATFORMS = new Set(["darwin", "linux", "win32"]);
 const SUPPORTED_ARCHES = new Set(["x64", "arm64"]);
 
 function run(command, args, options = {}) {
@@ -80,7 +80,8 @@ export async function installRemoteDesktopPackage({ archive, metadata, instanceD
   await fsp.mkdir(staging, { recursive: true, mode: 0o700 });
   try {
     await tar.x({ file: path.resolve(archive), cwd: staging, strip: 1 });
-    const launchPath = path.join(staging, EXECUTABLE);
+    const executable = remoteDesktopExecutablePath(metadata.platform);
+    const launchPath = path.join(staging, executable);
     const file = fs.lstatSync(launchPath, { throwIfNoEntry: false });
     if (!file?.isFile() || file.isSymbolicLink()) throw new Error("Remote desktop package has no usable launcher inside its install root.");
     fs.chmodSync(launchPath, 0o755);
@@ -96,7 +97,7 @@ export async function installRemoteDesktopPackage({ archive, metadata, instanceD
       packageVersion: metadata.version,
       integrity: metadata.integrity,
       installRoot,
-      launchPath: EXECUTABLE,
+      launchPath: executable,
       files,
     };
     fs.writeFileSync(path.join(staging, "managed-app.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
@@ -126,13 +127,13 @@ async function main() {
     console.log(usage());
     return;
   }
-  if (!SUPPORTED_PLATFORMS.has(process.platform) || !SUPPORTED_ARCHES.has(process.arch)) {
-    throw new Error(`Remote desktop builds are supported on darwin/linux x64/arm64, not ${process.platform}/${process.arch}.`);
+  if (!SUPPORTED_PLATFORMS.has(process.platform) || !SUPPORTED_ARCHES.has(process.arch) || (process.platform === "win32" && process.arch !== "x64")) {
+    throw new Error(`Remote desktop builds are supported on darwin/linux x64/arm64 and win32/x64, not ${process.platform}/${process.arch}.`);
   }
   const version = args.version || process.env.TASK_HANDOFF_VERSION || JSON.parse(fs.readFileSync(path.join(root, "packages", "controlled-instance", "package.json"), "utf8")).version;
   const toolchain = args.toolchain || process.env.RUSTUP_TOOLCHAIN || "1.95.0";
   const profile = args.debug ? "debug" : "release";
-  const cargoArgs = [`+${toolchain}`, "build", "--manifest-path", path.join(root, "remote-desktop-rs", "Cargo.toml"), "-p", "desktop-streaming", "--bin", COMPONENT_BINARY];
+  const cargoArgs = [`+${toolchain}`, "build", "--manifest-path", path.join(root, "remote-desktop-rs", "Cargo.toml"), "-p", "desktop-streaming", "--bin", COMPONENT_BIN];
   if (!args.debug) cargoArgs.push("--release");
   if (args.features) cargoArgs.push("--features", args.features);
   console.log(`[remote-desktop] building ${profile} for ${process.platform}/${process.arch} with Rust ${toolchain}`);

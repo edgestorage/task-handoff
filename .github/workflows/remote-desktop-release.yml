@@ -92,6 +92,9 @@ jobs:
           - runner: macos-26
             platform: darwin
             arch: arm64
+          - runner: windows-latest
+            platform: win32
+            arch: x64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     steps:
@@ -138,11 +141,19 @@ jobs:
           cargo +1.95.0 build --locked --release --manifest-path remote-desktop-rs/Cargo.toml \
             -p desktop-streaming --bin task-handoff-desktop-streaming
 
+      - name: Build Windows component
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          cargo +1.95.0 build --locked --release --manifest-path remote-desktop-rs/Cargo.toml `
+            -p desktop-streaming --bin task-handoff-desktop-streaming
+
       - name: Pack the native npm artifact
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.verify.outputs.version }}
-          BINARY: ${{ matrix.platform == 'linux' && 'release/remote-desktop-packages/bin/task-handoff-desktop-streaming' || 'remote-desktop-rs/target/release/task-handoff-desktop-streaming' }}
+          BINARY: ${{ matrix.platform == 'linux' && 'release/remote-desktop-packages/bin/task-handoff-desktop-streaming' || matrix.platform == 'win32' && 'remote-desktop-rs/target/release/task-handoff-desktop-streaming.exe' || 'remote-desktop-rs/target/release/task-handoff-desktop-streaming' }}
         run: |
           node scripts/remote-desktop-packages.mjs pack \
             --version "$RELEASE_VERSION" \
@@ -205,7 +216,7 @@ jobs:
           node scripts/remote-desktop-packages.mjs metadata --complete \
             --input release/remote-desktop-packages \
             --output release/remote-desktop-packages/remote-desktop-packages.json
-          node -e 'const {packages}=require("./release/remote-desktop-packages/remote-desktop-packages.json"); if (packages.length !== 4) throw new Error(`Expected four remote desktop packages, got ${packages.length}`); if (packages.some((entry)=>entry.version!==process.env.RELEASE_VERSION)) throw new Error("Remote desktop package versions must equal the release version.")'
+          node -e 'const {packages}=require("./release/remote-desktop-packages/remote-desktop-packages.json"); if (packages.length !== 5) throw new Error(`Expected five remote desktop packages, got ${packages.length}`); if (packages.some((entry)=>entry.version!==process.env.RELEASE_VERSION)) throw new Error("Remote desktop package versions must equal the release version.")'
 
       - uses: actions/upload-artifact@v7
         with:
@@ -238,7 +249,7 @@ jobs:
           name: remote-desktop-complete-${{ needs.verify.outputs.version }}
           path: release/remote-desktop-packages
 
-      - name: Publish all four packages under a staging dist-tag
+      - name: Publish all five packages under a staging dist-tag
         env:
           RELEASE_VERSION: ${{ needs.verify.outputs.version }}
         shell: bash

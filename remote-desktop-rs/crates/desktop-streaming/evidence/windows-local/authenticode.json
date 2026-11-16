@@ -1,0 +1,42 @@
+﻿{
+    "result":  "passed-development-signature",
+    "mode":  "development-self-signed",
+    "generatedAt":  "2026-11-16T05:08:38.2787411Z",
+    "certificate":  {
+                        "subject":  "CN=TaskHandoff Development Code Signing",
+                        "thumbprint":  "352B06F0E5EEF511FF93783E4B34EE0777DEFF3E",
+                        "notAfter":  "2028-11-16T04:31:46.0000000Z",
+                        "publicCertificate":  "TaskHandoffDevelopmentCodeSigning.cer",
+                        "privateKeyIncluded":  false
+                    },
+    "artifacts":  [
+                      {
+                          "path":  "task-handoff-desktop-streaming.exe",
+                          "sha256":  "82cb1df1147fb62a596ccc08b5332a5bbbefc58a1dc7165a6e35b23814561124",
+                          "status":  "ValidSignatureUntrustedDevelopmentRoot",
+                          "trust":  "self-signed-development-untrusted-root",
+                          "statusMessage":  "A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider",
+                          "signerSubject":  "CN=TaskHandoff Development Code Signing",
+                          "signerThumbprint":  "352B06F0E5EEF511FF93783E4B34EE0777DEFF3E"
+                      },
+                      {
+                          "path":  "TaskHandoffRemoteDesktop-0.0.46-x64.msi",
+                          "sha256":  "b8d6f228d6dfeb33a65b1dd80d45e1c539c36f48d38a93e6e3e031f848f6d6af",
+                          "status":  "ValidSignatureUntrustedDevelopmentRoot",
+                          "trust":  "self-signed-development-untrusted-root",
+                          "statusMessage":  "A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider",
+                          "signerSubject":  "CN=TaskHandoff Development Code Signing",
+                          "signerThumbprint":  "352B06F0E5EEF511FF93783E4B34EE0777DEFF3E"
+                      }
+                  ],
+    "verification":  "Set-AuthenticodeSignature followed by Get-AuthenticodeSignature. The attached signature and signer certificate were accepted; each artifact reports ValidSignatureUntrustedDevelopmentRoot because the self-signed development root is not installed in the OS root store.",
+    "trustNote":  "Headless current-user root-store writes require an interactive consent dialog on this host, so the pipeline records the self-signed chain explicitly instead of silently installing trust. No PFX password, private key or production certificate is stored in the repository.",
+    "productionSigning":  {
+                              "status":  "not provided",
+                              "acceptedInputs":  [
+                                                     "PFX path and password",
+                                                     "CurrentUser certificate thumbprint"
+                                                 ],
+                              "requirement":  "Use a certificate whose chain terminates in an OS-trusted code-signing root; omit -SignDevelopment."
+                          }
+}

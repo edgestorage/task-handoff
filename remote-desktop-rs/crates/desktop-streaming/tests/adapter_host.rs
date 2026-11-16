@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use controlled_instance_protocol::AppManagementOperation;
 use desktop_component_host::{
     contract::{Command, Reply},

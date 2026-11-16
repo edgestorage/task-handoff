@@ -5,9 +5,13 @@ a window-reference registry, Linux X11 capture/input/clipboard, macOS SCK displa
 and window capture/input, hardware/software encoding and explicit native WebRTC
 diagnostic harnesses with four actual DataChannels. The synthetic
 backend renders test pixels and records input in memory; it never captures a
-host desktop or injects OS input. All native platform probes deliberately report
-`available: false`. Windows is deferred by the user; the acceptance boundaries
-and remaining hardware/release validation are recorded below.
+host desktop or injects OS input. Native probes report backend availability,
+while the product capability stays fail-closed until the platform and release
+gates below pass. Windows window catalog/WGC capture/input leases and the
+named-pipe host are implemented. On an active console session on 2026-11-16,
+display and window WGC capture, focus/hit/input, private-desktop fail-closed
+behavior, MSVC release, development Authenticode and a per-user MSI
+install/uninstall cycle were verified.
 
 See [G1-ACCEPTANCE.md](G1-ACCEPTANCE.md) for the evidence matrix and exact limits.
 
@@ -26,10 +30,23 @@ remote-desktop-rs/target/debug/desktop-test-host
 node remote-desktop-rs/crates/desktop-streaming/tests/node-host.mjs remote-desktop-rs/target/debug/task-handoff-desktop-streaming
 ```
 
-Windows uses `.exe` binary names. The shared transport supports named pipes;
-Windows ACL, actual native backend and strong-kill cleanup remain unverified.
-The tests above exercise a spawned component over real local IPC on macOS.
-They do not require a product process, display permissions or a managed instance.
+Windows uses `.exe` binary names and a private named-pipe host endpoint. The
+shared transport, Windows display/window catalog/WGC capture, input leases and Rust/Node
+host startup are covered by compilation, unit, IPC and contract tests. The opt-in
+`windows_native` tests passed on an active console session: real display and
+window WGC frames, catalog selection, DWM geometry, `AttachThreadInput` foreground
+activation, pointer hit validation and native click delivery. Locked,
+disconnected or cross-session desktops still fail closed; a dimming system
+security/consent prompt (for example a pending Windows Firewall authorization)
+also keeps input fail-closed until the desktop is clear.
+Display capture emits real 1280x800 BGRA display frames with matching stride and
+visible pixels; cross-session windows are filtered. The MSVC x64 release is
+static-CRT and imports only system DLLs. Development Authenticode covers the
+executable and MSI, and the WiX per-user installer passed silent
+install/version/uninstall. Actual lock/RDP-disconnect transitions, remote unlock,
+multi-session delivery, production certificate trust and interactive
+strong-kill/key-release remain outside this acceptance.
+Interactive macOS tests exercise the same spawned-component boundary.
 
 ## Run the synthetic browser harness
 
@@ -171,9 +188,14 @@ diagnostics.
 macOS VideoToolbox and Linux VA-API helper selection/fallback are implemented;
 macOS native display/window correctness is verified. Actual Linux GPU encoding
 is unverified on the permitted host because it has no render node. Windows
-implementation/acceptance is deferred. Sustained network/latency and packaged
-installer permissions remain release gates. The implemented Linux and transport work is detailed
-below; passing diagnostic tests do not open product capabilities.
+display/window capture, input leases and host IPC are implemented; real display
+and window WGC frames, focus/hit validation, native click delivery, static-CRT
+MSVC release, development signing and the per-user MSI cycle passed on an active
+console session. Windows Media Foundation remains deferred to OpenH264.
+Sustained network/latency, non-Windows packaged installer permissions and
+production signing trust remain release gates. The implemented Linux,
+Windows and transport work is detailed below; passing diagnostic tests do not
+open product capabilities.
 
 Keep all unverified native platform capabilities unavailable. Do not enter G2
 based on a passing synthetic browser harness.
@@ -255,10 +277,23 @@ acceptance remains a packaging gate.
 
 Windows checks its own active nonzero WTS session and input desktop before native
 capture/injection, and requests per-monitorV2 DPI awareness. It never switches
-or adopts a desktop/session. Native catalogs filter OS metadata on demand and
-invalidate preceding references before enumeration. Windows catalogs are not wired into
-the component service yet; same-process handle reuse, focus/hit and geometry
-transitions still block window availability. All native capabilities remain off.
+or adopts a desktop/session, and a window owned by another session is not
+selectable. Native catalogs filter OS metadata on demand and
+invalidate preceding references before enumeration. The window catalog is wired
+into the component service; retained HWND/PID identity, DWM geometry, focus/hit
+validation and lease revocation are covered by unit and contract tests. The
+opt-in native tests captured real WGC display and window frames, exercised real
+foreground activation and pointer hit validation, delivered a native click to
+the fixture, and proved a private desktop fails closed on an active console
+session.
+Window-level input is stricter than RustDesk-style whole-desktop injection: the
+target must be foreground and under the pointer. Because a background host is
+denied `SetForegroundWindow` by the Windows foreground lock, `focus()`
+temporarily attaches to the current foreground input queue with
+`AttachThreadInput`, activates the bound window and detaches. Occluded,
+cloaked, cross-desktop or cross-session targets still fail closed with
+`REMOTE_DESKTOP_WINDOW_FOCUS_REQUIRED`. Native capability remains gated until
+the remaining platform/release gates pass.
 
 `harness/run-linux-reference.py` serializes3×100s/100input samples for each
 static/scroll/drag synthetic workload on the explicitly permitted109host. Each
@@ -272,11 +307,13 @@ the chosen clock and raw failures in reports; never auto-resume lost input
 authority between measurement chunks. The synthetic GUI logs only marker count,
 value, elapsed time and expiry for input-delivery diagnostics.
 
-The non-Windows implementation includes Linux VA-API/fallback and native macOS
-window catalog/focus/hit/geometry handling. The permitted Linux host proves
-software fallback only; actual VA-API hardware is not claimed. Windows MF,
-Job Object/interactive desktop/cursor/DPI acceptance remains deferred. Formal LAN/TURN/weak-network
-performance thresholds belong toG6. Local macOS hardware/browser/input/strong-kill
+The implementation includes Linux VA-API/fallback, native macOS window
+catalog/focus/hit/geometry handling, and Windows display/window catalog/WGC/input-lease
+wiring and active-console window acceptance. The permitted Linux host proves
+software fallback only; actual VA-API hardware is not claimed. Windows
+interactive display/cursor acceptance passed; Windows MF remains deferred.
+Formal LAN/TURN/weak-network performance thresholds
+belong toG6. Local macOS hardware/browser/input/strong-kill
 evidence is recorded below. Mac Local window targets use owner-bound catalog
 selection retained through reserve/attach. Other modes/platforms reject window
 requests, preventing a window request from falling through to display capture. Stable typed backend failures preserve permission/platform
@@ -289,8 +326,8 @@ commit. A moved/disconnected display fails closed even if captured pixel dimensi
 are unchanged; held keys/buttons can still be released. Ambiguous mirrored display
 rectangles are rejected. This is safe failure on topology change, not live geometry
 recovery or window focus protection. Local macOS runtime evidence is recorded
-below; Windows runtime acceptance is deferred. Cross-compilation alone does not
-establish native Windows behavior.
+below. Windows compilation, unit/contract coverage, named-pipe ownership and
+active-console window runtime acceptance are complete.
 
 ## Preliminary runtime evidence
 
@@ -312,7 +349,7 @@ max-fs/max-mbps constraints. The bounded `harness/fullhd-surface.py` creates tha
 explicit test display; it never discovers/adopts a user or product display.
 Codec format changes invalidate queued RTP and force fresh SPS/PPS/IDR.
 
-## Windows process ownership (runtime acceptance pending)
+## Windows process ownership
 
 The standalone Rust host owns an unnamed, non-inheritable kill-on-close Job for
 its component. Child assignment happens before the IPC bootstrap. Each clipboard
@@ -329,8 +366,8 @@ of this ownership contract remains G2/G3 work.
 
 On an authorized Windows target, `cargo test -p desktop-streaming --test
 windows_ownership` tests actual kernel cleanup and scope using children that
-never receive bootstrap or touch a desktop. These tests have only been
-cross-compiled here; interactive strong-kill/key-release acceptance remains open.
+never receive bootstrap or touch a desktop. These tests pass on this Windows
+host; interactive strong-kill/key-release acceptance remains open.
 
 ## Local macOS acceptance and hardware selection
 
@@ -365,8 +402,12 @@ receivedx100. No preceding pointer packet or delay is required by the corrected
 button/wheel path. Enigo continues to own physical-key mapping and Unicode.
 
 Native capability remains unavailable while remaining platform acceptance
-and the remaining platform gates are incomplete. Windows runtime acceptance is
-deferred by the user. Formal LAN150ms/TURN/weak-network gates belong toG6.
+and the remaining platform gates are incomplete. Windows display/window
+WGC/focus/hit/input, the active-session/private-desktop boundary, MSVC release,
+development Authenticode and the per-user MSI install/uninstall cycle are
+verified. Actual lock/RDP-disconnect transitions, remote unlock, multi-session
+delivery, production certificate trust and interactive strong-kill/key-release
+remain open. Formal LAN150ms/TURN/weak-network gates belong toG6.
 
 ## macOS window lifecycle evidence
 

@@ -57,8 +57,20 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
             },
         );
     }
+    #[cfg(target_os = "windows")]
+    {
+        capability.source_providers.push(
+            controlled_instance_protocol::RemoteDesktopSourceProvider {
+                kind: "window".into(),
+                available: true,
+                reason: None,
+            },
+        );
+    }
     capability.capture.backends = vec![if cfg!(target_os = "macos") {
         "screencapturekit"
+    } else if cfg!(target_os = "windows") {
+        "wgc"
     } else {
         "x11-xshm-xdamage"
     }
@@ -73,6 +85,8 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
     };
     capability.input.backends = vec![if cfg!(target_os = "macos") {
         "cgevent"
+    } else if cfg!(target_os = "windows") {
+        "sendinput"
     } else {
         "xtest"
     }
@@ -97,7 +111,11 @@ fn check(mode: Mode) -> anyhow::Result<()> {
         BackendError::PlatformUnsupported
     );
     anyhow::ensure!(
-        cfg!(any(target_os = "macos", target_os = "linux")),
+        cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )),
         BackendError::PlatformUnsupported
     );
     #[cfg(target_os = "macos")]
@@ -138,6 +156,16 @@ fn check(mode: Mode) -> anyhow::Result<()> {
         })?;
         let _input = enigo::Enigo::new(&enigo::Settings {
             x11_display: Some(display),
+            open_prompt_to_get_permissions: false,
+            ..Default::default()
+        })
+        .map_err(|_| anyhow::anyhow!(BackendError::InputPermissionRequired))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        anyhow::ensure!(mode == Mode::Local, BackendError::VirtualUnsupported);
+        crate::platform::apple_windows::preflight()?;
+        let _input = enigo::Enigo::new(&enigo::Settings {
             open_prompt_to_get_permissions: false,
             ..Default::default()
         })

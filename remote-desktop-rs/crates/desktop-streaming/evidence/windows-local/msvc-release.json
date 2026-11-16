@@ -1,0 +1,38 @@
+﻿{
+    "result":  "passed",
+    "target":  "x86_64-pc-windows-msvc",
+    "toolchain":  "1.95.0-x86_64-pc-windows-msvc",
+    "crt":  "static (/MT, -C target-feature=+crt-static)",
+    "binary":  "remote-desktop-rs/target/x86_64-pc-windows-msvc/release/task-handoff-desktop-streaming.exe",
+    "unsignedSizeBytes":  12301312,
+    "unsignedSha256":  "f19548c4c6cd01915e1d8510c16e678f6e4de41743348d3cf2c53702f571cecd",
+    "signedStageBinary":  "release/windows/stage/0.0.46/task-handoff-desktop-streaming.exe",
+    "signedStageSizeBytes":  12303168,
+    "signedStageSha256":  "82cb1df1147fb62a596ccc08b5332a5bbbefc58a1dc7165a6e35b23814561124",
+    "versionOutput":  "0.0.46",
+    "imports":  [
+                    "advapi32.dll",
+                    "api-ms-win-core-synch-l1-2-0.dll",
+                    "api-ms-win-shcore-scaling-l1-1-1.dll",
+                    "bcrypt.dll",
+                    "bcryptprimitives.dll",
+                    "coremessaging.dll",
+                    "d3d11.dll",
+                    "dwmapi.dll",
+                    "dxgi.dll",
+                    "iphlpapi.dll",
+                    "kernel32.dll",
+                    "ntdll.dll",
+                    "ole32.dll",
+                    "oleaut32.dll",
+                    "psapi.dll",
+                    "user32.dll",
+                    "ws2_32.dll",
+                    "wtsapi32.dll"
+                ],
+    "vcruntimeOrUcrtImports":  [
+
+                               ],
+    "staticCrtVerified":  true,
+    "importsCommand":  "llvm-readobj --coff-imports \u003crelease exe\u003e"
+}

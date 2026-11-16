@@ -20,6 +20,8 @@ pub struct NativeInput {
     window: Option<crate::platform::macos_window::Lease>,
     #[cfg(target_os = "linux")]
     window: Option<crate::platform::linux::WindowLease>,
+    #[cfg(target_os = "windows")]
+    window: Option<crate::platform::windows_window::Lease>,
     keys: HashSet<u16>,
     buttons: HashSet<u8>,
     wheel_x: f64,
@@ -33,6 +35,8 @@ impl NativeInput {
             #[cfg(target_os = "macos")]
             None,
             #[cfg(target_os = "linux")]
+            None,
+            #[cfg(target_os = "windows")]
             None,
         )
     }
@@ -53,19 +57,22 @@ impl NativeInput {
         let lease = crate::platform::linux::WindowLease::bind(window, geometry)?;
         Self::build(geometry, display, Some(lease))
     }
+    #[cfg(target_os = "windows")]
+    pub fn new_window(
+        identity: crate::platform::windows_window::Identity,
+        geometry: Geometry,
+    ) -> anyhow::Result<Self> {
+        let lease = crate::platform::windows_window::Lease::bind(identity, geometry)?;
+        Self::build(geometry, None, Some(lease))
+    }
     fn build(
         geometry: Geometry,
         display: Option<String>,
         #[cfg(target_os = "macos")] window: Option<crate::platform::macos_window::Lease>,
         #[cfg(target_os = "linux")] window: Option<crate::platform::linux::WindowLease>,
+        #[cfg(target_os = "windows")] window: Option<crate::platform::windows_window::Lease>,
     ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            geometry.width > 0
-                && geometry.height > 0
-                && geometry.scale.is_finite()
-                && geometry.scale > 0.0,
-            crate::error::BackendError::InvalidGeometry
-        );
+        geometry.validate()?;
         #[cfg(target_os = "windows")]
         {
             crate::platform::windows_access::prepare_dpi()?;
@@ -82,7 +89,9 @@ impl NativeInput {
                 )?)
             }
             #[cfg(target_os = "windows")]
-            {
+            if window.is_some() {
+                None
+            } else {
                 Some(crate::platform::display_geometry::DisplayGeometry::bind(
                     geometry,
                 )?)
@@ -108,6 +117,8 @@ impl NativeInput {
             window,
             #[cfg(target_os = "linux")]
             window,
+            #[cfg(target_os = "windows")]
+            window,
             keys: HashSet::new(),
             buttons: HashSet::new(),
             wheel_x: 0.0,
@@ -120,6 +131,10 @@ impl NativeInput {
             return window.validate(self.geometry, point);
         }
         #[cfg(target_os = "linux")]
+        if let Some(window) = &self.window {
+            return window.validate(self.geometry, point);
+        }
+        #[cfg(target_os = "windows")]
         if let Some(window) = &self.window {
             return window.validate(self.geometry, point);
         }
@@ -136,6 +151,10 @@ impl NativeInput {
             window.focus()?;
         }
         #[cfg(target_os = "linux")]
+        if let Some(window) = &self.window {
+            window.focus()?;
+        }
+        #[cfg(target_os = "windows")]
         if let Some(window) = &self.window {
             window.focus()?;
         }
@@ -156,6 +175,16 @@ impl NativeInput {
         #[cfg(target_os = "linux")]
         if let Some(window) = &mut self.window {
             window.reconfigure(geometry)?;
+            self.geometry = geometry;
+            self.pointer_mapping = PointerMapping::from_geometry(geometry);
+            return Ok(());
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(window) = &self.window {
+            anyhow::ensure!(
+                window.geometry()? == geometry,
+                crate::error::BackendError::GeometryChanged
+            );
             self.geometry = geometry;
             self.pointer_mapping = PointerMapping::from_geometry(geometry);
             return Ok(());

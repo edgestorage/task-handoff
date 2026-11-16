@@ -12,10 +12,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 export const PACKAGE_PREFIX = "@task-handoff/remote-desktop";
 const EXECUTABLE = "bin/task-handoff-desktop-streaming";
-const PLATFORMS = new Set(["linux", "darwin"]);
+const PLATFORMS = new Set(["linux", "darwin", "win32"]);
 const ARCHES = new Set(["x64", "arm64"]);
-const COMPLETE_TARGETS = ["linux/x64", "linux/arm64", "darwin/x64", "darwin/arm64"];
+const COMPLETE_TARGETS = ["linux/x64", "linux/arm64", "darwin/x64", "darwin/arm64", "win32/x64"];
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+export function remoteDesktopExecutablePath(platform) {
+  if (!PLATFORMS.has(platform)) throw new Error(`Unsupported remote desktop package target: ${platform}`);
+  return `${EXECUTABLE}${platform === "win32" ? ".exe" : ""}`;
+}
 
 export function remoteDesktopPackageName(platform, arch) {
   if (!PLATFORMS.has(platform) || !ARCHES.has(arch)) throw new Error(`Unsupported remote desktop package target: ${platform}/${arch}`);
@@ -44,7 +49,14 @@ function exactVersion(value) {
 }
 
 function npmPack(packageDir, outputDir) {
-  const result = spawnSync("npm", ["pack", "--json", "--pack-destination", outputDir, packageDir], {
+  // Windows cannot spawn npm's .cmd shim without a shell. Launch the npm CLI
+  // with the current Node executable so paths stay argument-escaped.
+  const npmCli = process.platform === "win32"
+    ? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
+    : undefined;
+  const command = npmCli && fs.existsSync(npmCli) ? process.execPath : "npm";
+  const args = [...(npmCli && fs.existsSync(npmCli) ? [npmCli] : []), "pack", "--json", "--pack-destination", outputDir, packageDir];
+  const result = spawnSync(command, args, {
     cwd: root,
     env: { ...process.env, npm_config_cache: process.env.npm_config_cache || path.join(os.tmpdir(), "task-handoff-npm-cache") },
     encoding: "utf8",
@@ -62,6 +74,7 @@ export async function packRemoteDesktopPackage(options) {
   const platform = options.platform;
   const arch = options.arch;
   const name = remoteDesktopPackageName(platform, arch);
+  const executable = remoteDesktopExecutablePath(platform);
   const binary = path.resolve(options.binary);
   const outputDir = path.resolve(options.output);
   if (!fs.lstatSync(binary).isFile() || fs.lstatSync(binary).isSymbolicLink()) throw new Error(`Remote desktop binary is missing: ${binary}`);
@@ -70,8 +83,8 @@ export async function packRemoteDesktopPackage(options) {
   try {
     const packageDir = path.join(work, "package");
     await fsp.mkdir(path.join(packageDir, "bin"), { recursive: true });
-    await fsp.copyFile(binary, path.join(packageDir, EXECUTABLE));
-    await fsp.chmod(path.join(packageDir, EXECUTABLE), 0o755);
+    await fsp.copyFile(binary, path.join(packageDir, executable));
+    await fsp.chmod(path.join(packageDir, executable), 0o755);
     await fsp.writeFile(path.join(packageDir, "package.json"), `${JSON.stringify({
       name,
       version,
@@ -80,7 +93,7 @@ export async function packRemoteDesktopPackage(options) {
       repository: rootPackage.repository,
       os: [platform],
       cpu: [arch],
-      bin: { "task-handoff-desktop-streaming": EXECUTABLE },
+      bin: { "task-handoff-desktop-streaming": executable },
       files: ["bin", "README.md"],
       publishConfig: { access: "public" },
     }, null, 2)}\n`);
@@ -157,7 +170,7 @@ async function main() {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  throw new Error("Usage: remote-desktop-packages.mjs pack --version <v> --platform <linux|darwin> --arch <x64|arm64> --binary <path> --output <dir> | metadata [--complete] --input <dir> --output <file>");
+  throw new Error("Usage: remote-desktop-packages.mjs pack --version <v> --platform <linux|darwin|win32> --arch <x64|arm64> --binary <path> --output <dir> | metadata [--complete] --input <dir> --output <file>");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

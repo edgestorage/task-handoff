@@ -8,10 +8,11 @@ export function remoteDesktopCapabilities(instance: Pick<InstanceBoardItem, "cap
   const document = instance.capabilities as Record<string, unknown>;
   return controlledInstanceRemoteDesktopCapabilities(document);
 }
-/** UI rollout gate for the remote desktop component. Unknown platforms stay
- * visible so a new capability report cannot accidentally hide the feature. */
-export function remoteDesktopVisibleForPlatform(platform: string | null | undefined) {
-  return platform !== "win32";
+/** UI rollout gate for the remote desktop component. Windows now uses the same
+ * capability projection as macOS/Linux; unknown platforms stay visible so a new
+ * report cannot accidentally hide the feature. */
+export function remoteDesktopVisibleForPlatform(_platform: string | null | undefined) {
+  return true;
 }
 
 export function remoteDesktopAvailable(instance: Pick<InstanceBoardItem, "capabilities">) {

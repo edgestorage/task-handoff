@@ -92,12 +92,12 @@ struct Service {
     mode: crate::capture::Mode,
     show_cursor: bool,
     source_salt: String,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     catalog: Option<crate::platform::window::WindowCatalog>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     display_catalog: Option<crate::platform::display::DisplayCatalog>,
     pending_source: HashMap<String, crate::capture::Source>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     selected_source: HashMap<String, (String, crate::platform::display::SourceTarget)>,
     #[cfg(target_os = "linux")]
     surface: Option<crate::surface::Client>,
@@ -117,7 +117,11 @@ impl Service {
                 crate::capture::Mode::Local | crate::capture::Mode::Virtual
             )
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(target_os = "windows")]
+        {
+            mode == crate::capture::Mode::Local
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
             let _ = mode;
             false
@@ -130,7 +134,7 @@ impl Service {
         }
         Ok(())
     }
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     async fn source_catalogs(
         &mut self,
     ) -> anyhow::Result<(
@@ -170,6 +174,16 @@ impl Service {
                 self.display_catalog =
                     Some(crate::platform::display::DisplayCatalog::with_source_salt(
                         config,
+                        self.source_salt.clone(),
+                    ));
+            }
+            #[cfg(target_os = "windows")]
+            {
+                self.catalog = Some(crate::platform::window::WindowCatalog::with_source_salt(
+                    self.source_salt.clone(),
+                ));
+                self.display_catalog =
+                    Some(crate::platform::display::DisplayCatalog::with_source_salt(
                         self.source_salt.clone(),
                     ));
             }
@@ -218,7 +232,7 @@ impl Service {
     async fn effects(&mut self, id: &str, effects: Effects) {
         if effects.close_peer {
             self.pending_source.remove(id);
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             {
                 self.selected_source.remove(id);
             }
@@ -618,7 +632,7 @@ impl Service {
             Command::ListSources { owner } => {
                 // Enumeration is an on-demand catalog read, not a viewer
                 // reservation. Active viewers may need it to switch scope.
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                 {
                     let (windows, displays) = match self.source_catalogs().await {
                         Ok(catalogs) => catalogs,
@@ -685,7 +699,7 @@ impl Service {
                     } => Some(viewer_session_id.as_str()),
                     _ => None,
                 };
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                 let prepared = if self.mode == crate::capture::Mode::Control {
                     None
                 } else if self.mode == crate::capture::Mode::Synthetic {
@@ -753,7 +767,7 @@ impl Service {
                     replacement,
                     now
                 ));
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                 if let Some((target, source)) = prepared {
                     if let Some(target) = target {
                         self.selected_source.insert(
@@ -848,6 +862,16 @@ impl Service {
                                     authority: authority.clone(),
                                 },
                             )
+                            .unwrap_or(backend),
+                        _ => backend,
+                    };
+                    #[cfg(target_os = "windows")]
+                    let backend = match &source {
+                        crate::capture::Source::Native(c) => c
+                            .window_input()
+                            .map(|(identity, geometry)| {
+                                crate::input_guard::Backend::WindowsWindow { identity, geometry }
+                            })
                             .unwrap_or(backend),
                         _ => backend,
                     };
@@ -2233,12 +2257,12 @@ pub async fn serve_mode_with_cursor_and_source_salt(
         mode,
         show_cursor,
         source_salt: source_salt.unwrap_or_else(crate::session::secret),
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         catalog: None,
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         display_catalog: None,
         pending_source: HashMap::new(),
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         selected_source: HashMap::new(),
         #[cfg(target_os = "linux")]
         surface: None,
@@ -2593,11 +2617,11 @@ mod tests {
             mode: crate::capture::Mode::Synthetic,
             show_cursor: true,
             source_salt: crate::session::secret(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
             pending_source: HashMap::new(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             selected_source: HashMap::new(),
             #[cfg(target_os = "linux")]
             surface: None,
@@ -2702,11 +2726,11 @@ mod tests {
             mode: crate::capture::Mode::Synthetic,
             show_cursor: true,
             source_salt: crate::session::secret(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
             pending_source: HashMap::new(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             selected_source: HashMap::new(),
             #[cfg(target_os = "linux")]
             surface: None,
@@ -2807,11 +2831,11 @@ mod tests {
             mode: crate::capture::Mode::Control,
             show_cursor: true,
             source_salt: crate::session::secret(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
             pending_source: HashMap::new(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             selected_source: HashMap::new(),
             #[cfg(target_os = "linux")]
             surface: None,
@@ -2860,11 +2884,11 @@ mod tests {
             mode: crate::capture::Mode::Control,
             show_cursor: true,
             source_salt: crate::session::secret(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
             pending_source: HashMap::new(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             selected_source: HashMap::new(),
             #[cfg(target_os = "linux")]
             surface: None,
@@ -2944,11 +2968,11 @@ mod tests {
             mode: crate::capture::Mode::Synthetic,
             show_cursor: true,
             source_salt: crate::session::secret(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
             pending_source: HashMap::new(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             selected_source: HashMap::new(),
             #[cfg(target_os = "linux")]
             surface: None,

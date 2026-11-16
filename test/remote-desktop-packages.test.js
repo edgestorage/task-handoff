@@ -20,11 +20,17 @@ test('remote desktop npm packages use their component version, preserve the bina
  assert.equal(packed.metadata.integrity,`sha512-${crypto.createHash('sha512').update(fs.readFileSync(packed.archive)).digest('base64')}`);
  const entries=[];let manifestSource='';await tar.list({file:packed.archive,onReadEntry:entry=>{entries.push([entry.path,entry.mode]);if(entry.path==='package/package.json')entry.on('data',chunk=>{manifestSource+=chunk});}});
  const executable=entries.find(([name])=>name==='package/bin/task-handoff-desktop-streaming');
- assert.ok(executable);assert.ok((executable[1]&0o111)!==0);
+ assert.ok(executable);if(process.platform!=='win32')assert.ok((executable[1]&0o111)!==0);
  const packageManifest=JSON.parse(manifestSource);
  assert.deepEqual(packageManifest.repository,require('../package.json').repository);
+ const windowsBinary=path.join(dir,'task-handoff-desktop-streaming.exe');fs.writeFileSync(windowsBinary,'MZ test binary',{mode:0o700});
+ const windowsPacked=await packRemoteDesktopPackage({version,platform:'win32',arch:'x64',binary:windowsBinary,output});
+ assert.equal(windowsPacked.metadata.package,'@task-handoff/remote-desktop-win32-x64');
+ const windowsEntries=[];let windowsManifestSource='';await tar.list({file:windowsPacked.archive,onReadEntry:entry=>{windowsEntries.push(entry.path);if(entry.path==='package/package.json')entry.on('data',chunk=>{windowsManifestSource+=chunk});}});
+ assert.ok(windowsEntries.includes('package/bin/task-handoff-desktop-streaming.exe'));
+ assert.equal(JSON.parse(windowsManifestSource).bin['task-handoff-desktop-streaming'],'bin/task-handoff-desktop-streaming.exe');
  const manifest=await collectRemoteDesktopPackages(output,path.join(dir,'metadata.json'));
- assert.deepEqual(manifest.packages,[packed.metadata]);
+ assert.deepEqual(manifest.packages,[packed.metadata,windowsPacked.metadata]);
  await assert.rejects(()=>collectRemoteDesktopPackages(output,path.join(dir,'complete.json'),{complete:true}),/incomplete/i);
  await assert.rejects(()=>packRemoteDesktopPackage({version:'1.2',platform:'linux',arch:'arm64',binary,output}),/semver/i);
 });
@@ -34,7 +40,7 @@ test('npm is used for distribution while the native installer only downloads ver
  const script=fs.readFileSync(path.join(root,'scripts','remote-desktop-packages.mjs'),'utf8');
  const resolver=fs.readFileSync(path.join(root,'packages','app-runtime','src','registry-native-package.ts'),'utf8');
  const executor=fs.readFileSync(path.join(root,'packages','controlled-instance','src','web','app-recipe-executor.ts'),'utf8');
- assert.match(script,/npm", \["pack"/);
+ assert.match(script,/"pack", "--json"/);
  assert.doesNotMatch(resolver,/spawn|execFile|npm (?:install|pack)/);
  assert.doesNotMatch(executor,/executeNativePackage[\s\S]{0,4000}npm (?:install|pack)/);
  assert.match(executor,/if \(recipe\.tarballUrl\)/);

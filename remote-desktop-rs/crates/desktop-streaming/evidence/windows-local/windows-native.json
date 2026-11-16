@@ -1,0 +1,21 @@
+﻿{
+    "result":  "passed",
+    "command":  "cargo +1.95.0-x86_64-pc-windows-gnu test -q --manifest-path remote-desktop-rs/Cargo.toml -p desktop-streaming --test windows_native -- --ignored --nocapture",
+    "summary":  "3 passed; 0 failed; 0 ignored",
+    "durationSeconds":  1.74,
+    "rawOutput":  "..display capture ok: sources=1 geometry=1280x800 frame=1280x800 cursor=true\n.",
+    "tests":  [
+                  {
+                      "name":  "display_catalog_and_wgc_capture_emit_real_frames",
+                      "covers":  "display catalog, native display WGC frame, BGRA geometry, non-zero pixels, pause and input preparation"
+                  },
+                  {
+                      "name":  "wgc_window_catalog_capture_and_input_lease_share_geometry",
+                      "covers":  "owned fixture publication, native window WGC frame, DWM geometry, AttachThreadInput foreground activation, pointer hit validation, native click delivery and same-geometry input lease"
+                  },
+                  {
+                      "name":  "direct_wgc_emits_frames_for_a_visible_owned_window",
+                      "covers":  "direct WindowTarget WGC frame path for a visible owned window"
+                  }
+              ]
+}

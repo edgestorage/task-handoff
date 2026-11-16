@@ -1,0 +1,25 @@
+﻿{
+    "result":  "passed",
+    "command":  "cargo +1.95.0-x86_64-pc-windows-gnu test -q --manifest-path remote-desktop-rs/Cargo.toml -p desktop-streaming --lib -- --ignored --nocapture",
+    "summary":  "1 passed; 0 failed; 0 ignored",
+    "tests":  [
+                  {
+                      "name":  "private_desktop_is_rejected_like_a_secure_desktop",
+                      "expectedError":  "REMOTE_DESKTOP_DESKTOP_UNAVAILABLE",
+                      "result":  "passed"
+                  },
+                  {
+                      "name":  "session_zero_and_disconnected_states_are_not_interactive",
+                      "result":  "passed"
+                  }
+              ],
+    "enforcedChecks":  [
+                           "current process session must be non-zero",
+                           "WTSQuerySessionInformation state must equal WTSActive",
+                           "a window-owner PID must resolve to the current process session",
+                           "OpenInputDesktop must open and its name must match the current thread desktop",
+                           "no SetThreadDesktop or cross-session switch is performed by the product path"
+                       ],
+    "limitations":  "An actual lock/RDP-disconnect transition was not triggered on the working host. The private-desktop test exercises the same fail-closed boundary and proves no input injection or desktop switch occurs. Remote unlock of a locked/secure desktop is not supported or claimed.",
+    "rawOutput":  "running 1 test\n.\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s"
+}

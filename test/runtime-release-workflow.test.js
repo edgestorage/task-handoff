@@ -84,16 +84,17 @@ test("remote desktop components publish independently from runtime releases", ()
   assert.match(workflow, /^\s+needs: \[verify, packages\]$/m);
   assert.match(workflow, /^\s+needs: \[verify, complete-set\]$/m);
   assert.match(workflow, /metadata --complete/);
-  assert.match(workflow, /packages\.length !== 4/);
+  assert.match(workflow, /packages\.length !== 5/);
   assert.match(workflow, /--tag remote-desktop-staging/);
   assert.match(workflow, /npm dist-tag add "\$package@\$version" latest/);
   assert.match(workflow, /gh release create "\$RELEASE_TAG"/);
   assert.match(workflow, /node scripts\/sync-npmmirror\.mjs/);
   assert.match(workflow, /runner: macos-26-intel\s+platform: darwin\s+arch: x64/);
   assert.match(workflow, /runner: macos-26\s+platform: darwin\s+arch: arm64/);
+  assert.match(workflow, /runner: windows-latest\s+platform: win32\s+arch: x64/);
   assert.doesNotMatch(workflow, /runner: macos-15(?:-intel)?\s/);
   const normalized = workflow.toLowerCase();
-  assert.ok(normalized.indexOf("publish all four packages") < normalized.indexOf("promote latest only after every target is published"));
+  assert.ok(normalized.indexOf("publish all five packages") < normalized.indexOf("promote latest only after every target is published"));
   assert.ok(normalized.indexOf("promote latest only after every target is published") < normalized.indexOf("publish the independent github release"));
 });
 

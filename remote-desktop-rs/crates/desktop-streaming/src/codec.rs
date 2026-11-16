@@ -54,13 +54,13 @@ impl VideoCodec {
 /// VideoToolbox proves hardware HEVC encoding is available; otherwise the
 /// MediaEngine and capability document would promise a bitstream we cannot send.
 pub fn local_video_codecs() -> Vec<VideoCodec> {
-    let mut codecs = Vec::new();
     #[cfg(target_os = "macos")]
-    if crate::platform::macos_encoder::hevc_supported() {
-        codecs.push(VideoCodec::H265);
+    {
+        if crate::platform::macos_encoder::hevc_supported() {
+            return vec![VideoCodec::H265, VideoCodec::H264];
+        }
     }
-    codecs.push(VideoCodec::H264);
-    codecs
+    vec![VideoCodec::H264]
 }
 
 /// Local WebRTC ceiling. A 4K30 H.264 stream fits level 5.1 without exceeding

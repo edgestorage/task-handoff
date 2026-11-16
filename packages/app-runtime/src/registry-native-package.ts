@@ -10,7 +10,7 @@ import type {
 const NPM_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]{0,99}\/)?[a-z0-9][a-z0-9._-]{0,99}$/i;
 const NPM_DIST_TAG = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 const EXACT_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-const SUPPORTED_PLATFORMS = new Set<ManagedAppRecipePlatform>(["linux", "darwin"]);
+const SUPPORTED_PLATFORMS = new Set<ManagedAppRecipePlatform>(["linux", "darwin", "win32"]);
 const SUPPORTED_ARCHES = new Set<ManagedAppRecipeArch>(["x64", "arm64"]);
 const DEFAULT_REGISTRIES = ["https://registry.npmjs.org", "https://registry.npmmirror.com"];
 const DEFAULT_TIMEOUT_MS = 8_000;

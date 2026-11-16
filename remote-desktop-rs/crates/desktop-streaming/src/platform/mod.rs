@@ -11,10 +11,12 @@ pub mod windows_access;
 #[cfg(target_os = "windows")]
 pub mod windows_job;
 #[cfg(target_os = "windows")]
+pub mod windows_window;
+#[cfg(target_os = "windows")]
 pub use apple_windows as native_capture;
 #[cfg(target_os = "macos")]
 pub use macos as native_capture;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub mod display;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod display_geometry;
@@ -30,7 +32,7 @@ pub mod macos_encoder;
 #[cfg(target_os = "macos")]
 pub mod macos_window;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub mod window;
 
 #[cfg(target_os = "linux")]

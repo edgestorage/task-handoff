@@ -10,6 +10,16 @@ use crabgrab::{
     prelude::*,
 };
 use std::sync::Arc;
+
+pub fn preflight() -> anyhow::Result<()> {
+    crate::platform::windows_access::prepare_dpi()?;
+    crate::platform::windows_access::check()?;
+    anyhow::ensure!(
+        CaptureStream::test_access(false).is_some(),
+        BackendError::ScreenPermissionRequired
+    );
+    Ok(())
+}
 #[derive(Clone)]
 pub enum Target {
     Display(CapturableDisplay),
@@ -27,15 +37,7 @@ impl DisplayTarget {
 }
 pub async fn enumerate_displays() -> anyhow::Result<Vec<crate::catalog::NativeSource<DisplayTarget>>>
 {
-    #[cfg(target_os = "windows")]
-    {
-        crate::platform::windows_access::prepare_dpi()?;
-        crate::platform::windows_access::check()?;
-    }
-    anyhow::ensure!(
-        CaptureStream::test_access(false).is_some(),
-        BackendError::ScreenPermissionRequired
-    );
+    preflight()?;
     let content = CapturableContent::new(CapturableContentFilter::DISPLAYS)
         .await
         .map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))?;
@@ -74,21 +76,14 @@ pub struct Capture {
     precision: CapturePrecision,
     display_geometry: Option<super::display_geometry::DisplayGeometry>,
     pixel_size: Option<(usize, usize)>,
+    window_input: Option<super::windows_window::Identity>,
 }
 impl Capture {
     pub async fn primary_display() -> anyhow::Result<Self> {
         Self::primary_display_with_cursor(true).await
     }
     pub async fn primary_display_with_cursor(show_cursor: bool) -> anyhow::Result<Self> {
-        #[cfg(target_os = "windows")]
-        {
-            crate::platform::windows_access::prepare_dpi()?;
-            crate::platform::windows_access::check()?;
-        }
-        anyhow::ensure!(
-            CaptureStream::test_access(false).is_some(),
-            BackendError::ScreenPermissionRequired
-        );
+        preflight()?;
         let content = CapturableContent::new(CapturableContentFilter::DISPLAYS)
             .await
             .map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))?;
@@ -102,33 +97,34 @@ impl Capture {
         Self::new_with_cursor(target, true)
     }
     pub fn new_with_cursor(target: Target, show_cursor: bool) -> anyhow::Result<Self> {
-        #[cfg(target_os = "windows")]
-        {
-            crate::platform::windows_access::prepare_dpi()?;
-            crate::platform::windows_access::check()?;
-        }
+        preflight()?;
         let retained_target = target.clone();
         let display_target = matches!(&target, Target::Display(_));
-        let (rect, config) = match target {
-            Target::Display(d) => (
-                d.rect(),
-                CaptureConfig::with_display(d, CapturePixelFormat::Bgra8888),
-            ),
+        let (config, geometry, window_input) = match target {
+            Target::Display(d) => {
+                let rect = d.rect();
+                (
+                    CaptureConfig::with_display(d, CapturePixelFormat::Bgra8888),
+                    Geometry::from_actuator_rect(
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.width,
+                        rect.size.height,
+                    )?,
+                    None,
+                )
+            }
             Target::Window(w) => {
                 anyhow::ensure!(w.is_visible(), BackendError::WindowUnavailable);
+                let identity = super::native_catalog::identity(&w)?;
                 (
-                    w.rect(),
                     CaptureConfig::with_window(w, CapturePixelFormat::Bgra8888)
                         .map_err(|_| anyhow::anyhow!(BackendError::WindowUnavailable))?,
+                    super::windows_window::geometry(identity)?,
+                    Some(identity),
                 )
             }
         };
-        let geometry = Geometry::from_actuator_rect(
-            rect.origin.x,
-            rect.origin.y,
-            rect.size.width,
-            rect.size.height,
-        )?;
         let display_geometry = display_target
             .then(|| super::display_geometry::DisplayGeometry::bind(geometry))
             .transpose()?;
@@ -150,7 +146,11 @@ impl Capture {
             precision,
             display_geometry,
             pixel_size: None,
+            window_input,
         })
+    }
+    pub fn window_input(&self) -> Option<(super::windows_window::Identity, Geometry)> {
+        self.window_input.map(|identity| (identity, self.geometry))
     }
     pub fn geometry(&self) -> Geometry {
         self.geometry
@@ -184,19 +184,24 @@ impl Capture {
         if let Some(display) = &self.display_geometry {
             display.validate()?;
         }
-        let rect = match &self.target {
-            Target::Display(display) => display.rect(),
+        let geometry = match &self.target {
+            Target::Display(display) => {
+                let rect = display.rect();
+                Geometry::from_actuator_rect(
+                    rect.origin.x,
+                    rect.origin.y,
+                    rect.size.width,
+                    rect.size.height,
+                )?
+            }
             Target::Window(window) => {
                 anyhow::ensure!(window.is_visible(), BackendError::WindowUnavailable);
-                window.rect()
+                let identity = self
+                    .window_input
+                    .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?;
+                super::windows_window::geometry(identity)?
             }
         };
-        let geometry = Geometry::from_actuator_rect(
-            rect.origin.x,
-            rect.origin.y,
-            rect.size.width,
-            rect.size.height,
-        )?;
         let next_capture_size = capture_size_for(&self.target, self.precision)?;
         if geometry != self.geometry || next_capture_size != self.capture_size {
             self.pause()?;
@@ -313,12 +318,18 @@ fn logical_scale_for_rect(rect: crabgrab::prelude::Rect) -> f64 {
 }
 
 fn capture_size_for(target: &Target, precision: CapturePrecision) -> anyhow::Result<(u32, u32)> {
-    let rect = match target {
-        Target::Display(display) => display.rect(),
-        Target::Window(window) => window.rect(),
+    let (width, height, rect) = match target {
+        Target::Display(display) => {
+            let rect = display.rect();
+            (rect.size.width.round(), rect.size.height.round(), rect)
+        }
+        Target::Window(window) => {
+            anyhow::ensure!(window.is_visible(), BackendError::WindowUnavailable);
+            let identity = super::native_catalog::identity(window)?;
+            let geometry = super::windows_window::geometry(identity)?;
+            (geometry.width as f64, geometry.height as f64, window.rect())
+        }
     };
-    let width = rect.size.width.round();
-    let height = rect.size.height.round();
     anyhow::ensure!(width >= 1.0 && height >= 1.0, BackendError::InvalidGeometry);
     // Per-monitor DPI aware V2 exposes WGC rectangles in physical pixels.
     // Performance mode divides that native size by the monitor scale, while

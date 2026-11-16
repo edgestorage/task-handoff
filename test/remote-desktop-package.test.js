@@ -9,41 +9,42 @@ require.extensions['.ts']=(module,filename)=>module._compile(ts.transpileModule(
 const {readManagedDesktopPackage,removeLegacyManagedDesktopPackage}=require('../packages/app-runtime/src/managed-app-definitions/remote-desktop/index.ts');
 const {DesktopSettings}=require('../packages/controlled-instance/src/remote-desktop/settings.ts');
 const integrity=`sha512-${Buffer.alloc(64,1).toString('base64')}`;
+const executable=process.platform==='win32'?'bin/task-handoff-desktop-streaming.exe':'bin/task-handoff-desktop-streaming';
 function root(t){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-package-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  return {dir,base:path.join(dir,'apps'),state:path.join(dir,'state')};
 }
 function nativeFixture(t){
- const f=root(t),installRoot=path.join(f.base,'native','remote-desktop'),binary=path.join(installRoot,'bin/task-handoff-desktop-streaming'),manifest=path.join(installRoot,'managed-app.json');
+ const f=root(t),installRoot=path.join(f.base,'native','remote-desktop'),binary=path.join(installRoot,executable),manifest=path.join(installRoot,'managed-app.json');
  fs.mkdirSync(path.dirname(binary),{recursive:true});fs.writeFileSync(binary,'test-only',{mode:0o700});
- const record={schemaVersion:1,appId:'remote-desktop',version:'1',package:'@task-handoff/remote-desktop-linux-x64',packageVersion:'1',integrity,installRoot,launchPath:'bin/task-handoff-desktop-streaming',files:['bin/task-handoff-desktop-streaming','managed-app.json']};
+ const record={schemaVersion:1,appId:'remote-desktop',version:'1',package:'@task-handoff/remote-desktop-linux-x64',packageVersion:'1',integrity,installRoot,launchPath:executable,files:[executable,'managed-app.json']};
  fs.writeFileSync(manifest,JSON.stringify(record));
  return {...f,installRoot,binary,manifest,record};
 }
 function archiveFixture(t){
  const f=root(t),installRoot=path.join(f.base,'remote-desktop'),state=path.join(f.dir,'state'),manifest=path.join(state,'manifests','remote-desktop.json');
  fs.mkdirSync(path.join(installRoot,'bin'),{recursive:true});fs.mkdirSync(path.dirname(manifest),{recursive:true});
- const binary=path.join(installRoot,'bin/task-handoff-desktop-streaming'),metadata=path.join(installRoot,'desktop-component.json');
+ const binary=path.join(installRoot,executable),metadata=path.join(installRoot,'desktop-component.json');
  fs.writeFileSync(binary,'test-only',{mode:0o700});fs.writeFileSync(metadata,JSON.stringify({version:'legacy',future:true}));
- const record={appId:'remote-desktop',installRoot,files:['bin/task-handoff-desktop-streaming','desktop-component.json']};fs.writeFileSync(manifest,JSON.stringify(record));
+ const record={appId:'remote-desktop',installRoot,files:[executable,'desktop-component.json']};fs.writeFileSync(manifest,JSON.stringify(record));
  return {...f,installRoot,manifest,binary,metadata,record};
 }
 test('native package resolver owns only its manifest launcher and executable file',t=>{
  const f=nativeFixture(t);assert.deepEqual(readManagedDesktopPackage(f.base,f.state),{binary:f.binary,version:'1'});
  fs.writeFileSync(f.manifest,JSON.stringify({...f.record,launchPath:'bin/../../outside'}));assert.throws(()=>readManagedDesktopPackage(f.base,f.state),/PACKAGE_INVALID/);
- fs.writeFileSync(f.manifest,JSON.stringify(f.record));fs.chmodSync(f.binary,0o600);assert.throws(()=>readManagedDesktopPackage(f.base,f.state),/PACKAGE_INVALID/);
+ fs.writeFileSync(f.manifest,JSON.stringify(f.record));if(process.platform!=='win32'){fs.chmodSync(f.binary,0o600);assert.throws(()=>readManagedDesktopPackage(f.base,f.state),/PACKAGE_INVALID/);}
 });
 test('legacy archive remains usable and is replaced by a complete native package without deleting unowned files',t=>{
  const f=archiveFixture(t);assert.deepEqual(readManagedDesktopPackage(f.base,f.state),{binary:f.binary,version:'legacy'});
  fs.writeFileSync(path.join(f.installRoot,'user.txt'),'preserved');
- const nativeRoot=path.join(f.base,'native','remote-desktop'),binary=path.join(nativeRoot,'bin/task-handoff-desktop-streaming'),manifest=path.join(nativeRoot,'managed-app.json');
+ const nativeRoot=path.join(f.base,'native','remote-desktop'),binary=path.join(nativeRoot,executable),manifest=path.join(nativeRoot,'managed-app.json');
  fs.mkdirSync(path.dirname(binary),{recursive:true});fs.writeFileSync(binary,'native',{mode:0o700});
- fs.writeFileSync(manifest,JSON.stringify({...f.record,schemaVersion:1,version:'2',package:'@task-handoff/remote-desktop-linux-x64',packageVersion:'2',integrity,installRoot:nativeRoot,launchPath:'bin/task-handoff-desktop-streaming',files:['bin/task-handoff-desktop-streaming','managed-app.json']}));
+ fs.writeFileSync(manifest,JSON.stringify({...f.record,schemaVersion:1,version:'2',package:'@task-handoff/remote-desktop-linux-x64',packageVersion:'2',integrity,installRoot:nativeRoot,launchPath:executable,files:[executable,'managed-app.json']}));
  assert.deepEqual(readManagedDesktopPackage(f.base,f.state),{binary,version:'2'});
  assert.equal(removeLegacyManagedDesktopPackage(f.base,f.state),true);
  assert.equal(fs.existsSync(f.binary),false);assert.equal(fs.existsSync(f.metadata),false);assert.equal(fs.existsSync(f.manifest),false);assert.equal(fs.readFileSync(path.join(f.installRoot,'user.txt'),'utf8'),'preserved');
 });
-test('desktop package resolver rejects symlinks and incomplete archive transactions even with no live root',t=>{
+test('desktop package resolver rejects symlinks and incomplete archive transactions even with no live root',{skip:process.platform==='win32'},t=>{
  const f=archiveFixture(t);fs.renameSync(f.binary,path.join(f.dir,'external'));fs.symlinkSync(path.join(f.dir,'external'),f.binary);
  assert.throws(()=>readManagedDesktopPackage(f.base,f.state),/PACKAGE_INVALID/);
  fs.rmSync(f.installRoot,{recursive:true});fs.rmSync(f.manifest);assert.equal(readManagedDesktopPackage(f.base,f.state),undefined);

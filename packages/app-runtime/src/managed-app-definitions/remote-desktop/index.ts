@@ -10,7 +10,11 @@ import {
 import type { ManagedAppProvider } from "../types";
 
 export const DESKTOP_COMPONENT_APP_ID = "remote-desktop";
-export const DESKTOP_COMPONENT_EXECUTABLE = "bin/task-handoff-desktop-streaming";
+const DESKTOP_COMPONENT_UNIX_EXECUTABLE = "bin/task-handoff-desktop-streaming";
+const DESKTOP_COMPONENT_WINDOWS_EXECUTABLE = `${DESKTOP_COMPONENT_UNIX_EXECUTABLE}.exe`;
+export const DESKTOP_COMPONENT_EXECUTABLE = process.platform === "win32"
+  ? DESKTOP_COMPONENT_WINDOWS_EXECUTABLE
+  : DESKTOP_COMPONENT_UNIX_EXECUTABLE;
 export const DESKTOP_COMPONENT_PACKAGE_PREFIX = "@task-handoff/remote-desktop";
 
 /** The component release train is independent from the controlled-instance version. */
@@ -36,7 +40,7 @@ export function desktopProvider(): ManagedAppProvider {
             libc: "gnu" as const,
             privilege: "user" as const,
             packagePrefix: DESKTOP_COMPONENT_PACKAGE_PREFIX,
-            launchPath: DESKTOP_COMPONENT_EXECUTABLE,
+            launchPath: DESKTOP_COMPONENT_UNIX_EXECUTABLE,
           },
           {
             type: "registry-native-package" as const,
@@ -44,11 +48,19 @@ export function desktopProvider(): ManagedAppProvider {
             arches: ["x64" as const, "arm64" as const],
             privilege: "user" as const,
             packagePrefix: DESKTOP_COMPONENT_PACKAGE_PREFIX,
-            launchPath: DESKTOP_COMPONENT_EXECUTABLE,
+            launchPath: DESKTOP_COMPONENT_UNIX_EXECUTABLE,
+          },
+          {
+            type: "registry-native-package" as const,
+            platforms: ["win32" as const],
+            arches: ["x64" as const],
+            privilege: "user" as const,
+            packagePrefix: DESKTOP_COMPONENT_PACKAGE_PREFIX,
+            launchPath: DESKTOP_COMPONENT_WINDOWS_EXECUTABLE,
           },
           {
             type: "archive-ownership" as const,
-            platforms: ["linux" as const, "darwin" as const],
+            platforms: ["linux" as const, "darwin" as const, "win32" as const],
             arches: ["x64" as const, "arm64" as const],
             privilege: "user" as const,
             installRoot: DESKTOP_COMPONENT_APP_ID,
