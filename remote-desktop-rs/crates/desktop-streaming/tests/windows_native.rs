@@ -443,6 +443,102 @@ async fn wgc_window_catalog_capture_and_input_lease_share_geometry() -> anyhow::
 }
 
 #[tokio::test]
+#[ignore = "requires an active WTS desktop and owns a visible resizable window"]
+async fn wgc_window_resize_rebinds_input_geometry() -> anyhow::Result<()> {
+    const SW_MAXIMIZE: i32 = 3;
+    const SW_RESTORE: i32 = 9;
+
+    let _desktop = DESKTOP_FIXTURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let title = "TaskHandoff disposable WGC resize";
+    let fixture = Fixture::new(title)?;
+    pump_messages(Duration::from_millis(150));
+
+    let owner = Owner {
+        actor_id: "windows-resize-test".into(),
+        device_session_id: "owned-resize".into(),
+    };
+    let mut catalog = WindowCatalog::with_source_salt("windows-resize-test-salt".into());
+    let sources = catalog.enumerate(owner.clone()).await?;
+    let source = sources
+        .iter()
+        .find(|source| source.kind == "window" && source.title == title)
+        .ok_or_else(|| anyhow::anyhow!("resize fixture was not published"))?;
+    let target = catalog.consume(&source.source_ref, &owner).await?;
+    let WindowTarget::Windows(window) = target;
+    let identity = native_catalog::identity(&window)?;
+    let mut capture = Capture::new_with_cursor(Target::Window(window), true)?;
+    let mut previous = capture.geometry();
+    let mut lease = windows_window::Lease::bind(identity, previous)?;
+
+    for (transition, command, resize) in [
+        ("maximize", SW_MAXIMIZE, None),
+        ("restore", SW_RESTORE, None),
+        ("resize", 0, Some((640, 420))),
+    ] {
+        match resize {
+            Some((width, height)) => unsafe {
+                SetWindowPos(
+                    fixture.0,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    width,
+                    height,
+                    SWP_NOMOVE | SWP_NOACTIVATE,
+                );
+            },
+            None => unsafe {
+                ShowWindow(fixture.0, command);
+            },
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let refreshed = loop {
+            pump_messages(Duration::from_millis(40));
+            let observed = windows_window::geometry(identity)?;
+            if observed != previous {
+                break observed;
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "window geometry did not change during {transition}"
+            );
+        };
+        let capture_geometry = capture.refresh_geometry()?;
+        anyhow::ensure!(
+            capture_geometry == refreshed,
+            "{transition}: capture geometry {capture_geometry:?} disagrees with native geometry {refreshed:?}"
+        );
+        lease.reconfigure(refreshed)?;
+        lease.focus()?;
+        lease.validate(refreshed, None)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            pump_messages(Duration::from_millis(20));
+            if let Some(frame) = capture.frame(true)? {
+                anyhow::ensure!(
+                    frame.geometry.width > 0 && frame.geometry.height > 0,
+                    "{transition}: empty frame"
+                );
+                println!(
+                    "{transition}: geometry={refreshed:?} frame={}x{}",
+                    frame.geometry.width, frame.geometry.height
+                );
+                break;
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "{transition}: WGC emitted no frame after resize"
+            );
+        }
+        previous = refreshed;
+        println!("{transition}: geometry={refreshed:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "requires an active WTS desktop and owns a visible popup window"]
 async fn wgc_window_capture_includes_owned_popup_windows() -> anyhow::Result<()> {
     let _desktop = DESKTOP_FIXTURE

@@ -2701,7 +2701,7 @@ function handleControlValue(value: any, channel = "control") {
   rememberRemoteDesktopFrame({ direction: "receive", channel, type, sequence: inboundSequence, bytes: new TextEncoder().encode(JSON.stringify(value)).byteLength });
   recordRemoteDesktopDiagnostic("control.message", { channel, controlType: type, inboundSequence });
   if (value.type === "input.resumed") {
-    if (props.preview || surfacePaused()) {
+    if (props.preview || surfacePaused() || !inputRequested.value) {
       const control = controlChannel();
       if (control) wire(control, "input.suspend");
       releaseInputState();
@@ -3083,6 +3083,7 @@ function primaryInputAction() {
 
 function toggleInputEnabled() {
   if (inputRequested.value) {
+    recordRemoteDesktopDiagnostic("input.local.suspend", { reason: "user" });
     inputRequested.value = false;
     inputResumeGeneration += 1;
     suspend();
@@ -3278,6 +3279,7 @@ function stopPointerMove() {
 function surfaceBlur(event: FocusEvent) {
   const next = event.relatedTarget;
   if (next instanceof Node && viewer.value?.contains(next)) return;
+  recordRemoteDesktopDiagnostic("input.local.suspend", { reason: "surface-blur" });
   suspend();
 }
 
@@ -3300,6 +3302,7 @@ function windowFocus() {
 }
 
 function windowBlur() {
+  recordRemoteDesktopDiagnostic("input.local.suspend", { reason: "window-blur" });
   suspend();
 }
 
@@ -3337,6 +3340,7 @@ function updateResolution() {
 
 function visibility() {
   documentVisible.value = document.visibilityState !== "hidden";
+  if (!documentVisible.value) recordRemoteDesktopDiagnostic("input.local.suspend", { reason: "document-hidden" });
   syncVisibility();
 }
 

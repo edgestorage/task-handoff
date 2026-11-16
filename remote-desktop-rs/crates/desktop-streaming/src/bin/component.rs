@@ -3,7 +3,7 @@ use desktop_streaming::{
     contract::{Hello, IPC_VERSION},
     framing,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::{path::PathBuf, time::Duration};
@@ -32,6 +32,42 @@ fn redirect_stderr_to_instance_log() {
     }
 }
 
+#[cfg(windows)]
+fn redirect_stderr_to_instance_log() {
+    use std::os::windows::io::AsRawHandle;
+
+    const STD_ERROR_HANDLE: u32 = (-12i32) as u32;
+    const HANDLE_FLAG_INHERIT: u32 = 1;
+
+    unsafe extern "system" {
+        fn SetStdHandle(std_handle: u32, handle: *mut core::ffi::c_void) -> i32;
+        fn SetHandleInformation(object: *mut core::ffi::c_void, mask: u32, flags: u32) -> i32;
+    }
+
+    let Some(log_dir) = std::env::var_os("TASK_HANDOFF_LOG_DIR") else {
+        return;
+    };
+    let path = PathBuf::from(log_dir).join("controlled-instance.err.log");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+    let handle = file.as_raw_handle().cast::<core::ffi::c_void>();
+    // Safety: the append-only handle is intentionally leaked for the process
+    // lifetime and marked inheritable so the input guard writes to the same
+    // instance log. SetStdHandle runs before the first stderr access.
+    unsafe {
+        SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        SetStdHandle(STD_ERROR_HANDLE, handle);
+    }
+    std::mem::forget(file);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn redirect_stderr_to_instance_log() {}
+
 fn main() -> anyhow::Result<()> {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--version")) {
         anyhow::ensure!(
@@ -41,7 +77,6 @@ fn main() -> anyhow::Result<()> {
         println!("{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    #[cfg(unix)]
     redirect_stderr_to_instance_log();
     #[cfg(target_os = "macos")]
     if std::env::args_os().nth(1).as_deref()

@@ -299,6 +299,15 @@ impl Lease {
         self.native.geometry()
     }
 
+    pub fn reconfigure(&mut self, geometry: Geometry) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            native_geometry(self.native.identity)? == geometry,
+            BackendError::GeometryChanged
+        );
+        self.native.geometry = geometry;
+        Ok(())
+    }
+
     pub fn focus(&self) -> anyhow::Result<Geometry> {
         self.native.focus()
     }
