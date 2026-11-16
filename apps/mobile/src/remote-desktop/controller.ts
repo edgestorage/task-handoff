@@ -635,6 +635,7 @@ export class RemoteDesktopController {
           if (!this.current(epoch)) return;
           diagnosticLog.info('remote.desktop.signal.ready');
           this.update({ signalingReady: true });
+          this.sendVisibility();
           this.applyStreamResolution();
           const availability = this.snapshotValue.transportAvailability;
           if (availability.p2p || availability.turn) {
@@ -1390,8 +1391,13 @@ export class RemoteDesktopController {
 
   private resumeWanted() {
     if (this.destroyed || !this.active || this.snapshotValue.paused || this.snapshotValue.inputEnabled || this.snapshotValue.inputPending || this.inputResumeRetryTimer !== undefined) return;
-    if (this.snapshotValue.session?.phase !== 'active' && this.snapshotValue.phase !== 'connected') return;
-    if (this.snapshotValue.session?.mediaPaused) return;
+    // mediaPaused is a snapshot projection and can be stale across fallback
+    // reconnects. Visibility and input resume share one ordered control
+    // channel, so the server clears mediaPaused before accepting the resume.
+    if (this.snapshotValue.session?.phase !== 'active' && this.snapshotValue.phase !== 'connected') {
+      this.deferInputResume('session-not-ready');
+      return;
+    }
     if (!this.snapshotValue.isController) {
       if (!this.snapshotValue.hasController) this.requestControl();
       return;
@@ -1405,7 +1411,23 @@ export class RemoteDesktopController {
       });
       this.update({ inputPending: true });
       this.armInputResumeAckTimeout();
+      return;
     }
+    const channel = this.fallbackState === 'active' ? this.fallbackControl : this.channels.get('control');
+    this.deferInputResume(channel ? 'control-send-failed' : 'control-channel-unavailable');
+  }
+
+  private deferInputResume(reason: string) {
+    const channel = this.fallbackState === 'active' ? this.fallbackControl : this.channels.get('control');
+    diagnosticLog.info('remote.desktop.input.resume.deferred', {
+      reason,
+      controlReadyState: channel?.readyState,
+      fallbackState: this.fallbackState,
+      sessionPhase: this.snapshotValue.session?.phase,
+      mediaPaused: this.snapshotValue.session?.mediaPaused,
+      ...this.inputTraceState(),
+    });
+    this.scheduleInputResumeRetry(reason);
   }
 
   private armInputResumeAckTimeout() {

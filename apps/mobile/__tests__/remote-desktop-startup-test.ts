@@ -23,11 +23,13 @@ jest.mock('react-native-webrtc', () => ({
 jest.mock('../modules/task-handoff-remote-desktop/src', () => ({
   closeRemoteDesktopDecoder: jest.fn(async () => undefined),
   configureRemoteDesktopDecoder: jest.fn(async () => undefined),
+  currentRemoteDesktopLandscapeSide: jest.fn(() => undefined),
   decodeRemoteDesktopFrame: jest.fn(async () => undefined),
   resetRemoteDesktopDecoder: jest.fn(async () => undefined),
   startRemoteDesktopTextInputObservation: jest.fn(() => false),
   stopRemoteDesktopTextInputObservation: jest.fn(),
   subscribeRemoteDesktopDecoderErrors: jest.fn(() => ({ remove: jest.fn() })),
+  subscribeRemoteDesktopOrientation: jest.fn(() => ({ remove: jest.fn() })),
   subscribeRemoteDesktopVideoDimensions: jest.fn(() => ({ remove: jest.fn() })),
   subscribeRemoteDesktopTextInput: jest.fn(() => ({ remove: jest.fn() })),
 }));
@@ -850,6 +852,97 @@ test('an inactive channel does not steal control and preserves explicit input in
     .some((message) => message.type === 'input.resume')).toBe(true);
 
   await controller.close();
+});
+
+test('visibility recovery re-requests input after a stale media-paused snapshot', async () => {
+  const { controller, sockets } = setup({ p2p: false, turn: false, websocket: true });
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const media = sockets[1];
+  const control = sockets[2];
+  media.handlers.onOpen?.();
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
+
+  controller.enableInput();
+  await flushMicrotasks();
+  control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 5 } }));
+  expect(controller.getSnapshot().inputEnabled).toBe(true);
+
+  sockets[0].handlers.onMessage(JSON.stringify({
+    type: 'snapshot',
+    snapshot: {
+      ...createdSession().snapshot,
+      sessionRevision: 2,
+      transport: 'websocket',
+      phase: 'active',
+      mediaPaused: true,
+    },
+  }));
+  await flushMicrotasks();
+  control.send.mockClear();
+
+  controller.setActive(false);
+  controller.setActive(true);
+  await flushMicrotasks();
+
+  const messages = control.send.mock.calls.map(([data]) => JSON.parse(String(data)));
+  const visible = messages.findIndex((message) => message.type === 'visibility' && message.payload?.hidden === false);
+  const resumed = messages.findIndex((message) => message.type === 'input.resume');
+  expect(visible).toBeGreaterThanOrEqual(0);
+  expect(resumed).toBeGreaterThan(visible);
+  expect(messages[resumed]?.payload).toEqual({ sessionRevision: 2 });
+  expect(controller.getSnapshot().inputPending).toBe(true);
+
+  await controller.close();
+});
+
+test('retries input resume when the control channel is briefly unavailable', async () => {
+  jest.useFakeTimers();
+  let controller: RemoteDesktopController | undefined;
+  try {
+    const current = setup({ p2p: false, turn: false, websocket: true });
+    controller = current.controller;
+    const { sockets } = current;
+    await controller.start();
+    sockets[0].handlers.onOpen?.();
+    sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+    await flushMicrotasks();
+
+    const media = sockets[1];
+    const control = sockets[2];
+    media.handlers.onOpen?.();
+    control.handlers.onOpen?.();
+    control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+    await flushMicrotasks();
+
+    controller.enableInput();
+    await flushMicrotasks();
+    control.handlers.onMessage(JSON.stringify({ type: 'input.resumed', payload: { inputEpoch: 5 } }));
+    control.send.mockClear();
+
+    control.readyState = 0;
+    controller.setActive(false);
+    controller.setActive(true);
+    await flushMicrotasks();
+    expect(control.send.mock.calls
+      .map(([data]) => JSON.parse(String(data)))
+      .some((message) => message.type === 'input.resume')).toBe(false);
+
+    control.readyState = 1;
+    jest.advanceTimersByTime(250);
+    await flushMicrotasks();
+    expect(control.send.mock.calls
+      .map(([data]) => JSON.parse(String(data)))
+      .filter((message) => message.type === 'input.resume')).toHaveLength(1);
+  } finally {
+    await controller?.close();
+    jest.useRealTimers();
+  }
 });
 
 test('automatically acquires control when nobody holds input', async () => {

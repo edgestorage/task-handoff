@@ -12,14 +12,18 @@ type NativeRemoteDesktopModule = {
   decode(data: Uint8Array, keyframe: boolean, timestampUs: number): Promise<void>;
   reset(): Promise<void>;
   close(): Promise<void>;
+  getLandscapeSide?(): RemoteDesktopLandscapeSide | null;
   startTextInputObservation(nativeID: string): boolean;
   stopTextInputObservation(): void;
   addListener?(name: 'onRemoteDesktopDecoderError', listener: (event: RemoteDesktopDecoderError) => void): { remove(): void };
   addListener?(name: 'onRemoteDesktopVideoDimensions', listener: (event: RemoteDesktopVideoDimensions) => void): { remove(): void };
   addListener?(name: 'onRemoteDesktopTextInput', listener: (event: RemoteDesktopTextInputEvent) => void): { remove(): void };
+  addListener?(name: 'onRemoteDesktopOrientationChange', listener: (event: RemoteDesktopOrientationEvent) => void): { remove(): void };
 };
 
 export type RemoteDesktopTextInputEvent = { text: string; composing: boolean };
+export type RemoteDesktopLandscapeSide = 'left' | 'right';
+export type RemoteDesktopOrientationEvent = { side: RemoteDesktopLandscapeSide };
 
 const native = requireOptionalNativeModule<NativeRemoteDesktopModule>('TaskHandoffRemoteDesktop');
 
@@ -66,5 +70,15 @@ export function stopRemoteDesktopTextInputObservation() {
 
 export function subscribeRemoteDesktopTextInput(listener: (event: RemoteDesktopTextInputEvent) => void) {
   try { return native?.addListener?.('onRemoteDesktopTextInput', listener); }
+  catch { return undefined; }
+}
+
+export function currentRemoteDesktopLandscapeSide() {
+  try { return native?.getLandscapeSide?.() ?? undefined; }
+  catch { return undefined; }
+}
+
+export function subscribeRemoteDesktopOrientation(listener: (side: RemoteDesktopLandscapeSide) => void) {
+  try { return native?.addListener?.('onRemoteDesktopOrientationChange', (event) => listener(event.side)); }
   catch { return undefined; }
 }

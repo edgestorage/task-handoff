@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import type { DesktopSource, RemoteDesktopCapabilities } from '@task-handoff/protocol/remote-desktop';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon } from '../components/Icon';
 import { useMobileTheme } from '../components/theme';
@@ -22,6 +23,7 @@ type Props = {
 export function RemoteDesktopSourcePicker({ capability, loadSources, onClose, onSelect, target, visible }: Props) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const insets = useSafeAreaInsets();
   const [sources, setSources] = useState<DesktopSource[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -73,7 +75,12 @@ export function RemoteDesktopSourcePicker({ capability, loadSources, onClose, on
   };
 
   return <Modal animationType="slide" onRequestClose={onClose} onShow={() => { if (available) beginLoad(); }} presentationStyle="pageSheet" visible={visible}>
-    <View style={[styles.root, { backgroundColor: colors.background }]}>
+    <View style={[styles.root, {
+      backgroundColor: colors.background,
+      paddingBottom: insets.bottom,
+      paddingLeft: insets.left,
+      paddingRight: insets.right,
+    }]} testID="remote-desktop-source-picker">
       <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
         <Pressable accessibilityLabel={t('common.cancel')} accessibilityRole="button" onPress={onClose} style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
           <Text style={[styles.headerAction, { color: colors.primary }]}>{t('common.cancel')}</Text>

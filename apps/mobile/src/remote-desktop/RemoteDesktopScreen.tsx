@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Easing, Keyboard, type LayoutChangeEvent, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, DeviceEventEmitter, Dimensions, Easing, Keyboard, type LayoutChangeEvent, Platform, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { remoteDesktopSupportsCapturePrecision, type DesktopSource } from '@task-handoff/protocol/remote-desktop';
 import {
+  currentRemoteDesktopLandscapeSide,
   startRemoteDesktopTextInputObservation,
   stopRemoteDesktopTextInputObservation,
+  subscribeRemoteDesktopOrientation,
   subscribeRemoteDesktopTextInput,
 } from '../../modules/task-handoff-remote-desktop/src';
 import { Icon } from '../components/Icon';
@@ -38,6 +40,7 @@ import { rememberSessionRemoteDesktopLink, removeSessionRemoteDesktopLink } from
 
 const KEYBOARD_INPUT_ID = 'remote-desktop-keyboard-input';
 const KEY_DELETION_HANDLED_WINDOW_MS = 250;
+const LANDSCAPE_RAIL_WIDTH = 52;
 const INITIAL_KEYBOARD_STATE: MobileKeyboardState = { visible: false, height: 0, duration: DEFAULT_REMOTE_DESKTOP_KEYBOARD_DURATION_MS, easing: 'keyboard' };
 
 function keyboardAnimationEasing(easing: MobileKeyboardState['easing']) {
@@ -54,6 +57,9 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
+  const viewport = useWindowDimensions();
+  const landscape = viewport.width > viewport.height;
+  const [landscapeSide, setLandscapeSide] = useState<'left' | 'right'>(() => currentRemoteDesktopLandscapeSide() ?? (insets.left > insets.right ? 'left' : 'right'));
   const remote = useRemoteDesktop(instanceId, { sessionId });
   const [sourcePicker, setSourcePicker] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState(false);
@@ -68,6 +74,34 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   const virtualKeyboardInteractive = keyboardOpen && keyboardMode === 'virtual';
   const keyboardVisible = keyboardOpen && (systemKeyboardVisible || virtualKeyboardSurfaceVisible);
   const [keyboardInset] = useState(() => new Animated.Value(0));
+  useEffect(() => {
+    const nativeSubscription = subscribeRemoteDesktopOrientation(setLandscapeSide);
+    const dimensionsSubscription = Dimensions.addEventListener('change', ({ window }) => {
+      if (window.width <= window.height) return;
+      const nativeSide = currentRemoteDesktopLandscapeSide();
+      if (nativeSide) setLandscapeSide(nativeSide);
+    });
+    const subscription = DeviceEventEmitter.addListener('namedOrientationDidChange', (event: { name?: string }) => {
+      if (event.name === 'landscape-primary') setLandscapeSide('right');
+      else if (event.name === 'landscape-secondary') setLandscapeSide('left');
+    });
+    return () => {
+      nativeSubscription?.remove();
+      dimensionsSubscription.remove();
+      subscription.remove();
+    };
+  }, []);
+  useEffect(() => {
+    diagnosticLog.info('remote.desktop.viewport', {
+      height: Math.round(viewport.height),
+      insetBottom: insets.bottom,
+      insetLeft: insets.left,
+      insetRight: insets.right,
+      insetTop: insets.top,
+      landscapeSide,
+      width: Math.round(viewport.width),
+    });
+  }, [insets.bottom, insets.left, insets.right, insets.top, landscapeSide, viewport.height, viewport.width]);
   // The previous fit-to-reduced-height layout kept the content centered in the
   // visible area, which moved its visual center by half the obstruction. Match
   // that position without shrinking the capture surface.
@@ -295,80 +329,145 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   const sourceEnded = isRemoteDesktopSourceEndedError(snapshot.error?.code);
   const sourceTitle = remoteDesktopSourceHeaderLabel(snapshot.target, sourceEnded, t);
 
-  return <View style={[styles.root, { backgroundColor: '#000' }]}>
-    <StatusBar style="light" />
-    <View style={[styles.header, { paddingTop: insets.top + 4 }]}>
-      <Pressable accessibilityLabel={t('common.back')} accessibilityRole="button" hitSlop={10} onPress={back} style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
-        <Icon color="#fff" name="chevron-back" size={25} />
-      </Pressable>
-      <Pressable
-        accessibilityHint={t('remoteDesktop.sourcePickerHint')}
-        accessibilityLabel={`${t('remoteDesktop.chooseSource')}: ${sourceTitle}`}
-        accessibilityRole="button"
-        onPress={() => setSourcePicker(true)}
-        style={({ pressed }) => [styles.headerCopy, pressed && styles.headerSourcePressed]}
-      >
-        <View style={styles.sourceRow}>
-          <Text numberOfLines={1} style={styles.headerTitle}>{sourceTitle}</Text>
-          <Icon color="rgba(255,255,255,0.64)" name="chevron-down" size={14} />
-        </View>
-        <View style={styles.statusRow}>
-          {snapshot.phase === 'connecting' || snapshot.phase === 'reconnecting' ? <ActivityIndicator color="#9fd2ff" size="small" /> : <View style={[styles.statusDot, { backgroundColor: sourceEnded ? '#ffb340' : snapshot.phase === 'error' || snapshot.phase === 'stopped' ? '#ff6961' : '#34c759' }]} />}
-          <Text numberOfLines={1} style={styles.headerStatus}>{phaseLabel}</Text>
-          {snapshot.viewerCount > 0 ? <Text numberOfLines={1} style={styles.headerMeta}>· {t('remoteDesktop.viewers', { count: snapshot.viewerCount })}</Text> : null}
-        </View>
-      </Pressable>
-      {activeTransport ? (() => {
-        const TransportIcon = transportIcon(activeTransport);
-        return <Pressable
-          accessibilityHint={t('remoteDesktop.connectionInfoHint')}
-          accessibilityLabel={`${transportLabel(activeTransport, t)}: ${t('remoteDesktop.transportActive')}`}
-          accessibilityRole="button"
-          hitSlop={6}
-          onPress={() => setConnectionInfo(true)}
-          style={({ pressed }) => [styles.transportBadge, pressed && styles.transportBadgePressed]}
-        >
-          <TransportIcon color="#9fd2ff" size={20} strokeWidth={1.9} />
-        </Pressable>;
-      })() : null}
-      <RemoteDesktopSettingsMenu
-        capturePrecisionSupported={remoteDesktopSupportsCapturePrecision(capability)}
-        onDisconnect={disconnect}
-        onSetCapturePrecision={remote.setCapturePrecision}
-        onSetInputEnabled={remote.setInputEnabled}
-        onSetFrameRate={remote.setFrameRate}
-        onSetResolution={remote.setResolution}
-        onToggleTransport={remote.toggleTransport}
-        snapshot={snapshot}
-      >
-        <Pressable accessibilityLabel={t('remoteDesktop.settings')} accessibilityRole="button" hitSlop={10} style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
-          <Icon color="#fff" name="ellipsis-horizontal" size={23} />
-        </Pressable>
-      </RemoteDesktopSettingsMenu>
-    </View>
+  const sourceStatusColor = sourceEnded ? '#ffb340' : snapshot.phase === 'error' || snapshot.phase === 'stopped' ? '#ff6961' : snapshot.phase === 'connecting' || snapshot.phase === 'reconnecting' ? '#9fd2ff' : '#34c759';
 
-    {/* Keyboard panels overlay the capture surface. Reserving their height
-        here would shrink the contain rect and change the apparent zoom while
-        the user is typing. */}
-    <View style={[styles.stage, styles.stageClip]} testID="remote-desktop-stage">
-      {capability?.available === false || (!capability && remote.instance) ? <CenteredState title={t('remoteDesktop.unsupported')} detail={capability?.reason === 'REMOTE_DESKTOP_UPDATING' ? t('remoteDesktop.loading') : t('remoteDesktop.unsupportedDescription')} />
-        : !remote.ready || !remote.instance ? <CenteredState loading title={t('remoteDesktop.connecting')} detail={t('remoteDesktop.loading')} />
-          : sourceEnded ? <CenteredState title={snapshot.target.kind === 'window' ? t('remoteDesktop.windowClosed') : t('remoteDesktop.sourceEnded')} detail={errorMessage || t('remoteDesktop.sourceEndedDetail')} actionLabel={t('remoteDesktop.chooseAnotherSource')} onAction={() => setSourcePicker(true)} />
-            : showVideo ? <Animated.View
-              style={[styles.stageContent, { transform: [{ translateY: keyboardStageOffset }] }]}
-              testID="remote-desktop-touch-surface-host"
-            >
-              <RemoteDesktopTouchSurface controller={remote.controller} mouseMode={remote.preferences.mouseMode} snapshot={snapshot} />
-            </Animated.View>
-            : snapshot.phase === 'error' || snapshot.phase === 'stopped' ? <CenteredState title={snapshot.phase === 'stopped' ? t('remoteDesktop.stopped') : t('remoteDesktop.error')} detail={snapshot.phase === 'error' ? errorMessage || t('remoteDesktop.errorGeneric') : undefined} actionLabel={t('remoteDesktop.reconnect')} onAction={reconnect} />
-              : <CenteredState loading title={t('remoteDesktop.connecting')} detail={t('remoteDesktop.waitingForFrame')} />}
-      {showVideo && snapshot.phase === 'error' && !sourceEnded ? <View style={[styles.errorBanner, { backgroundColor: colors.errorSoft, borderColor: colors.error }]}>
-        <Icon color={colors.error} name="alert-circle-outline" size={18} />
-        <Text numberOfLines={3} style={[styles.errorText, { color: colors.error }]}>{errorMessage}</Text>
-        <Pressable accessibilityRole="button" onPress={reconnect}><Text style={[styles.bannerAction, { color: colors.error }]}>{t('remoteDesktop.retry')}</Text></Pressable>
+  const sourceStatusIndicator = () => snapshot.phase === 'connecting' || snapshot.phase === 'reconnecting'
+    ? <ActivityIndicator color="#9fd2ff" size="small" />
+    : <View style={[styles.statusDot, { backgroundColor: sourceStatusColor }]} />;
+
+  const renderBackButton = (rail: boolean) => <Pressable
+    accessibilityLabel={t('common.back')}
+    accessibilityRole="button"
+    hitSlop={10}
+    onPress={back}
+    style={({ pressed }) => [rail ? styles.landscapeRailButton : styles.headerButton, pressed && styles.pressed]}
+    testID={rail ? 'remote-desktop-landscape-back' : 'remote-desktop-header-back'}
+  >
+    <Icon color="#fff" name="chevron-back" size={25} />
+  </Pressable>;
+
+  const renderSourceButton = (rail: boolean) => <Pressable
+    accessibilityHint={t('remoteDesktop.sourcePickerHint')}
+    accessibilityLabel={`${t('remoteDesktop.chooseSource')}: ${sourceTitle}`}
+    accessibilityRole="button"
+    onPress={() => setSourcePicker(true)}
+    style={({ pressed }) => [rail ? styles.landscapeSource : styles.headerCopy, pressed && styles.headerSourcePressed]}
+    testID={rail ? 'remote-desktop-landscape-source' : 'remote-desktop-header-source'}
+  >
+    {rail ? <>
+      <View style={styles.landscapeSourceIconWrap}>
+        <View style={[styles.landscapeSourceIcon, { backgroundColor: colors.primarySoft }]} testID="remote-desktop-landscape-source-icon">
+          <Icon color={colors.primary} name="swap-horizontal-outline" size={21} />
+        </View>
+        <View style={[styles.landscapeStatusDot, { backgroundColor: sourceStatusColor }]} testID="remote-desktop-landscape-status-dot" />
+      </View>
+      {snapshot.viewerCount > 0 ? <View style={styles.landscapeViewers} testID="remote-desktop-landscape-viewers">
+        <Icon color="rgba(255,255,255,0.58)" name="eye-outline" size={12} />
+        <Text style={styles.landscapeViewerCount}>{snapshot.viewerCount}</Text>
       </View> : null}
-      {showVideo && !snapshot.streamURL && snapshot.path !== 'websocket' && !snapshot.path ? <View pointerEvents="none" style={styles.waiting}><ActivityIndicator color="#fff" size="small" /><Text style={styles.waitingText}>{t('remoteDesktop.waitingForFrame')}</Text></View> : null}
+    </> : <>
+      <View style={styles.sourceRow}>
+        <Text numberOfLines={1} style={styles.headerTitle}>{sourceTitle}</Text>
+        <Icon color="rgba(255,255,255,0.64)" name="chevron-down" size={14} />
+      </View>
+      <View style={styles.statusRow}>
+        {sourceStatusIndicator()}
+        <Text numberOfLines={1} style={styles.headerStatus}>{phaseLabel}</Text>
+        {snapshot.viewerCount > 0 ? <Text numberOfLines={1} style={styles.headerMeta}>· {t('remoteDesktop.viewers', { count: snapshot.viewerCount })}</Text> : null}
+      </View>
+    </>}
+  </Pressable>;
+
+  const renderTransportButton = (rail: boolean) => activeTransport ? (() => {
+    const TransportIcon = transportIcon(activeTransport);
+    return <Pressable
+      accessibilityHint={t('remoteDesktop.connectionInfoHint')}
+      accessibilityLabel={`${transportLabel(activeTransport, t)}: ${t('remoteDesktop.transportActive')}`}
+      accessibilityRole="button"
+      hitSlop={6}
+      onPress={() => setConnectionInfo(true)}
+      style={({ pressed }) => [styles.transportBadge, rail && styles.landscapeTransportButton, pressed && styles.transportBadgePressed]}
+      testID={rail ? 'remote-desktop-landscape-transport' : 'remote-desktop-header-transport'}
+    >
+      <TransportIcon color="#9fd2ff" size={20} strokeWidth={1.9} />
+    </Pressable>;
+  })() : null;
+
+  const renderSettingsButton = (rail: boolean) => <RemoteDesktopSettingsMenu
+    capturePrecisionSupported={remoteDesktopSupportsCapturePrecision(capability)}
+    onDisconnect={disconnect}
+    onSetCapturePrecision={remote.setCapturePrecision}
+    onSetInputEnabled={remote.setInputEnabled}
+    onSetFrameRate={remote.setFrameRate}
+    onSetResolution={remote.setResolution}
+    onToggleTransport={remote.toggleTransport}
+    snapshot={snapshot}
+  >
+    <Pressable
+      accessibilityLabel={t('remoteDesktop.settings')}
+      accessibilityRole="button"
+      hitSlop={10}
+      style={({ pressed }) => [rail ? styles.landscapeRailButton : styles.headerButton, pressed && styles.pressed]}
+      testID={rail ? 'remote-desktop-landscape-settings' : 'remote-desktop-header-settings'}
+    >
+      <Icon color="#fff" name="ellipsis-horizontal" size={23} />
+    </Pressable>
+  </RemoteDesktopSettingsMenu>;
+
+  const header = <View style={[styles.header, { paddingTop: insets.top + 4 }]} testID="remote-desktop-header">
+    {renderBackButton(false)}
+    {renderSourceButton(false)}
+    {renderTransportButton(false)}
+    {renderSettingsButton(false)}
+  </View>;
+
+  const landscapeRail = <View
+    style={[styles.landscapeRail, {
+      paddingBottom: insets.bottom + 8,
+      paddingLeft: (landscapeSide === 'left' ? insets.left : 0) + 4,
+      paddingRight: 4,
+      paddingTop: insets.top + 8,
+      width: LANDSCAPE_RAIL_WIDTH + (landscapeSide === 'left' ? insets.left : 0),
+    }]}
+    testID="remote-desktop-landscape-rail"
+  >
+    {renderBackButton(true)}
+    {renderSourceButton(true)}
+    <View style={styles.landscapeRailActions} testID="remote-desktop-landscape-actions">
+      {renderTransportButton(true)}
+      {renderSettingsButton(true)}
     </View>
+  </View>;
+
+  const stage = <View style={[styles.stage, styles.stageClip]} testID="remote-desktop-stage">
+    {capability?.available === false || (!capability && remote.instance) ? <CenteredState title={t('remoteDesktop.unsupported')} detail={capability?.reason === 'REMOTE_DESKTOP_UPDATING' ? t('remoteDesktop.loading') : t('remoteDesktop.unsupportedDescription')} />
+      : !remote.ready || !remote.instance ? <CenteredState loading title={t('remoteDesktop.connecting')} detail={t('remoteDesktop.loading')} />
+        : sourceEnded ? <CenteredState title={snapshot.target.kind === 'window' ? t('remoteDesktop.windowClosed') : t('remoteDesktop.sourceEnded')} detail={errorMessage || t('remoteDesktop.sourceEndedDetail')} actionLabel={t('remoteDesktop.chooseAnotherSource')} onAction={() => setSourcePicker(true)} />
+          : showVideo ? <Animated.View
+            style={[styles.stageContent, { transform: [{ translateY: keyboardStageOffset }] }]}
+            testID="remote-desktop-touch-surface-host"
+          >
+            <RemoteDesktopTouchSurface controller={remote.controller} mouseMode={remote.preferences.mouseMode} snapshot={snapshot} />
+          </Animated.View>
+          : snapshot.phase === 'error' || snapshot.phase === 'stopped' ? <CenteredState title={snapshot.phase === 'stopped' ? t('remoteDesktop.stopped') : t('remoteDesktop.error')} detail={snapshot.phase === 'error' ? errorMessage || t('remoteDesktop.errorGeneric') : undefined} actionLabel={t('remoteDesktop.reconnect')} onAction={reconnect} />
+            : <CenteredState loading title={t('remoteDesktop.connecting')} detail={t('remoteDesktop.waitingForFrame')} />}
+    {showVideo && snapshot.phase === 'error' && !sourceEnded ? <View style={[styles.errorBanner, { backgroundColor: colors.errorSoft, borderColor: colors.error }]}>
+      <Icon color={colors.error} name="alert-circle-outline" size={18} />
+      <Text numberOfLines={3} style={[styles.errorText, { color: colors.error }]}>{errorMessage}</Text>
+      <Pressable accessibilityRole="button" onPress={reconnect}><Text style={[styles.bannerAction, { color: colors.error }]}>{t('remoteDesktop.retry')}</Text></Pressable>
+    </View> : null}
+    {showVideo && !snapshot.streamURL && snapshot.path !== 'websocket' && !snapshot.path ? <View pointerEvents="none" style={styles.waiting}><ActivityIndicator color="#fff" size="small" /><Text style={styles.waitingText}>{t('remoteDesktop.waitingForFrame')}</Text></View> : null}
+  </View>;
+
+  return <View style={[styles.root, { backgroundColor: '#000' }]}>
+    <StatusBar hidden={landscape} style="light" />
+    {landscape ? <View style={styles.landscapeShell} testID="remote-desktop-landscape-shell">
+      {landscapeRail}
+      {stage}
+    </View> : <>
+      {header}
+      {stage}
+    </>}
 
     <TextInput
       autoCapitalize="none"
@@ -498,6 +597,17 @@ function remoteKeyboardCode(key: string) {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  landscapeShell: { flex: 1, flexDirection: 'row', minHeight: 0 },
+  landscapeRail: { backgroundColor: 'rgba(15,16,18,0.98)', borderRightColor: 'rgba(255,255,255,0.12)', borderRightWidth: StyleSheet.hairlineWidth, flexDirection: 'column', flexShrink: 0, gap: 8, zIndex: 2 },
+  landscapeRailActions: { gap: 6, marginTop: 'auto' },
+  landscapeRailButton: { alignItems: 'center', alignSelf: 'center', borderRadius: 10, height: 44, justifyContent: 'center', width: 44 },
+  landscapeTransportButton: { height: 44, marginLeft: 0, width: 44 },
+  landscapeSource: { alignItems: 'center', alignSelf: 'stretch', borderRadius: 12, gap: 8, minWidth: 0, paddingBottom: 4, paddingTop: 2 },
+  landscapeSourceIconWrap: { height: 30, position: 'relative', width: 30 },
+  landscapeSourceIcon: { alignItems: 'center', borderRadius: 8, height: 30, justifyContent: 'center', width: 30 },
+  landscapeStatusDot: { borderColor: 'rgba(15,16,18,0.98)', borderRadius: 5, borderWidth: 1.5, height: 9, position: 'absolute', right: -2, top: -2, width: 9 },
+  landscapeViewers: { alignItems: 'center', flexDirection: 'row', gap: 2 },
+  landscapeViewerCount: { color: 'rgba(255,255,255,0.58)', fontSize: 11, lineHeight: 14 },
   header: { alignItems: 'center', backgroundColor: 'rgba(15, 16, 18, 0.94)', flexDirection: 'row', gap: 3, minHeight: 56, paddingBottom: 6, paddingHorizontal: 6 },
   headerButton: { alignItems: 'center', height: 42, justifyContent: 'center', width: 40 },
   headerCopy: { flex: 1, gap: 1, justifyContent: 'center', minHeight: 42, minWidth: 0 },

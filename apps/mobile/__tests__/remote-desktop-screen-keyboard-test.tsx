@@ -12,8 +12,10 @@ jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ bottom: 0, left: 0, right: 0, top: 0 }),
 }));
 jest.mock('../modules/task-handoff-remote-desktop/src', () => ({
+  currentRemoteDesktopLandscapeSide: () => undefined,
   startRemoteDesktopTextInputObservation: () => false,
   stopRemoteDesktopTextInputObservation: jest.fn(),
+  subscribeRemoteDesktopOrientation: () => ({ remove: jest.fn() }),
   subscribeRemoteDesktopTextInput: () => ({ remove: jest.fn() }),
 }));
 jest.mock('../src/components/Icon', () => {

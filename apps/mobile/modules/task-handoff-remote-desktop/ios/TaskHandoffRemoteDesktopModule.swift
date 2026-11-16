@@ -5,6 +5,52 @@ public final class TaskHandoffRemoteDesktopModule: Module {
   private let queue = DispatchQueue(label: "com.taskhandoff.mobile.remote-desktop-decoder", qos: .userInitiated)
   private var textInputObserver: NSObjectProtocol?
   private var textInputNativeID: String?
+  private var orientationObservers: [NSObjectProtocol] = []
+  private var orientationNotificationsActive = false
+
+  private func currentLandscapeSide() -> String? {
+    switch UIDevice.current.orientation {
+    case .landscapeRight: return "right"
+    case .landscapeLeft: return "left"
+    default: break
+    }
+    for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+      switch scene.interfaceOrientation {
+      case .landscapeLeft: return "right"
+      case .landscapeRight: return "left"
+      default: continue
+      }
+    }
+    return nil
+  }
+
+  private func landscapeSideNow() -> String? {
+    if Thread.isMainThread { return currentLandscapeSide() }
+    return DispatchQueue.main.sync { currentLandscapeSide() }
+  }
+
+  private func stopOrientationObservation() {
+    for observer in orientationObservers { NotificationCenter.default.removeObserver(observer) }
+    orientationObservers = []
+    if orientationNotificationsActive {
+      UIDevice.current.endGeneratingDeviceOrientationNotifications()
+      orientationNotificationsActive = false
+    }
+  }
+
+  private func startOrientationObservation() {
+    stopOrientationObservation()
+    UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+    orientationNotificationsActive = true
+    let emit: (Notification) -> Void = { [weak self] _ in
+      guard let self, let side = self.currentLandscapeSide() else { return }
+      self.sendEvent("onRemoteDesktopOrientationChange", ["side": side])
+    }
+    orientationObservers = [
+      NotificationCenter.default.addObserver(forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main, using: emit),
+      NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main, using: emit),
+    ]
+  }
 
   private func stopTextInputObservation() {
     if let textInputObserver { NotificationCenter.default.removeObserver(textInputObserver) }
@@ -60,7 +106,15 @@ public final class TaskHandoffRemoteDesktopModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("TaskHandoffRemoteDesktop")
-    Events("onRemoteDesktopDecoderError", "onRemoteDesktopVideoDimensions", "onRemoteDesktopTextInput")
+    Events("onRemoteDesktopDecoderError", "onRemoteDesktopVideoDimensions", "onRemoteDesktopTextInput", "onRemoteDesktopOrientationChange")
+
+    OnStartObserving("onRemoteDesktopOrientationChange") {
+      self.startOrientationObservation()
+    }
+
+    OnStopObserving("onRemoteDesktopOrientationChange") {
+      self.stopOrientationObservation()
+    }
 
     OnCreate { [weak self] in
       RemoteDesktopDecoderEngine.shared.onError = { [weak self] code, message in
@@ -76,6 +130,10 @@ public final class TaskHandoffRemoteDesktopModule: Module {
     }
 
     Function("isAvailable") { true }
+
+    Function("getLandscapeSide") { () -> String? in
+      self.landscapeSideNow()
+    }
 
     Function("startTextInputObservation") { (nativeID: String) -> Bool in
       self.stopTextInputObservation()
@@ -127,6 +185,7 @@ public final class TaskHandoffRemoteDesktopModule: Module {
 
     OnDestroy {
       self.stopTextInputObservation()
+      self.stopOrientationObservation()
       RemoteDesktopDecoderEngine.shared.onError = nil
       RemoteDesktopDecoderEngine.shared.onVideoDimensions = nil
       RemoteDesktopDecoderEngine.shared.close()

@@ -3,6 +3,7 @@ export * from './RemoteDesktopDecoder.types';
 export {
   closeRemoteDesktopDecoder,
   configureRemoteDesktopDecoder,
+  currentRemoteDesktopLandscapeSide,
   decodeRemoteDesktopFrame,
   nativeRemoteDesktopDecoderAvailable,
   nativeRemoteDesktopTextInputAvailable,
@@ -10,7 +11,10 @@ export {
   startRemoteDesktopTextInputObservation,
   stopRemoteDesktopTextInputObservation,
   subscribeRemoteDesktopDecoderErrors,
+  subscribeRemoteDesktopOrientation,
   subscribeRemoteDesktopVideoDimensions,
   subscribeRemoteDesktopTextInput,
+  type RemoteDesktopLandscapeSide,
+  type RemoteDesktopOrientationEvent,
   type RemoteDesktopTextInputEvent,
 } from './TaskHandoffRemoteDesktopModule';

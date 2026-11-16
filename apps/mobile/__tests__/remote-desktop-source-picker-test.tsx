@@ -1,4 +1,5 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
 import { unsupportedRemoteDesktopCapabilities, type DesktopSource, type RemoteDesktopCapabilities } from '@task-handoff/protocol/remote-desktop';
 
@@ -6,6 +7,9 @@ import { RemoteDesktopSourcePicker } from '../src/remote-desktop/RemoteDesktopSo
 
 jest.mock('../src/i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
+}));
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: 21, left: 24, right: 48, top: 0 }),
 }));
 
 const sources: DesktopSource[] = [
@@ -53,6 +57,11 @@ test('does not request sources when no provider is available', async () => {
   await show(screen);
   expect(loadSources).not.toHaveBeenCalled();
   expect(screen.getByText('remoteDesktop.sourceCaptureUnavailable')).toBeTruthy();
+  expect(StyleSheet.flatten(screen.getByTestId('remote-desktop-source-picker').props.style)).toEqual(expect.objectContaining({
+    paddingBottom: 21,
+    paddingLeft: 24,
+    paddingRight: 48,
+  }));
 });
 
 test('loads selectable sources when opened and refreshes on demand', async () => {
