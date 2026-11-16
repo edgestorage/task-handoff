@@ -26,19 +26,21 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
-    Graphics::Gdi::UpdateWindow,
+    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Graphics::Gdi::{CreateSolidBrush, UpdateWindow},
     UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
-        LoadCursorW, PeekMessageW, RegisterClassW, SetCursorPos, SetWindowPos, ShowWindow,
-        TranslateMessage, CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW, WM_LBUTTONDOWN, WM_LBUTTONUP, WNDCLASSW,
-        WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        GetWindowRect, LoadCursorW, PeekMessageW, RegisterClassW, SetCursorPos, SetWindowPos,
+        ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, IDC_ARROW, MSG,
+        PM_REMOVE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
     },
 };
 
 const FIXTURE_CLASS: &str = "TaskHandoffWgcFixture";
+const POPUP_FIXTURE_CLASS: &str = "TaskHandoffWgcPopupFixture";
 static REGISTER_FIXTURE_CLASS: Once = Once::new();
+static REGISTER_POPUP_CLASS: Once = Once::new();
 static DESKTOP_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static FIXTURE_CLICKS: AtomicUsize = AtomicUsize::new(0);
 
@@ -186,6 +188,72 @@ impl Drop for Fixture {
     }
 }
 
+struct PopupFixture(HWND);
+
+impl PopupFixture {
+    fn new(owner: HWND, title: &str) -> anyhow::Result<Self> {
+        REGISTER_POPUP_CLASS.call_once(|| unsafe {
+            let class = wide(POPUP_FIXTURE_CLASS);
+            let wc = WNDCLASSW {
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(fixture_window_proc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: std::ptr::null_mut(),
+                hIcon: std::ptr::null_mut(),
+                hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
+                hbrBackground: CreateSolidBrush(0x0000FF00),
+                lpszMenuName: std::ptr::null(),
+                lpszClassName: class.as_ptr(),
+            };
+            RegisterClassW(&wc);
+        });
+        let mut owner_rect = RECT::default();
+        anyhow::ensure!(unsafe { GetWindowRect(owner, &mut owner_rect) } != 0);
+        let class = wide(POPUP_FIXTURE_CLASS);
+        let title = wide(title);
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                title.as_ptr(),
+                WS_POPUP | WS_VISIBLE,
+                owner_rect.left + 100,
+                owner_rect.top + 100,
+                160,
+                100,
+                owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        anyhow::ensure!(!hwnd.is_null(), "popup window creation failed");
+        unsafe {
+            ShowWindow(hwnd, SW_SHOW);
+            UpdateWindow(hwnd);
+        }
+        Ok(Self(hwnd))
+    }
+
+    fn rect(&self) -> anyhow::Result<RECT> {
+        let mut rect = RECT::default();
+        anyhow::ensure!(
+            unsafe { GetWindowRect(self.0, &mut rect) } != 0,
+            "popup window rect failed"
+        );
+        Ok(rect)
+    }
+}
+
+impl Drop for PopupFixture {
+    fn drop(&mut self) {
+        unsafe {
+            DestroyWindow(self.0);
+        }
+    }
+}
+
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
 }
@@ -245,6 +313,29 @@ fn pump_until_clicked(timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(5));
     }
     FIXTURE_CLICKS.load(Ordering::SeqCst) > 0
+}
+
+fn pump_messages(duration: Duration) {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        unsafe {
+            let mut message = std::mem::zeroed::<MSG>();
+            while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn bgra_at(frame: &desktop_streaming::traits::RawFrame, x: i32, y: i32) -> Option<(u8, u8, u8)> {
+    if x < 0 || y < 0 || x as u32 >= frame.geometry.width || y as u32 >= frame.geometry.height {
+        return None;
+    }
+    let offset = y as usize * frame.stride + x as usize * 4;
+    let pixel = frame.bgra.get(offset..offset + 4)?;
+    Some((pixel[0], pixel[1], pixel[2]))
 }
 
 #[tokio::test]
@@ -349,6 +440,62 @@ async fn wgc_window_catalog_capture_and_input_lease_share_geometry() -> anyhow::
         SetCursorPos(previous.x, previous.y);
     }
     result
+}
+
+#[tokio::test]
+#[ignore = "requires an active WTS desktop and owns a visible popup window"]
+async fn wgc_window_capture_includes_owned_popup_windows() -> anyhow::Result<()> {
+    let _desktop = DESKTOP_FIXTURE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let title = "TaskHandoff disposable WGC popup owner";
+    let fixture = Fixture::new(title)?;
+    let popup = PopupFixture::new(fixture.0, "TaskHandoff owned WGC popup")?;
+    pump_messages(Duration::from_millis(150));
+
+    let owner = Owner {
+        actor_id: "windows-popup-test".into(),
+        device_session_id: "owned-popup".into(),
+    };
+    let mut catalog = WindowCatalog::with_source_salt("windows-popup-test-salt".into());
+    let sources = catalog.enumerate(owner.clone()).await?;
+    let source = sources
+        .iter()
+        .find(|source| source.kind == "window" && source.title == title)
+        .ok_or_else(|| anyhow::anyhow!("popup owner was not published"))?;
+    let target = catalog.consume(&source.source_ref, &owner).await?;
+    let WindowTarget::Windows(window) = target;
+    let mut capture = Capture::new_with_cursor(Target::Window(window), true)?;
+    let geometry = capture.geometry();
+    let popup_rect = popup.rect()?;
+    let sample_x = popup_rect.left + 24 - geometry.x;
+    let sample_y = popup_rect.top + 24 - geometry.y;
+    anyhow::ensure!(
+        sample_x >= 0 && sample_y >= 0,
+        "popup sample point falls outside the captured window"
+    );
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut observed = None;
+    loop {
+        if let Some(frame) = capture.frame(true)? {
+            observed = bgra_at(&frame, sample_x, sample_y);
+            if let Some((blue, green, red)) = observed {
+                if green >= 180 && red <= 80 && blue <= 80 {
+                    break;
+                }
+            }
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "owned popup was not composited into the WGC window frame; last BGRA={observed:?} sample=({sample_x},{sample_y}) window={}x{}",
+            geometry.width,
+            geometry.height
+        );
+        tokio::time::sleep(Duration::from_millis(33)).await;
+    }
+    capture.pause()?;
+    Ok(())
 }
 
 #[tokio::test]

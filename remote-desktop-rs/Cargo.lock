@@ -652,8 +652,6 @@ dependencies = [
 [[package]]
 name = "crabgrab"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0afb3aa4017693c3b87eb64e970098c10f57cb38644828780c879d93254e5d5"
 dependencies = [
  "block2 0.5.1",
  "bytemuck",
