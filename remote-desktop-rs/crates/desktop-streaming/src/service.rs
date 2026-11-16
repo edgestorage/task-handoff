@@ -35,6 +35,14 @@ fn input_trace_sample(counter: &AtomicUsize) -> bool {
     count < 20 || count.is_multiple_of(12)
 }
 
+fn should_rearm_input_after_geometry(
+    input_was_held: bool,
+    pending_rearm: bool,
+    is_controller: bool,
+) -> bool {
+    input_was_held || (pending_rearm && is_controller)
+}
+
 struct LivePeer {
     id: String,
     owner: Owner,
@@ -56,6 +64,11 @@ struct LivePeer {
     fallback_control: Option<mpsc::Sender<String>>,
     webrtc_connected: bool,
     input_suspension_notice_at: Option<Instant>,
+    /// A geometry transition suspended a live input lease. WGC can emit
+    /// `GeometryUnstable` before the replacement geometry exists, so the next
+    /// `GeometryChanged` must re-arm even though the registry no longer reports
+    /// a held epoch by then.
+    geometry_input_rearm_pending: bool,
 }
 impl LivePeer {
     async fn reply(&mut self, kind: Channel, message: serde_json::Value) -> anyhow::Result<()> {
@@ -936,6 +949,7 @@ impl Service {
                             fallback_control: None,
                             webrtc_connected: false,
                             input_suspension_notice_at: None,
+                            geometry_input_rearm_pending: false,
                         },
                     );
                 }
@@ -1224,10 +1238,17 @@ impl Service {
                 session,
                 acknowledged,
             } => {
-                if self.suspend_input_for_geometry(&session, &owner).await? {
+                let input_was_held = self.suspend_input_for_geometry(&session, &owner).await?;
+                if input_was_held {
+                    if let Some(live) = self.live.get_mut(&session) {
+                        live.geometry_input_rearm_pending = true;
+                    }
                     self.notify_geometry_input_suspended(&session, &owner)
                         .await?;
                 }
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.unstable session={session} inputWasHeld={input_was_held}"
+                );
                 let _ = acknowledged.send(());
             }
             PeerEvent::GeometryChanged {
@@ -1240,8 +1261,13 @@ impl Service {
                     "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.received session={session} geometry={geometry:?}"
                 );
                 let input_was_held = self.suspend_input_for_geometry(&session, &owner).await?;
+                let pending_rearm = self
+                    .live
+                    .get(&session)
+                    .is_some_and(|live| live.geometry_input_rearm_pending);
+                let is_controller = self.registry.snapshot(&session, &owner)?.is_controller;
                 eprintln!(
-                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.input_suspended session={session} inputWasHeld={input_was_held} elapsedMs={}",
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.input_suspended session={session} inputWasHeld={input_was_held} pendingRearm={pending_rearm} controller={is_controller} elapsedMs={}",
                     started.elapsed().as_millis()
                 );
                 let live_backend = self
@@ -1316,7 +1342,28 @@ impl Service {
                 {
                     backend.set_geometry(geometry);
                 }
-                if input_was_held {
+                // A held lease is a native geometry transition, not a control
+                // handoff. The guard already validated the replacement
+                // geometry, so re-arm locally instead of forcing the
+                // controller to race `input.resume` against further changes.
+                // Maximizing or dragging a window emits several updates in a
+                // row; each one would otherwise round-trip through the client
+                // with a new revision and can leave input paused when the
+                // retries fall behind.
+                let should_rearm =
+                    should_rearm_input_after_geometry(input_was_held, pending_rearm, is_controller);
+                if pending_rearm && !is_controller {
+                    if let Some(live) = self.live.get_mut(&session) {
+                        live.geometry_input_rearm_pending = false;
+                    }
+                }
+                let rearmed = should_rearm && self.rearm_input_after_geometry(&session).await?;
+                if should_rearm {
+                    if let Some(live) = self.live.get_mut(&session) {
+                        live.geometry_input_rearm_pending = false;
+                    }
+                }
+                if !rearmed && (input_was_held || is_controller) {
                     self.notify_geometry_input_suspended(&session, &owner)
                         .await?;
                 }
@@ -1579,6 +1626,7 @@ impl Service {
         }
         if let Some(live) = self.live.get_mut(id) {
             live.input_suspension_notice_at = None;
+            live.geometry_input_rearm_pending = false;
         }
         eprintln!(
             "REMOTE_DESKTOP_GEOMETRY_TRACE phase=control.resume.armed session={id} epoch={epoch}"
@@ -1586,6 +1634,57 @@ impl Service {
         Ok(Some(
             serde_json::json!({"type":"input.resumed","payload":{"inputEpoch":epoch}}),
         ))
+    }
+
+    /// Re-establish a lease that was held before a geometry update. The caller
+    /// has already released the previous epoch and pushed the replacement
+    /// geometry into the guard, so `Arm` validates against what capture is
+    /// producing now. Failure falls back to the normal recoverable suspension
+    /// notice; it must never leave the controller waiting for an ACK.
+    async fn rearm_input_after_geometry(&mut self, id: &str) -> anyhow::Result<bool> {
+        let epoch = match self.registry.prepare_input(id, Instant::now()) {
+            Ok(epoch) => epoch,
+            Err(error) => {
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.rearm.skipped session={id} error={error}"
+                );
+                return Ok(false);
+            }
+        };
+        match self.resume_input(id, epoch).await {
+            Ok(Some(message)) => {
+                eprintln!(
+                    "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.rearm.resumed session={id} epoch={epoch}"
+                );
+                self.live
+                    .get_mut(id)
+                    .ok_or_else(|| anyhow::anyhow!("peer closed"))?
+                    .reply(Channel::Control, message)
+                    .await?;
+                Ok(true)
+            }
+            // The guard replied with a recoverable error, or rejected the arm.
+            // The caller publishes the authoritative geometry suspension.
+            Ok(None) => Ok(false),
+            Err(error) => {
+                let Some(cause) = error.downcast_ref::<crate::error::BackendError>().copied()
+                else {
+                    return Err(error);
+                };
+                if cause == crate::error::BackendError::InputGuardFailed
+                    || cause.is_recoverable_input_suspension()
+                {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.rearm.recoverable session={id} cause={cause}"
+                    );
+                    self.discard_input_guard().await;
+                    let _ = self.suspend_input_after_guard_failure(id, cause).await?;
+                    Ok(false)
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 
     async fn discard_input_guard(&mut self) {
@@ -1721,6 +1820,9 @@ impl Service {
                     let response = match self.registry.request_control(&id, now) {
                         Ok(previous) => {
                             if let Some(previous) = previous.filter(|previous| previous != &id) {
+                                if let Some(live) = self.live.get_mut(&previous) {
+                                    live.geometry_input_rearm_pending = false;
+                                }
                                 self.effects(
                                     &previous,
                                     Effects {
@@ -1835,6 +1937,9 @@ impl Service {
                     );
                     let effects = self.registry.suspend_input(&id)?;
                     self.effects(&id, effects).await;
+                    if let Some(live) = self.live.get_mut(&id) {
+                        live.geometry_input_rearm_pending = false;
+                    }
                     self.live
                         .get_mut(&id)
                         .ok_or_else(|| anyhow::anyhow!("peer closed"))?
@@ -1897,6 +2002,11 @@ impl Service {
                 Control::Visibility { hidden } => {
                     let effects = self.registry.visibility(&id, hidden, now)?;
                     self.effects(&id, effects).await;
+                    if hidden {
+                        if let Some(live) = self.live.get_mut(&id) {
+                            live.geometry_input_rearm_pending = false;
+                        }
+                    }
                 }
                 Control::Keyframe => {
                     self.live
@@ -2672,6 +2782,7 @@ mod tests {
                 fallback_control: None,
                 webrtc_connected: false,
                 input_suspension_notice_at: None,
+                geometry_input_rearm_pending: false,
             },
         );
         service.registry.fallback_activated(&viewer).unwrap();
@@ -2713,6 +2824,115 @@ mod tests {
             .await
             .unwrap());
         assert!(control_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn geometry_unstable_keeps_input_rearm_intent_until_geometry_settles() {
+        let (events, _events_rx) = mpsc::channel(16);
+        let mut service = Service {
+            registry: Registry::new(),
+            live: HashMap::new(),
+            input_guard: None,
+            input_guard_backend: None,
+            mode: crate::capture::Mode::Synthetic,
+            show_cursor: true,
+            source_salt: crate::session::secret(),
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+            catalog: None,
+            display_catalog: None,
+            pending_source: HashMap::new(),
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+            selected_source: HashMap::new(),
+            #[cfg(target_os = "linux")]
+            surface: None,
+            events: events.clone(),
+            fallbacks: HashMap::new(),
+        };
+        let owner = Owner {
+            actor_id: "fixture".into(),
+            device_session_id: "device".into(),
+        };
+        let target = crate::session::CaptureSelection {
+            source_ref: "window".into(),
+            stream_region: None,
+            control_region: None,
+        };
+        let now = Instant::now();
+        let (snapshot, token) = service
+            .registry
+            .reserve("geometry-unstable", owner.clone(), target.clone(), now)
+            .unwrap();
+        let viewer = snapshot.viewer_session_id;
+        service
+            .registry
+            .attach(&viewer, &owner, &target, &token, now)
+            .unwrap();
+        let peer = MediaPeer::new(viewer.clone(), events).await.unwrap();
+        let control = peer.control();
+        service.live.insert(
+            viewer.clone(),
+            LivePeer {
+                id: viewer.clone(),
+                owner: owner.clone(),
+                input_backend: None,
+                pointer_mapping: None,
+                peer,
+                control,
+                channels: HashMap::new(),
+                decoder: Decoder::default(),
+                reply_seq: 0,
+                clipboard_enabled: false,
+                clipboard: String::new(),
+                native_clipboard: None,
+                ice_expires_at: None,
+                pending_ice_expires_at: None,
+                ice_restart_pending: false,
+                fallback_generation: None,
+                fallback_active: false,
+                fallback_control: None,
+                webrtc_connected: false,
+                input_suspension_notice_at: None,
+                geometry_input_rearm_pending: false,
+            },
+        );
+        service.registry.fallback_activated(&viewer).unwrap();
+        service.registry.resume_input(&viewer, now).unwrap();
+        let (control_tx, mut control_rx) = mpsc::channel(4);
+        service.live.get_mut(&viewer).unwrap().fallback_control = Some(control_tx);
+
+        let (acknowledged, wait) = tokio::sync::oneshot::channel();
+        service
+            .event(PeerEvent::GeometryUnstable {
+                session: viewer.clone(),
+                acknowledged,
+            })
+            .await
+            .unwrap();
+        wait.await.unwrap();
+
+        let pending = service
+            .live
+            .get(&viewer)
+            .unwrap()
+            .geometry_input_rearm_pending;
+        assert!(pending, "unstable geometry must retain the re-arm intent");
+        assert!(should_rearm_input_after_geometry(false, pending, true));
+        assert!(!should_rearm_input_after_geometry(false, pending, false));
+        let message: serde_json::Value =
+            serde_json::from_str(&control_rx.try_recv().unwrap()).unwrap();
+        assert_eq!(message["type"], "input.suspended");
+
+        service
+            .message(viewer.clone(), Message::Control(Control::Suspend), None)
+            .await
+            .unwrap();
+        assert!(
+            !service
+                .live
+                .get(&viewer)
+                .unwrap()
+                .geometry_input_rearm_pending
+        );
     }
 
     #[tokio::test]
@@ -2781,6 +3001,7 @@ mod tests {
                 fallback_control: None,
                 webrtc_connected: false,
                 input_suspension_notice_at: None,
+                geometry_input_rearm_pending: false,
             },
         );
         service.registry.fallback_activated(&viewer).unwrap();
@@ -3023,6 +3244,7 @@ mod tests {
                 fallback_control: None,
                 webrtc_connected: false,
                 input_suspension_notice_at: None,
+                geometry_input_rearm_pending: false,
             },
         );
 

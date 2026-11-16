@@ -180,11 +180,8 @@ impl NativeInput {
             return Ok(());
         }
         #[cfg(target_os = "windows")]
-        if let Some(window) = &self.window {
-            anyhow::ensure!(
-                window.geometry()? == geometry,
-                crate::error::BackendError::GeometryChanged
-            );
+        if let Some(window) = &mut self.window {
+            window.reconfigure(geometry)?;
             self.geometry = geometry;
             self.pointer_mapping = PointerMapping::from_geometry(geometry);
             return Ok(());
