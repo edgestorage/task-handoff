@@ -1,0 +1,21 @@
+﻿{
+    "capturedAt":  "2026-11-16T05:05:35.7563622Z",
+    "host":  {
+                 "os":  "Microsoft Windows 11 专业工作站版",
+                 "version":  "10.0.26200",
+                 "build":  "26200",
+                 "architecture":  "x64"
+             },
+    "session":  {
+                    "id":  2,
+                    "state":  "active",
+                    "evidence":  "WTSActive passed through windows_access::check(); explorer.exe is in the same session (PID 2124)"
+                },
+    "display":  {
+                    "width":  1280,
+                    "height":  800,
+                    "sourceCount":  1,
+                    "source":  "native Windows display catalog"
+                },
+    "scope":  "Local Windows G1 native acceptance. Product capability remains fail-closed."
+}

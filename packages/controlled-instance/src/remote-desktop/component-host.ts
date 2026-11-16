@@ -101,7 +101,6 @@ export class DesktopComponentHost extends EventEmitter {
   get closed() { return this.ended; }
 
   static async spawn(binary: string, mode: "local" | "virtual" | "control", stateDir?: string) {
-    if (process.platform === "win32") throw new Error("REMOTE_DESKTOP_PLATFORM_UNSUPPORTED");
     if (!path.isAbsolute(binary)) throw new Error("REMOTE_DESKTOP_PACKAGE_INVALID");
     const host = new DesktopComponentHost();
     try { await host.start(binary, mode, stateDir); return host; }
@@ -112,9 +111,15 @@ export class DesktopComponentHost extends EventEmitter {
     }
   }
   private async start(binary: string, mode: "local" | "virtual" | "control", stateDir?: string) {
-    this.directory = fs.mkdtempSync(path.join(process.platform === "darwin" ? "/private/tmp" : os.tmpdir(), "th-desktop-host-"));
-    fs.chmodSync(this.directory, 0o700);
-    const endpoint = path.join(this.directory, "host.sock");
+    // Windows uses a named pipe. Keep the unguessable name paired with the
+    // inherited nonce; neither value is passed through the environment.
+    const endpoint = process.platform === "win32"
+      ? `\\\\.\\pipe\\th-desktop-host-${randomBytes(32).toString("hex")}`
+      : (() => {
+        this.directory = fs.mkdtempSync(path.join(process.platform === "darwin" ? "/private/tmp" : os.tmpdir(), "th-desktop-host-"));
+        fs.chmodSync(this.directory, 0o700);
+        return path.join(this.directory, "host.sock");
+      })();
     const nonce = randomBytes(32).toString("hex");
     const hello = { protocolVersion: DESKTOP_IPC_VERSION, nonce };
     await new Promise<void>((resolve, reject) => {

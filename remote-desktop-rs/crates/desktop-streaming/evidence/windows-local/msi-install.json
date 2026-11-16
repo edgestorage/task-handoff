@@ -1,0 +1,28 @@
+﻿{
+    "result":  "passed",
+    "installer":  "WiX Toolset 3.14.1 MSI",
+    "msi":  "release/windows/TaskHandoffRemoteDesktop-0.0.46-x64.msi",
+    "msiSizeBytes":  4259840,
+    "msiSha256":  "b8d6f228d6dfeb33a65b1dd80d45e1c539c36f48d38a93e6e3e031f848f6d6af",
+    "installScope":  "perUser",
+    "installDirectory":  "%LOCALAPPDATA%\\TaskHandoff\\RemoteDesktop",
+    "install":  {
+                    "command":  "msiexec /i \u003cmsi\u003e /qn /norestart /l*v install-0.0.46.log",
+                    "exitCode":  0,
+                    "logEvidence":  "Product: TaskHandoff Remote Desktop -- Installation completed successfully.",
+                    "installedVersion":  "0.0.46",
+                    "installedExecutableSha256":  "82cb1df1147fb62a596ccc08b5332a5bbbefc58a1dc7165a6e35b23814561124",
+                    "installedExecutableSignature":  "ValidSignatureUntrustedDevelopmentRoot",
+                    "installedExecutableTrust":  "self-signed-development-untrusted-root",
+                    "hashVerified":  true,
+                    "signatureVerified":  true
+                },
+    "uninstall":  {
+                      "command":  "msiexec /x \u003cmsi\u003e /qn /norestart /l*v uninstall-0.0.46.log",
+                      "exitCode":  0,
+                      "logEvidence":  "Product: TaskHandoff Remote Desktop -- Removal completed successfully.",
+                      "executableRemoved":  true
+                  },
+    "buildEvidence":  "msi-build.json",
+    "limitations":  "This verifies a per-user MSI, one install/uninstall cycle and executable version/signature checks. A machine-wide installer, upgrade/downgrade matrix, uninstall UI and trust-prompt UX remain outside this component acceptance."
+}

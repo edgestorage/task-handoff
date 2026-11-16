@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const ts = require("typescript");
+require("./workspace-require.js").registerWorkspaceRequire();
 require.extensions[".ts"] = (module, filename) => {
   const output = ts.transpileModule(fs.readFileSync(filename, "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true }, fileName: filename });
   module._compile(output.outputText, filename);
@@ -10,6 +11,7 @@ require.extensions[".ts"] = (module, filename) => {
 const { DesktopComponentHost, DesktopFrameReader, desktopIpcFrame, DESKTOP_IPC_VERSION, MAX_DESKTOP_IPC_FRAME } = require("../packages/controlled-instance/src/remote-desktop/component-host.ts");
 const fixture = require("../remote-desktop-rs/crates/desktop-streaming/fixtures/contract.json");
 const steps = require("../remote-desktop-rs/crates/desktop-streaming/fixtures/adapter-contract.json");
+const componentBinary = path.resolve(`remote-desktop-rs/target/debug/task-handoff-desktop-streaming${process.platform === "win32" ? ".exe" : ""}`);
 
 function fakeHandshakeBinary(directory, protocolVersion, nonce) {
   const binary = path.join(directory, `fake-component-${protocolVersion}-${nonce || "echo"}.js`);
@@ -26,7 +28,7 @@ function fakeHandshakeBinary(directory, protocolVersion, nonce) {
   return binary;
 }
 
-test("private IPC distinguishes protocol mismatch and authentication failure", async () => {
+test("private IPC distinguishes protocol mismatch and authentication failure", { skip: process.platform === "win32" }, async () => {
   const directory = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "desktop-handshake-"));
   try {
     await assert.rejects(DesktopComponentHost.spawn(fakeHandshakeBinary(directory, "1999-01-01"), "control"), /REMOTE_DESKTOP_PROTOCOL_MISMATCH/);
@@ -49,7 +51,7 @@ test("private IPC consumes shared framing, fragmented/coalesced packets, and rej
   assert.throws(() => reader.push(invalid, () => {}), /IPC_LIMIT/);
 });
 test("production Node host consumes shared session contract and restart invalidates references", { timeout:30000 }, async () => {
-  const binary = path.resolve("remote-desktop-rs/target/debug/task-handoff-desktop-streaming");
+  const binary = componentBinary;
   const host = await DesktopComponentHost.spawn(binary,"control");
   const events = []; host.on("session", (event) => events.push(event));
   let session = "", token = "";
@@ -79,7 +81,7 @@ test("production Node host consumes shared session contract and restart invalida
 });
 
 test("final shutdown response is drained before process exit",{timeout:15000},async()=>{
-  const binary=path.resolve('remote-desktop-rs/target/debug/task-handoff-desktop-streaming');
+  const binary=componentBinary;
   for(let n=0;n<20;n++){
     const host=await DesktopComponentHost.spawn(binary,'control');
     try{assert.equal((await host.request('shutdown',{type:'shutdown'})).type,'stopped');}
@@ -88,7 +90,7 @@ test("final shutdown response is drained before process exit",{timeout:15000},as
 });
 
 test('owner takeover, stale callback and trusted force stop consume shared contract',{timeout:15000},async()=>{
-  const host=await DesktopComponentHost.spawn(path.resolve('remote-desktop-rs/target/debug/task-handoff-desktop-streaming'),'control');
+  const host=await DesktopComponentHost.spawn(componentBinary,'control');
   const values={};
   try{
     for(const step of require('../remote-desktop-rs/crates/desktop-streaming/fixtures/ownership-contract.json')){
@@ -104,4 +106,15 @@ test('owner takeover, stale callback and trusted force stop consume shared contr
     }
     assert.notEqual(values.firstSession,values.secondSession);
   }finally{await host.close();}
+});
+
+test('Windows private IPC authenticates over a named pipe', { skip: process.platform !== "win32" || !fs.existsSync(componentBinary), timeout: 30000 }, async () => {
+  const host = await DesktopComponentHost.spawn(componentBinary, "control");
+  try {
+    assert.ok(host.bootId);
+    assert.ok(host.capability);
+    assert.equal((await host.request("probe", { type: "probe" })).type, "capability");
+  } finally {
+    await host.close();
+  }
 });

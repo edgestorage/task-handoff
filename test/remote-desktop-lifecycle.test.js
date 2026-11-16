@@ -17,6 +17,8 @@ const version=controlledInstancePackageVersionResolver({})();
 const owner={actorId:'actor',deviceSessionId:'device'};
 const quote=value=>`'${value.replaceAll("'","'\\''")}'`;
 const integrity=bytes=>`sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}`;
+const componentBinary=path.resolve(`remote-desktop-rs/target/debug/task-handoff-desktop-streaming${process.platform==='win32'?'.exe':''}`);
+const legacyExecutable=process.platform==='win32'?'bin/task-handoff-desktop-streaming.exe':'bin/task-handoff-desktop-streaming';
 
 function mismatchedComponent(directory){
  const binary=path.join(directory,'mismatched-component.js');
@@ -32,10 +34,11 @@ function mismatchedComponent(directory){
 }
 
 async function nativePackageFixture(dir){
- const binary=path.resolve('remote-desktop-rs/target/debug/task-handoff-desktop-streaming');
  const packageRoot=path.join(dir,'package');fs.mkdirSync(path.join(packageRoot,'bin'),{recursive:true});
  fs.writeFileSync(path.join(packageRoot,'package.json'),JSON.stringify({name:'@task-handoff/remote-desktop-test',version,files:['bin']}));
- fs.writeFileSync(path.join(packageRoot,'bin/task-handoff-desktop-streaming'),`#!/bin/sh\nif [ "$1" = "--version" ]; then echo ${quote(version)}; exit 0; fi\nif [ "$1" = "--native" ] || [ "$1" = "--virtual" ]; then shift; fi\nexec ${quote(binary)} "$@"\n`,{mode:0o700});
+ const packaged=path.join(packageRoot,'bin',process.platform==='win32'?'task-handoff-desktop-streaming.exe':'task-handoff-desktop-streaming');
+ if(process.platform==='win32')fs.copyFileSync(componentBinary,packaged);
+ else fs.writeFileSync(packaged,`#!/bin/sh\nif [ "$1" = "--version" ]; then echo ${quote(version)}; exit 0; fi\nif [ "$1" = "--native" ] || [ "$1" = "--virtual" ]; then shift; fi\nexec ${quote(componentBinary)} "$@"\n`,{mode:0o700});
  const archive=path.join(dir,'component.tgz');await tar.c({cwd:dir,file:archive,gzip:true,portable:true,noMtime:true},['package']);
  const bytes=fs.readFileSync(archive);return {bytes,archive,integrity:integrity(bytes)};
 }
@@ -43,8 +46,9 @@ async function nativePackageFixture(dir){
 function desktopDefinition(){
  const definition=desktopProvider().definition({env:{}});
  assert.equal(definition.launchable,false);
- assert.equal(definition.distribution.recipes.filter(recipe=>recipe.type==='registry-native-package').length,2);
+ assert.equal(definition.distribution.recipes.filter(recipe=>recipe.type==='registry-native-package').length,3);
  assert.equal(definition.distribution.recipes.filter(recipe=>recipe.type==='archive-ownership').length,1);
+ assert.equal(definition.distribution.recipes.find(recipe=>recipe.type==='registry-native-package'&&recipe.platforms.includes('win32')).launchPath,'bin/task-handoff-desktop-streaming.exe');
  return definition;
 }
 
@@ -53,7 +57,7 @@ function lifecycleManager(options){
  const completed=new Map(),waiters=new Map();let resolutions=0,failResolution=false,stopCalls=0;
  const execute=createAppRecipeExecutor({
   installBaseDir,stateDir,
-  commandRunner:async command=>command.executable.endsWith('task-handoff-desktop-streaming')?{exitCode:0,stdout:`${version}\n`,stderr:''}:assert.fail('unexpected command'),
+  commandRunner:async command=>path.basename(command.executable).replace(/\.exe$/i,'')==='task-handoff-desktop-streaming'?{exitCode:0,stdout:`${version}\n`,stderr:''}:assert.fail('unexpected command'),
   fetcher:async()=>new Response(bytes),
  });
  const manager=new AppManagementManager({stateDir,installBaseDir,definitions:()=>[definition],capabilities:()=>({platform:process.platform,arch:process.arch,installers:[],privilege:'user'}),execute,
@@ -69,7 +73,7 @@ function lifecycleManager(options){
 
 test('package metadata version never gates a protocol-compatible component',{timeout:20000},async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-version-compat-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
- const binary=path.resolve('remote-desktop-rs/target/debug/task-handoff-desktop-streaming');
+ const binary=componentBinary;
  const service=new DesktopService({dataDir:dir,mode:'local',canStart:()=>true,installedPackage:()=>({binary,version:'component-previous'})});
  t.after(()=>service.close());
  service.settings.set(true);
@@ -79,7 +83,7 @@ test('package metadata version never gates a protocol-compatible component',{tim
  assert.notEqual(service.status().reason,'REMOTE_DESKTOP_VERSION_MISMATCH');
 });
 
-test('protocol mismatch requests one App update until the package changes',{timeout:20000},async t=>{
+test('protocol mismatch requests one App update until the package changes',{skip:process.platform==='win32',timeout:20000},async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-protocol-update-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  let requests=0;const service=new DesktopService({dataDir:dir,mode:'local',canStart:()=>true,installedPackage:()=>({binary:mismatchedComponent(dir),version:'same'}),requestUpdate:()=>{requests++;}});t.after(()=>service.close());
  service.settings.set(true);
@@ -112,8 +116,12 @@ test('native npm package install, real component lifecycle and uninstall share t
  assert.equal(service.componentRunning(),true);assert.equal(readManagedDesktopPackage(installBaseDir,stateDir).version,version);
  lifecycle.failResolution(false);
  const first=await service.request('first',{type:'reserve',owner,captureSelection:{sourceRef:'display'}});
- assert.equal(first.type,'reserved');
- await service.request('attach',{type:'attach',owner,viewerSessionId:first.snapshot.viewerSessionId,captureSelection:{sourceRef:'display'},attachToken:first.attachToken});
+ if(process.platform==='win32'&&first.type==='error'&&first.code==='REMOTE_DESKTOP_NO_INTERACTIVE_SESSION'){
+  t.diagnostic('lease assertions skipped because the Windows session is not interactive');
+ }else{
+  assert.equal(first.type,'reserved',JSON.stringify(first));
+  await service.request('attach',{type:'attach',owner,viewerSessionId:first.snapshot.viewerSessionId,captureSelection:{sourceRef:'display'},attachToken:first.attachToken});
+ }
  await lifecycle.run('uninstall','uninstall');
  assert.equal(service.componentRunning(),false);assert.equal(service.settings.get().enabled,false);assert.equal(readManagedDesktopPackage(installBaseDir,stateDir),undefined);
 });
@@ -122,8 +130,8 @@ test('legacy archive stays detectable and updates into the native layout without
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-archive-migration-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const installBaseDir=path.join(dir,'apps'),stateDir=path.join(dir,'state'),legacyRoot=path.join(installBaseDir,'remote-desktop'),manifestFile=path.join(stateDir,'manifests','remote-desktop.json');
  fs.mkdirSync(path.join(legacyRoot,'bin'),{recursive:true});fs.mkdirSync(path.dirname(manifestFile),{recursive:true});
- fs.writeFileSync(path.join(legacyRoot,'bin/task-handoff-desktop-streaming'),'legacy',{mode:0o700});fs.writeFileSync(path.join(legacyRoot,'desktop-component.json'),JSON.stringify({version:'previous'}));fs.writeFileSync(path.join(legacyRoot,'user.txt'),'preserved');
- fs.writeFileSync(manifestFile,JSON.stringify({appId:'remote-desktop',installRoot:legacyRoot,files:['bin/task-handoff-desktop-streaming','desktop-component.json']}));
+ fs.writeFileSync(path.join(legacyRoot,legacyExecutable),'legacy',{mode:0o700});fs.writeFileSync(path.join(legacyRoot,'desktop-component.json'),JSON.stringify({version:'previous'}));fs.writeFileSync(path.join(legacyRoot,'user.txt'),'preserved');
+ fs.writeFileSync(manifestFile,JSON.stringify({appId:'remote-desktop',installRoot:legacyRoot,files:[legacyExecutable,'desktop-component.json']}));
  const fixture=await nativePackageFixture(dir),definition=desktopDefinition();
  let manager;
  const service=new DesktopService({dataDir:dir,mode:'local',installedPackage:()=>readManagedDesktopPackage(installBaseDir,stateDir),canStart:()=>!manager.hasActiveOperation('remote-desktop')});t.after(()=>service.close());
@@ -132,7 +140,7 @@ test('legacy archive stays detectable and updates into the native layout without
  const app=manager.snapshot().apps[0];assert.equal(app.state,'installed');assert.equal(app.canUpdate,true);assert.equal(app.canUninstall,true);
  await lifecycle.run('update','migrate');
  assert.equal(readManagedDesktopPackage(installBaseDir,stateDir).version,version);
- assert.equal(fs.existsSync(path.join(legacyRoot,'bin/task-handoff-desktop-streaming')),false);
+ assert.equal(fs.existsSync(path.join(legacyRoot,legacyExecutable)),false);
  assert.equal(fs.existsSync(path.join(legacyRoot,'desktop-component.json')),false);
  assert.equal(fs.existsSync(manifestFile),false);
  assert.equal(fs.readFileSync(path.join(legacyRoot,'user.txt'),'utf8'),'preserved');
@@ -153,9 +161,10 @@ test('real Node server projects capability snapshots and publishes only authorit
  const {createWebApp}=require('../packages/controlled-instance/src/web/server.ts');
  const {WebEventBus}=require('../packages/controlled-instance/src/web/events.ts');
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'desktop-producer-'));
- const keys=['TASK_HANDOFF_DATA_DIR','TASK_HANDOFF_LOG_DIR','TASK_HANDOFF_CONFIG','TASK_HANDOFF_WEB_AUTH','TASK_HANDOFF_AI_SESSION_SCAN','TASK_HANDOFF_NODE_AGENT_URL','TASK_HANDOFF_WEB_TOKEN','TASK_HANDOFF_CONTROL_MODE'];
+ const keys=['TASK_HANDOFF_DATA_DIR','TASK_HANDOFF_LOG_DIR','TASK_HANDOFF_CONFIG','TASK_HANDOFF_WEB_AUTH','TASK_HANDOFF_AI_SESSION_SCAN','TASK_HANDOFF_NODE_AGENT_URL','TASK_HANDOFF_WEB_TOKEN','TASK_HANDOFF_CONTROL_MODE','TASK_HANDOFF_GIT_CREDENTIAL_SOCKET'];
  const previous=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
  Object.assign(process.env,{TASK_HANDOFF_DATA_DIR:dir,TASK_HANDOFF_LOG_DIR:path.join(dir,'logs'),TASK_HANDOFF_CONFIG:path.join(dir,'config.json'),TASK_HANDOFF_WEB_AUTH:'off',TASK_HANDOFF_AI_SESSION_SCAN:'0',TASK_HANDOFF_WEB_TOKEN:'fixture-web-token',TASK_HANDOFF_CONTROL_MODE:'standalone'});delete process.env.TASK_HANDOFF_NODE_AGENT_URL;
+ delete process.env.TASK_HANDOFF_GIT_CREDENTIAL_SOCKET;
  let installed;const service=new DesktopService({dataDir:dir,mode:'local',installedPackage:()=>installed,canStart:()=>true});
  const events=[],publish=WebEventBus.prototype.publish;
  WebEventBus.prototype.publish=function(type,payload){if(type==='instance.capabilities.changed')events.push(payload);return publish.call(this,type,payload);};

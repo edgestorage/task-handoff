@@ -11,6 +11,8 @@ use std::time::Instant;
 pub type DisplayTarget = crate::platform::macos::DisplayTarget;
 #[cfg(target_os = "linux")]
 pub type DisplayTarget = crate::platform::linux::DisplayTarget;
+#[cfg(target_os = "windows")]
+pub type DisplayTarget = crate::platform::apple_windows::DisplayTarget;
 
 pub struct DisplayCatalog {
     catalog: Catalog<DisplayTarget>,
@@ -18,7 +20,7 @@ pub struct DisplayCatalog {
     config: crate::platform::linux::Config,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl Default for DisplayCatalog {
     fn default() -> Self {
         Self::new()
@@ -31,6 +33,16 @@ impl DisplayCatalog {
         Self::with_source_salt(crate::session::secret())
     }
     #[cfg(target_os = "macos")]
+    pub fn with_source_salt(source_salt: String) -> Self {
+        Self {
+            catalog: Catalog::with_salt(source_salt),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    pub fn new() -> Self {
+        Self::with_source_salt(crate::session::secret())
+    }
+    #[cfg(target_os = "windows")]
     pub fn with_source_salt(source_salt: String) -> Self {
         Self {
             catalog: Catalog::with_salt(source_salt),
@@ -52,6 +64,8 @@ impl DisplayCatalog {
         #[cfg(target_os = "macos")]
         let displays =
             tokio::task::spawn_blocking(crate::platform::macos::enumerate_displays).await??;
+        #[cfg(target_os = "windows")]
+        let displays = crate::platform::apple_windows::enumerate_displays().await?;
         #[cfg(target_os = "linux")]
         let displays = {
             let config = self.config.clone();

@@ -3,6 +3,7 @@ use desktop_streaming::{
     contract::{Hello, IPC_VERSION},
     framing,
 };
+#[cfg(unix)]
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::{path::PathBuf, time::Duration};

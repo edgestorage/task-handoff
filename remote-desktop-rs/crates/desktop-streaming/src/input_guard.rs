@@ -39,6 +39,11 @@ pub enum Backend {
         display: Option<String>,
         authority: Option<std::path::PathBuf>,
     },
+    #[cfg(target_os = "windows")]
+    WindowsWindow {
+        identity: crate::platform::windows_window::Identity,
+        geometry: Geometry,
+    },
     Native {
         geometry: Geometry,
         display: Option<String>,
@@ -55,6 +60,10 @@ impl Backend {
             } => *current = geometry,
             #[cfg(target_os = "linux")]
             Self::LinuxWindow {
+                geometry: current, ..
+            } => *current = geometry,
+            #[cfg(target_os = "windows")]
+            Self::WindowsWindow {
                 geometry: current, ..
             } => *current = geometry,
             Self::Native {
@@ -90,6 +99,13 @@ impl Backend {
                     ..
                 },
             ) => window == other_window && display == other_display && authority == other_authority,
+            #[cfg(target_os = "windows")]
+            (
+                Self::WindowsWindow { identity, .. },
+                Self::WindowsWindow {
+                    identity: other, ..
+                },
+            ) => identity == other,
             (
                 Self::Native {
                     display, authority, ..
@@ -229,6 +245,10 @@ fn bind_backend(backend: Backend) -> anyhow::Result<Actuator> {
             ..
         } => NativeInput::new_window(window, geometry, display)
             .map(|n| Actuator::Native(Box::new(n))),
+        #[cfg(target_os = "windows")]
+        Backend::WindowsWindow { identity, geometry } => {
+            NativeInput::new_window(identity, geometry).map(|n| Actuator::Native(Box::new(n)))
+        }
     }
 }
 impl Actuator {
@@ -566,9 +586,19 @@ pub struct Client {
 }
 impl Client {
     pub async fn spawn(binary: &std::path::Path, backend: Backend) -> anyhow::Result<Self> {
+        match &backend {
+            Backend::Synthetic => {}
+            Backend::Native { geometry, .. } => geometry.validate()?,
+            #[cfg(target_os = "macos")]
+            Backend::MacWindow { geometry, .. } => geometry.validate()?,
+            #[cfg(target_os = "linux")]
+            Backend::LinuxWindow { geometry, .. } => geometry.validate()?,
+            #[cfg(target_os = "windows")]
+            Backend::WindowsWindow { geometry, .. } => geometry.validate()?,
+        }
         let mut process = tokio::process::Command::new(binary);
         #[cfg(target_os = "windows")]
-        {
+        if !matches!(backend, Backend::Synthetic) {
             // The host Job permits this one explicit breakaway. If an outer
             // embedding Job forbids it, CreateProcess fails and native input
             // remains unavailable; never retry inside the kill-on-close Job.

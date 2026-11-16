@@ -1,6 +1,6 @@
-//! On-demand WGC window references. Native identities stay inside this
-//! adapter; the service must not expose window capture until focus/hit testing
-//! and geometry transitions are integrated and validated on each platform.
+//! On-demand WGC window references. Native identities stay inside this adapter;
+//! selection, retained-handle validation and input leases share the same
+//! HWND/PID identity without exposing it to IPC or the product UI.
 use crate::{
     catalog::{CaptureSource, Catalog, NativeSource, MAX_SOURCES},
     error::BackendError,
@@ -12,11 +12,28 @@ use std::time::Instant;
 
 struct Selection {
     window: CapturableWindow,
-    pid: i32,
+    pid: u32,
 }
-#[derive(Default)]
 pub struct WindowCatalog {
     references: Catalog<Selection>,
+}
+
+impl Default for WindowCatalog {
+    fn default() -> Self {
+        Self::new(crate::session::secret())
+    }
+}
+
+pub fn identity(window: &CapturableWindow) -> anyhow::Result<super::windows_window::Identity> {
+    use crabgrab::platform::windows::WindowsCapturableWindowExt;
+    let pid = u32::try_from(window.application().pid())
+        .ok()
+        .filter(|pid| *pid != 0)
+        .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))?;
+    Ok(super::windows_window::Identity {
+        window: window.get_window_handle().0,
+        pid,
+    })
 }
 
 fn selectable(window: &CapturableWindow) -> bool {
@@ -25,37 +42,12 @@ fn selectable(window: &CapturableWindow) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        use crabgrab::platform::windows::WindowsCapturableWindowExt;
-        use windows_sys::Win32::{Graphics::Dwm::*, UI::WindowsAndMessaging::*};
-        let hwnd = window.get_window_handle().0 as *mut std::ffi::c_void;
-        unsafe {
-            if IsWindow(hwnd) == 0
-                || IsIconic(hwnd) != 0
-                || hwnd == GetShellWindow()
-                || hwnd == GetDesktopWindow()
-                || GetAncestor(hwnd, GA_ROOT) != hwnd
-                || (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW) != 0
-            {
-                return false;
-            }
-            let mut cloaked = 0u32;
-            if DwmGetWindowAttribute(
-                hwnd,
-                DWMWA_CLOAKED as u32,
-                (&mut cloaked as *mut u32).cast(),
-                4,
-            ) < 0
-                || cloaked != 0
-            {
-                return false;
-            }
-            let mut affinity = 0;
-            // The OS may deny this query for another process. Successful
-            // protection metadata excludes the target; WGC remains final owner
-            // of capture authorization when the query is inaccessible.
-            if GetWindowDisplayAffinity(hwnd, &mut affinity) != 0 && affinity != WDA_NONE {
-                return false;
-            }
+        let Ok(identity) = identity(window) else {
+            return false;
+        };
+        let hwnd = identity.window as *mut std::ffi::c_void;
+        if !super::windows_window::selectable(hwnd, identity.pid) {
+            return false;
         }
     }
     let r = window.rect();
@@ -76,27 +68,35 @@ async fn enumerate() -> anyhow::Result<CapturableContent> {
         .map_err(|_| anyhow::anyhow!(BackendError::CaptureUnavailable))
 }
 impl WindowCatalog {
+    pub fn new(source_salt: String) -> Self {
+        Self {
+            references: Catalog::with_salt(source_salt),
+        }
+    }
+
     pub async fn enumerate(&mut self, owner: Owner) -> anyhow::Result<Vec<CaptureSource>> {
         self.references.invalidate();
         let content = enumerate().await?;
         let mut windows = Vec::new();
         for window in content.windows().filter(selectable) {
-            let rect = window.rect();
-            let geometry = Geometry::from_actuator_rect(
-                rect.origin.x,
-                rect.origin.y,
-                rect.size.width,
-                rect.size.height,
-            )?;
+            let Ok(native_identity) = identity(&window) else {
+                continue;
+            };
+            // WGC frames are configured from the DWM visible frame. Publish the
+            // same rectangle here so catalog dimensions cannot disagree with the
+            // capture and input authority selected moments later.
+            let Ok(geometry) = super::windows_window::geometry(native_identity) else {
+                continue;
+            };
             let application = window.application();
             let (title, subtitle) =
                 crate::catalog::source_labels(window.title(), application.name());
             windows.push(NativeSource {
-                identity: format!("wgc:{}:{}", window.get_window_handle().0, application.pid()),
+                identity: format!("wgc:{}:{}", native_identity.window, native_identity.pid),
                 unavailable_reason: None,
                 handle: Selection {
                     window: window.clone(),
-                    pid: application.pid(),
+                    pid: native_identity.pid,
                 },
                 kind: "window".into(),
                 title,
@@ -104,7 +104,7 @@ impl WindowCatalog {
                 width: geometry.width,
                 height: geometry.height,
             });
-            if windows.len() > MAX_SOURCES {
+            if windows.len() >= MAX_SOURCES {
                 break;
             }
         }
@@ -113,19 +113,27 @@ impl WindowCatalog {
             .map_err(Into::into)
     }
     /// Consume once and reject vanished/hidden targets or a changed owning PID.
-    /// Same-process HWND reuse and focus protection still require a retained
-    /// native capture-item identity before this is wired into the service.
+    /// Input leases separately revalidate the retained HWND before every event.
     pub async fn consume(
         &mut self,
         reference: &str,
         owner: &Owner,
     ) -> anyhow::Result<CapturableWindow> {
-        let selected = self.references.consume(reference, owner, Instant::now())?;
+        let selected = match self.references.consume(reference, owner, Instant::now()) {
+            Ok(selected) => selected,
+            Err(crate::catalog::CatalogError::InvalidReference) => {
+                self.enumerate(owner.clone()).await?;
+                self.references.consume(reference, owner, Instant::now())?
+            }
+            Err(error) => return Err(error.into()),
+        };
         let content = enumerate().await?;
         content
             .windows()
             .find(|w| {
-                w == &selected.window && w.application().pid() == selected.pid && selectable(w)
+                w == &selected.window
+                    && w.application().pid() as u32 == selected.pid
+                    && selectable(w)
             })
             .ok_or_else(|| anyhow::anyhow!(BackendError::WindowUnavailable))
     }

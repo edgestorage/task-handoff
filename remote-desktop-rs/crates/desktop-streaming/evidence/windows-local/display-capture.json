@@ -1,0 +1,31 @@
+﻿{
+    "result":  "passed",
+    "test":  "display_catalog_and_wgc_capture_emit_real_frames",
+    "command":  "cargo +1.95.0-x86_64-pc-windows-gnu test -q --manifest-path remote-desktop-rs/Cargo.toml -p desktop-streaming --test windows_native -- --ignored --nocapture",
+    "rawOutput":  "display capture ok: sources=1 geometry=1280x800 frame=1280x800 cursor=true",
+    "sources":  1,
+    "selectedKind":  "display",
+    "geometry":  {
+                     "width":  1280,
+                     "height":  800
+                 },
+    "frame":  {
+                  "width":  1280,
+                  "height":  800,
+                  "stride":  5120,
+                  "format":  "BGRA",
+                  "bytes":  4096000
+              },
+    "cursor":  true,
+    "checks":  [
+                   "display catalog returned at least one interactive source",
+                   "selected source kind was display",
+                   "one-use source reference was consumed by the owner",
+                   "native WGC backend produced a real frame within 5s",
+                   "catalog and capture geometry agree",
+                   "stride equals width * 4 and BGRA length equals stride * height",
+                   "at least one non-zero byte exists in the first 1 MiB",
+                   "capture paused successfully",
+                   "NativeInput::prepare succeeded for the same display geometry"
+               ]
+}

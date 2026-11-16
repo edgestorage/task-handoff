@@ -79,12 +79,23 @@ test('registry resolution rejects incomplete or mutable metadata',async()=>{
   /changed/,
  );
  await assert.rejects(
-  ()=>resolveRegistryNativePackage(recipe,{...capabilities,platform:'win32'},{
+  ()=>resolveRegistryNativePackage(recipe,{...capabilities,platform:'freebsd'},{
    registries:['https://registry.example'],
    fetch:async()=>assert.fail('fetch must not run'),
   }),
   /does not support/,
  );
+});
+
+test('registry native recipes resolve Windows x64 package names',async()=>{
+ const windowsName='@task-handoff/remote-desktop-win32-x64';
+ const windowsRecipe={...recipe,platforms:['win32'],arches:['x64'],launchPath:'bin/task-handoff-desktop-streaming.exe'};
+ const windowsMetadata={name:windowsName,'dist-tags':{latest:'1.2.3'},versions:{'1.2.3':{name:windowsName,version:'1.2.3',dist:{integrity,tarball:'https://registry.example/task-handoff-remote-desktop-win32-x64-1.2.3.tgz'}}}};
+ const result=await resolveRegistryNativePackage(windowsRecipe,{platform:'win32',arch:'x64',installers:[],privilege:'user'},{registries:['https://registry.example'],fetch:async url=>new Response(JSON.stringify(String(url).endsWith('/1.2.3')?windowsMetadata.versions['1.2.3']:windowsMetadata),{status:200})});
+ assert.equal(result.platforms[0],'win32');
+ assert.equal(result.arches[0],'x64');
+ assert.equal(result.package,windowsName);
+ assert.equal(result.launchPath,'bin/task-handoff-desktop-streaming.exe');
 });
 
 test('registry resolution rejects non-HTTPS tarballs',async()=>{

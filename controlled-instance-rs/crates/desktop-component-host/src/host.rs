@@ -69,14 +69,27 @@ impl ComponentHost {
         show_cursor: bool,
         state_dir: Option<&Path>,
     ) -> anyhow::Result<Self> {
-        anyhow::ensure!(!cfg!(windows), "REMOTE_DESKTOP_PLATFORM_UNSUPPORTED");
         anyhow::ensure!(binary.is_absolute(), "REMOTE_DESKTOP_PACKAGE_INVALID");
-        let directory = tempfile::Builder::new()
-            .prefix("th-desktop-host-")
-            .tempdir_in(local_ipc::temporary_root())?;
         let nonce = secret();
-        let endpoint =
-            LocalIpcEndpoint::in_directory(directory.path(), "desktop", &nonce, "host.sock")?;
+        // Windows host IPC uses a private named pipe, matching the Node host.
+        // POSIX keeps a per-host temporary directory and filesystem socket.
+        #[cfg(windows)]
+        let directory: Option<tempfile::TempDir> = None;
+        #[cfg(windows)]
+        let endpoint = LocalIpcEndpoint::generated_with_scope_name(
+            &format!("th-desktop-host-{nonce}"),
+            "host.sock",
+            None,
+        )?;
+        #[cfg(not(windows))]
+        let (directory, endpoint) = {
+            let directory = tempfile::Builder::new()
+                .prefix("th-desktop-host-")
+                .tempdir_in(local_ipc::temporary_root())?;
+            let endpoint =
+                LocalIpcEndpoint::in_directory(directory.path(), "desktop", &nonce, "host.sock")?;
+            (Some(directory), endpoint)
+        };
         endpoint.prepare()?;
         let mut listener = local_ipc::bind(&endpoint)?;
         let mut command = Process::new(binary);

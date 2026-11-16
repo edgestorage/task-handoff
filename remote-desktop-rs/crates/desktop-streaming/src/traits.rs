@@ -23,6 +23,14 @@ pub struct Geometry {
     pub scale: f64,
 }
 impl Geometry {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.width > 0 && self.height > 0 && self.scale.is_finite() && self.scale > 0.0,
+            crate::error::BackendError::InvalidGeometry
+        );
+        Ok(())
+    }
+
     /// OS actuator rectangle, independent of captured pixel dimensions. Validate
     /// floats before conversion so saturating casts cannot mask invalid targets.
     pub fn from_actuator_rect(x: f64, y: f64, width: f64, height: f64) -> Result<Self> {

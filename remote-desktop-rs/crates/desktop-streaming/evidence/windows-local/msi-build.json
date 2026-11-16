@@ -1,0 +1,16 @@
+﻿{
+    "componentSignatureStatus":  "ValidSignatureUntrustedDevelopmentRoot",
+    "msiSignatureStatus":  "ValidSignatureUntrustedDevelopmentRoot",
+    "version":  "0.0.46",
+    "target":  "x86_64-pc-windows-msvc",
+    "staticCrt":  true,
+    "msi":  "TaskHandoffRemoteDesktop-0.0.46-x64.msi",
+    "msiSha256":  "b8d6f228d6dfeb33a65b1dd80d45e1c539c36f48d38a93e6e3e031f848f6d6af",
+    "componentSha256":  "82cb1df1147fb62a596ccc08b5332a5bbbefc58a1dc7165a6e35b23814561124",
+    "signed":  true,
+    "signMode":  "development-self-signed",
+    "componentSigningEvidence":  "prepackage-signature/authenticode.json",
+    "msiSigningEvidence":  "authenticode.json",
+    "installVerified":  true,
+    "uninstallVerified":  true
+}
