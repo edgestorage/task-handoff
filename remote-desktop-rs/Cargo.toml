@@ -1,6 +1,10 @@
 [workspace]
 members = ["crates/protocol", "crates/desktop-streaming"]
 resolver = "2"
+exclude = ["vendor/crabgrab"]
+
+[patch.crates-io]
+crabgrab = { path = "vendor/crabgrab" }
 
 [workspace.package]
 version = "0.0.46"

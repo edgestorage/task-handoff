@@ -35,7 +35,10 @@ shared transport, Windows display/window catalog/WGC capture, input leases and R
 host startup are covered by compilation, unit, IPC and contract tests. The opt-in
 `windows_native` tests passed on an active console session: real display and
 window WGC frames, catalog selection, DWM geometry, `AttachThreadInput` foreground
-activation, pointer hit validation and native click delivery. Locked,
+activation, pointer hit validation, native click delivery and owned-popup
+compositing. Window capture enables WGC secondary windows, so owned context
+menus, popups and tooltips are included in the same frame on Windows 11 22H2+;
+pre-22H2 systems keep primary-window-only capture. Locked,
 disconnected or cross-session desktops still fail closed; a dimming system
 security/consent prompt (for example a pending Windows Firewall authorization)
 also keeps input fail-closed until the desktop is clear.
@@ -267,7 +270,10 @@ video and the documented 1280x720 test surface; keep runtime evidence with the r
 
 macOS uses maintained `screencapturekit`11.1.2 for BOTH display and window
 capture. CrabGrab0.4's macOS display implementation uses CGDisplayStream, so it
-cannot satisfy this boundary; CrabGrab remains Windows-only for WGC. SCK driver
+cannot satisfy this boundary; CrabGrab remains Windows-only for WGC. Windows
+vendors CrabGrab 0.4.0 under `remote-desktop-rs/vendor/crabgrab` with one local
+patch that enables `IGraphicsCaptureSession6::IncludeSecondaryWindows`, which
+its windows-rs 0.52 bindings do not expose. SCK driver
 queue depth is its documented minimum3; the application holds latest sample plus
 one in flight, without a raw queue. macOS requires a13+SDK to build the12.3
 Swift deployment target; this is a dependency build minimum, not a verified
