@@ -14,6 +14,7 @@ const settingsPages = [
   ["EnvironmentTemplatesSettings.vue", "environment-template-page"],
   ["GitCredentialsSettingsSection.vue", "git-credentials-page"],
   ["ImageSettingsSection.vue", "image-settings-page"],
+  ["InstanceSettingsSection.vue", "instance-directory-page"],
   ["MobileSessionsSettingsSection.vue", "mobile-sessions-page"],
   ["ModelSettingsSection.vue", "model-settings-page"],
   ["ProjectSettingsSection.vue", "project-settings-page"],
@@ -28,7 +29,7 @@ test("settings sections use one full-width content contract without a right-only
   assert.match(layout, /margin-inline: auto/);
   assert.match(layout, /width: min\(100%, var\(--settings-content-max-width, 1080px\)\)/);
   assert.doesNotMatch(layout, /padding-(?:left|right|inline)|inline-gutter/);
-  assert.match(layout, /\.control-settings-page > \.settings-page-scroll \{[^}]*width: calc\(100% \+ var\(--settings-scrollbar-outset, 16px\)\);[^}]*margin-right: calc\(-1 \* var\(--settings-scrollbar-outset, 16px\)\);/);
+  assert.match(layout, /\.control-settings-page > \.settings-page-scroll,\s*\.control-settings-group-content > \.settings-page-scroll \{[^}]*width: calc\(100% \+ var\(--settings-scrollbar-outset, 16px\)\);[^}]*margin-right: calc\(-1 \* var\(--settings-scrollbar-outset, 16px\)\);/);
   assert.match(layout, /\.settings-page-scroll > \[data-task-handoff-scroll-viewport\] \{[^}]*width: calc\(100% - var\(--settings-scrollbar-outset, 16px\)\);/);
   assert.match(modal, /class="settings-section-scroll settings-page-scroll"/);
   assert.match(modal, /settings-section-scroll-content settings-content-page/);
@@ -74,7 +75,7 @@ test("settings navigation replaces overflowing tabs with the current-section men
   assert.match(modal, /new ResizeObserver\(syncSettingsNavigationLayout\)/);
   assert.match(modal, /v-show="!compactSettingsNavigation"/);
   assert.match(modal, /<DropdownMenu v-if="compactSettingsNavigation">/);
-  assert.match(modal, /\{\{ currentSettingsSectionLabel \}\}/);
+  assert.match(modal, /\{\{ currentSettingsSection\?\.label \}\}/);
   assert.match(modal, /<DropdownMenuRadioItem v-for="item in settingsSections"/);
   assert.match(modal, /class="control-settings-section-menu-scroll"/);
   assert.match(modal, /var\(--reka-dropdown-menu-content-available-height\)/);
@@ -87,6 +88,7 @@ test("settings tab page heads vertically center the description row against thei
     ["CloudConnectivitySettingsSection.vue", "cloud-page-head"],
     ["GitCredentialsSettingsSection.vue", "git-credentials-page-head"],
     ["ImageSettingsSection.vue", "image-page-head"],
+    ["InstanceSettingsSection.vue", "instance-directory-page-head"],
     ["MobileSessionsSettingsSection.vue", "mobile-sessions-page-head"],
     ["ModelSettingsSection.vue", "model-page-head"],
     ["ProjectSettingsSection.vue", "project-page-head"],

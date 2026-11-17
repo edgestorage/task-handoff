@@ -103,9 +103,20 @@ export const settings = {
   },
   chat: "聊天",
   nodes: "节点",
+  instances: "实例",
+  instanceRegistry: {
+    description: "查看所有节点上的实例，并管理实例设置。",
+    search: "搜索实例", searchPlaceholder: "搜索名称、ID、节点、项目或镜像",
+    nodeFilter: "筛选节点", allNodes: "全部节点", statusFilter: "筛选状态", allStatuses: "全部状态", runtimeFilter: "筛选运行环境", allRuntimes: "全部运行环境",
+    count: "实例 · {count}", filteredFrom: "筛选自 {count} 项", clearFilters: "清除筛选", loading: "正在加载实例…",
+    empty: "暂无实例", emptyDescription: "创建实例后，可在这里查看并管理实例设置。", noMatches: "没有匹配的实例", noMatchesDescription: "请尝试调整搜索词或筛选条件。",
+    unavailableNodes: "暂时无法获取以下节点的最新实例信息：{nodes}。列表可能不完整。",
+  },
   projects: "Git 项目",
   models: "模型",
   images: "镜像",
+  environment: "环境",
+  git: { navigation: "Git", projects: "项目", credentials: "凭据" },
   environmentTemplates: "环境模板",
   chatBridges: "聊天桥接",
   gitCredentials: {
@@ -207,7 +218,7 @@ export const settings = {
     saveFailed: "无法修改密码。",
   },
   userAccess: {
-    navigation: "用户与权限",
+    navigation: "用户",
     context: "管理员功能",
     readOnlyContext: "本地身份",
     title: "用户与权限",
@@ -282,7 +293,7 @@ export const settings = {
     failed: "无法更新用户权限。",
   },
   mobileSessions: {
-    navigation: "设备与会话",
+    navigation: "设备",
     title: "移动设备会话",
     description: "当前账号已登录的设备与命令行客户端。撤销会话会让该客户端退出登录，不影响其他客户端。",
     authenticationRequired: "需要先启用账号登录，才能管理移动设备会话。",

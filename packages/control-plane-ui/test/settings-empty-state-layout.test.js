@@ -8,6 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cases = [
   ["src/apps/control-plane/settings/EnvironmentTemplatesSettings.vue", "environment-template-empty-state"],
   ["src/apps/control-plane/settings/ImageSettingsSection.vue", "image-empty-state"],
+  ["src/apps/control-plane/settings/InstanceSettingsSection.vue", "instance-directory-empty-state"],
   ["src/apps/control-plane/settings/GitCredentialsSettingsSection.vue", "git-credentials-empty-state"],
   ["src/apps/control-plane/settings/ModelSettingsSection.vue", "model-empty-state"],
   ["src/apps/control-plane/settings/ProjectSettingsSection.vue", "project-empty-state"],

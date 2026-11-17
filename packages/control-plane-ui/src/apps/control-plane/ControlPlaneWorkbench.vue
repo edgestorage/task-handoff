@@ -46,12 +46,12 @@
                     v-for="item in settingsSections"
                     :key="item.id"
                     class="control-plane-settings-menu-item"
-                    :class="{ selected: item.id === settingsSection }"
-                    :aria-current="item.id === settingsSection ? 'true' : undefined"
+                    :class="{ selected: item.id === currentSettingsSection?.id }"
+                    :aria-current="item.id === currentSettingsSection?.id ? 'true' : undefined"
                     @select="settingsSection = item.id"
                   >
                     <span>{{ item.label }}</span>
-                    <Check v-if="item.id === settingsSection" :size="16" aria-hidden="true" />
+                    <Check v-if="item.id === currentSettingsSection?.id" :size="16" aria-hidden="true" />
                   </DropdownMenuItem>
                 </div>
               </ScrollArea>
@@ -765,7 +765,7 @@ import { useInstanceAppManagement } from "./instance-settings/useInstanceAppMana
 import NewInstanceModal from "./NewInstanceModal.vue";
 import AccountSecurityDialog from "./settings/AccountSecurityDialog.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
-import { buildSettingsSections, type SettingsSection } from "./settings/settingsSections";
+import { buildSettingsSections, findSettingsSectionGroup, type SettingsSection } from "./settings/settingsSections";
 import { type NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { Story, StoryAction, StoryDecision } from "@task-handoff/protocol/stories";
@@ -1027,6 +1027,7 @@ watch(() => nodeFilterOptions.value.map((node) => node.id).join("\0"), () => {
 watch(nodeFilter, (filter) => persistNodeVisibilityFilter(filter));
 const settingsMode = ref(false);
 const settingsSection = ref<SettingsSection>("nodes");
+const currentSettingsSection = computed(() => findSettingsSectionGroup(settingsSections.value, settingsSection.value));
 const settingsNodeId = ref("");
 const settingsNodeAction = ref<"rename">();
 const accountSecurityOpen = ref(false);
@@ -1674,7 +1675,7 @@ const topbarTitle = computed(() => {
       : undefined;
     return selectedDetail?.name || standaloneDirectoryInstance.value?.name || t("navigation.controlPlane");
   }
-  return settingsSections.value.find((section) => section.id === settingsSection.value)?.label || t("navigation.settings");
+  return currentSettingsSection.value?.label || t("navigation.settings");
 });
 const topbarRuntimeType = computed(() => {
   if (!standaloneMode.value) return activeInstance.value?.runtime?.type;

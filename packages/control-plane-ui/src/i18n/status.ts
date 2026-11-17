@@ -9,6 +9,7 @@ export const instanceStatusKeys: Record<string, string> = {
   running: "instances.status.running",
   stopping: "instances.status.stopping",
   stopped: "instances.status.stopped",
+  deleting: "instances.status.deleting",
   failed: "instances.status.failed",
   unhealthy: "instances.status.unhealthy",
 };

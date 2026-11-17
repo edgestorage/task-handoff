@@ -5,7 +5,8 @@
   width: min(100%, var(--settings-content-max-width, 1080px));
 }
 
-.control-settings-page > .settings-page-scroll {
+.control-settings-page > .settings-page-scroll,
+.control-settings-group-content > .settings-page-scroll {
   width: calc(100% + var(--settings-scrollbar-outset, 16px));
   margin-right: calc(-1 * var(--settings-scrollbar-outset, 16px));
 }

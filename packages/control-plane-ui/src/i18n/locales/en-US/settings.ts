@@ -100,9 +100,20 @@ export const settings = {
   },
   chat: "Chat",
   nodes: "Nodes",
+  instances: "Instances",
+  instanceRegistry: {
+    description: "View instances across all nodes and manage their settings.",
+    search: "Search instances", searchPlaceholder: "Search names, IDs, nodes, projects, or images",
+    nodeFilter: "Filter by node", allNodes: "All nodes", statusFilter: "Filter by status", allStatuses: "All statuses", runtimeFilter: "Filter by runtime", allRuntimes: "All runtimes",
+    count: "Instances · {count}", filteredFrom: "Filtered from {count}", clearFilters: "Clear filters", loading: "Loading instances…",
+    empty: "No instances yet", emptyDescription: "Create an instance to view it here and manage its settings.", noMatches: "No matching instances", noMatchesDescription: "Try another search term or adjust the filters.",
+    unavailableNodes: "The latest instance information is unavailable for these nodes: {nodes}. The list may be incomplete.",
+  },
   projects: "Git Projects",
   models: "Models",
   images: "Images",
+  environment: "Environment",
+  git: { navigation: "Git", projects: "Projects", credentials: "Credentials" },
   environmentTemplates: "Environment templates",
   chatBridges: "Chat bridges",
   gitCredentials: {
@@ -204,7 +215,7 @@ export const settings = {
     saveFailed: "Could not change the password.",
   },
   userAccess: {
-    navigation: "Users & access",
+    navigation: "Users",
     context: "Administrator tools",
     readOnlyContext: "Local identity",
     title: "Users & access",
@@ -279,7 +290,7 @@ export const settings = {
     failed: "Could not update user access.",
   },
   mobileSessions: {
-    navigation: "Devices & sessions",
+    navigation: "Devices",
     title: "Mobile device sessions",
     description: "Devices and command line clients signed in to your account. Revoking a session signs that client out without affecting the others.",
     authenticationRequired: "Account sign-in must be enabled before mobile device sessions can be managed.",

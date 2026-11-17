@@ -7,7 +7,7 @@
             <span>{{ t("common.actions.back") }}</span>
           </Button>
         </div>
-        <Tabs v-show="!compactSettingsNavigation" :model-value="settingsSection" @update:model-value="(value) => setSettingsSection(value as SettingsSection)">
+        <Tabs v-show="!compactSettingsNavigation" :model-value="currentSettingsSection?.id" @update:model-value="(value) => setSettingsSection(value as SettingsSection)">
           <TabsList class="control-settings-tabs" :aria-label="t('settings.sections')">
             <TabsTrigger v-for="item in settingsSections" :key="item.id" :value="item.id">{{ item.label }}</TabsTrigger>
           </TabsList>
@@ -15,7 +15,7 @@
         <DropdownMenu v-if="compactSettingsNavigation">
           <DropdownMenuTrigger as-child>
             <Button variant="outline" size="sm" class="control-settings-section-trigger">
-              <span>{{ currentSettingsSectionLabel }}</span>
+              <span>{{ currentSettingsSection?.label }}</span>
               <ChevronDown :size="14" aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
@@ -25,7 +25,7 @@
               :horizontal="false"
               :style="{ '--settings-section-count': settingsSections.length }"
             >
-              <DropdownMenuRadioGroup class="control-settings-section-menu-list" :model-value="settingsSection" @update:model-value="(value) => setSettingsSection(value as SettingsSection)">
+              <DropdownMenuRadioGroup class="control-settings-section-menu-list" :model-value="currentSettingsSection?.id" @update:model-value="(value) => setSettingsSection(value as SettingsSection)">
                 <DropdownMenuRadioItem v-for="item in settingsSections" :key="item.id" :value="item.id">
                   {{ item.label }}
                 </DropdownMenuRadioItem>
@@ -107,15 +107,37 @@
 
       <CloudConnectivitySettingsSection v-else-if="settingsSection === 'cloud-connectivity'" />
 
-      <GitCredentialsSettingsSection v-else-if="settingsSection === 'git-credentials'" />
-
       <ModelSettingsSection v-else-if="settingsSection === 'models'" :instances="instances" @open-instance-settings="(instanceId, section) => emit('openInstanceSettings', instanceId, section)" />
 
-      <ImageSettingsSection v-else-if="settingsSection === 'images'" />
+      <InstanceSettingsSection
+        v-else-if="settingsSection === 'instances'"
+        :instances="instances"
+        :nodes="nodes.data.value || []"
+        :loading="board.isLoading.value"
+        :error-message="board.error.value ? errorText(board.error.value) : ''"
+        :unavailable-nodes="instanceDirectoryUnavailableNodes"
+        @retry="board.refetch()"
+        @open-instance-settings="(instanceId) => emit('openInstanceSettings', instanceId)"
+      />
 
-      <EnvironmentTemplatesSettings v-else-if="settingsSection === 'environment-templates'" :nodes="nodes.data.value || []" />
-
-      <ProjectSettingsSection v-else-if="settingsSection === 'projects'" :can-manage-secrets="canManageSecrets" />
+      <Tabs
+        v-else-if="currentSettingsSection?.children"
+        class="control-settings-group"
+        :model-value="settingsSection"
+        @update:model-value="(value) => setSettingsSection(value as SettingsSection)"
+      >
+        <div class="control-settings-group-navigation">
+          <TabsList class="control-settings-group-tabs" :aria-label="currentSettingsSection.label">
+            <TabsTrigger v-for="item in currentSettingsSection.children" :key="item.id" :value="item.id">{{ item.label }}</TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContent v-for="item in currentSettingsSection.children" :key="item.id" :value="item.id" class="control-settings-group-content">
+          <ImageSettingsSection v-if="item.id === 'images'" />
+          <EnvironmentTemplatesSettings v-else-if="item.id === 'environment-templates'" :nodes="nodes.data.value || []" />
+          <ProjectSettingsSection v-else-if="item.id === 'projects'" :can-manage-secrets="canManageSecrets" />
+          <GitCredentialsSettingsSection v-else-if="item.id === 'git-credentials'" />
+        </TabsContent>
+      </Tabs>
 
       <div v-else class="node-management-grid">
         <TooltipProvider :delay-duration="120">
@@ -533,6 +555,7 @@ import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
 import EnvironmentTemplatesSettings from "./EnvironmentTemplatesSettings.vue";
 import ImageSettingsSection from "./ImageSettingsSection.vue";
+import InstanceSettingsSection from "./InstanceSettingsSection.vue";
 import RemoteDesktopSettingsSection from "./RemoteDesktopSettingsSection.vue";
 import CloudConnectivitySettingsSection from "./CloudConnectivitySettingsSection.vue";
 import GitCredentialsSettingsSection from "./GitCredentialsSettingsSection.vue";
@@ -545,7 +568,7 @@ import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimForceDeleteAllowed, proxyClaimValidation } from "./controlPlaneProxyUi";
 import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
-import { buildSettingsSections, type SettingsSection } from "./settingsSections";
+import { buildSettingsSections, findSettingsSectionGroup, type SettingsSection } from "./settingsSections";
 import { isFeatureEnabled } from "../../../lib/featureFlags";
 
 type NodeDiagnosticLog = {
@@ -592,7 +615,7 @@ function openCloudSettingsFromOnboarding() {
 }
 
 const settingsSection = ref<SettingsSection>(props.initialSection === "cloud-connectivity" && !isFeatureEnabled("officialAccount") ? "nodes" : props.initialSection || "nodes");
-const currentSettingsSectionLabel = computed(() => settingsSections.value.find((item) => item.id === settingsSection.value)?.label || "");
+const currentSettingsSection = computed(() => findSettingsSectionGroup(settingsSections.value, settingsSection.value));
 const settingsNavigationElement = ref<HTMLElement>();
 const settingsBackElement = ref<HTMLElement>();
 const settingsTabsMeasureElement = ref<HTMLElement>();
@@ -728,6 +751,7 @@ const codexModels = computed(() => (models.data.value || []).filter((model) => m
 const claudeModels = computed(() => (models.data.value || []).filter((model) => modelSupportsApp(model, "claude")));
 const nodeRuntimeItems = computed(() => nodeRuntimes.data.value?.data || []);
 const boardItems = computed(() => board.data.value?.data || []);
+const instanceDirectoryUnavailableNodes = computed(() => [...new Set((board.data.value?.meta?.nodeErrors || []).map((error) => nodes.data.value?.find((node) => node.id === error.nodeId)?.name || error.nodeId))]);
 const nodeDiagnosticsByNodeId = computed(() => {
   const diagnostics: Record<string, NodeDiagnosticLog[]> = {};
   const seen = new Set<string>();
@@ -1759,6 +1783,68 @@ function errorText(error: unknown) {
 
 .control-settings-back {
   flex: none;
+}
+
+.control-settings-group {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+}
+
+.control-settings-group-navigation {
+  width: min(100%, var(--settings-content-max-width));
+  min-width: 0;
+  margin-inline: auto;
+  padding-top: var(--settings-top-fade-height);
+}
+
+.control-settings-group-tabs {
+  width: fit-content;
+  max-width: 100%;
+  height: 32px;
+  min-height: 32px;
+  gap: 1px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-inset);
+  padding: 2px;
+}
+
+.control-settings-group-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.control-settings-group-tabs :deep(button) {
+  flex: 0 0 auto;
+  height: 26px;
+  min-height: 26px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0 10px;
+}
+
+.control-settings-group-tabs :deep(button:not([data-state="active"]):hover) {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+
+.control-settings-group-tabs :deep(button[data-state="active"]) {
+  background: var(--surface-active);
+  color: var(--text-strong);
+  box-shadow: none;
+}
+
+.control-settings-group-content {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  margin: 0;
 }
 
 .control-settings-tabs,

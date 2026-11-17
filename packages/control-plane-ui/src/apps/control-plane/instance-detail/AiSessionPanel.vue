@@ -769,6 +769,11 @@
                     <AiAgentIcon :agent="agentIcon(app.id)" :size="14" />
                     <span>{{ app.label }}</span><Check v-if="newSessionApp === app.id" :size="15" />
                   </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem class="session-ai-project-item" @select="emit('openSettings', instance.id, 'apps')">
+                    <Boxes :size="14" aria-hidden="true" />
+                    <span>{{ t("sessions.panel.manageApps") }}</span>
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
