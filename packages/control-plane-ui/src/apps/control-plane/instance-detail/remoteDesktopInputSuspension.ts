@@ -47,3 +47,16 @@ export function shouldResumeAfterInputError(
     && state.isController
     && !state.surfacePaused;
 }
+
+export function remoteDesktopSurfaceOwnsFocus(
+  surface: Element | null | undefined,
+  activeElement: Element | null | undefined,
+  documentFocused: boolean,
+) {
+  return Boolean(
+    documentFocused
+    && surface
+    && activeElement
+    && (surface === activeElement || surface.contains(activeElement)),
+  );
+}

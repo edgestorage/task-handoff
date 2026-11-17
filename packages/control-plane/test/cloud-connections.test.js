@@ -90,6 +90,75 @@ test("control registration starts from the discovered active origin and reports 
   assert.deepEqual(marks, ["failure:https://discovered.cloud.test", "success:https://primary.cloud.test"]);
 });
 
+test("an abnormal disconnect retires the connected origin before reconnecting", async () => {
+  const connects = [];
+  const marks = [];
+  const failovers = [];
+  const primary = "https://primary.cloud.test";
+  const backup = "https://backup.cloud.test";
+  let active = primary;
+  let epoch = 0;
+  const manager = new CloudControlConnectionManager({
+    state: {
+      backgroundCredential: () => "credential",
+      snapshot: () => ({ status: "active", scopes: { deviceAccess: true, nodeRelay: false }, remoteAccessEnabled: true, serviceOrigin: primary, cloudControlPlaneId: "cp_cloud_a", identity: { controlPlaneId: "control_plane_a" } }),
+      nextConnectionEpoch: () => ++epoch,
+    },
+    originResolver: {
+      activeOrigin: () => active,
+      endpoints: () => [primary, backup],
+      markSuccess: (origin) => { active = origin; marks.push(`success:${origin}`); },
+      markFailure: (origin) => { marks.push(`failure:${origin}`); if (active === origin) active = backup; },
+    },
+    connector: {
+      async connect(input) { connects.push(input.serviceOrigin); return { async close() {} }; },
+    },
+    onEvent: async () => undefined,
+    onOriginFailover: (entry) => failovers.push(entry),
+  });
+
+  assert.equal((await manager.connectOnce()).status, "connected");
+  manager.disconnected({ closeCode: 1006, errorCode: "ECONNRESET" });
+  assert.equal(active, backup);
+  assert.deepEqual(marks, [`success:${primary}`, `failure:${primary}`]);
+  assert.deepEqual(failovers, [{ fromOrigin: primary, toOrigin: backup, reason: "ECONNRESET" }]);
+
+  assert.equal((await manager.connectOnce()).status, "connected");
+  assert.deepEqual(connects, [primary, backup]);
+  assert.deepEqual(marks, [`success:${primary}`, `failure:${primary}`, `success:${backup}`]);
+});
+
+test("a Coordinator business-close does not retire the connected origin", async () => {
+  const marks = [];
+  const failovers = [];
+  const primary = "https://primary.cloud.test";
+  const backup = "https://backup.cloud.test";
+  let active = primary;
+  let epoch = 0;
+  const manager = new CloudControlConnectionManager({
+    state: {
+      backgroundCredential: () => "credential",
+      snapshot: () => ({ status: "active", scopes: { deviceAccess: true, nodeRelay: false }, remoteAccessEnabled: true, serviceOrigin: primary, cloudControlPlaneId: "cp_cloud_a", identity: { controlPlaneId: "control_plane_a" } }),
+      nextConnectionEpoch: () => ++epoch,
+    },
+    originResolver: {
+      activeOrigin: () => active,
+      endpoints: () => [primary, backup],
+      markSuccess: (origin) => { active = origin; marks.push(`success:${origin}`); },
+      markFailure: (origin) => { marks.push(`failure:${origin}`); if (active === origin) active = backup; },
+    },
+    connector: { async connect() { return { async close() {} }; } },
+    onEvent: async () => undefined,
+    onOriginFailover: (entry) => failovers.push(entry),
+  });
+
+  assert.equal((await manager.connectOnce()).status, "connected");
+  manager.disconnected({ closeCode: 1008, closeReason: "BACKGROUND_CREDENTIAL_REQUIRED", errorCode: "BACKGROUND_CREDENTIAL_REQUIRED" });
+  assert.equal(active, primary);
+  assert.deepEqual(marks, [`success:${primary}`]);
+  assert.deepEqual(failovers, []);
+});
+
 test("Coordinator origin cooldowns suppress repeated dialing and expire without changing the canonical origin", async () => {
   let now = 1_000;
   let epoch = 0;

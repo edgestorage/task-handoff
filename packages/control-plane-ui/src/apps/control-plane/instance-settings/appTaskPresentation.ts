@@ -10,6 +10,13 @@ export function appTaskGroups(snapshot: AppManagementSnapshot) {
   };
 }
 
+export function appTaskSections(groups: ReturnType<typeof appTaskGroups>, labels: { active: string; recent: string }) {
+  return [
+    { id: "active", label: labels.active, jobs: groups.active },
+    { id: "recent", label: labels.recent, jobs: groups.recent },
+  ].filter((section) => section.jobs.length);
+}
+
 export function appTaskProgress(job?: AppManagementJob) {
   const { current, total } = job?.progress || {};
   if (current === undefined || !total) return undefined;

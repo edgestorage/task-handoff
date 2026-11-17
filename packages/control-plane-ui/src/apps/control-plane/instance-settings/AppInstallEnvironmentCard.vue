@@ -281,17 +281,17 @@ async function prepareToolchain() {
 </script>
 
 <style scoped>
-.install-environment { display: grid; gap: 14px; }
-.install-environment-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.install-environment { display: grid; gap: 0; }
+.install-environment-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .install-environment-heading h3 { margin: 0; color: var(--text-strong); font-size: 14px; font-weight: 600; }
 .install-environment-heading p { margin: 4px 0 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
-.install-environment-content { display: grid; gap: 16px; min-width: 0; }
-.install-environment-loading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; color: var(--text-muted); font-size: 13px; }
-.install-environment-runtime { border: 1px solid var(--line); border-radius: 9px; background: var(--surface-raised); }
+.install-environment-content { display: grid; gap: 0; min-width: 0; }
+.install-environment-loading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; color: var(--text-muted); font-size: 13px; }
+.install-environment-runtime { border-top: 1px solid var(--line); }
 .install-environment-field-error { color: var(--status-danger); font-size: 12px; line-height: 1.5; }
 .install-environment-custom-grid input[aria-invalid="true"] { border-color: var(--status-danger); }
 .install-environment-save-hint { flex-basis: 100%; margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-.install-environment-panel { overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-raised); }
+.install-environment-panel { overflow: hidden; }
 .install-environment-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 320px); align-items: center; gap: 20px; padding: 14px 16px; }
 .install-environment-custom,
 .install-environment-effective,

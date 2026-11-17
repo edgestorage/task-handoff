@@ -37,6 +37,13 @@ function newerPersistedSession(candidate: PersistedRelaySession, current: Persis
 }
 
 const COORDINATOR_ORIGIN_COOLDOWN_MS = 5_000;
+const NON_ORIGIN_COORDINATOR_ERROR_CODES = new Set([
+  "REGISTRATION_REJECTED",
+  "BINDING_NOT_FOUND",
+  "BACKGROUND_CREDENTIAL_INVALID",
+  "BACKGROUND_CREDENTIAL_REQUIRED",
+  "CLOUD_REMOTE_BINDING_EXISTS",
+]);
 const TERMINAL_RELAY_RESUME_CODES = new Set([
   "RELAY_SESSION_NOT_FOUND",
   "RELAY_SESSION_REVOKED",
@@ -52,6 +59,7 @@ const TERMINAL_RELAY_RESUME_CODES = new Set([
 export class CloudControlConnectionManager {
   private connection?: ManagedConnection;
   private connectionBindingId?: string;
+  private connectionOrigin?: string;
   private readonly coordinatorOrigins: readonly string[];
   private readonly originCooldownMs: number;
   private readonly originCooldowns = new Map<string, number>();
@@ -124,7 +132,7 @@ export class CloudControlConnectionManager {
     if (this.connection) await this.stop("registration-changed");
     const epoch = this.options.state.nextConnectionEpoch();
     try {
-      this.connection = (await this.connectAcrossOrigins({
+      const connected = await this.connectAcrossOrigins({
         credential,
         bindingId: snapshot.bindingId,
         bindingRevision: snapshot.bindingRevision,
@@ -133,14 +141,16 @@ export class CloudControlConnectionManager {
         processInstanceId: this.processInstanceId,
         epoch,
         onEvent: this.options.onEvent,
-      }, snapshot.serviceOrigin)).connection;
+      }, snapshot.serviceOrigin);
+      this.connection = connected.connection;
+      this.connectionOrigin = connected.origin;
     } catch (error) {
       // A revoked binding credential can no longer authenticate. Try an
       // unbound registration: the Coordinator only accepts that when it has no
       // live binding for this identity, which is the authoritative signal that
       // the pending revocation is already complete remotely.
       if (snapshot.status !== "pending-revocation" || !credential) throw error;
-      this.connection = (await this.connectAcrossOrigins({
+      const connected = await this.connectAcrossOrigins({
         credential: undefined,
         bindingId: undefined,
         bindingRevision: undefined,
@@ -149,7 +159,9 @@ export class CloudControlConnectionManager {
         processInstanceId: this.processInstanceId,
         epoch,
         onEvent: this.options.onEvent,
-      }, snapshot.serviceOrigin, { ignoreCooldown: true })).connection;
+      }, snapshot.serviceOrigin, { ignoreCooldown: true });
+      this.connection = connected.connection;
+      this.connectionOrigin = connected.origin;
       this.connectionBindingId = undefined;
       this.backoff.reset();
       return { status: "connected" as const, epoch, revocationFallback: true as const };
@@ -207,12 +219,39 @@ export class CloudControlConnectionManager {
 
   reconnectDelay() { return this.backoff.next().delay; }
 
-  disconnected() { this.connection = undefined; this.connectionBindingId = undefined; }
+  disconnected(details: { closeCode?: number; closeReason?: string; errorCode?: string } = {}) {
+    const origin = this.connectionOrigin;
+    this.connection = undefined;
+    this.connectionBindingId = undefined;
+    this.connectionOrigin = undefined;
+    if (!origin || !coordinatorDisconnectIsOriginFailure(details)) return;
+    const endpoints = this.orderedOrigins(origin, true);
+    // A single-origin deployment must still reconnect immediately. Cooldowns
+    // only make sense while another origin can take over.
+    if (!endpoints.some((candidate) => candidate !== origin)) {
+      this.options.originResolver?.markFailure?.(origin);
+      return;
+    }
+    this.originCooldowns.set(origin, this.clock() + this.originCooldownMs);
+    this.options.originResolver?.markFailure?.(origin);
+    const nextOrigin = this.orderedOrigins(origin, false).find((candidate) => candidate !== origin);
+    if (!nextOrigin) return;
+    try {
+      this.options.onOriginFailover?.({
+        fromOrigin: origin,
+        toOrigin: nextOrigin,
+        reason: details.errorCode ?? details.closeReason ?? "COORDINATOR_CONNECTION_LOST",
+      });
+    } catch {
+      // Observability cannot prevent failover.
+    }
+  }
 
   async stop(reason: string) {
     const current = this.connection;
     this.connection = undefined;
     this.connectionBindingId = undefined;
+    this.connectionOrigin = undefined;
     await current?.close(reason);
   }
 }
@@ -596,7 +635,12 @@ function coordinatorConnectRetryable(error: unknown) {
     ?? (error as { statusCode?: unknown } | null)?.statusCode);
   if (Number.isFinite(status)) return status >= 500 || status === 408 || status === 425 || status === 429;
   const code = String((error as { code?: unknown } | null)?.code ?? "");
-  return !["REGISTRATION_REJECTED", "BINDING_NOT_FOUND", "BACKGROUND_CREDENTIAL_INVALID", "CLOUD_REMOTE_BINDING_EXISTS"].includes(code);
+  return !NON_ORIGIN_COORDINATOR_ERROR_CODES.has(code);
+}
+
+function coordinatorDisconnectIsOriginFailure(details: { closeCode?: number; closeReason?: string; errorCode?: string }) {
+  const code = details.errorCode ?? details.closeReason;
+  return !code || !NON_ORIGIN_COORDINATOR_ERROR_CODES.has(code);
 }
 
 function errorCode(error: unknown) {

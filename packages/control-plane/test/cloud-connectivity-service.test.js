@@ -390,6 +390,20 @@ test("origin conflict leaves local HTTP healthy and exposes diagnostics and expl
   } finally { await app.close(); }
 });
 
+test("combined sign-in and bind refuses a conflicting cloud origin before creating a request", async () => {
+  const { root, service } = fixture();
+  service.createChallenge();
+  service.activate({ accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, backgroundCredential: "c".repeat(43) });
+  fs.copyFileSync(path.join(root, "binding.json"), path.join(root, "cloud-connectivity.json"));
+  const app = await createControlPlaneApp({ dataDir: root, staticDir: path.join(root, "missing-ui"), logger: false, auth: { mode: "disabled" }, cloudServiceOrigin: STAGING_ENVIRONMENT.serviceOrigin, allowNonProductionCloudOrigin: true });
+  try {
+    const state = await app.inject({ method: "GET", url: "/api/cloud-connectivity" });
+    assert.equal(state.json().data.originConflict.configuredServiceOrigin, STAGING_ENVIRONMENT.serviceOrigin);
+    const combined = await app.inject({ method: "POST", url: "/api/cloud-account/sign-in-and-bind-requests", payload: {} });
+    assert.equal(combined.json().error.code, "CLOUD_SERVICE_ORIGIN_CHANGED");
+  } finally { await app.close(); }
+});
+
 test("origin conflict suppresses account refresh, persisted relay resume and registration at startup", async () => {
   const { root, identity, service } = fixture();
   service.createChallenge();

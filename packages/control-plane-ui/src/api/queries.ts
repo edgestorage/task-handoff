@@ -237,6 +237,10 @@ export function createCloudSignInRequest() {
   return sharedControlPlaneClient.admin.createCloudSignInRequest();
 }
 
+export function createCloudSignInAndBindRequest() {
+  return sharedControlPlaneClient.admin.createCloudSignInAndBindRequest();
+}
+
 export function signOutCloudAccount() {
   return sharedControlPlaneClient.admin.signOutCloudAccount();
 }

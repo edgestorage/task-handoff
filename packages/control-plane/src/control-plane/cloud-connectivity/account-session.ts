@@ -136,7 +136,7 @@ export class CloudAccountSessionService {
 
   complete(input: { requestId?: string; accountId: string; email?: string; deviceSessionId: string; refreshCredential: string; sessionExpiresAt?: string }, options: { preservePending?: boolean } = {}) {
     const current = this.state.get();
-    const deliveredOwnerUserId = !options.preservePending && input.requestId && current.pendingRequestId === input.requestId
+    const deliveredOwnerUserId = input.requestId && current.pendingRequestId === input.requestId
       ? current.pendingOwnerUserId
       : undefined;
     const ownerUserId = deliveredOwnerUserId ?? (current.accountId === input.accountId ? current.ownerUserId : undefined);

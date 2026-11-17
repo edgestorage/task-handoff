@@ -76,7 +76,7 @@ import { proxyStateProjectionSignature } from "../proxy/state-projection.ts";
 import { ControlPlaneIdentityService } from "../identity/service.ts";
 import { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
 import { createControlPlaneDiagnosticLogger, createDiagnosticLogsArchive } from "../diagnostics/logs.ts";
-import { CloudConnectivityService } from "../cloud-connectivity/service.ts";
+import { CloudConnectivityService, assertCloudOriginMatches } from "../cloud-connectivity/service.ts";
 import type { CloudConnectivityLifecycle } from "../cloud-connectivity/lifecycle.ts";
 import { CloudConnectivityBackgroundRuntime } from "../cloud-connectivity/coordinator-runtime.ts";
 import { assertCloudOwnerChangeAllowed } from "../cloud-connectivity/owner-binding.ts";
@@ -1198,6 +1198,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   // the relay must not be able to widen or narrow its own authority.
   const requireLocalCloudOwnerAdmin = async (request: FastifyRequest) => {
     const actor = await requireCloudConnectivityAdmin(request);
+    assertCloudOriginMatches(cloudConnectivity.snapshot());
     if (actor.type !== "user") {
       throw Object.assign(new Error("Cloud sign-in and binding must be initiated by a local administrator."), {
         code: "CLOUD_LOCAL_ADMIN_REQUIRED",
@@ -1298,6 +1299,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const ownerUserId = await requireLocalCloudOwnerAdmin(request);
     reply.header("cache-control", "no-store");
     return { data: await cloudConnectivityRuntime.beginAccountRequest({ scope: "account:sign-in", ownerUserId }) };
+  });
+
+  app.post("/api/cloud-account/sign-in-and-bind-requests", async (request, reply) => {
+    const ownerUserId = await requireLocalCloudOwnerAdmin(request);
+    reply.header("cache-control", "no-store");
+    const challenge = cloudConnectivity.createChallenge();
+    await publishCloudBindingChallenge(challenge);
+    return { data: await cloudConnectivityRuntime.beginSignInAndBindRequest({ challengeCode: challenge.challengeCode, ownerUserId }) };
   });
 
   app.post("/api/cloud-account/sign-out", async (request) => {

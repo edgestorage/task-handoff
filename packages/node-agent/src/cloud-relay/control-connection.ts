@@ -21,6 +21,7 @@ export class NodeRelayControlConnection {
     resolveTarget(): Promise<Target | undefined>;
     onSnapshotRequired(): void;
     onCredentialRejected?(error: { code?: string; message: string }): void;
+    onOriginFailure?(origin: string, error: Error): void;
     webSocket?: typeof WebSocket | false;
     now?: () => number;
     random?: () => number;
@@ -82,8 +83,9 @@ export class NodeRelayControlConnection {
     if (this.stopped || this.connecting || this.socket) return;
     this.connecting = true;
     const generation = ++this.generation;
+    let target: Target | undefined;
     try {
-      const target = await this.options.resolveTarget();
+      target = await this.options.resolveTarget();
       if (!target || this.stopped || generation !== this.generation) return;
       const url = new URL("/api/v1/node-relay/v1/connect", target.origin);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -93,6 +95,12 @@ export class NodeRelayControlConnection {
         headers: { authorization: `Bearer ${target.credential}` },
       } as never);
       this.socket = socket;
+      let originFailureReported = false;
+      const reportOriginFailure = (error: Error) => {
+        if (originFailureReported) return;
+        originFailureReported = true;
+        this.options.onOriginFailure?.(target!.origin, error);
+      };
       this.registrationTimer = setTimeout(() => {
         this.closeSocket(socket, 4408, "registration-timeout");
       }, REGISTRATION_TIMEOUT_MS);
@@ -107,11 +115,19 @@ export class NodeRelayControlConnection {
       });
       socket.on("message", (raw) => this.handleMessage(socket, raw));
       socket.once("error", (error) => {
-        this.options.log?.warn?.({ error: error instanceof Error ? error.message : String(error) }, "node relay control socket failed");
+        if (this.socket !== socket) return;
+        reportOriginFailure(error instanceof Error ? error : new Error(String(error)));
+        this.options.log?.warn?.({ origin: target!.origin, error: error instanceof Error ? error.message : String(error) }, "node relay control socket failed");
       });
-      socket.once("close", (code, reason) => this.handleClose(socket, code, reason));
+      socket.once("close", (code, reason) => {
+        if (this.socket === socket && !this.stopped && !this.credentialError) {
+          reportOriginFailure(new Error(`Node relay control socket closed (${code}${reason.length ? `: ${reason.toString("utf8").slice(0, 120)}` : ""}).`));
+        }
+        this.handleClose(socket, code, reason);
+      });
     } catch (error) {
       if (this.stopped || generation !== this.generation) return;
+      if (target) this.options.onOriginFailure?.(target.origin, error instanceof Error ? error : new Error(String(error)));
       this.options.log?.warn?.({ error: error instanceof Error ? error.message : String(error) }, "node relay control connection failed");
       this.scheduleReconnect();
     } finally {

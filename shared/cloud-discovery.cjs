@@ -11,6 +11,10 @@ const DEFAULT_HEALTH_CHECK_PATH = "/api/v1/auth/providers";
 const DEFAULT_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 const DEFAULT_COOLDOWN_MS = 60_000;
 
+function originFailureStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
 const TXT_PROVIDERS = Object.freeze([
   Object.freeze({
     name: "alidns",
@@ -188,6 +192,12 @@ class CloudEndpointResolver {
   }
 
   async request(input, init) {
+    return (await this.requestWithOrigin(input, init)).response;
+  }
+
+  // Keep the actual transport origin with the response: activeOrigin can change
+  // while a caller reads or validates its body, including after HTTP failover.
+  async requestWithOrigin(input, init) {
     await this.initialize();
     const target = new URL(String(input), this.active);
     const requestPath = `${target.pathname}${target.search}`;
@@ -200,14 +210,14 @@ class CloudEndpointResolver {
       const origin = candidates[index];
       try {
         const response = await this.fetchImpl(`${origin}${requestPath}`, init);
-        if (response.status >= 500) {
+        if (originFailureStatus(response.status)) {
           this.markFailure(origin);
-          lastResponse = response;
+          lastResponse = { response, origin };
           if (retryable && index < candidates.length - 1) continue;
-          return response;
+          return lastResponse;
         }
         this.markSuccess(origin);
-        return response;
+        return { response, origin };
       } catch (error) {
         this.markFailure(origin);
         lastError = error;
@@ -277,7 +287,7 @@ class CloudEndpointResolver {
         redirect: "error",
         signal: controller.signal,
       });
-      return response.status < 500;
+      return !originFailureStatus(response.status);
     } catch {
       return false;
     } finally {

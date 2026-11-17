@@ -236,6 +236,9 @@ export function createControlPlaneAdminApi(transport: ControlPlaneClientTranspor
     createCloudSignInRequest() {
       return requestData("/api/cloud-account/sign-in-requests", CloudAccountRequestSchema, jsonRequest("POST", {}));
     },
+    createCloudSignInAndBindRequest() {
+      return requestData("/api/cloud-account/sign-in-and-bind-requests", CloudAccountRequestSchema, jsonRequest("POST", {}));
+    },
     signOutCloudAccount() {
       return requestData("/api/cloud-account/sign-out", CloudAccountSessionSchema, jsonRequest("POST", {}));
     },

@@ -348,6 +348,7 @@ export class NodeAgentCloudRelayClient {
       },
       onSnapshotRequired: () => this.schedulePoll(0),
       onCredentialRejected: (error) => this.markRebindRequired(error),
+      onOriginFailure: (origin, error) => this.reportControlOriginFailure(origin, error),
       ...(options.controlWebSocket === undefined ? {} : { webSocket: options.controlWebSocket }),
       now: () => this.now(),
       ...(options.random ? { random: options.random } : {}),
@@ -528,13 +529,39 @@ export class NodeAgentCloudRelayClient {
       ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
       ...(resolver ? {
         onOriginSuccess: (origin: string) => resolver.markSuccess(origin),
-        onOriginFailure: (origin: string) => resolver.markFailure(origin),
+        onOriginFailure: (origin: string, error: unknown) => this.markCloudOriginFailure(resolver, origin, error),
       } : {}),
     });
   }
 
   private boundCloudClient(binding: NodeAgentCloudRelayBinding) {
     return this.cloudClient(binding.cloudOrigin, binding.cloudOriginMode === "discovered");
+  }
+
+  private reportControlOriginFailure(origin: string, error: Error) {
+    let binding: NodeAgentCloudRelayBinding | undefined;
+    try {
+      binding = this.binding();
+    } catch {
+      return;
+    }
+    if (!binding || binding.cloudOriginMode !== "discovered") return;
+    void this.discoveryResolver(binding.cloudOrigin).then((resolver) => {
+      if (resolver) this.markCloudOriginFailure(resolver, origin, error);
+    }).catch(() => {});
+  }
+
+  private markCloudOriginFailure(resolver: CloudEndpointResolver, origin: string, error: unknown) {
+    const previousOrigin = resolver.activeOrigin;
+    resolver.markFailure(origin);
+    const nextOrigin = resolver.activeOrigin;
+    if (nextOrigin === previousOrigin) return;
+    this.options.host.log.warn({
+      nodeId: this.options.nodeId,
+      origin,
+      nextOrigin,
+      error: error instanceof Error ? error.message : String(error),
+    }, "node agent cloud origin failed over");
   }
 
   private discoveryResolver(cloudOrigin: string) {

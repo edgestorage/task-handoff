@@ -31,7 +31,7 @@ import type { CloudDeviceTrustService } from "../device-trust/service.ts";
 import type { TrustedDeviceSessionRegistry } from "../device-trust/trusted-device-sessions.ts";
 
 type RpcConnection = { request(operation: string, payload?: unknown): Promise<unknown>; close(reason?: string): Promise<void> };
-type CloudAccountScope = "account:sign-in" | "control-plane:bind";
+type CloudAccountScope = "account:sign-in" | "control-plane:bind" | "control-plane:sign-in-and-bind";
 type CreateRequestResult = { requestId: string; scope: string; expiresAt: string; authorizationUrl: string };
 const ACCOUNT_REQUEST_SCOPES = ["account:read", "control-plane:manage"];
 const DEFAULT_CONTROL_REGISTRATION_TIMEOUT_MS = 15_000;
@@ -169,7 +169,7 @@ export class CloudConnectivityBackgroundRuntime {
     this.connector = new CloudCoordinatorConnector({ identity: options.identity, webSocket: options.webSocket, supportsRelaySessionResume: persistResume, onMessageError: (details) => {
       this.options.logger?.warn?.({ code: "CLOUD_CONTROL_MESSAGE_FAILED", ...details }, "cloud_control_message_failed");
     }, onDisconnected: (details) => {
-      this.control.disconnected();
+      this.control.disconnected(details);
       this.schedule();
       this.options.logger?.warn?.({ code: "CLOUD_CONTROL_CONNECTION_CLOSED", ...details }, "cloud_control_connection_closed");
     }, onRegistered: (registration) => {
@@ -361,6 +361,20 @@ export class CloudConnectivityBackgroundRuntime {
     return result;
   }
 
+  /**
+   * Older Coordinators only understand the two independent scopes. Keep the new
+   * one-consent path when available and fall back to the old sign-in request so
+   * the UI can continue with its existing automatic binding step.
+   */
+  async beginSignInAndBindRequest(input: { challengeCode: string; ownerUserId?: string }) {
+    try {
+      return await this.beginAccountRequest({ scope: "control-plane:sign-in-and-bind", challengeCode: input.challengeCode, ownerUserId: input.ownerUserId });
+    } catch (error) {
+      if (errorCode(error) !== "AUTHORIZATION_SCOPE_INVALID") throw error;
+      return this.beginAccountRequest({ scope: "account:sign-in", ownerUserId: input.ownerUserId });
+    }
+  }
+
   /** Reuse the latest role snapshot revision; reconnects and retries never mint a revision. */
   async publishAccessRoleCatalog() {
     this.catalogPublishQueued = true;
@@ -420,8 +434,12 @@ export class CloudConnectivityBackgroundRuntime {
 
   /** Account node directory, read through the signed-in account session (never the binding credential). */
   async listAccountNodes() {
-    const data = await this.accountRequest("/api/v1/nodes", { method: "GET" });
-    return Array.isArray(data?.items) ? data.items : [];
+    return this.accountRequest("/api/v1/nodes", { method: "GET" }, (data) => {
+      if (!data || typeof data !== "object" || !Array.isArray((data as { items?: unknown }).items)) {
+        throw new Error("Cloud account node directory response is invalid.");
+      }
+      return (data as { items: unknown[] }).items;
+    });
   }
 
   /**
@@ -580,32 +598,55 @@ export class CloudConnectivityBackgroundRuntime {
    * and never leaves this method; a rejected token signs the session out so the
    * UI falls back to the sign-in guidance.
    */
-  private async accountRequest(path: string, init: RequestInit = {}) {
+  private async accountRequest<T = any>(path: string, init: RequestInit = {}, validate?: (value: unknown) => T): Promise<T> {
     const session = this.options.accountSession;
     if (!session.credentials()) throw accountError("CLOUD_ACCOUNT_SIGNED_OUT");
     if (!this.hasFreshAccessToken()) await this.refreshAccountCredential();
     const token = this.accessToken?.value;
     if (!token) throw accountError("CLOUD_ACCOUNT_SIGNED_OUT");
-    const response = await this.cloudFetch(path, {
-      ...init,
-      headers: {
-        ...(init.body ? { "content-type": "application/json" } : {}),
-        ...(init.headers as Record<string, string> | undefined),
-        authorization: `Bearer ${token}`,
-        "x-task-handoff-client": "control-plane",
-        [RESOURCE_SHARING_CAPABILITY_HEADER]: RESOURCE_SHARING_CLIENT_CAPABILITY,
-      },
-    });
-    const body = await response.json().catch(() => undefined) as any;
-    if (response.status === 401 || response.status === 403) {
-      session.signOut("credential-rejected");
-      throw accountError("CLOUD_ACCOUNT_SIGNED_OUT");
+    const method = String(init.method ?? "GET").toUpperCase();
+    const retryable = method === "GET" || method === "HEAD";
+    const attempts = retryable && this.options.cloudDiscovery
+      ? Math.max(1, new Set(this.options.cloudDiscovery.endpoints).size)
+      : 1;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const { response, origin } = await this.cloudFetch(path, {
+        ...init,
+        headers: {
+          ...(init.body ? { "content-type": "application/json" } : {}),
+          ...(init.headers as Record<string, string> | undefined),
+          authorization: `Bearer ${token}`,
+          "x-task-handoff-client": "control-plane",
+          [RESOURCE_SHARING_CAPABILITY_HEADER]: RESOURCE_SHARING_CLIENT_CAPABILITY,
+        },
+      });
+      const body = await response.json().catch(() => undefined) as any;
+      if (response.status === 401 || response.status === 403) {
+        session.signOut("credential-rejected");
+        throw accountError("CLOUD_ACCOUNT_SIGNED_OUT");
+      }
+      if (!response.ok) throw Object.assign(new Error(body?.error?.message || `Cloud account request failed with HTTP ${response.status}`), {
+        code: typeof body?.error?.code === "string" ? body.error.code : "CLOUD_ACCOUNT_REQUEST_FAILED",
+        statusCode: response.status,
+      });
+      try {
+        if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Cloud account returned an invalid response.");
+        const data = (body as { data?: unknown }).data ?? body;
+        return validate ? validate(data) : data as T;
+      } catch (cause) {
+        lastError = Object.assign(new Error("Cloud account returned an invalid response."), {
+          code: "CLOUD_ACCOUNT_RESPONSE_INVALID",
+          statusCode: response.status,
+          retryable: true,
+          cause,
+        });
+        this.markInvalidCloudResponse("CLOUD_ACCOUNT_RESPONSE_INVALID", origin);
+        if (retryable && attempt < attempts - 1) continue;
+        throw lastError;
+      }
     }
-    if (!response.ok) throw Object.assign(new Error(body?.error?.message || `Cloud account request failed with HTTP ${response.status}`), {
-      code: typeof body?.error?.code === "string" ? body.error.code : "CLOUD_ACCOUNT_REQUEST_FAILED",
-      statusCode: response.status,
-    });
-    return body?.data ?? body;
+    throw lastError ?? accountError("CLOUD_ACCOUNT_REQUEST_FAILED");
   }
 
   /** Serialized so two callers share one credential rotation instead of replaying each other. */
@@ -852,14 +893,15 @@ export class CloudConnectivityBackgroundRuntime {
   private acceptAccountCredential(payload: any) {
     const requestId = String(payload?.requestId ?? "");
     if (!payload?.accountId || !payload?.deviceSessionId || !payload?.refreshCredential) throw runtimeError("CLOUD_ACCOUNT_CREDENTIAL_INVALID");
+    const preservePendingRequest = payload?.preservePendingRequest === true;
     const snapshot = this.options.accountSession.complete({
       requestId,
       accountId: payload.accountId, email: typeof payload.email === "string" ? payload.email : undefined,
       deviceSessionId: payload.deviceSessionId, refreshCredential: payload.refreshCredential,
       sessionExpiresAt: typeof payload.expiresAt === "string" ? payload.expiresAt : undefined,
-    });
+    }, { preservePending: preservePendingRequest });
     if (typeof payload.accessToken === "string") this.accessToken = { value: payload.accessToken, expiresAt: this.clock() + accessTokenLifetimeSeconds(payload.accessExpiresIn) * 1_000 };
-    if (requestId) this.options.accountSession.resolveRequest({ requestId, status: "delivered" });
+    if (requestId && !preservePendingRequest) this.options.accountSession.resolveRequest({ requestId, status: "delivered" });
     return snapshot;
   }
 
@@ -871,13 +913,14 @@ export class CloudConnectivityBackgroundRuntime {
     const session = this.options.accountSession;
     const credentials = session.credentials();
     if (!credentials) return;
-    const response = await this.cloudFetch("/api/v1/auth/refresh", {
+    const result = await this.cloudFetch("/api/v1/auth/refresh", {
       method: "POST", headers: { "content-type": "application/json", "x-task-handoff-client": "mobile" },
       body: JSON.stringify({ refreshCredential: credentials.refreshCredential, deviceSessionId: credentials.deviceSessionId, scopes: ACCOUNT_REQUEST_SCOPES }),
     }).catch(() => undefined);
     // A network failure or a server fault must not throw away a working session; the stored
     // credential is still current and rotation can be retried on the next connection.
-    if (!response) return;
+    if (!result) return;
+    const { response, origin } = result;
     const body = await response.json().catch(() => undefined) as any;
     // The official API wraps every success in `{ data: ... }`.
     const tokens = body?.data ?? body;
@@ -886,7 +929,10 @@ export class CloudConnectivityBackgroundRuntime {
       if (response.status === 401 || response.status === 403 || response.status === 400) session.signOut("credential-rejected");
       return;
     }
-    if (!tokens?.refreshCredential || !tokens?.accountId || !tokens?.deviceSessionId) return;
+    if (!tokens?.refreshCredential || !tokens?.accountId || !tokens?.deviceSessionId) {
+      this.markInvalidCloudResponse("CLOUD_ACCOUNT_REFRESH_RESPONSE_INVALID", origin);
+      return;
+    }
     this.accessToken = typeof tokens.accessToken === "string" ? { value: tokens.accessToken, expiresAt: this.clock() + accessTokenLifetimeSeconds(tokens.accessExpiresIn) * 1_000 } : undefined;
     session.complete({ accountId: tokens.accountId, email: credentials.email, deviceSessionId: tokens.deviceSessionId, refreshCredential: tokens.refreshCredential, sessionExpiresAt: typeof tokens.sessionExpiresAt === "string" ? tokens.sessionExpiresAt : credentials.sessionExpiresAt }, { preservePending: true });
   }
@@ -896,10 +942,28 @@ export class CloudConnectivityBackgroundRuntime {
     await this.refreshAccountCredential();
   }
 
-  private cloudFetch(path: string, init?: RequestInit) {
+  private async cloudFetch(path: string, init?: RequestInit) {
     assertCloudOriginMatches(this.options.state.snapshot());
-    if (this.options.cloudDiscovery) return this.options.cloudDiscovery.request(path, init);
-    return this.options.fetch(`${this.options.accountSession.origin}${path}`, init);
+    if (this.options.cloudDiscovery) return this.options.cloudDiscovery.requestWithOrigin(path, init);
+    const origin = this.options.accountSession.origin;
+    const response = await this.options.fetch(`${origin}${path}`, init);
+    return { response, origin };
+  }
+
+  private markInvalidCloudResponse(code: string, fromOrigin: string) {
+    const discovery = this.options.cloudDiscovery;
+    if (!discovery) {
+      this.options.logger?.warn?.({ code, fromOrigin }, "cloud_coordinator_response_invalid");
+      return;
+    }
+    const previousActiveOrigin = discovery.activeOrigin;
+    discovery.markFailure(fromOrigin);
+    const toOrigin = discovery.activeOrigin;
+    if (toOrigin !== previousActiveOrigin) {
+      try { this.options.onOriginFailover?.({ fromOrigin, toOrigin, reason: code }); }
+      catch { /* observability cannot prevent failover */ }
+    }
+    this.options.logger?.warn?.({ code, fromOrigin, toOrigin }, "cloud_coordinator_response_invalid");
   }
 
   private schedule(delay = this.control.reconnectDelay()) {
@@ -908,7 +972,8 @@ export class CloudConnectivityBackgroundRuntime {
     if (state.originConflict) return;
     const active = state.status === "active";
     const revoking = state.status === "pending-revocation" && Boolean(state.bindingId) && Boolean(this.options.state.revocationCredential());
-    if (!active && !revoking) return;
+    const awaitingAuthorization = Boolean(this.options.accountSession.pendingRequest());
+    if (!active && !revoking && !awaitingAuthorization) return;
     this.timer = setTimeout(() => { this.timer = undefined; void this.ensureConnected().catch(() => this.schedule()); }, delay);
     this.timer.unref();
   }

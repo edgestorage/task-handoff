@@ -49,11 +49,11 @@
               {{ requestFailureMessage }}
               <code>{{ requestFailure.code }}</code>
             </p>
-            <p v-if="reauthRequired && !waitingForSignIn" class="cloud-warning" role="alert">
+            <p v-if="reauthRequired && !waitingForSignIn && !waitingForConnect" class="cloud-warning" role="alert">
               {{ t("settings.cloud.sessionExpired") }}
               <button v-if="connectionStage !== 'active'" type="button" class="cloud-link" :disabled="busy" @click="signIn('sign-in')">{{ t("settings.cloud.signIn") }}</button>
             </p>
-            <p v-if="waitingForSignIn || waitingForBinding" class="cloud-pending" role="status">
+            <p v-if="waitingForSignIn || waitingForBinding || waitingForConnect" class="cloud-pending" role="status">
               {{ pendingMessage }}
               <button type="button" class="cloud-link" @click="reopen(pendingUrl)">{{ t("settings.cloud.reopen") }}</button>
             </p>
@@ -65,8 +65,8 @@
                 <span v-if="signedIn" class="cloud-account-email">{{ session?.email || session?.accountId }}</span>
                 <p class="cloud-hint">{{ t(signedIn ? "settings.cloud.accountSessionNote" : "settings.cloud.accountSignedOutNote") }}</p>
               </div>
-              <Button v-if="signedIn" variant="outline" size="sm" :disabled="busy || waitingForBinding" @click="signOutOpen = true">{{ t("settings.cloud.signOut") }}</Button>
-              <Button v-else variant="outline" size="sm" :disabled="busy || waitingForSignIn || Boolean(originConflict)" @click="signIn('sign-in')">{{ pendingAction === 'sign-in' ? t("settings.cloud.opening") : t("settings.cloud.signIn") }}</Button>
+              <Button v-if="signedIn" variant="outline" size="sm" :disabled="busy || waitingForBinding || waitingForConnect" @click="signOutOpen = true">{{ t("settings.cloud.signOut") }}</Button>
+              <Button v-else variant="outline" size="sm" :disabled="busy || waitingForSignIn || waitingForConnect || Boolean(originConflict)" @click="signIn('sign-in')">{{ pendingAction === 'sign-in' ? t("settings.cloud.opening") : t("settings.cloud.signIn") }}</Button>
             </section>
 
             <section v-if="connectionStage === 'active'" class="cloud-subsection" :aria-busy="savingDeviceAccess">
@@ -114,7 +114,7 @@
           </header>
           <p v-if="!signedIn" class="cloud-node-picker-warning" role="status">
             <span>{{ t("settings.cloud.nodeAddRequiresSignIn") }}</span>
-            <button type="button" class="cloud-link" :disabled="busy || waitingForSignIn || Boolean(originConflict)" @click="signIn('sign-in')">{{ t("settings.cloud.signIn") }}</button>
+            <button type="button" class="cloud-link" :disabled="busy || waitingForSignIn || waitingForConnect || Boolean(originConflict)" @click="signIn('sign-in')">{{ t("settings.cloud.signIn") }}</button>
           </p>
           <p v-else-if="!canAddCloudNodes" class="cloud-node-picker-warning" role="status">
             {{ t("settings.cloud.nodeAddRequiresBinding") }}
@@ -275,13 +275,13 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "../../../components/ui/input";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
-import { bindCloudRelayNode, createCloudBindingRequest, createCloudSignInRequest, disconnectCloudAccount, resetConflictingCloudBinding, signOutCloudAccount, stepUpControlPlaneAuthentication, updateCloudAvailableRoles, updateCloudRemoteAccess, useCloudAccessSettingsQuery, useCloudAccountQuery, useCloudConnectivityQuery, useCloudNodeRelayQuery, useNodesQuery } from "../../../api/queries";
+import { bindCloudRelayNode, createCloudBindingRequest, createCloudSignInAndBindRequest, createCloudSignInRequest, disconnectCloudAccount, resetConflictingCloudBinding, signOutCloudAccount, stepUpControlPlaneAuthentication, updateCloudAvailableRoles, updateCloudRemoteAccess, useCloudAccessSettingsQuery, useCloudAccountQuery, useCloudConnectivityQuery, useCloudNodeRelayQuery, useNodesQuery } from "../../../api/queries";
 import type { Node } from "../../../api/types";
 import { translateApiError } from "../../../i18n/apiError";
 import { nodeConnectionModeKeys, nodeRuntimeStatusKeys, translateStatus } from "../../../i18n/status";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import TrustedDevicesSettingsSection from "./TrustedDevicesSettingsSection.vue";
-import { resolveCloudConnectionStage, type CloudConnectionStage, type CloudLoginIntent } from "./cloudConnectionState";
+import { CLOUD_SIGN_IN_AND_BIND_SCOPE, resolveCloudConnectionStage, type CloudConnectionStage, type CloudLoginIntent } from "./cloudConnectionState";
 
 const { locale, t } = useI18n();
 type ConnectionStage = CloudConnectionStage;
@@ -314,11 +314,16 @@ const nodeRelay = useCloudNodeRelayQuery({
 const pendingScope = computed(() => session.value?.pendingRequest?.scope);
 const pendingUrl = computed(() => session.value?.pendingRequest?.authorizationUrl);
 const requestFailure = computed(() => session.value?.requestFailure);
-const requestFailureMessage = computed(() => requestFailure.value?.scope === "control-plane:bind"
-  ? t("settings.cloud.bindingDeliveryFailed")
-  : t("settings.cloud.signInDeliveryFailed"));
+const requestFailureMessage = computed(() => {
+  const failure = requestFailure.value;
+  if (!failure) return "";
+  const bindingFailure = failure.scope === "control-plane:bind"
+    || (failure.scope === CLOUD_SIGN_IN_AND_BIND_SCOPE && failure.code !== "CONTROL_PLANE_DELIVERY_FAILED");
+  return bindingFailure ? t("settings.cloud.bindingDeliveryFailed") : t("settings.cloud.signInDeliveryFailed");
+});
 const waitingForSignIn = computed(() => pendingScope.value === "account:sign-in");
 const waitingForBinding = computed(() => pendingScope.value === "control-plane:bind");
+const waitingForConnect = computed(() => pendingScope.value === CLOUD_SIGN_IN_AND_BIND_SCOPE);
 const connectionStage = computed<ConnectionStage>(() => resolveCloudConnectionStage({
   status: state.value?.status,
   originConflict: originConflict.value,
@@ -332,6 +337,7 @@ const boundAccountLabel = computed(() => session.value?.accountId === state.valu
 const stageTitle = computed(() => {
   switch (connectionStage.value) {
     case "origin-conflict": return t("settings.cloud.originConflictTitle");
+    case "awaiting-connect": return t("settings.cloud.stage.awaitingConnect");
     case "awaiting-sign-in": return t("settings.cloud.stage.awaitingSignIn");
     case "awaiting-binding": return t("settings.cloud.stage.awaitingBinding");
     case "signed-in-unbound": return t("settings.cloud.stage.signedInUnbound");
@@ -344,6 +350,7 @@ const stageTitle = computed(() => {
 const stageDetail = computed(() => {
   switch (connectionStage.value) {
     case "origin-conflict": return t("settings.cloud.originConflictNote");
+    case "awaiting-connect": return t("settings.cloud.stageDetail.awaitingConnect");
     case "awaiting-sign-in": return t("settings.cloud.stageDetail.awaitingSignIn");
     case "awaiting-binding": return t("settings.cloud.stageDetail.awaitingBinding");
     case "signed-in-unbound": return t("settings.cloud.stageDetail.signedInUnbound", { account: accountLabel.value });
@@ -353,9 +360,11 @@ const stageDetail = computed(() => {
     default: return t("settings.cloud.stageDetail.signedOut");
   }
 });
-const pendingMessage = computed(() => waitingForSignIn.value
-  ? t("settings.cloud.waitingSignIn")
-  : t("settings.cloud.waitingBinding"));
+const pendingMessage = computed(() => {
+  if (waitingForSignIn.value) return t("settings.cloud.waitingSignIn");
+  if (waitingForConnect.value) return t("settings.cloud.waitingConnect");
+  return t("settings.cloud.waitingBinding");
+});
 const showConnectionActions = computed(() => ["signed-out", "signed-in-unbound", "revoking"].includes(connectionStage.value));
 const canDisconnect = computed(() => Boolean(originConflict.value) || state.value?.status === "active" || state.value?.status === "clone-conflict");
 const roleDraft = ref<string[]>([]);
@@ -546,10 +555,15 @@ async function saveAvailableRoles() {
 }
 async function signIn(intent: LoginIntent) {
   if (busy.value) return;
-  loginIntent.value = intent;
+  loginIntent.value = null;
   pendingAction.value = "sign-in";
   try {
-    const request = await createCloudSignInRequest();
+    const request = intent === "bind"
+      ? await createCloudSignInAndBindRequest()
+      : await createCloudSignInRequest();
+    // An N-1 Coordinator returns the legacy sign-in scope. Only that fallback
+    // needs the second, automatic binding request.
+    loginIntent.value = intent === "bind" && request.scope === "account:sign-in" ? "bind" : null;
     reopen(request.authorizationUrl);
     await refresh();
   } catch (error) {

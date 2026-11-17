@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   parseInputSuspension,
   REMOTE_DESKTOP_GEOMETRY_CHANGED,
+  remoteDesktopSurfaceOwnsFocus,
   shouldResumeAfterInputError,
   shouldResumeAfterInputSuspension,
 } from "../src/apps/control-plane/instance-detail/remoteDesktopInputSuspension.ts";
@@ -69,4 +70,14 @@ test("manual suspension and unavailable recovery context stay released", () => {
     assert.equal(shouldResumeAfterInputSuspension(notice, state), false);
   }
   assert.equal(shouldResumeAfterInputSuspension({ ...notice, sessionRevision: undefined }, ready), false);
+});
+
+test("input recovery belongs to the focused remote desktop surface", () => {
+  const child = {};
+  const surface = { contains: (node) => node === child };
+  assert.equal(remoteDesktopSurfaceOwnsFocus(surface, surface, true), true);
+  assert.equal(remoteDesktopSurfaceOwnsFocus(surface, child, true), true);
+  assert.equal(remoteDesktopSurfaceOwnsFocus(surface, {}, true), false);
+  assert.equal(remoteDesktopSurfaceOwnsFocus(surface, child, false), false);
+  assert.equal(remoteDesktopSurfaceOwnsFocus(null, child, true), false);
 });

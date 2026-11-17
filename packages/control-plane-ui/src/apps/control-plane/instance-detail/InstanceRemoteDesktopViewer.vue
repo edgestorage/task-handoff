@@ -626,7 +626,7 @@ import { isRemoteDesktopSourceEndedError } from "@task-handoff/control-plane-cli
 import { createRemoteDesktopSession, forceStopRemoteDesktopSession, listRemoteDesktopSources, recoverRemoteDesktopSession, requestRemoteDesktopFallback, resumeRemoteDesktopSignal, stopRemoteDesktopSession, type RemoteDesktopCreated, type RemoteDesktopSource } from "../../../api/remoteDesktop";
 import { useControlPlaneSettingsQuery } from "../../../api/queries";
 import { translateApiError } from "../../../i18n/apiError";
-import { parseInputSuspension, shouldResumeAfterInputError, shouldResumeAfterInputSuspension } from "./remoteDesktopInputSuspension";
+import { parseInputSuspension, remoteDesktopSurfaceOwnsFocus, shouldResumeAfterInputError, shouldResumeAfterInputSuspension } from "./remoteDesktopInputSuspension";
 import { isLostRemoteDesktopSessionError, isRetryableRemoteDesktopSignalResumeError, remoteDesktopSignalResumeRetryDelayMs, REMOTE_DESKTOP_SIGNAL_RESUME_WINDOW_MS } from "./remoteDesktopSignalRecovery";
 import { createRemoteDesktopDiagnostics, remoteDesktopErrorFields } from "./remoteDesktopDiagnostics";
 import { parseSelectedSourceIdentity, resolveRefreshedSource, selectedSourceIdentity as toSelectedSourceIdentity, type SelectedSourceIdentity } from "./remoteDesktopSourceSelection";
@@ -2947,6 +2947,7 @@ async function resume() {
     requestControl();
     return;
   }
+  if (!surfaceHoldsFocus()) return;
   inputRequested.value = true;
   if (
     !signalingReady.value
@@ -2969,7 +2970,7 @@ async function resume() {
     generation !== inputResumeGeneration
     || !inputRequested.value
     || surfacePaused()
-    || !document.hasFocus()
+    || !surfaceHoldsFocus()
   ) {
     if (generation === inputResumeGeneration) inputResumePending = false;
     return;
@@ -2985,7 +2986,10 @@ async function resume() {
   });
   armInputResumeAckTimeout();
   clipboardStatus.value = "";
-  surface.value?.focus();
+}
+
+function surfaceHoldsFocus() {
+  return remoteDesktopSurfaceOwnsFocus(surface.value, document.activeElement, document.hasFocus());
 }
 
 function armInputResumeAckTimeout() {
@@ -3077,8 +3081,13 @@ function clearInputResumeTimers() {
 
 function primaryInputAction() {
   if (fallbackSwitching.value) return;
-  if (isController.value && !inputEnabled.value) void resume();
+  if (isController.value && !inputEnabled.value) focusSurfaceAndResume();
   else if (!isController.value) requestControl();
+}
+
+function focusSurfaceAndResume() {
+  if (!surfaceHoldsFocus()) surface.value?.focus();
+  resumeWanted();
 }
 
 function toggleInputEnabled() {
@@ -3090,7 +3099,7 @@ function toggleInputEnabled() {
     return;
   }
   inputRequested.value = true;
-  if (isController.value) resumeWanted();
+  if (isController.value) focusSurfaceAndResume();
   else requestControl();
 }
 

@@ -2,6 +2,7 @@ export type CloudConnectionStatus = "unbound" | "pending-claim" | "active" | "pe
 
 export type CloudConnectionStage =
   | "signed-out"
+  | "awaiting-connect"
   | "awaiting-sign-in"
   | "signed-in-unbound"
   | "awaiting-binding"
@@ -11,6 +12,7 @@ export type CloudConnectionStage =
   | "origin-conflict";
 
 export type CloudLoginIntent = "sign-in" | "bind";
+export const CLOUD_SIGN_IN_AND_BIND_SCOPE = "control-plane:sign-in-and-bind";
 
 export function resolveCloudConnectionStage(input: {
   status?: CloudConnectionStatus;
@@ -22,6 +24,7 @@ export function resolveCloudConnectionStage(input: {
   if (input.status === "clone-conflict") return "conflict";
   if (input.status === "pending-revocation") return "revoking";
   if (input.status === "active") return "active";
+  if (input.pendingScope === CLOUD_SIGN_IN_AND_BIND_SCOPE) return "awaiting-connect";
   if (input.pendingScope === "account:sign-in") return "awaiting-sign-in";
   if (input.pendingScope === "control-plane:bind") return "awaiting-binding";
   if (input.signedIn) return "signed-in-unbound";

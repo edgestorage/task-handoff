@@ -141,6 +141,7 @@ test("only the personal operation approval snapshot and decision routes are rela
 test("cloud binding routes require settings permission for owner and shared actors", () => {
   for (const path of [
     "/api/cloud-account", "/api/cloud-account/sign-out",
+    "/api/cloud-account/sign-in-and-bind-requests",
     "/api/cloud-connectivity", "/api/cloud-connectivity/access-settings",
     "/api/cloud-connectivity/binding-requests",
   ]) {

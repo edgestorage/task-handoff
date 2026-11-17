@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { appTaskGroups, appTaskProgress, appTaskStatusKey, retryableAppTask } from "../src/apps/control-plane/instance-settings/appTaskPresentation.ts";
+import { appTaskGroups, appTaskProgress, appTaskSections, appTaskStatusKey, retryableAppTask } from "../src/apps/control-plane/instance-settings/appTaskPresentation.ts";
 import { useInstanceAppManagement } from "../src/apps/control-plane/instance-settings/useInstanceAppManagement.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -232,6 +232,17 @@ test("task groups retain every operation and keep the snapshot order untouched",
   assert.deepEqual(groups.recent.map((item) => item.id), ["latest", "old"]);
   assert.deepEqual(current.activeJobs, [queued, running]);
   assert.deepEqual(current.recentJobs, [old, latest]);
+});
+
+test("task sections omit empty groups so the first visible group does not double the surface border", () => {
+  const labels = { active: "In progress", recent: "Recently finished" };
+  const recentOnly = appTaskGroups(snapshot(1, { recentJobs: [job({ state: "succeeded" })] }));
+  assert.deepEqual(appTaskSections(recentOnly, labels).map((section) => section.id), ["recent"]);
+
+  const both = appTaskGroups(snapshot(1, { activeJobs: [job()], recentJobs: [job({ id: "old", state: "failed" })] }));
+  assert.deepEqual(appTaskSections(both, labels).map((section) => section.id), ["active", "recent"]);
+
+  assert.deepEqual(appTaskSections(appTaskGroups(snapshot(1)), labels), []);
 });
 
 test("task retry requires both a retryable failure and the current authoritative action permission", () => {

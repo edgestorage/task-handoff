@@ -2,7 +2,7 @@
   <div class="app-tasks">
     <p v-if="groups.active.length" class="app-tasks-hint">{{ t("instances.settings.appTasksBackground") }}</p>
     <p v-if="!groups.active.length && !groups.recent.length" class="app-tasks-empty">{{ t("instances.settings.noAppTasks") }}</p>
-    <section v-for="group in taskSections" v-show="group.jobs.length" :key="group.id" class="app-task-group" :aria-label="group.label">
+    <section v-for="group in taskSections" :key="group.id" class="app-task-group" :aria-label="group.label">
       <h4>{{ group.label }} <span>{{ group.jobs.length }}</span></h4>
       <Collapsible v-for="job in group.jobs" :key="job.id" :open="selectedJobId === job.id" class="app-task" @update:open="selectedJobId = $event ? job.id : ''">
         <div class="app-task-row">
@@ -66,7 +66,7 @@ import { Progress } from "../../../components/ui/progress";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
-import { appTaskGroups, appTaskProgress, appTaskStatusKey, retryableAppTask } from "./appTaskPresentation";
+import { appTaskGroups, appTaskProgress, appTaskSections, appTaskStatusKey, retryableAppTask } from "./appTaskPresentation";
 
 const props = defineProps<{ snapshot: AppManagementSnapshot; submitting: string }>();
 const selectedJobId = defineModel<string>("selectedJobId", { default: "" });
@@ -74,10 +74,10 @@ const emit = defineEmits<{ retry: [job: AppManagementJob] }>();
 const { t, te } = useI18n();
 const { locale } = useControlPlaneLocale();
 const groups = computed(() => appTaskGroups(props.snapshot));
-const taskSections = computed(() => [
-  { id: "active", label: t("instances.settings.activeAppTasks"), jobs: groups.value.active },
-  { id: "recent", label: t("instances.settings.recentAppTasks"), jobs: groups.value.recent },
-]);
+const taskSections = computed(() => appTaskSections(groups.value, {
+  active: t("instances.settings.activeAppTasks"),
+  recent: t("instances.settings.recentAppTasks"),
+}));
 
 onMounted(() => {
   const jobs = [...groups.value.active, ...groups.value.recent];

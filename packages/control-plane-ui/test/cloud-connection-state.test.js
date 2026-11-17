@@ -10,6 +10,7 @@ test("cloud connection authority states take precedence over pending account req
 
 test("login-only and binding-pending states are distinct", () => {
   assert.equal(resolveCloudConnectionStage({ status: "unbound", signedIn: false, pendingScope: "account:sign-in" }), "awaiting-sign-in");
+  assert.equal(resolveCloudConnectionStage({ status: "pending-claim", signedIn: false, pendingScope: "control-plane:sign-in-and-bind" }), "awaiting-connect");
   assert.equal(resolveCloudConnectionStage({ status: "pending-claim", signedIn: true, pendingScope: "control-plane:bind" }), "awaiting-binding");
   assert.equal(resolveCloudConnectionStage({ status: "unbound", signedIn: true }), "signed-in-unbound");
   assert.equal(resolveCloudConnectionStage({ status: "unbound", signedIn: false }), "signed-out");

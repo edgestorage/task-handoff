@@ -23,6 +23,7 @@ test("sign-in and binding both open the official approval page without a copied 
   assert.doesNotMatch(component, /clipboard/);
   assert.doesNotMatch(component, /CloudBindingChallenge/);
   assert.match(component, /createCloudSignInRequest\(\)/);
+  assert.match(component, /createCloudSignInAndBindRequest\(\)/);
   assert.match(component, /createCloudBindingRequest\(\)/);
   assert.match(component, /reopen\(request\.authorizationUrl\)/);
   assert.match(component, /window\.open\(url, "_blank", "noopener,noreferrer"\)/);
@@ -56,7 +57,7 @@ test("an active binding can sign back in after the account session is signed out
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
   const accountRow = component.match(/<section v-if="signedIn \|\| connectionStage === 'active'"[\s\S]*?<\/section>/)?.[0] || "";
   assert.match(accountRow, /v-if="signedIn"[\s\S]*@click="signOutOpen = true"/);
-  assert.match(accountRow, /<Button v-else[^>]*:disabled="busy \|\| waitingForSignIn \|\| Boolean\(originConflict\)"[^>]*@click="signIn\('sign-in'\)"/);
+  assert.match(accountRow, /<Button v-else[^>]*:disabled="busy \|\| waitingForSignIn \|\| waitingForConnect \|\| Boolean\(originConflict\)"[^>]*@click="signIn\('sign-in'\)"/);
   assert.match(accountRow, /settings\.cloud\.accountSessionNote/);
   assert.match(accountRow, /settings\.cloud\.accountSignedOutNote/);
   assert.match(component, /<p v-if="!signedIn" class="cloud-node-picker-warning"[\s\S]{0,400}signIn\('sign-in'\)/);
@@ -71,6 +72,7 @@ test("signing in only and signing in to bind keep separate intents", () => {
   assert.match(component, /const loginIntent = ref<LoginIntent \| null>\(null\)/);
   assert.match(component, /signIn\('bind'\)/);
   assert.match(component, /signIn\('sign-in'\)/);
+  assert.match(component, /request\.scope === "account:sign-in" \? "bind" : null/);
   assert.match(component, /watch\(\[signedIn, busy\], async \(\[value, isBusy\]\) => \{[\s\S]*if \(intent !== "bind"\) return;/);
   assert.match(component, /if \(status !== "unbound" && status !== "pending-claim"\) return;/);
 });

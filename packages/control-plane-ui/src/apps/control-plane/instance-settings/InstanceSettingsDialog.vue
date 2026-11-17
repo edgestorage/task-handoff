@@ -1717,7 +1717,7 @@ async function confirmAppOperation() {
 .instance-app-task-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-left: 5px; padding: 0 4px; border-radius: 4px; background: var(--surface-raised); color: var(--text); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .instance-app-view-content { margin-top: 0; }
 .instance-app-view-content[hidden] { display: none; }
-.instance-app-environment-content { padding: 16px; }
+.instance-app-environment-content { padding: 0; }
 .instance-app-task-summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-block: 1px solid var(--line); background: var(--surface-inset); color: var(--text); font-size: 12px; }
 .instance-app-task-summary > svg { flex-shrink: 0; color: var(--brand-accent-muted); }
 .instance-app-task-summary-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -2035,7 +2035,6 @@ async function confirmAppOperation() {
 
 @media (max-width: 680px) {
   .instance-app-header { align-items: flex-start; }
-  .instance-app-environment-content { padding: 12px; }
   .remote-desktop-component-main,
   .remote-desktop-component-note,
   .remote-desktop-component-enable,

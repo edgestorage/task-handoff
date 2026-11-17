@@ -24,12 +24,23 @@ import {
 const AUTH_TOKEN = "cloud-relay-node-test-token";
 const SERVICE_ORIGIN = "https://cloud.example.com";
 
+function controlOrigin(url: string) {
+  const parsed = new URL(url);
+  parsed.protocol = parsed.protocol === "wss:" ? "https:" : "http:";
+  return parsed.origin;
+}
+
 class TestNodeRelayControlSocket extends EventEmitter {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
   static readonly CLOSING = 2;
   static readonly CLOSED = 3;
   static readonly instances: TestNodeRelayControlSocket[] = [];
+  static readonly failingOrigins = new Set<string>();
+  static reset() {
+    this.instances.length = 0;
+    this.failingOrigins.clear();
+  }
   readyState = TestNodeRelayControlSocket.OPEN;
   readonly sent: any[] = [];
   readonly url: string;
@@ -39,7 +50,16 @@ class TestNodeRelayControlSocket extends EventEmitter {
     this.url = url;
     this.options = options;
     TestNodeRelayControlSocket.instances.push(this);
-    queueMicrotask(() => this.emit("open"));
+    if (TestNodeRelayControlSocket.failingOrigins.has(controlOrigin(url))) {
+      this.readyState = TestNodeRelayControlSocket.CONNECTING;
+      queueMicrotask(() => {
+        this.readyState = TestNodeRelayControlSocket.CLOSED;
+        this.emit("error", new Error("Client network socket disconnected before secure TLS connection was established"));
+        this.emit("close", 1006, Buffer.alloc(0));
+      });
+    } else {
+      queueMicrotask(() => this.emit("open"));
+    }
   }
   send(raw: string) {
     const message = JSON.parse(raw);
@@ -398,6 +418,117 @@ test("node agent discovers the cloud origin from TXT before binding", async (t) 
   assert.ok(calls.some((url) => url.startsWith("https://dns.alidns.com/")), "the node must resolve the discovery TXT record");
   assert.ok(calls.some((url) => url === "https://backup.cloud.example.com/api/v1/node-relay/v1/redeem"), "redemption must use the discovered origin");
   assert.equal(calls.some((url) => url === `${SERVICE_ORIGIN}/api/v1/node-relay/v1/redeem`), false);
+});
+
+test("a failed control socket fails over to the next discovered origin", async (t) => {
+  TestNodeRelayControlSocket.reset();
+  t.after(() => TestNodeRelayControlSocket.reset());
+  const backupOrigin = "https://backup.cloud.example.com";
+  TestNodeRelayControlSocket.failingOrigins.add(SERVICE_ORIGIN);
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    if (url.hostname === "dns.alidns.com" || url.hostname === "cloudflare-dns.com") {
+      return new Response(JSON.stringify({ Answer: [{ type: 16, data: "v1 cloud.example.com backup.cloud.example.com" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname === "/api/v1/auth/providers") return new Response("", { status: 200 });
+    return stub.fetchImpl(input, init);
+  };
+  const { app } = await cloudRelayFixture(t, stub, {
+    fetchImpl,
+    cloudDiscovery: {
+      record: "_cloud.example.com",
+      fallbackOrigin: SERVICE_ORIGIN,
+      allowedHostSuffixes: ["example.com"],
+    },
+    controlWebSocket: TestNodeRelayControlSocket as any,
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/cloud-relay/bind",
+    headers: authorizationHeaders(),
+    payload: { bindingToken: stub.state.bindingToken },
+  });
+  assert.equal(response.statusCode, 201, response.body);
+  await waitFor(() => TestNodeRelayControlSocket.instances.some((socket) => controlOrigin(socket.url) === backupOrigin) ? true : undefined, "backup control socket");
+  const failed = TestNodeRelayControlSocket.instances.find((socket) => controlOrigin(socket.url) === SERVICE_ORIGIN);
+  const backup = TestNodeRelayControlSocket.instances.find((socket) => controlOrigin(socket.url) === backupOrigin);
+  assert.ok(failed, "the primary origin must be attempted first");
+  assert.ok(backup, "the backup origin must be attempted after the failure");
+  await waitFor(() => backup.sent.some((message) => message.type === "register") ? true : undefined, "backup control registration");
+});
+
+test("an HTTP origin failure switches the next allocation poll to the next discovered origin", async (t) => {
+  const backupOrigin = "https://backup.cloud.example.com";
+  const stub = cloudRelayCloudStub({ serviceOrigin: SERVICE_ORIGIN });
+  const calls: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    calls.push(url.href);
+    if (url.hostname === "dns.alidns.com" || url.hostname === "cloudflare-dns.com") {
+      return new Response(JSON.stringify({ Answer: [{ type: 16, data: "v1 cloud.example.com backup.cloud.example.com" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname === "/api/v1/auth/providers") return new Response("", { status: 200 });
+    if (url.origin === SERVICE_ORIGIN && url.pathname === "/api/v1/node-relay/v1/allocations") {
+      return new Response(JSON.stringify({ error: { code: "COORDINATOR_UNAVAILABLE", message: "unavailable" } }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return stub.fetchImpl(input, init);
+  };
+  const { app, relay } = await cloudRelayFixture(t, stub, {
+    fetchImpl,
+    cloudDiscovery: {
+      record: "_cloud.example.com",
+      fallbackOrigin: SERVICE_ORIGIN,
+      allowedHostSuffixes: ["example.com"],
+    },
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/cloud-relay/bind",
+    headers: authorizationHeaders(),
+    payload: { bindingToken: stub.state.bindingToken },
+  });
+  assert.equal(response.statusCode, 201, response.body);
+  relay.pollNow();
+  await waitFor(() => calls.includes(`${backupOrigin}/api/v1/node-relay/v1/allocations`) ? true : undefined, "allocation request to the backup origin");
+});
+
+test("cloud origin failure reporting covers transport, server and malformed responses", async () => {
+  const failures: Array<{ origin: string; message: string }> = [];
+  for (const response of [
+    () => new Response(JSON.stringify({ error: { code: "UNAVAILABLE", message: "unavailable" } }), { status: 503 }),
+    () => new Response(JSON.stringify({ error: { code: "RATE_LIMITED", message: "slow down" } }), { status: 429 }),
+    () => new Response("not-json", { status: 200 }),
+    () => { throw new TypeError("Client network socket disconnected before secure TLS connection was established"); },
+  ]) {
+    const client = new NodeRelayCloudClient({
+      cloudOrigin: SERVICE_ORIGIN,
+      fetchImpl: async () => response(),
+      onOriginFailure: (origin, error) => failures.push({ origin, message: error instanceof Error ? error.message : String(error) }),
+    });
+    await assert.rejects(client.allocations("thnc_test_credential_000000000000", { nodeId: "node_cloud_relay" }));
+  }
+  assert.equal(failures.length, 4);
+  assert.ok(failures.every((failure) => failure.origin === SERVICE_ORIGIN));
+
+  const credentialClient = new NodeRelayCloudClient({
+    cloudOrigin: SERVICE_ORIGIN,
+    fetchImpl: async () => new Response(JSON.stringify({ error: { code: "NODE_RELAY_CREDENTIAL_INVALID", message: "invalid" } }), { status: 401 }),
+    onOriginFailure: (origin) => failures.push({ origin, message: "unexpected failover" }),
+  });
+  await assert.rejects(credentialClient.allocations("thnc_test_credential_000000000000", { nodeId: "node_cloud_relay" }));
+  assert.equal(failures.length, 4, "credential rejection must not fail over the origin");
 });
 
 test("an explicit cloud origin bypasses the bundled discovery record", async (t) => {

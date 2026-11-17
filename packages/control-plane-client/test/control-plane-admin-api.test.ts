@@ -85,6 +85,7 @@ test("control-plane admin cloud routes", async () => {
       return { data: { signedIn: false, futureAccountField: true, pendingRequest: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: `https://cloud.example.com/authorize/control-plane?request=request_a`, futurePendingField: true } } };
     }
     if (path === "/api/cloud-account/sign-in-requests") return { data: { requestId: "request_a", scope: "account:sign-in", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_a", futureRequestField: true } };
+    if (path === "/api/cloud-account/sign-in-and-bind-requests") return { data: { requestId: "request_connect", scope: "control-plane:sign-in-and-bind", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_connect", futureRequestField: true } };
     if (path === "/api/cloud-connectivity/binding-requests") return { data: { requestId: "request_b", scope: "control-plane:bind", expiresAt: TS, authorizationUrl: "https://cloud.example.com/authorize/control-plane?request=request_b", futureRequestField: true } };
     if (path === "/api/cloud-account/sign-out") return { data: { signedIn: false } };
     if (path === "/api/cloud-connectivity/access-settings") return { data: {
@@ -134,6 +135,9 @@ test("control-plane admin cloud routes", async () => {
   const accountRequest = await api.createCloudSignInRequest();
   assert.equal(accountRequest.scope, "account:sign-in");
   assert.equal("futureRequestField" in accountRequest, false);
+  const connectRequest = await api.createCloudSignInAndBindRequest();
+  assert.equal(connectRequest.scope, "control-plane:sign-in-and-bind");
+  assert.equal("futureRequestField" in connectRequest, false);
   const bindingRequest = await api.createCloudBindingRequest();
   assert.equal(bindingRequest.scope, "control-plane:bind");
   assert.equal("futureRequestField" in bindingRequest, false);
@@ -148,6 +152,7 @@ test("control-plane admin cloud routes", async () => {
     ["/api/cloud-connectivity/disconnect", "POST"],
     ["/api/cloud-account", undefined],
     ["/api/cloud-account/sign-in-requests", "POST"],
+    ["/api/cloud-account/sign-in-and-bind-requests", "POST"],
     ["/api/cloud-connectivity/binding-requests", "POST"],
     ["/api/cloud-account/sign-out", "POST"],
   ]);

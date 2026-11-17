@@ -49,4 +49,5 @@ export class CloudEndpointResolver {
   markSuccess(origin: string): void;
   markFailure(origin: string): void;
   request(input: string | URL, init?: RequestInit): Promise<Response>;
+  requestWithOrigin(input: string | URL, init?: RequestInit): Promise<{ response: Response; origin: string }>;
 }

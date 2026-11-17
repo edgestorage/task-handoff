@@ -6,6 +6,7 @@ import test from "node:test";
 import { RELAY_SESSION_PROTOCOL_VERSION, RELAY_SESSION_RESUME_CAPABILITY, RelaySessionAudience } from "@task-handoff/cloud-contracts";
 import { CloudAccountSessionService } from "../src/control-plane/cloud-connectivity/account-session.ts";
 import { CloudConnectivityBackgroundRuntime } from "../src/control-plane/cloud-connectivity/coordinator-runtime.ts";
+import { CloudEndpointResolver } from "../../../shared/cloud-discovery.cjs";
 
 const ISO = (ms) => new Date(ms).toISOString();
 const tempDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "cloud-account-"));
@@ -160,10 +161,11 @@ test("a delivery-failed request clears pending and exposes a retryable failure",
   assert.equal(service.snapshot().requestFailure, undefined);
 });
 
-function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, bindingId, pendingRevocation = false, rejectCredentialRegistration = false, roleCatalog, catalogRevision = 1, runtimeOptions = {} } = {}) {
+function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, bindingId, bindingStatus, pendingRequest, requestHandler, pendingRevocation = false, rejectCredentialRegistration = false, roleCatalog, catalogRevision = 1, runtimeOptions = {} } = {}) {
   const dir = tempDir();
   const accountSession = new CloudAccountSessionService({ statePath: path.join(dir, "session.json"), serviceOrigin: "https://cloud.example.test" });
   accountSession.init();
+  if (pendingRequest) accountSession.beginRequest(pendingRequest);
   const sockets = [];
   const fetchCalls = [];
   class FakeSocket {
@@ -177,6 +179,7 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, bindingId, pendin
       this.sent = [...(this.sent ?? []), message];
       if (message.type === "register" && rejectCredentialRegistration && message.backgroundCredential) queueMicrotask(() => this.close(1008, "BACKGROUND_CREDENTIAL_INVALID"));
       else if (message.type === "register") queueMicrotask(() => this.emit("message", { toString: () => JSON.stringify({ type: "registered", controlPlaneId: "control_plane_test", reportedControlPlaneId: "control_plane_test", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }) }));
+      else if (message.type === "request" && requestHandler) requestHandler(message, this);
     }
     close(code, reason) { this.readyState = 3; queueMicrotask(() => this.emit("close", code, reason)); }
     emit(event, ...args) { for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args); }
@@ -184,7 +187,7 @@ function runtimeHarness({ fetchImpl, accountRenewalIntervalMs, bindingId, pendin
     respond(requestId, data) { this.receive({ type: "response", requestId, data }); }
   }
   const identity = { publicIdentity: () => ({ controlPlaneId: "control_plane_test", publicKey: "key", fingerprint: "sha256:fingerprint" }), signCloudOutboundRegistration: () => "signature" };
-  let status = pendingRevocation ? "pending-revocation" : bindingId ? "active" : "unbound";
+  let status = bindingStatus ?? (pendingRevocation ? "pending-revocation" : bindingId ? "active" : "unbound");
   let currentBindingId = bindingId;
   let currentCatalogRevision = catalogRevision;
   let catalogPublication;
@@ -573,6 +576,62 @@ test("the runtime records a created request and completes the local session from
   assert.equal(accountSession.pendingRequest(), undefined);
 });
 
+test("a combined account credential keeps the request pending until the binding credential arrives", async () => {
+  const { runtime, accountSession, sockets } = runtimeHarness();
+  const created = runtime.beginSignInAndBindRequest({ challengeCode: "challenge_a.secret", ownerUserId: "user_owner" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const create = sockets[0].sent.find((message) => message.type === "request" && message.operation === "create-control-plane-request");
+  assert.equal(create.payload.scope, "control-plane:sign-in-and-bind");
+  assert.equal(create.payload.challengeCode, "challenge_a.secret");
+  sockets[0].respond(create.requestId, { requestId: "request_connect", scope: "control-plane:sign-in-and-bind", expiresAt: new Date(Date.now() + 900_000).toISOString(), authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=request_connect" });
+  await created;
+
+  sockets[0].receive({ type: "request", requestId: "push_account", operation: "deliver-account-credential", payload: { requestId: "request_connect", accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}`, expiresAt: "2026-09-09T00:00:00.000Z", email: "owner@example.test", preservePendingRequest: true } });
+  await waitFor(() => accountSession.snapshot().signedIn === true, "the combined account credential was not accepted");
+  assert.equal(accountSession.pendingRequest()?.requestId, "request_connect");
+  assert.deepEqual(accountSession.bindingOwner(), { accountId: "account_a", ownerUserId: "user_owner" });
+
+  sockets[0].receive({ type: "request", requestId: "push_binding", operation: "deliver-binding-credential", payload: { accountId: "account_a", bindingId: "binding_a", bindingRevision: 1, backgroundCredential: `${"b".repeat(43)}` } });
+  await waitFor(() => accountSession.pendingRequest() === undefined, "the binding credential did not resolve the combined request");
+  assert.equal(accountSession.snapshot().signedIn, true);
+  assert.deepEqual(accountSession.bindingOwner(), { accountId: "account_a", ownerUserId: "user_owner" });
+});
+
+test("the combined request falls back to legacy sign-in when the Coordinator rejects its scope", async () => {
+  const { runtime, sockets } = runtimeHarness();
+  const created = runtime.beginSignInAndBindRequest({ challengeCode: "challenge_a.secret" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const combined = sockets[0].sent.find((message) => message.type === "request" && message.operation === "create-control-plane-request");
+  assert.equal(combined.payload.scope, "control-plane:sign-in-and-bind");
+  sockets[0].receive({ type: "response", requestId: combined.requestId, error: { code: "AUTHORIZATION_SCOPE_INVALID", message: "scope unsupported" } });
+  const legacy = await waitFor(
+    () => sockets[0].sent.filter((message) => message.type === "request" && message.operation === "create-control-plane-request").at(-1)?.requestId !== combined.requestId
+      && sockets[0].sent.filter((message) => message.type === "request" && message.operation === "create-control-plane-request").at(-1),
+    "the runtime did not retry with the legacy sign-in scope",
+  );
+  assert.equal(legacy.payload.scope, "account:sign-in");
+  sockets[0].respond(legacy.requestId, { requestId: "request_legacy", scope: "account:sign-in", expiresAt: new Date(Date.now() + 900_000).toISOString(), authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=request_legacy" });
+  assert.equal((await created).scope, "account:sign-in");
+});
+
+test("a combined binding failure keeps the delivered sign-in and binding ownership retryable", async () => {
+  const { runtime, accountSession, sockets } = runtimeHarness();
+  const created = runtime.beginSignInAndBindRequest({ challengeCode: "challenge_a.secret", ownerUserId: "user_owner" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const create = sockets[0].sent.find((message) => message.type === "request" && message.operation === "create-control-plane-request");
+  sockets[0].respond(create.requestId, { requestId: "request_connect", scope: "control-plane:sign-in-and-bind", expiresAt: new Date(Date.now() + 900_000).toISOString(), authorizationUrl: "https://cloud.example.test/authorize/control-plane?request=request_connect" });
+  await created;
+
+  sockets[0].receive({ type: "request", requestId: "push_account", operation: "deliver-account-credential", payload: { requestId: "request_connect", accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}`, expiresAt: "2026-09-09T00:00:00.000Z", preservePendingRequest: true } });
+  await waitFor(() => accountSession.snapshot().signedIn === true, "the combined account credential was not accepted");
+  sockets[0].receive({ type: "request", requestId: "resolved_binding_failed", operation: "control-plane-request-resolved", payload: { requestId: "request_connect", scope: "control-plane:sign-in-and-bind", status: "delivery-failed", errorCode: "BINDING_STEP_UP_REQUIRED" } });
+  await waitFor(() => accountSession.pendingRequest() === undefined, "the failed binding did not settle the request");
+
+  assert.equal(accountSession.snapshot().signedIn, true);
+  assert.deepEqual(accountSession.bindingOwner(), { accountId: "account_a", ownerUserId: "user_owner" });
+  assert.deepEqual(accountSession.snapshot().requestFailure, { requestId: "request_connect", scope: "control-plane:sign-in-and-bind", code: "BINDING_STEP_UP_REQUIRED" });
+});
+
 test("the runtime makes a delivery-failed authorization retryable", async () => {
   const { runtime, accountSession, sockets } = runtimeHarness();
   const created = runtime.beginAccountRequest({ scope: "account:sign-in" });
@@ -587,6 +646,35 @@ test("the runtime makes a delivery-failed authorization retryable", async () => 
   assert.equal(accountSession.pendingRequest(), undefined);
   assert.deepEqual(accountSession.snapshot().requestFailure, { requestId: "request_a", scope: "account:sign-in", code: "CONTROL_PLANE_DELIVERY_FAILED" });
   assert.equal(sockets[0].sent.some((message) => message.operation === "poll-control-plane-request"), false, "a live connection must consume the pushed resolution without polling");
+});
+
+test("a pending authorization request reconnects after restart and polls its denied resolution", async () => {
+  const requestId = "request_restart_denied";
+  let polls = 0;
+  const { runtime, accountSession, sockets } = runtimeHarness({
+    bindingStatus: "pending-claim",
+    pendingRequest: {
+      requestId,
+      authorizationUrl: `https://cloud.example.test/authorize/control-plane?request=${requestId}`,
+      scope: "control-plane:sign-in-and-bind",
+      expiresAt: ISO(Date.now() + 60_000),
+    },
+    requestHandler: (message, socket) => {
+      if (message.operation !== "poll-control-plane-request") return;
+      polls += 1;
+      assert.deepEqual(message.payload, { requestId });
+      socket.respond(message.requestId, { requestId, scope: "control-plane:sign-in-and-bind", status: "denied" });
+    },
+  });
+
+  try {
+    await waitFor(() => polls === 1, "a pending request did not reconnect and poll after runtime start");
+    await waitFor(() => accountSession.pendingRequest() === undefined, "the denied request remained pending");
+    assert.equal(accountSession.snapshot().signedIn, false);
+    assert.equal(sockets.length, 1);
+  } finally {
+    await runtime.stop();
+  }
 });
 
 test("concurrent credential refreshes share one rotation and read the official response envelope", async () => {
@@ -612,6 +700,169 @@ test("a rotation response without a session expiry keeps the stored one", async 
   await runtime.refreshAccountCredential();
   assert.equal(accountSession.refreshCredential(), `${"b".repeat(40)}`);
   assert.equal(accountSession.snapshot().sessionExpiresAt, "2026-09-01T00:00:00.000Z");
+});
+
+test("a malformed account response fails a safe request over to the next cloud origin", async () => {
+  const primary = "https://primary.cloud.example.test";
+  const backup = "https://backup.cloud.example.test";
+  let active = primary;
+  const failures = [];
+  const calls = [];
+  const cloudDiscovery = {
+    get activeOrigin() { return active; },
+    get endpoints() { return [primary, backup]; },
+    markSuccess: (origin) => { active = origin; },
+    markFailure: (origin) => { failures.push(origin); if (active === origin) active = backup; },
+    requestWithOrigin: async (path) => {
+      calls.push(`${active}${path}`);
+      if (path === "/api/v1/auth/refresh") return {
+        origin: active,
+        response: Response.json({ data: { accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"b".repeat(40)}`, accessToken: "access_token_value", accessExpiresIn: 300 } }),
+      };
+      return {
+        origin: active,
+        response: active === primary ? new Response("not-json") : Response.json({ data: { items: [{ nodeHandle: "nrh_node_a" }] } }),
+      };
+    },
+  };
+  const { runtime, accountSession } = runtimeHarness({ runtimeOptions: { cloudDiscovery } });
+  try {
+    accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}` });
+    const items = await runtime.listAccountNodes();
+    assert.deepEqual(items, [{ nodeHandle: "nrh_node_a" }]);
+    assert.deepEqual(failures, [primary]);
+    assert.equal(active, backup);
+    assert.ok(calls.includes(`${primary}/api/v1/nodes`));
+    assert.ok(calls.includes(`${backup}/api/v1/nodes`));
+  } finally {
+    await runtime.stop();
+  }
+});
+
+test("response validation attributes failures to the request origin across concurrent origin changes", async (t) => {
+  for (const scenario of ["invalid-json", "invalid-directory", "invalid-refresh"]) {
+    await t.test(scenario, async (t) => {
+      const primary = "https://primary.cloud.example.test";
+      const backup = "https://backup.cloud.example.test";
+      const bodyStarted = Promise.withResolvers();
+      const releaseBody = Promise.withResolvers();
+      const failures = [];
+      const failovers = [];
+      const directoryCalls = [];
+      const cloudDiscovery = new CloudEndpointResolver({
+        config: { record: "_cloud.example.test", fallbackOrigin: primary, allowedHostSuffixes: ["example.test"] },
+        fallbackOrigin: primary,
+        fetchImpl: async (input) => {
+          const url = new URL(String(input));
+          if (url.hostname === "dns.alidns.com") return Response.json({ Answer: [{ type: 16, data: "v1 primary.cloud.example.test backup.cloud.example.test" }] });
+          if (url.pathname === "/api/v1/auth/providers") return Response.json({});
+          if (url.pathname === "/api/v1/nodes") directoryCalls.push(url.origin);
+          if (url.pathname === "/api/v1/auth/refresh" && scenario !== "invalid-refresh") return Response.json({ data: {
+            accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: "b".repeat(40), accessToken: "access_token", accessExpiresIn: 300,
+          } });
+          if (url.origin === backup) return Response.json({ data: { items: [{ nodeHandle: "nrh_node_a" }] } });
+          const response = new Response(scenario === "invalid-json" ? "not-json" : JSON.stringify({ data: {} }));
+          const readJson = response.json.bind(response);
+          response.json = async () => {
+            bodyStarted.resolve();
+            await releaseBody.promise;
+            return readJson();
+          };
+          return response;
+        },
+      });
+      await cloudDiscovery.initialize();
+      const markFailure = cloudDiscovery.markFailure.bind(cloudDiscovery);
+      t.mock.method(cloudDiscovery, "markFailure", (origin) => { failures.push(origin); markFailure(origin); });
+      const { runtime, accountSession, sockets } = runtimeHarness({ bindingId: "binding_a", runtimeOptions: { cloudDiscovery, onOriginFailover: (entry) => failovers.push(entry) } });
+      t.after(async () => { releaseBody.resolve(); await runtime.stop(); });
+      await waitFor(() => sockets[0]?.sent?.some((message) => message.type === "register"), "the runtime did not register");
+      accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: "a".repeat(40) });
+      const pending = scenario === "invalid-refresh" ? runtime.refreshAccountCredential() : runtime.listAccountNodes();
+      await bodyStarted.promise;
+      // A different successful transport selects the backup while primary's body is still arriving.
+      cloudDiscovery.markSuccess(backup);
+      releaseBody.resolve();
+      const result = await pending;
+      assert.deepEqual(failures, [primary]);
+      assert.equal(cloudDiscovery.activeOrigin, backup);
+      assert.deepEqual(failovers, [], "validation must not report a failover when the backup was already active");
+      assert.equal(accountSession.snapshot().signedIn, true);
+      if (scenario === "invalid-refresh") {
+        assert.equal(accountSession.refreshCredential(), "a".repeat(40));
+      } else {
+        assert.deepEqual(directoryCalls, [primary, backup]);
+        assert.deepEqual(result, [{ nodeHandle: "nrh_node_a" }]);
+      }
+    });
+  }
+});
+
+test("runtime disconnect handling preserves business rejection and transport failure details", async (t) => {
+  for (const reason of ["BACKGROUND_CREDENTIAL_REQUIRED", "BACKGROUND_CREDENTIAL_INVALID", "ECONNRESET"]) {
+    await t.test(reason, async (t) => {
+      const primary = "https://primary.cloud.example.test";
+      const backup = "https://backup.cloud.example.test";
+      const transportFailure = reason === "ECONNRESET";
+      let active = primary;
+      const failures = [];
+      const failovers = [];
+      const logs = [];
+      const cloudDiscovery = {
+        get activeOrigin() { return active; },
+        get endpoints() { return [primary, backup]; },
+        markSuccess: (origin) => { active = origin; },
+        markFailure: (origin) => { failures.push(origin); if (active === origin) active = backup; },
+      };
+      const { runtime, sockets } = runtimeHarness({ bindingId: "binding_a", runtimeOptions: {
+        cloudDiscovery,
+        onOriginFailover: (entry) => failovers.push(entry),
+        logger: { warn: (details) => logs.push(details) },
+      } });
+      t.after(() => runtime.stop());
+      await waitFor(() => sockets[0]?.sent?.some((message) => message.type === "register"), "the runtime did not register");
+      if (transportFailure) sockets[0].emit("error", Object.assign(new Error("connection reset"), { code: reason }));
+      sockets[0].close(transportFailure ? 1006 : 1008, transportFailure ? "" : reason);
+      await waitFor(() => logs.some((entry) => entry.code === "CLOUD_CONTROL_CONNECTION_CLOSED"), "the disconnect did not reach the runtime");
+      assert.deepEqual(failures, transportFailure ? [primary] : []);
+      assert.equal(active, transportFailure ? backup : primary);
+      assert.deepEqual(failovers, transportFailure ? [{ fromOrigin: primary, toOrigin: backup, reason }] : []);
+
+      const created = runtime.beginAccountRequest({ scope: "account:sign-in" });
+      const request = await waitFor(() => sockets[1]?.sent?.find((message) => message.operation === "create-control-plane-request"), "the runtime did not reconnect");
+      const url = new URL(sockets[1].url);
+      url.protocol = "https:";
+      assert.equal(url.origin, transportFailure ? backup : primary);
+      sockets[1].respond(request.requestId, { requestId: "request_reconnected", scope: "account:sign-in", expiresAt: new Date(Date.now() + 60_000).toISOString(), authorizationUrl: `${primary}/authorize` });
+      await created;
+    });
+  }
+});
+
+test("a malformed account refresh marks the origin failed without discarding the session", async () => {
+  const primary = "https://primary.cloud.example.test";
+  const backup = "https://backup.cloud.example.test";
+  let active = primary;
+  const failures = [];
+  const failovers = [];
+  const cloudDiscovery = {
+    get activeOrigin() { return active; },
+    get endpoints() { return [primary, backup]; },
+    markSuccess: (origin) => { active = origin; },
+    markFailure: (origin) => { failures.push(origin); if (active === origin) active = backup; },
+    requestWithOrigin: async () => ({ origin: active, response: Response.json({ data: { accountId: "account_a" } }) }),
+  };
+  const { runtime, accountSession } = runtimeHarness({ runtimeOptions: { cloudDiscovery, onOriginFailover: (entry) => failovers.push(entry) } });
+  try {
+    accountSession.complete({ accountId: "account_a", deviceSessionId: "control_plane_session_a", refreshCredential: `${"a".repeat(40)}` });
+    await runtime.refreshAccountCredential();
+    assert.equal(accountSession.snapshot().signedIn, true);
+    assert.equal(accountSession.refreshCredential(), `${"a".repeat(40)}`);
+    assert.deepEqual(failures, [primary]);
+    assert.deepEqual(failovers, [{ fromOrigin: primary, toOrigin: backup, reason: "CLOUD_ACCOUNT_REFRESH_RESPONSE_INVALID" }]);
+  } finally {
+    await runtime.stop();
+  }
 });
 
 test("the runtime renews the account credential on its timer and adopts the new expiry", async () => {
