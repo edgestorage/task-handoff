@@ -22,6 +22,18 @@ pub struct Geometry {
     pub height: u32,
     pub scale: f64,
 }
+/// Native window mutation requested by the browser boundary. Width and height
+/// are logical actuator dimensions, independent of capture and video pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WindowResizeTarget {
+    Preset { width: u32, height: u32 },
+    Viewport { width: u32, height: u32 },
+}
 impl Geometry {
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(

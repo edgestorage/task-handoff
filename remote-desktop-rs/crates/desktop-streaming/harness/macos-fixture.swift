@@ -25,15 +25,38 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     var lastMouseY: CGFloat = -1
     let expected = "中文・日本語・é・😀 mixed ASCII punctuation !?"
 
+    func stringArgument(_ name: String) -> String? {
+        guard let index = CommandLine.arguments.firstIndex(of: name),
+              CommandLine.arguments.indices.contains(index + 1) else { return nil }
+        return CommandLine.arguments[index + 1]
+    }
+
+    func sizeArgument(_ name: String) -> NSSize? {
+        guard let value = stringArgument(name) else { return nil }
+        let parts = value.split(separator: "x", maxSplits: 1).compactMap { Double($0) }
+        guard parts.count == 2, parts.allSatisfy({ $0 > 0 }) else { return nil }
+        return NSSize(width: parts[0], height: parts[1])
+    }
+
+    func aspectArgument() -> NSSize? {
+        guard let value = stringArgument("--aspect-ratio") else { return nil }
+        let parts = value.split(separator: ":", maxSplits: 1).compactMap { Double($0) }
+        guard parts.count == 2, parts.allSatisfy({ $0 > 0 }) else { return nil }
+        return NSSize(width: parts[0], height: parts[1])
+    }
+
     func emit(_ kind: String) {
         let frame = window.frame
         let mainHeight: CGFloat = NSScreen.screens.first?.frame.height ?? 0
         let mainWidth: CGFloat = NSScreen.screens.first?.frame.width ?? 0
+        let workArea = NSScreen.screens.first?.visibleFrame ?? .zero
         let display: [String: CGFloat] = ["x": 0, "y": 0, "width": mainWidth, "height": mainHeight]
         let state: [String: Any] = [
             "kind": kind, "pid": ProcessInfo.processInfo.processIdentifier,
             "active": NSApplication.shared.isActive,
             "display": display,
+            "workArea": ["x": workArea.minX, "y": mainHeight - workArea.maxY,
+                         "width": workArea.width, "height": workArea.height],
             "rect": ["x": frame.minX, "y": mainHeight - frame.maxY,
                      "width": frame.width, "height": frame.height],
             "keyDowns": downs, "keyUps": ups, "mouseDowns": clicks,
@@ -48,9 +71,18 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         previous = NSWorkspace.shared.frontmostApplication
+        let fixed = CommandLine.arguments.contains("--fixed")
         window = NSWindow(contentRect: NSRect(x: 180, y: 160, width: 640, height: 360),
-                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "G1 owned macOS input fixture"
+                          styleMask: fixed ? [.titled, .closable, .miniaturizable]
+                                           : [.titled, .closable, .resizable, .miniaturizable],
+                          backing: .buffered, defer: false)
+        window.title = stringArgument("--title") ?? "G1 owned macOS input fixture"
+        if let minimum = sizeArgument("--min-size") { window.minSize = minimum }
+        if let maximum = sizeArgument("--max-size") { window.maxSize = maximum }
+        if let aspect = aspectArgument() { window.aspectRatio = aspect }
+        if let initial = sizeArgument("--size") {
+            window.setFrame(NSRect(origin: window.frame.origin, size: initial), display: true)
+        }
         window.isReleasedWhenClosed = false
         let content = window.contentView!
         marker = MarkerView(frame: NSRect(x: 16, y: 280, width: 48, height: 48))
@@ -80,6 +112,9 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextViewDelegate {
             }
             self.emit("input")
             return event
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.emit("resized") }
         }
         if CommandLine.arguments.contains("--background") {
             window.orderBack(nil)

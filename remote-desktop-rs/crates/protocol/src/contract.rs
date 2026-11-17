@@ -3,7 +3,7 @@ use crate::model::{CaptureSelection, CaptureSource, Owner, Snapshot};
 use serde::{Deserialize, Serialize};
 
 pub const IPC_VERSION: &str = "2026-11-11";
-pub const CHANNEL_VERSION: &str = "2026-11-05";
+pub const CHANNEL_VERSION: &str = "2026-11-17";
 pub const MAX_IPC_FRAME: usize = 1024 * 1024;
 
 // Deliberately no Debug: nonce, attach credentials, SDP and input must not enter logs.

@@ -4,9 +4,9 @@ import { z } from "zod";
  * negotiated limits, owned by the instance/component; none is persisted on a
  * node/instance record. Package and enable intent retain their existing owners.
  * The independent desktop subprotocol does not change the instance protocol. */
-export const REMOTE_DESKTOP_PROTOCOL_VERSION = "2026-11-11";
+export const REMOTE_DESKTOP_PROTOCOL_VERSION = "2026-11-17";
 /** Browser DataChannel envelope version. Independent from signaling and IPC. */
-export const REMOTE_DESKTOP_CHANNEL_VERSION = "2026-11-05";
+export const REMOTE_DESKTOP_CHANNEL_VERSION = "2026-11-17";
 /** WebSocket fallback date version. It does not upgrade the WebRTC or instance protocol. */
 export const REMOTE_DESKTOP_FALLBACK_PROTOCOL_VERSION = "2026-11-09";
 export const REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL = "taskhandoff.remote-desktop.fallback.media.v1";
@@ -63,6 +63,52 @@ function decodePathSegment(value: string) {
 }
 const Name = z.string().min(1);
 const Names = z.array(Name);
+export const REMOTE_DESKTOP_WINDOW_MIN_SIZE = 160;
+export const REMOTE_DESKTOP_WINDOW_MAX_SIZE = 16_384;
+export const REMOTE_DESKTOP_WINDOW_RESIZE_MAX_PRESETS = 32;
+
+export type RemoteDesktopWindowSize = { width:number; height:number };
+export type RemoteDesktopWindowResize = {
+  available:boolean;
+  presets:RemoteDesktopWindowSize[];
+  fitToViewport:boolean;
+};
+
+function windowSize(value: unknown): RemoteDesktopWindowSize | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { width, height } = value as { width?:unknown; height?:unknown };
+  if (
+    typeof width !== "number" || !Number.isInteger(width)
+    || typeof height !== "number" || !Number.isInteger(height)
+    || width < REMOTE_DESKTOP_WINDOW_MIN_SIZE || width > REMOTE_DESKTOP_WINDOW_MAX_SIZE
+    || height < REMOTE_DESKTOP_WINDOW_MIN_SIZE || height > REMOTE_DESKTOP_WINDOW_MAX_SIZE
+  ) return undefined;
+  return { width, height };
+}
+
+export function normalizeRemoteDesktopWindowResize(value: unknown): RemoteDesktopWindowResize {
+  if (!value || typeof value !== "object") return { available:false, presets:[], fitToViewport:false };
+  const input = value as { available?:unknown; presets?:unknown; fitToViewport?:unknown };
+  if (input.available !== true) return { available:false, presets:[], fitToViewport:false };
+  const unique = new Map<string, RemoteDesktopWindowSize>();
+  if (Array.isArray(input.presets)) {
+    for (const candidate of input.presets) {
+      const size = windowSize(candidate);
+      if (!size) continue;
+      unique.set(`${size.width}x${size.height}`, size);
+      if (unique.size >= REMOTE_DESKTOP_WINDOW_RESIZE_MAX_PRESETS) break;
+    }
+  }
+  const presets = [...unique.values()];
+  const fitToViewport = input.fitToViewport === true;
+  return {
+    available: presets.length > 0 || fitToViewport,
+    presets,
+    fitToViewport,
+  };
+}
+
+const RemoteDesktopWindowResizeCapabilitySchema = z.unknown().optional().transform(normalizeRemoteDesktopWindowResize);
 /** Additive fallback capability. Older peers omit it and keep WebRTC only. */
 export const RemoteDesktopFallbackCapabilitiesSchema = z.object({
   available:z.boolean(),
@@ -99,7 +145,11 @@ export const RemoteDesktopCapabilitiesSchema = z.object({
   input: z.object({ backends:Names, textCommit:z.boolean(), keyboardLayout:z.boolean() }).strip(),
   transport: Names,
   video: z.object({ codecs:Names, maxWidth:z.number().int().nonnegative(), maxHeight:z.number().int().nonnegative(), maxFrameRate:z.number().int().nonnegative() }).strip(),
-  features: z.object({ clipboard:z.boolean(), keyboard:z.boolean(), mouse:z.boolean() }).strip(),
+  features: z.object({
+    clipboard:z.boolean(), keyboard:z.boolean(), mouse:z.boolean(),
+    // Additive: old components omit it; malformed values disable only resize.
+    windowResize:RemoteDesktopWindowResizeCapabilitySchema,
+  }).strip(),
   viewerLimit:z.number().int().nonnegative(),
   fallback: RemoteDesktopFallbackCapabilitiesSchema.default(unsupportedRemoteDesktopFallback()),
 }).strip();
@@ -111,6 +161,12 @@ export function remoteDesktopSupportsCapturePrecision(
   return capabilities?.capture.precisionModes.includes("performance") === true;
 }
 
+export function remoteDesktopSupportsWindowResize(
+  capabilities: RemoteDesktopCapabilities | null | undefined,
+) {
+  return capabilities?.features.windowResize.available === true;
+}
+
 /** Compatibility for v0.0.50: missing/invalid desktop disables only this domain.
  * No server policy default or current platform list becomes a reader limit. */
 export function unsupportedRemoteDesktopCapabilities(reason = "REMOTE_DESKTOP_UNSUPPORTED"): RemoteDesktopCapabilities {
@@ -120,7 +176,7 @@ export function unsupportedRemoteDesktopCapabilities(reason = "REMOTE_DESKTOP_UN
     capture:{backends:[],cursor:false,precisionModes:[]},encoders:[],
     input:{backends:[],textCommit:false,keyboardLayout:false},transport:[],
     video:{codecs:[],maxWidth:0,maxHeight:0,maxFrameRate:0},
-    features:{clipboard:false,keyboard:false,mouse:false},viewerLimit:0,
+    features:{clipboard:false,keyboard:false,mouse:false,windowResize:{available:false,presets:[],fitToViewport:false}},viewerLimit:0,
     fallback:unsupportedRemoteDesktopFallback(reason),
   };
 }
@@ -155,6 +211,33 @@ export function isRemoteDesktopLocalNetworkAddress(value: string) {
 }
 const utf8 = (value: string) => new TextEncoder().encode(value).byteLength;
 export const DesktopRequestIdSchema = z.string().min(1).refine(value => utf8(value) <= 128);
+export const RemoteDesktopWindowResizeRequestSchema = z.discriminatedUnion("mode", [
+  z.object({
+    requestId:DesktopRequestIdSchema,
+    mode:z.literal("preset"),
+    width:z.number().int().min(REMOTE_DESKTOP_WINDOW_MIN_SIZE).max(REMOTE_DESKTOP_WINDOW_MAX_SIZE),
+    height:z.number().int().min(REMOTE_DESKTOP_WINDOW_MIN_SIZE).max(REMOTE_DESKTOP_WINDOW_MAX_SIZE),
+  }).strict(),
+  z.object({
+    requestId:DesktopRequestIdSchema,
+    mode:z.literal("viewport"),
+    width:z.number().int().min(REMOTE_DESKTOP_WINDOW_MIN_SIZE).max(REMOTE_DESKTOP_WINDOW_MAX_SIZE),
+    height:z.number().int().min(REMOTE_DESKTOP_WINDOW_MIN_SIZE).max(REMOTE_DESKTOP_WINDOW_MAX_SIZE),
+  }).strict(),
+]);
+export type RemoteDesktopWindowResizeRequest = z.infer<typeof RemoteDesktopWindowResizeRequestSchema>;
+export const RemoteDesktopWindowResizedPayloadSchema = z.object({
+  requestId:DesktopRequestIdSchema,
+  mode:z.enum(["preset", "viewport"]),
+  width:z.number().int().positive(),
+  height:z.number().int().positive(),
+}).strict();
+export type RemoteDesktopWindowResizedPayload = z.infer<typeof RemoteDesktopWindowResizedPayloadSchema>;
+export const RemoteDesktopWindowResizeFailedPayloadSchema = z.object({
+  requestId:DesktopRequestIdSchema,
+  code:z.string().min(1).refine(value => utf8(value) <= 128),
+}).strict();
+export type RemoteDesktopWindowResizeFailedPayload = z.infer<typeof RemoteDesktopWindowResizeFailedPayloadSchema>;
 export const DesktopNormalizedRectSchema = z.object({
   x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
   width: z.number().finite().positive().max(1), height: z.number().finite().positive().max(1),

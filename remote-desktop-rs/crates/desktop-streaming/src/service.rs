@@ -21,6 +21,7 @@ use tokio::{sync::mpsc, task::JoinSet};
 use webrtc::data_channel::DataChannel;
 
 const STALE_INPUT_NOTICE_INTERVAL: Duration = Duration::from_secs(2);
+const WINDOW_RESIZE_CONFIRM_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct FallbackRuntime {
     viewer: String,
@@ -69,6 +70,8 @@ struct LivePeer {
     /// `GeometryChanged` must re-arm even though the registry no longer reports
     /// a held epoch by then.
     geometry_input_rearm_pending: bool,
+    window_resize_inflight: bool,
+    expected_window_geometry: Option<(crate::traits::Geometry, Instant)>,
 }
 impl LivePeer {
     async fn reply(&mut self, kind: Channel, message: serde_json::Value) -> anyhow::Result<()> {
@@ -105,6 +108,7 @@ struct Service {
     mode: crate::capture::Mode,
     show_cursor: bool,
     source_salt: String,
+    window_resize: controlled_instance_protocol::RemoteDesktopWindowResize,
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     catalog: Option<crate::platform::window::WindowCatalog>,
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -314,7 +318,7 @@ impl Service {
         Some(match kind {
             "control.request" | "input.resume" | "input.suspend" | "input.alive" | "visibility"
             | "stream.keyframe" | "stream.resolution" | "session.stop" | "clipboard.enable"
-            | "transport.upgrade" => Channel::Control,
+            | "transport.upgrade" | "window.resize" => Channel::Control,
             "key" | "button" | "wheel" | "text.commit" => Channel::Input,
             "pointer" => Channel::Pointer,
             "clipboard.write" | "clipboard.read" => Channel::Clipboard,
@@ -946,6 +950,8 @@ impl Service {
                             webrtc_connected: false,
                             input_suspension_notice_at: None,
                             geometry_input_rearm_pending: false,
+                            window_resize_inflight: false,
+                            expected_window_geometry: None,
                         },
                     );
                 }
@@ -1252,6 +1258,39 @@ impl Service {
                 geometry,
                 acknowledged,
             } => {
+                let capture_matches = self
+                    .registry
+                    .snapshot(&session, &owner)?
+                    .capture_geometry
+                    .is_some_and(|capture| {
+                        capture.width == geometry.width && capture.height == geometry.height
+                    });
+                let expected = self.live.get_mut(&session).is_some_and(|live| {
+                    let now = Instant::now();
+                    match classify_expected_window_geometry(
+                        live.expected_window_geometry,
+                        geometry,
+                        capture_matches,
+                        now,
+                    ) {
+                        ExpectedWindowGeometry::Matched => {
+                            live.expected_window_geometry = None;
+                            true
+                        }
+                        ExpectedWindowGeometry::Expired => {
+                            live.expected_window_geometry = None;
+                            false
+                        }
+                        ExpectedWindowGeometry::Unrelated => false,
+                    }
+                });
+                if expected {
+                    eprintln!(
+                        "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.window_resize.expected_geometry session={session} geometry={geometry:?}"
+                    );
+                    let _ = acknowledged.send(true);
+                    return Ok(());
+                }
                 let started = Instant::now();
                 eprintln!(
                     "REMOTE_DESKTOP_GEOMETRY_TRACE phase=service.received session={session} geometry={geometry:?}"
@@ -1734,6 +1773,260 @@ impl Service {
         Ok(true)
     }
 
+    fn selected_window_target(&self, id: &str) -> bool {
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+        {
+            self.selected_source.get(id).is_some_and(|(_, target)| {
+                matches!(target, crate::platform::display::SourceTarget::Window(_))
+            })
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            let _ = id;
+            false
+        }
+    }
+
+    async fn window_resize_failed(
+        &mut self,
+        id: &str,
+        request_id: &str,
+        code: &str,
+    ) -> anyhow::Result<()> {
+        let Some(live) = self.live.get_mut(id) else {
+            return Ok(());
+        };
+        live.window_resize_inflight = false;
+        live.reply(
+            Channel::Control,
+            window_resize_failed_message(request_id, code),
+        )
+        .await
+    }
+
+    async fn window_resize_failed_with_input_notice(
+        &mut self,
+        id: &str,
+        request_id: &str,
+        code: &str,
+        input_was_held: bool,
+    ) -> anyhow::Result<()> {
+        // Source cleanup and the recovery signal are independent: a closed or
+        // saturated control stream must not leave the client believing that its
+        // previously armed input lease is still current.
+        let reply = self.window_resize_failed(id, request_id, code).await;
+        let notice = if input_was_held {
+            self.notify_input_suspended(id, code, Instant::now()).await
+        } else {
+            Ok(())
+        };
+        reply.and(notice)
+    }
+
+    fn clear_window_resize_inflight(&mut self, id: &str) {
+        if let Some(live) = self.live.get_mut(id) {
+            live.window_resize_inflight = false;
+        }
+    }
+
+    async fn window_resized(
+        &mut self,
+        id: &str,
+        request_id: &str,
+        mode: &str,
+        geometry: crate::traits::Geometry,
+    ) -> anyhow::Result<()> {
+        let Some(live) = self.live.get_mut(id) else {
+            return Ok(());
+        };
+        live.window_resize_inflight = false;
+        live.reply(
+            Channel::Control,
+            window_resized_message(request_id, mode, geometry),
+        )
+        .await
+    }
+
+    async fn handle_window_resize(
+        &mut self,
+        id: &str,
+        request: crate::channel::WindowResizeMessage,
+        now: Instant,
+    ) -> anyhow::Result<()> {
+        let request_id = request.id().to_owned();
+        let mode = request.mode();
+        let target = match request {
+            crate::channel::WindowResizeMessage::Preset { width, height, .. } => {
+                crate::traits::WindowResizeTarget::Preset { width, height }
+            }
+            crate::channel::WindowResizeMessage::Viewport { width, height, .. } => {
+                crate::traits::WindowResizeTarget::Viewport { width, height }
+            }
+        };
+        let owner = self
+            .live
+            .get(id)
+            .map(|live| live.owner.clone())
+            .ok_or_else(|| anyhow::anyhow!("peer closed"))?;
+        let snapshot = self.registry.snapshot(id, &owner)?;
+        if !snapshot.is_controller {
+            self.window_resize_failed(
+                id,
+                &request_id,
+                &crate::error::BackendError::WindowResizeDenied.to_string(),
+            )
+            .await?;
+            return Ok(());
+        }
+        if snapshot.phase != Phase::Active || snapshot.media_paused {
+            self.window_resize_failed(id, &request_id, "REMOTE_DESKTOP_INVALID_STATE")
+                .await?;
+            return Ok(());
+        }
+        let supported = window_resize_target_supported(
+            &self.window_resize,
+            self.selected_window_target(id),
+            &target,
+        );
+        if !supported {
+            self.window_resize_failed(
+                id,
+                &request_id,
+                &crate::error::BackendError::WindowResizeUnsupported.to_string(),
+            )
+            .await?;
+            return Ok(());
+        }
+        let guard_matches = self.live.get(id).is_some_and(|live| {
+            live.input_backend
+                .as_ref()
+                .is_some_and(|backend| backend.supports_window_resize())
+                && live.input_backend.as_ref() == self.input_guard_backend.as_ref()
+        });
+        if !guard_matches || self.input_guard.is_none() {
+            self.window_resize_failed(
+                id,
+                &request_id,
+                &crate::error::BackendError::WindowResizeUnsupported.to_string(),
+            )
+            .await?;
+            return Ok(());
+        }
+        let busy = self.live.get(id).is_some_and(|live| {
+            window_resize_busy(
+                live.window_resize_inflight,
+                live.expected_window_geometry,
+                now,
+            )
+        });
+        if busy {
+            self.window_resize_failed(id, &request_id, "REMOTE_DESKTOP_BUSY")
+                .await?;
+            return Ok(());
+        }
+        if let Some(live) = self.live.get_mut(id) {
+            live.window_resize_inflight = true;
+        }
+
+        let input_was_held = match self.suspend_input_for_geometry(id, &owner).await {
+            Ok(input_was_held) => input_was_held,
+            Err(error) => {
+                self.clear_window_resize_inflight(id);
+                return Err(error);
+            }
+        };
+        let reply = match self.input_guard.as_mut() {
+            Some(guard) => {
+                guard
+                    .call(&crate::input_guard::Command::ResizeWindow { target })
+                    .await
+            }
+            None => Err(crate::error::BackendError::InputGuardFailed.into()),
+        };
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(error) => {
+                let cause = error
+                    .downcast_ref::<crate::error::BackendError>()
+                    .copied()
+                    .unwrap_or(crate::error::BackendError::WindowResizeFailed);
+                if cause == crate::error::BackendError::InputGuardFailed {
+                    self.discard_input_guard().await;
+                }
+                self.window_resize_failed_with_input_notice(
+                    id,
+                    &request_id,
+                    &window_resize_failure_code(cause),
+                    input_was_held,
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        let geometry = match reply {
+            crate::input_guard::Event::Resized { geometry } => geometry,
+            crate::input_guard::Event::Suspended { cause } => {
+                self.window_resize_failed_with_input_notice(
+                    id,
+                    &request_id,
+                    &window_resize_failure_code(cause),
+                    input_was_held,
+                )
+                .await?;
+                return Ok(());
+            }
+            _ => {
+                self.window_resize_failed_with_input_notice(
+                    id,
+                    &request_id,
+                    &crate::error::BackendError::WindowResizeFailed.to_string(),
+                    input_was_held,
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        if geometry.validate().is_err() {
+            self.window_resize_failed_with_input_notice(
+                id,
+                &request_id,
+                &crate::error::BackendError::WindowResizeFailed.to_string(),
+                input_was_held,
+            )
+            .await?;
+            return Ok(());
+        }
+        if self.registry.capture_geometry(id, geometry).is_err() {
+            self.window_resize_failed_with_input_notice(
+                id,
+                &request_id,
+                &crate::error::BackendError::WindowResizeFailed.to_string(),
+                input_was_held,
+            )
+            .await?;
+            return Ok(());
+        }
+        if let Some(backend) = self.input_guard_backend.as_mut() {
+            backend.set_geometry(geometry);
+        }
+        if let Some(live) = self.live.get_mut(id) {
+            live.window_resize_inflight = false;
+            live.expected_window_geometry =
+                Some((geometry, Instant::now() + WINDOW_RESIZE_CONFIRM_TIMEOUT));
+            if let Some(backend) = live.input_backend.as_mut() {
+                backend.set_geometry(geometry);
+            }
+        }
+        let reply = self.window_resized(id, &request_id, mode, geometry).await;
+        let notice = if input_was_held {
+            self.notify_geometry_input_suspended(id, &owner).await
+        } else {
+            Ok(())
+        };
+        reply.and(notice)
+    }
+
     async fn notify_geometry_input_suspended(
         &mut self,
         id: &str,
@@ -2085,6 +2378,9 @@ impl Service {
                         )
                         .await?;
                 }
+                Control::WindowResizeMessage(request) => {
+                    self.handle_window_resize(&id, request, now).await?;
+                }
                 Control::Stop => {
                     let effects = self.registry.stop(&id, &owner, now)?;
                     self.effects(&id, effects).await;
@@ -2355,6 +2651,14 @@ pub async fn serve_mode_with_cursor_and_source_salt(
         Some(server) => (server.url, server.token, server.events),
         None => (String::new(), String::new(), mpsc::channel(1).1),
     };
+    let mut capability = crate::preflight::probe(mode, show_cursor);
+    capability.fallback = if fallback_url.is_empty() {
+        controlled_instance_protocol::RemoteDesktopFallbackCapabilities::unavailable(
+            "REMOTE_DESKTOP_FALLBACK_UNAVAILABLE",
+        )
+    } else {
+        controlled_instance_protocol::RemoteDesktopFallbackCapabilities::ready()
+    };
     let mut service = Service {
         registry: Registry::new(),
         live: HashMap::new(),
@@ -2363,6 +2667,7 @@ pub async fn serve_mode_with_cursor_and_source_salt(
         mode,
         show_cursor,
         source_salt: source_salt.unwrap_or_else(crate::session::secret),
+        window_resize: capability.features.window_resize.clone(),
         #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         catalog: None,
         #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -2374,14 +2679,6 @@ pub async fn serve_mode_with_cursor_and_source_salt(
         surface: None,
         events,
         fallbacks: HashMap::new(),
-    };
-    let mut capability = crate::preflight::probe(mode, show_cursor);
-    capability.fallback = if fallback_url.is_empty() {
-        controlled_instance_protocol::RemoteDesktopFallbackCapabilities::unavailable(
-            "REMOTE_DESKTOP_FALLBACK_UNAVAILABLE",
-        )
-    } else {
-        controlled_instance_protocol::RemoteDesktopFallbackCapabilities::ready()
     };
     framing::write(
         &mut stream,
@@ -2652,9 +2949,247 @@ fn geometry_input_suspended_notice(session_revision: u64) -> serde_json::Value {
     )
 }
 
+fn window_resize_failure_code(cause: crate::error::BackendError) -> String {
+    match cause {
+        crate::error::BackendError::WindowResizeUnsupported => {
+            crate::error::BackendError::WindowResizeUnsupported.to_string()
+        }
+        crate::error::BackendError::WindowResizeDenied => {
+            crate::error::BackendError::WindowResizeDenied.to_string()
+        }
+        _ => crate::error::BackendError::WindowResizeFailed.to_string(),
+    }
+}
+
+fn window_resize_target_supported(
+    capability: &controlled_instance_protocol::RemoteDesktopWindowResize,
+    is_window_target: bool,
+    target: &crate::traits::WindowResizeTarget,
+) -> bool {
+    capability.available
+        && is_window_target
+        && match target {
+            crate::traits::WindowResizeTarget::Preset { width, height } => capability
+                .presets
+                .iter()
+                .any(|preset| preset.width == *width && preset.height == *height),
+            crate::traits::WindowResizeTarget::Viewport { .. } => capability.fit_to_viewport,
+        }
+}
+
+fn window_resized_message(
+    request_id: &str,
+    mode: &str,
+    geometry: crate::traits::Geometry,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type":"window.resized",
+        "payload":{
+            "requestId":request_id,
+            "mode":mode,
+            "width":geometry.width,
+            "height":geometry.height
+        }
+    })
+}
+
+fn window_resize_failed_message(request_id: &str, code: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type":"window.resize.failed",
+        "payload":{"requestId":request_id,"code":code}
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedWindowGeometry {
+    Matched,
+    Expired,
+    Unrelated,
+}
+
+fn classify_expected_window_geometry(
+    expected: Option<(crate::traits::Geometry, Instant)>,
+    geometry: crate::traits::Geometry,
+    capture_matches: bool,
+    now: Instant,
+) -> ExpectedWindowGeometry {
+    match expected {
+        Some((expected, expires_at))
+            if capture_matches && expected == geometry && expires_at >= now =>
+        {
+            ExpectedWindowGeometry::Matched
+        }
+        Some((_, expires_at)) if expires_at < now => ExpectedWindowGeometry::Expired,
+        _ => ExpectedWindowGeometry::Unrelated,
+    }
+}
+
+fn window_resize_busy(
+    inflight: bool,
+    expected: Option<(crate::traits::Geometry, Instant)>,
+    now: Instant,
+) -> bool {
+    inflight || expected.is_some_and(|(_, expires_at)| expires_at >= now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn geometry(width: u32, height: u32) -> crate::traits::Geometry {
+        crate::traits::Geometry {
+            x: 10,
+            y: 20,
+            width,
+            height,
+            scale: 1.0,
+        }
+    }
+
+    fn resize_capability() -> controlled_instance_protocol::RemoteDesktopWindowResize {
+        controlled_instance_protocol::RemoteDesktopWindowResize {
+            available: true,
+            presets: vec![
+                controlled_instance_protocol::RemoteDesktopWindowSize {
+                    width: 1280,
+                    height: 720,
+                },
+                controlled_instance_protocol::RemoteDesktopWindowSize {
+                    width: 1920,
+                    height: 1080,
+                },
+            ],
+            fit_to_viewport: true,
+        }
+    }
+
+    #[test]
+    fn window_resize_requires_the_controller_window_target_and_declared_option() {
+        let capability = resize_capability();
+        assert!(window_resize_target_supported(
+            &capability,
+            true,
+            &crate::traits::WindowResizeTarget::Preset {
+                width: 1280,
+                height: 720,
+            },
+        ));
+        assert!(window_resize_target_supported(
+            &capability,
+            true,
+            &crate::traits::WindowResizeTarget::Viewport {
+                width: 1440,
+                height: 900,
+            },
+        ));
+        assert!(!window_resize_target_supported(
+            &capability,
+            false,
+            &crate::traits::WindowResizeTarget::Viewport {
+                width: 1440,
+                height: 900,
+            },
+        ));
+        assert!(!window_resize_target_supported(
+            &capability,
+            true,
+            &crate::traits::WindowResizeTarget::Preset {
+                width: 1366,
+                height: 768,
+            },
+        ));
+        assert!(!window_resize_target_supported(
+            &controlled_instance_protocol::RemoteDesktopWindowResize::default(),
+            true,
+            &crate::traits::WindowResizeTarget::Viewport {
+                width: 1440,
+                height: 900,
+            },
+        ));
+    }
+
+    #[test]
+    fn window_resize_busy_covers_inflight_and_fresh_expected_geometry() {
+        let now = Instant::now();
+        assert!(window_resize_busy(true, None, now));
+        assert!(window_resize_busy(
+            false,
+            Some((geometry(1280, 720), now + Duration::from_secs(1))),
+            now,
+        ));
+        assert!(!window_resize_busy(
+            false,
+            Some((geometry(1280, 720), now - Duration::from_secs(1))),
+            now,
+        ));
+        assert!(!window_resize_busy(false, None, now));
+    }
+
+    #[test]
+    fn expected_window_geometry_only_absorbs_matching_capture_geometry_once() {
+        let now = Instant::now();
+        let resized = geometry(1920, 1080);
+        let expected = Some((resized, now + Duration::from_secs(2)));
+        assert_eq!(
+            classify_expected_window_geometry(expected, resized, true, now),
+            ExpectedWindowGeometry::Matched,
+        );
+        assert_eq!(
+            classify_expected_window_geometry(expected, resized, false, now),
+            ExpectedWindowGeometry::Unrelated,
+        );
+        assert_eq!(
+            classify_expected_window_geometry(expected, geometry(1600, 900), true, now),
+            ExpectedWindowGeometry::Unrelated,
+        );
+        assert_eq!(
+            classify_expected_window_geometry(
+                Some((resized, now - Duration::from_secs(1))),
+                resized,
+                true,
+                now,
+            ),
+            ExpectedWindowGeometry::Expired,
+        );
+    }
+
+    #[test]
+    fn window_resize_messages_report_actual_geometry_or_structured_failure() {
+        let resized = window_resized_message("request-1", "preset", geometry(1900, 1060));
+        assert_eq!(resized["type"], "window.resized");
+        assert_eq!(resized["payload"]["requestId"], "request-1");
+        assert_eq!(resized["payload"]["mode"], "preset");
+        assert_eq!(resized["payload"]["width"], 1900);
+        assert_eq!(resized["payload"]["height"], 1060);
+
+        let failed = window_resize_failed_message(
+            "request-2",
+            &crate::error::BackendError::WindowResizeDenied.to_string(),
+        );
+        assert_eq!(failed["type"], "window.resize.failed");
+        assert_eq!(failed["payload"]["requestId"], "request-2");
+        assert_eq!(
+            failed["payload"]["code"],
+            "REMOTE_DESKTOP_WINDOW_RESIZE_DENIED"
+        );
+    }
+
+    #[test]
+    fn window_resize_failure_codes_preserve_permission_and_support_boundaries() {
+        assert_eq!(
+            window_resize_failure_code(crate::error::BackendError::WindowResizeDenied),
+            "REMOTE_DESKTOP_WINDOW_RESIZE_DENIED"
+        );
+        assert_eq!(
+            window_resize_failure_code(crate::error::BackendError::WindowResizeUnsupported),
+            "REMOTE_DESKTOP_WINDOW_RESIZE_UNSUPPORTED"
+        );
+        assert_eq!(
+            window_resize_failure_code(crate::error::BackendError::GeometryChanged),
+            "REMOTE_DESKTOP_WINDOW_RESIZE_FAILED"
+        );
+    }
+
     #[test]
     fn geometry_suspension_notice_carries_authoritative_revision() {
         let notice = geometry_input_suspended_notice(17);
@@ -2723,6 +3258,7 @@ mod tests {
             mode: crate::capture::Mode::Synthetic,
             show_cursor: true,
             source_salt: crate::session::secret(),
+            window_resize: controlled_instance_protocol::RemoteDesktopWindowResize::default(),
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
@@ -2779,6 +3315,8 @@ mod tests {
                 webrtc_connected: false,
                 input_suspension_notice_at: None,
                 geometry_input_rearm_pending: false,
+                window_resize_inflight: false,
+                expected_window_geometry: None,
             },
         );
         service.registry.fallback_activated(&viewer).unwrap();
@@ -2833,6 +3371,7 @@ mod tests {
             mode: crate::capture::Mode::Synthetic,
             show_cursor: true,
             source_salt: crate::session::secret(),
+            window_resize: controlled_instance_protocol::RemoteDesktopWindowResize::default(),
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
@@ -2889,6 +3428,8 @@ mod tests {
                 webrtc_connected: false,
                 input_suspension_notice_at: None,
                 geometry_input_rearm_pending: false,
+                window_resize_inflight: false,
+                expected_window_geometry: None,
             },
         );
         service.registry.fallback_activated(&viewer).unwrap();
@@ -2942,6 +3483,7 @@ mod tests {
             mode: crate::capture::Mode::Synthetic,
             show_cursor: true,
             source_salt: crate::session::secret(),
+            window_resize: controlled_instance_protocol::RemoteDesktopWindowResize::default(),
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
@@ -2998,6 +3540,8 @@ mod tests {
                 webrtc_connected: false,
                 input_suspension_notice_at: None,
                 geometry_input_rearm_pending: false,
+                window_resize_inflight: false,
+                expected_window_geometry: None,
             },
         );
         service.registry.fallback_activated(&viewer).unwrap();
@@ -3048,6 +3592,7 @@ mod tests {
             mode: crate::capture::Mode::Control,
             show_cursor: true,
             source_salt: crate::session::secret(),
+            window_resize: controlled_instance_protocol::RemoteDesktopWindowResize::default(),
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
@@ -3101,6 +3646,7 @@ mod tests {
             mode: crate::capture::Mode::Control,
             show_cursor: true,
             source_salt: crate::session::secret(),
+            window_resize: controlled_instance_protocol::RemoteDesktopWindowResize::default(),
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
@@ -3185,6 +3731,7 @@ mod tests {
             mode: crate::capture::Mode::Synthetic,
             show_cursor: true,
             source_salt: crate::session::secret(),
+            window_resize: controlled_instance_protocol::RemoteDesktopWindowResize::default(),
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             catalog: None,
             display_catalog: None,
@@ -3241,6 +3788,8 @@ mod tests {
                 webrtc_connected: false,
                 input_suspension_notice_at: None,
                 geometry_input_rearm_pending: false,
+                window_resize_inflight: false,
+                expected_window_geometry: None,
             },
         );
 

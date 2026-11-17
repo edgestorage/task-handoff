@@ -1,6 +1,6 @@
 {
   "ipcVersion": "2026-11-11",
-  "channelVersion": "2026-11-05",
+  "channelVersion": "2026-11-17",
   "maxIpcFrame": 1048576,
   "framing": {
     "json": {
@@ -46,7 +46,7 @@
     {
       "channel": "control",
       "message": {
-        "v": "2026-11-05",
+        "v": "2026-11-17",
         "seq": 0,
         "type": "input.suspend"
       }
@@ -54,7 +54,7 @@
     {
       "channel": "control",
       "message": {
-        "v": "2026-11-05",
+        "v": "2026-11-17",
         "seq": 0,
         "type": "stream.resolution",
         "payload": {
@@ -66,7 +66,7 @@
     {
       "channel": "input",
       "message": {
-        "v": "2026-11-05",
+        "v": "2026-11-17",
         "seq": 0,
         "type": "text.commit",
         "payload": {
@@ -78,7 +78,7 @@
     {
       "channel": "pointer",
       "message": {
-        "v": "2026-11-05",
+        "v": "2026-11-17",
         "seq": 0,
         "type": "pointer",
         "payload": {
@@ -91,7 +91,7 @@
     {
       "channel": "clipboard",
       "message": {
-        "v": "2026-11-05",
+        "v": "2026-11-17",
         "seq": 0,
         "type": "clipboard.write",
         "payload": {

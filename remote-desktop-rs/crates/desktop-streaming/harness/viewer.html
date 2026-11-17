@@ -13,7 +13,7 @@ const diagnostic={snapshot:null,error:null,decodedFrames:0,channels:[],inputEpoc
 window.diagnostic=diagnostic;
 let pc,ws,channels={},sequences={},epoch=null,signalTimer,inputTimer,pointerPending,pointerRaf,composing=false,offerQueue=Promise.resolve(),pendingAnswer,textPending=false,connectionGeneration=0;
 function status(){ $('status').textContent=JSON.stringify(diagnostic,null,2); }
-function send(channel,type,payload){if(channel==='clipboard'&&!diagnostic.clipboardEnabled)return false;const dc=channels[channel];if(dc?.readyState!=='open')return false;const limit=channel==='clipboard'?65536:16384;const text=JSON.stringify({v:'2026-11-05',seq:sequences[channel]??0,type,...(payload===undefined?{}:{payload})});if(new TextEncoder().encode(text).length>limit||dc.bufferedAmount>65536){if(channel==='input')suspend();return false;}sequences[channel]=(sequences[channel]??0)+1;dc.send(text);return true;}
+function send(channel,type,payload){if(channel==='clipboard'&&!diagnostic.clipboardEnabled)return false;const dc=channels[channel];if(dc?.readyState!=='open')return false;const limit=channel==='clipboard'?65536:16384;const text=JSON.stringify({v:'2026-11-17',seq:sequences[channel]??0,type,...(payload===undefined?{}:{payload})});if(new TextEncoder().encode(text).length>limit||dc.bufferedAmount>65536){if(channel==='input')suspend();return false;}sequences[channel]=(sequences[channel]??0)+1;dc.send(text);return true;}
 function suspend(){textPending=false;epoch=null;diagnostic.inputEpoch=null;clearInterval(inputTimer);pointerPending=null;send('control','input.suspend');status();}
 function visibility(hidden){suspend();send('control','visibility',{hidden});}
 async function cleanup(sendStop=true){

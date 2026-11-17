@@ -54,6 +54,12 @@ pub enum BackendError {
     WindowUnavailable,
     #[error("REMOTE_DESKTOP_WINDOW_CAPTURE_UNSUPPORTED")]
     WindowUnsupported,
+    #[error("REMOTE_DESKTOP_WINDOW_RESIZE_UNSUPPORTED")]
+    WindowResizeUnsupported,
+    #[error("REMOTE_DESKTOP_WINDOW_RESIZE_DENIED")]
+    WindowResizeDenied,
+    #[error("REMOTE_DESKTOP_WINDOW_RESIZE_FAILED")]
+    WindowResizeFailed,
 }
 impl BackendError {
     pub fn from_error(error: &anyhow::Error) -> Self {

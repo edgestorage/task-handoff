@@ -77,7 +77,8 @@ core-foundation = "=0.10.1"
 objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["std", "CGWindowLevel"] }
 objc2-core-foundation = { version = "=0.3.2", features = ["CFCGTypes"] }
 objc2-application-services = { version = "=0.3.2", default-features = false, features = ["std", "libc", "HIServices", "AXUIElement", "AXValue", "AXError"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "libc", "NSWorkspace", "NSRunningApplication", "NSEvent"] }
+objc2 = { version = "=0.6.5", default-features = false }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "libc", "NSWorkspace", "NSRunningApplication", "NSEvent", "NSScreen"] }
 
 [[bin]]
 name = "desktop-native-probe"

@@ -1,8 +1,11 @@
 //! The public instance capability boundary, with no attach credentials or private
 //! component/session records. Extensible diagnostics are strings, not enums.
 use serde::{Deserialize, Serialize};
-pub const REMOTE_DESKTOP_PROTOCOL_VERSION: &str = "2026-11-11";
+pub const REMOTE_DESKTOP_PROTOCOL_VERSION: &str = "2026-11-17";
 pub const REMOTE_DESKTOP_FALLBACK_PROTOCOL_VERSION: &str = "2026-11-09";
+pub const REMOTE_DESKTOP_WINDOW_MIN_SIZE: u32 = 160;
+pub const REMOTE_DESKTOP_WINDOW_MAX_SIZE: u32 = 16_384;
+pub const REMOTE_DESKTOP_WINDOW_RESIZE_MAX_PRESETS: usize = 32;
 pub const REMOTE_DESKTOP_FALLBACK_MEDIA_SUBPROTOCOL: &str =
     "taskhandoff.remote-desktop.fallback.media.v1";
 pub const REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL: &str =
@@ -70,6 +73,75 @@ pub struct RemoteDesktopFeatures {
     pub clipboard: bool,
     pub keyboard: bool,
     pub mouse: bool,
+    /// Additive capability domain. Old components omit it and readers keep
+    /// window-mode resize disabled without invalidating the other features.
+    #[serde(default, deserialize_with = "deserialize_window_resize")]
+    pub window_resize: RemoteDesktopWindowResize,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopWindowSize {
+    pub width: u32,
+    pub height: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopWindowResize {
+    #[serde(default)]
+    pub available: bool,
+    #[serde(default, deserialize_with = "deserialize_window_sizes")]
+    pub presets: Vec<RemoteDesktopWindowSize>,
+    #[serde(default)]
+    pub fit_to_viewport: bool,
+}
+impl RemoteDesktopWindowResize {
+    pub fn sanitize(&mut self) {
+        if !self.available {
+            self.presets.clear();
+            self.fit_to_viewport = false;
+            return;
+        }
+        let mut sanitized = Vec::new();
+        for size in &self.presets {
+            if size.width < REMOTE_DESKTOP_WINDOW_MIN_SIZE
+                || size.width > REMOTE_DESKTOP_WINDOW_MAX_SIZE
+                || size.height < REMOTE_DESKTOP_WINDOW_MIN_SIZE
+                || size.height > REMOTE_DESKTOP_WINDOW_MAX_SIZE
+                || sanitized.iter().any(|current| current == size)
+            {
+                continue;
+            }
+            sanitized.push(*size);
+            if sanitized.len() >= REMOTE_DESKTOP_WINDOW_RESIZE_MAX_PRESETS {
+                break;
+            }
+        }
+        self.presets = sanitized;
+        self.available = !self.presets.is_empty() || self.fit_to_viewport;
+    }
+}
+
+fn deserialize_window_resize<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RemoteDesktopWindowResize, D::Error> {
+    // An unknown or malformed additive submodel closes only this feature. It
+    // must not make the surrounding remote-desktop capability unreadable.
+    Ok(RemoteDesktopWindowResize::deserialize(deserializer).unwrap_or_default())
+}
+
+fn deserialize_window_sizes<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<RemoteDesktopWindowSize>, D::Error> {
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(values
+        .into_iter()
+        .filter_map(|value| {
+            let value = value.as_object()?;
+            let width = u32::try_from(value.get("width")?.as_u64()?).ok()?;
+            let height = u32::try_from(value.get("height")?.as_u64()?).ok()?;
+            Some(RemoteDesktopWindowSize { width, height })
+        })
+        .collect())
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -161,6 +233,10 @@ pub fn deserialize_remote_desktop<'de, D: serde::Deserializer<'de>>(
     }
     let parsed = serde_json::from_value::<RemoteDesktopCapabilities>(value)
         .ok()
+        .map(|mut capability| {
+            capability.features.window_resize.sanitize();
+            capability
+        })
         .filter(|c| {
             [
                 &c.status,
@@ -235,5 +311,130 @@ mod tests {
         assert!(read.available);
         assert_eq!(read.protocol_version, "2030-01-01");
         assert_eq!(read.source_providers[0].kind, "future-source");
+    }
+
+    #[test]
+    fn missing_window_resize_disables_only_that_feature() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../shared/remote-desktop-capability-fixture.json"
+        ))
+        .unwrap();
+        let mut legacy = fixture;
+        legacy["available"] = json!(true);
+        legacy["features"]
+            .as_object_mut()
+            .unwrap()
+            .remove("windowResize");
+        let read = serde_json::from_value::<Reader>(json!({"desktop": legacy}))
+            .unwrap()
+            .desktop
+            .unwrap();
+        assert!(read.available);
+        assert_eq!(
+            read.features.window_resize,
+            RemoteDesktopWindowResize::default()
+        );
+    }
+
+    #[test]
+    fn window_resize_presets_are_sanitized_without_disabling_the_capability() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../shared/remote-desktop-capability-fixture.json"
+        ))
+        .unwrap();
+        let mut current = fixture;
+        current["available"] = json!(true);
+        current["features"]["windowResize"] = json!({
+            "available": true,
+            "presets": [
+                {"width": 1280, "height": 720},
+                {"width": 1280, "height": 720},
+                {"width": 159, "height": 900},
+                {"width": 1920, "height": 1080}
+            ],
+            "fitToViewport": true,
+            "future": true
+        });
+        let read = serde_json::from_value::<Reader>(json!({"desktop": current}))
+            .unwrap()
+            .desktop
+            .unwrap();
+        assert!(read.available);
+        assert_eq!(
+            read.features.window_resize.presets,
+            vec![
+                RemoteDesktopWindowSize {
+                    width: 1280,
+                    height: 720
+                },
+                RemoteDesktopWindowSize {
+                    width: 1920,
+                    height: 1080
+                }
+            ]
+        );
+        assert!(read.features.window_resize.fit_to_viewport);
+    }
+
+    #[test]
+    fn malformed_window_resize_entries_disable_only_invalid_presets() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../shared/remote-desktop-capability-fixture.json"
+        ))
+        .unwrap();
+        let mut current = fixture;
+        current["available"] = json!(true);
+        current["features"]["windowResize"] = json!({
+            "available": true,
+            "presets": [
+                {"width": 1280, "height": 720},
+                {"width": -1, "height": 900},
+                {"width": 1600.5, "height": 900},
+                {"width": "1920", "height": 1080},
+                {"width": 1920, "height": 1080}
+            ],
+            "fitToViewport": true
+        });
+        let read = serde_json::from_value::<Reader>(json!({"desktop": current}))
+            .unwrap()
+            .desktop
+            .unwrap();
+        assert!(read.available);
+        assert_eq!(
+            read.features.window_resize.presets,
+            vec![
+                RemoteDesktopWindowSize {
+                    width: 1280,
+                    height: 720
+                },
+                RemoteDesktopWindowSize {
+                    width: 1920,
+                    height: 1080
+                }
+            ]
+        );
+        assert!(read.features.window_resize.fit_to_viewport);
+    }
+
+    #[test]
+    fn malformed_window_resize_submodel_leaves_other_features_readable() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../shared/remote-desktop-capability-fixture.json"
+        ))
+        .unwrap();
+        let mut current = fixture;
+        current["available"] = json!(true);
+        current["features"]["clipboard"] = json!(true);
+        current["features"]["windowResize"] = json!("future-shape");
+        let read = serde_json::from_value::<Reader>(json!({"desktop": current}))
+            .unwrap()
+            .desktop
+            .unwrap();
+        assert!(read.available);
+        assert!(read.features.clipboard);
+        assert_eq!(
+            read.features.window_resize,
+            RemoteDesktopWindowResize::default()
+        );
     }
 }

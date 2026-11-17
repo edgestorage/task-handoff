@@ -1,7 +1,10 @@
 //! Public AX/CG window identity, confined to a dedicated worker thread. Retain
 //! the AX object across selection/lifetime checks; never identify by title or
 //! use private AXWindowNumber APIs. Ambiguous AX/CG associations fail closed.
-use crate::{error::BackendError, traits::Geometry};
+use crate::{
+    error::BackendError,
+    traits::{Geometry, WindowResizeTarget},
+};
 use core_foundation::{
     array::CFArray,
     base::{CFType, TCFType},
@@ -28,6 +31,9 @@ const WINDOW_BIND_TIMEOUT: Duration = Duration::from_millis(600);
 const WINDOW_BIND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const FOCUSED_WINDOW_ANCESTOR_LIMIT: usize = 4;
 const COVERING_WINDOW_SCAN_LIMIT: usize = 256;
+const WINDOW_RESIZE_CONFIRM_TIMEOUT: Duration = Duration::from_millis(1_500);
+const WINDOW_RESIZE_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const WINDOW_RESIZE_STABLE_SAMPLES: usize = 2;
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Identity {
@@ -51,6 +57,10 @@ enum Operation {
     Geometry,
     Focus,
     Validate(Geometry, Option<(i32, i32)>),
+    Resize {
+        expected: Geometry,
+        target: WindowResizeTarget,
+    },
 }
 impl Operation {
     fn timeout(&self) -> Duration {
@@ -61,12 +71,14 @@ impl Operation {
             // reported as a dead window.
             Self::Focus => FOCUS_ACTIVATION_TIMEOUT + Duration::from_millis(400),
             Self::Geometry | Self::Validate(..) => Duration::from_millis(300),
+            Self::Resize { .. } => WINDOW_RESIZE_CONFIRM_TIMEOUT + Duration::from_millis(800),
         }
     }
     fn timeout_error(&self) -> BackendError {
         match self {
             Self::Focus => BackendError::WindowFocusRequired,
             Self::Geometry | Self::Validate(..) => BackendError::GeometryChanged,
+            Self::Resize { .. } => BackendError::WindowResizeFailed,
         }
     }
 }
@@ -98,7 +110,7 @@ impl Lease {
                     .map(|_| ())
                     .map_err(BackendError::from_error),
             );
-            let Ok(native) = native else {
+            let Ok(mut native) = native else {
                 return;
             };
             for request in rx {
@@ -111,6 +123,7 @@ impl Lease {
                     Operation::Geometry => native.geometry(),
                     Operation::Focus => native.focus(),
                     Operation::Validate(expected, point) => native.validate(expected, point),
+                    Operation::Resize { expected, target } => native.resize(expected, target),
                 }
                 .map_err(|e| BackendError::from_error(&e));
                 if is_geometry {
@@ -179,6 +192,13 @@ impl Lease {
     }
     pub fn validate(&self, geometry: Geometry, point: Option<(i32, i32)>) -> anyhow::Result<()> {
         self.call(Operation::Validate(geometry, point)).map(|_| ())
+    }
+    pub fn resize(
+        &self,
+        expected: Geometry,
+        target: WindowResizeTarget,
+    ) -> anyhow::Result<Geometry> {
+        self.call(Operation::Resize { expected, target })
     }
 }
 
@@ -372,6 +392,68 @@ fn ax_geometry(element: &AXUIElement) -> anyhow::Result<Geometry> {
     );
     Geometry::from_actuator_rect(point.x, point.y, extent.width, extent.height)
 }
+fn resize_attribute_error(error: AXError) -> BackendError {
+    match error {
+        AXError::APIDisabled => BackendError::WindowResizeDenied,
+        AXError::IllegalArgument
+        | AXError::AttributeUnsupported
+        | AXError::ActionUnsupported
+        | AXError::NotImplemented => BackendError::WindowResizeUnsupported,
+        AXError::InvalidUIElement | AXError::NoValue => BackendError::WindowUnavailable,
+        _ => BackendError::WindowResizeFailed,
+    }
+}
+fn set_ax_value(
+    element: &AXUIElement,
+    key: &str,
+    value_type: AXValueType,
+    value: NonNull<std::ffi::c_void>,
+) -> anyhow::Result<()> {
+    let value = unsafe { AXValue::new(value_type, value) }
+        .ok_or_else(|| anyhow::anyhow!(BackendError::WindowResizeFailed))?;
+    let error = unsafe { element.set_attribute_value(&CFString::from_str(key), value.as_ref()) };
+    if error == AXError::Success {
+        Ok(())
+    } else {
+        eprintln!(
+            "REMOTE_DESKTOP_WINDOW_RESIZE_TRACE phase=macos_window.attribute.set key={key} axError={error:?}"
+        );
+        Err(anyhow::anyhow!(resize_attribute_error(error)))
+    }
+}
+fn set_point_attribute(element: &AXUIElement, key: &str, x: i32, y: i32) -> anyhow::Result<()> {
+    let mut point = CGPoint {
+        x: f64::from(x),
+        y: f64::from(y),
+    };
+    set_ax_value(
+        element,
+        key,
+        AXValueType::CGPoint,
+        NonNull::from(&mut point).cast(),
+    )
+}
+fn set_size_attribute(
+    element: &AXUIElement,
+    key: &str,
+    width: i64,
+    height: i64,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        (1..=i64::from(u32::MAX)).contains(&width) && (1..=i64::from(u32::MAX)).contains(&height),
+        BackendError::InvalidGeometry
+    );
+    let mut size = CGSize {
+        width: width as f64,
+        height: height as f64,
+    };
+    set_ax_value(
+        element,
+        key,
+        AXValueType::CGSize,
+        NonNull::from(&mut size).cast(),
+    )
+}
 struct Native {
     identity: Identity,
     app: CFRetained<AXUIElement>,
@@ -451,6 +533,72 @@ impl Native {
             anyhow::ensure!(current.geometry == geometry, BackendError::GeometryChanged);
             Ok(geometry)
         })()
+    }
+    fn resize(
+        &mut self,
+        expected: Geometry,
+        target: WindowResizeTarget,
+    ) -> anyhow::Result<Geometry> {
+        let before = self.geometry()?;
+        anyhow::ensure!(before == expected, BackendError::GeometryChanged);
+        let desired = match target {
+            WindowResizeTarget::Preset { width, height }
+            | WindowResizeTarget::Viewport { width, height } => Geometry {
+                x: before.x,
+                y: before.y,
+                width,
+                height,
+                scale: before.scale,
+            },
+        };
+        if desired == before {
+            return Ok(before);
+        }
+
+        if desired.x != before.x || desired.y != before.y {
+            set_point_attribute(&self.window, "AXPosition", desired.x, desired.y)?;
+        }
+        if desired.width != before.width || desired.height != before.height {
+            set_size_attribute(
+                &self.window,
+                "AXSize",
+                i64::from(desired.width),
+                i64::from(desired.height),
+            )?;
+        }
+        self.wait_for_resize(before)
+    }
+    fn wait_for_resize(&self, before: Geometry) -> anyhow::Result<Geometry> {
+        let started = Instant::now();
+        let mut last = None;
+        let mut stable = 0usize;
+        while started.elapsed() < WINDOW_RESIZE_CONFIRM_TIMEOUT {
+            match self.geometry() {
+                Ok(geometry) if geometry != before => {
+                    if last == Some(geometry) {
+                        stable += 1;
+                        if stable >= WINDOW_RESIZE_STABLE_SAMPLES {
+                            return Ok(geometry);
+                        }
+                    } else {
+                        last = Some(geometry);
+                        stable = 0;
+                    }
+                }
+                Ok(_) => {
+                    last = None;
+                    stable = 0;
+                }
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<BackendError>(),
+                        Some(BackendError::GeometryChanged)
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+            thread::sleep(WINDOW_RESIZE_POLL_INTERVAL);
+        }
+        anyhow::bail!(BackendError::WindowResizeFailed)
     }
     fn frontmost(&self) -> anyhow::Result<()> {
         let app = objc2_app_kit::NSWorkspace::sharedWorkspace().frontmostApplication();
@@ -793,9 +941,10 @@ fn visible_windows() -> anyhow::Result<Vec<Visible>> {
 mod tests {
     use super::{
         capture_layout_from_windows, capture_union, focused_window_matches, geometry_contains,
-        owned_layer_zero_window_matches, pointer_hit_allowed, transient_geometry_ax_error,
-        Identity, Visible,
+        owned_layer_zero_window_matches, pointer_hit_allowed, resize_attribute_error,
+        transient_geometry_ax_error, Identity, Visible,
     };
+    use crate::error::BackendError;
     use crate::traits::Geometry;
     use objc2_application_services::AXError;
 
@@ -812,6 +961,26 @@ mod tests {
                 scale: 1.0,
             },
         }
+    }
+
+    #[test]
+    fn accessibility_resize_errors_keep_denied_and_unsupported_distinct() {
+        assert_eq!(
+            resize_attribute_error(AXError::APIDisabled),
+            BackendError::WindowResizeDenied
+        );
+        assert_eq!(
+            resize_attribute_error(AXError::AttributeUnsupported),
+            BackendError::WindowResizeUnsupported
+        );
+        assert_eq!(
+            resize_attribute_error(AXError::CannotComplete),
+            BackendError::WindowResizeFailed
+        );
+        assert_eq!(
+            resize_attribute_error(AXError::InvalidUIElement),
+            BackendError::WindowUnavailable
+        );
     }
 
     fn positioned(

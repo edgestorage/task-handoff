@@ -3,9 +3,14 @@
 use crate::{
     catalog::{CaptureSource, Catalog, CatalogError, NativeSource},
     error::BackendError,
-    traits::{Geometry, RawFrame},
+    traits::{Geometry, RawFrame, WindowResizeTarget},
 };
-use std::{fs::File, os::unix::fs::FileExt, time::Instant};
+use std::{
+    fs::File,
+    os::unix::fs::FileExt,
+    thread,
+    time::{Duration, Instant},
+};
 use x11rb::{
     connection::Connection,
     protocol::{
@@ -936,6 +941,71 @@ impl WindowLease {
     }
     pub fn geometry(&self) -> anyhow::Result<Geometry> {
         window_geometry(&self.conn, self.root, self.window)
+    }
+    pub fn resize(&mut self, target: WindowResizeTarget) -> anyhow::Result<Geometry> {
+        const CONFIRM_TIMEOUT: Duration = Duration::from_millis(1_500);
+        const POLL_INTERVAL: Duration = Duration::from_millis(25);
+        const STABLE_SAMPLES: usize = 2;
+
+        let before = self.geometry()?;
+        let desired = match target {
+            WindowResizeTarget::Preset { width, height }
+            | WindowResizeTarget::Viewport { width, height } => Geometry {
+                x: before.x,
+                y: before.y,
+                width,
+                height,
+                scale: before.scale,
+            },
+        };
+        if desired == before {
+            return Ok(before);
+        }
+        let mut configure = ConfigureWindowAux::new()
+            .width(desired.width)
+            .height(desired.height);
+        if desired.x != before.x {
+            configure = configure.x(desired.x);
+        }
+        if desired.y != before.y {
+            configure = configure.y(desired.y);
+        }
+        self.conn
+            .configure_window(self.window, &configure)?
+            .check()?;
+        self.conn.flush()?;
+
+        let started = Instant::now();
+        let mut last = None;
+        let mut stable = 0usize;
+        while started.elapsed() < CONFIRM_TIMEOUT {
+            match self.geometry() {
+                Ok(geometry) if geometry != before => {
+                    if last == Some(geometry) {
+                        stable += 1;
+                        if stable >= STABLE_SAMPLES {
+                            self.geometry = geometry;
+                            return Ok(geometry);
+                        }
+                    } else {
+                        last = Some(geometry);
+                        stable = 0;
+                    }
+                }
+                Ok(_) => {
+                    last = None;
+                    stable = 0;
+                }
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<BackendError>(),
+                        Some(BackendError::GeometryChanged | BackendError::WindowUnavailable)
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+        anyhow::bail!(BackendError::WindowResizeFailed)
     }
     pub fn reconfigure(&mut self, geometry: Geometry) -> anyhow::Result<()> {
         anyhow::ensure!(self.geometry()? == geometry, BackendError::GeometryChanged);

@@ -7,6 +7,9 @@ pub const MAX_MESSAGE: usize = 16 * 1024;
 pub const MAX_CLIPBOARD_TEXT: usize = 32 * 1024;
 pub const MAX_CLIPBOARD_WIRE: usize = 64 * 1024;
 pub const MAX_SAFE_SEQUENCE: u64 = (1u64 << 53) - 1;
+pub const MAX_REQUEST_ID: usize = 128;
+pub const MIN_WINDOW_SIZE: u32 = controlled_instance_protocol::REMOTE_DESKTOP_WINDOW_MIN_SIZE;
+pub const MAX_WINDOW_SIZE: u32 = controlled_instance_protocol::REMOTE_DESKTOP_WINDOW_MAX_SIZE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +94,129 @@ pub enum Control {
     /// a second viewer session or control lease.
     #[serde(rename = "transport.upgrade")]
     TransportUpgrade,
+    #[serde(rename = "window.resize")]
+    WindowResizeMessage(WindowResizeMessage),
+}
+impl Control {
+    fn valid(&self) -> bool {
+        match self {
+            Self::WindowResizeMessage(request) => request.valid(),
+            _ => true,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowResizeMessage {
+    Preset {
+        request_id: String,
+        width: u32,
+        height: u32,
+    },
+    Viewport {
+        request_id: String,
+        width: u32,
+        height: u32,
+    },
+}
+impl WindowResizeMessage {
+    fn request_id(&self) -> &str {
+        match self {
+            Self::Preset { request_id, .. } | Self::Viewport { request_id, .. } => request_id,
+        }
+    }
+    pub fn id(&self) -> &str {
+        self.request_id()
+    }
+    pub fn mode(&self) -> &'static str {
+        match self {
+            Self::Preset { .. } => "preset",
+            Self::Viewport { .. } => "viewport",
+        }
+    }
+    fn valid(&self) -> bool {
+        let request_id = self.request_id();
+        let request_id_valid = !request_id.is_empty() && request_id.len() <= MAX_REQUEST_ID;
+        match self {
+            Self::Preset { width, height, .. } | Self::Viewport { width, height, .. } => {
+                request_id_valid
+                    && (MIN_WINDOW_SIZE..=MAX_WINDOW_SIZE).contains(width)
+                    && (MIN_WINDOW_SIZE..=MAX_WINDOW_SIZE).contains(height)
+            }
+        }
+    }
+}
+impl Serialize for WindowResizeMessage {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        match self {
+            Self::Preset {
+                request_id,
+                width,
+                height,
+            } => {
+                let mut state = serializer.serialize_struct("WindowResizePreset", 4)?;
+                state.serialize_field("requestId", request_id)?;
+                state.serialize_field("mode", "preset")?;
+                state.serialize_field("width", width)?;
+                state.serialize_field("height", height)?;
+                state.end()
+            }
+            Self::Viewport {
+                request_id,
+                width,
+                height,
+            } => {
+                let mut state = serializer.serialize_struct("WindowResizeViewport", 4)?;
+                state.serialize_field("requestId", request_id)?;
+                state.serialize_field("mode", "viewport")?;
+                state.serialize_field("width", width)?;
+                state.serialize_field("height", height)?;
+                state.end()
+            }
+        }
+    }
+}
+impl<'de> Deserialize<'de> for WindowResizeMessage {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(
+            tag = "mode",
+            rename_all = "camelCase",
+            rename_all_fields = "camelCase"
+        )]
+        enum Wire {
+            Preset {
+                request_id: String,
+                width: u32,
+                height: u32,
+            },
+            Viewport {
+                request_id: String,
+                width: u32,
+                height: u32,
+            },
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Preset {
+                request_id,
+                width,
+                height,
+            } => Self::Preset {
+                request_id,
+                width,
+                height,
+            },
+            Wire::Viewport {
+                request_id,
+                width,
+                height,
+            } => Self::Viewport {
+                request_id,
+                width,
+                height,
+            },
+        })
+    }
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -271,7 +397,11 @@ impl Decoder {
                 {
                     value["payload"] = serde_json::json!({});
                 }
-                Message::Control(decode_adjacent(value)?)
+                let control: Control = decode_adjacent(value)?;
+                if !control.valid() {
+                    return Err(InvalidMessage);
+                }
+                Message::Control(control)
             }
             Channel::Input => {
                 let input: Input = serde_json::from_value(value).map_err(|_| InvalidMessage)?;
@@ -300,5 +430,108 @@ impl Decoder {
         };
         self.sequences[i] = Some(raw.seq);
         Ok((message, raw.v != CHANNEL_VERSION))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decode(value: serde_json::Value) -> Result<(Message, bool), InvalidMessage> {
+        Decoder::default().decode(Channel::Control, &serde_json::to_vec(&value).unwrap())
+    }
+
+    #[test]
+    fn decodes_window_resize_preset_and_viewport() {
+        let preset = decode(serde_json::json!({
+            "v": CHANNEL_VERSION,
+            "seq": 1,
+            "type": "window.resize",
+            "payload": {"requestId":"resize-1","mode":"preset","width":1600,"height":900}
+        }))
+        .unwrap()
+        .0;
+        let Message::Control(Control::WindowResizeMessage(WindowResizeMessage::Preset {
+            request_id,
+            width,
+            height,
+        })) = preset
+        else {
+            panic!("unexpected message")
+        };
+        assert_eq!(request_id, "resize-1");
+        assert_eq!((width, height), (1600, 900));
+
+        let viewport = decode(serde_json::json!({
+            "v": CHANNEL_VERSION,
+            "seq": 1,
+            "type": "window.resize",
+            "payload": {"requestId":"resize-2","mode":"viewport","width":1440,"height":900}
+        }))
+        .unwrap()
+        .0;
+        let Message::Control(Control::WindowResizeMessage(WindowResizeMessage::Viewport {
+            request_id,
+            width,
+            height,
+        })) = viewport
+        else {
+            panic!("unexpected message")
+        };
+        assert_eq!(request_id, "resize-2");
+        assert_eq!((width, height), (1440, 900));
+    }
+
+    #[test]
+    fn rejects_invalid_window_resize_without_advancing_the_decoder() {
+        for payload in [
+            serde_json::json!({"requestId":"","mode":"viewport","width":1440,"height":900}),
+            serde_json::json!({"requestId":"x","mode":"viewport","width":159,"height":900}),
+            serde_json::json!({"requestId":"x","mode":"viewport","width":1440,"height":16385}),
+            serde_json::json!({"requestId":"x","mode":"preset","width":159,"height":900}),
+            serde_json::json!({"requestId":"x","mode":"preset","width":1600,"height":16385}),
+            serde_json::json!({"requestId":"x","mode":"unknown"}),
+        ] {
+            let mut decoder = Decoder::default();
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "v": CHANNEL_VERSION,
+                "seq": 1,
+                "type": "window.resize",
+                "payload": payload
+            }))
+            .unwrap();
+            assert!(decoder.decode(Channel::Control, &bytes).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_oversized_request_id() {
+        let mut decoder = Decoder::default();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "v": CHANNEL_VERSION,
+            "seq": 1,
+            "type": "window.resize",
+            "payload": {"requestId":"x".repeat(MAX_REQUEST_ID + 1),"mode":"viewport","width":1440,"height":900}
+        }))
+        .unwrap();
+        assert!(decoder.decode(Channel::Control, &bytes).is_err());
+    }
+
+    #[test]
+    fn channel_version_mismatch_is_diagnostic_only() {
+        let (message, mismatch) = decode(serde_json::json!({
+            "v": "2026-01-01",
+            "seq": 1,
+            "type": "window.resize",
+            "payload": {"requestId":"resize-version","mode":"viewport","width":1440,"height":900}
+        }))
+        .unwrap();
+        assert!(mismatch);
+        assert!(matches!(
+            message,
+            Message::Control(Control::WindowResizeMessage(
+                WindowResizeMessage::Viewport { .. }
+            ))
+        ));
     }
 }

@@ -107,6 +107,20 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
     capability.features.keyboard = true;
     capability.features.mouse = true;
     capability.features.clipboard = true;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        capability.features.window_resize.available = true;
+        capability.features.window_resize.presets = [(1280, 720), (1600, 900), (1920, 1080)]
+            .into_iter()
+            .map(
+                |(width, height)| controlled_instance_protocol::RemoteDesktopWindowSize {
+                    width,
+                    height,
+                },
+            )
+            .collect();
+        capability.features.window_resize.fit_to_viewport = true;
+    }
     capability.viewer_limit = crate::session::MAX_VIEWERS as u64;
     capability.fallback = controlled_instance_protocol::RemoteDesktopFallbackCapabilities::ready();
     capability

@@ -5,7 +5,7 @@ use crate::{
     channel::{Input, Pointer},
     input_driver::NativeInput,
     synthetic::SyntheticInput,
-    traits::{Geometry, PointerMapping},
+    traits::{Geometry, PointerMapping, WindowResizeTarget},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -23,6 +23,7 @@ const VALIDATE_CALL_BUDGET: Duration = Duration::from_millis(600);
 const ARM_CALL_BUDGET: Duration = Duration::from_millis(1_200);
 const REBIND_CALL_BUDGET: Duration = Duration::from_millis(2_500);
 const GEOMETRY_CALL_BUDGET: Duration = Duration::from_millis(700);
+const WINDOW_RESIZE_CALL_BUDGET: Duration = Duration::from_millis(3_000);
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Backend {
@@ -51,6 +52,15 @@ pub enum Backend {
     },
 }
 impl Backend {
+    pub fn supports_window_resize(&self) -> bool {
+        match self {
+            #[cfg(target_os = "macos")]
+            Self::MacWindow { .. } => true,
+            #[cfg(target_os = "linux")]
+            Self::LinuxWindow { .. } => true,
+            _ => false,
+        }
+    }
     pub fn set_geometry(&mut self, geometry: Geometry) {
         match self {
             Self::Synthetic => {}
@@ -131,6 +141,7 @@ pub enum Command {
     Arm { epoch: u64 },
     Rebind { backend: Backend },
     Geometry { geometry: Geometry },
+    ResizeWindow { target: WindowResizeTarget },
     PointerMapping { mapping: PointerMapping },
     Alive { epoch: u64 },
     Input { event: Input },
@@ -144,6 +155,7 @@ fn command_label(command: &Command) -> &'static str {
         Command::Arm { .. } => "arm",
         Command::Rebind { .. } => "rebind",
         Command::Geometry { .. } => "geometry",
+        Command::ResizeWindow { .. } => "resizeWindow",
         Command::PointerMapping { .. } => "pointerMapping",
         Command::Alive { .. } => "alive",
         Command::Input { .. } => "input",
@@ -171,6 +183,7 @@ fn command_call_budget(command: &Command) -> Duration {
         // and whose lease worker handshake is itself bounded to 2s.
         Command::Rebind { .. } => REBIND_CALL_BUDGET,
         Command::Geometry { .. } => GEOMETRY_CALL_BUDGET,
+        Command::ResizeWindow { .. } => WINDOW_RESIZE_CALL_BUDGET,
         Command::Input {
             event: Input::Text(_),
         } => INPUT_TTL + QUEUE_TTL,
@@ -200,6 +213,9 @@ pub enum Event {
         cause: crate::error::BackendError,
     },
     Released,
+    Resized {
+        geometry: Geometry,
+    },
     Rejected,
     Stopped,
 }
@@ -268,6 +284,14 @@ impl Actuator {
         match self {
             Self::Native(n) => n.reconfigure(g),
             Self::Synthetic(_) => Ok(()),
+        }
+    }
+    fn resize_window(&mut self, target: WindowResizeTarget) -> anyhow::Result<Geometry> {
+        match self {
+            Self::Native(n) => n.resize_window(target),
+            Self::Synthetic(_) => {
+                anyhow::bail!(crate::error::BackendError::WindowResizeUnsupported)
+            }
         }
     }
 
@@ -522,6 +546,20 @@ pub fn run() -> anyhow::Result<()> {
                         result?;
                         Event::Released
                     }
+                    Command::ResizeWindow { target } => {
+                        actuator.release()?;
+                        epoch = None;
+                        deadline = None;
+                        match actuator.resize_window(target) {
+                            Ok(geometry) => Event::Resized { geometry },
+                            Err(error) => Event::Suspended {
+                                cause: error
+                                    .downcast_ref::<crate::error::BackendError>()
+                                    .copied()
+                                    .unwrap_or(crate::error::BackendError::WindowResizeFailed),
+                            },
+                        }
+                    }
                     Command::PointerMapping { mapping } => {
                         actuator.pointer_mapping(mapping)?;
                         actuator.state(epoch)
@@ -703,6 +741,7 @@ impl Client {
                 if is_geometry {
                     let response = match &response {
                         Event::Released => "released",
+                        Event::Resized { .. } => "resized",
                         Event::Suspended { .. } => "suspended",
                         Event::Rejected => "rejected",
                         Event::Stopped => "stopped",
@@ -799,6 +838,14 @@ mod tests {
                     scale: 1.0,
                 },
             }) > Duration::from_millis(300)
+        );
+        assert!(
+            command_call_budget(&Command::ResizeWindow {
+                target: WindowResizeTarget::Viewport {
+                    width: 1440,
+                    height: 900,
+                },
+            }) > Duration::from_secs(2)
         );
     }
 }

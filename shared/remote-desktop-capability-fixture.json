@@ -2,7 +2,7 @@
   "available": false,
   "status": "unavailable",
   "reason": "REMOTE_DESKTOP_UNSUPPORTED",
-  "protocolVersion": "2026-11-11",
+  "protocolVersion": "2026-11-17",
   "runtimeKind": "unknown",
   "platform": "unknown",
   "desktopSource": "none",
@@ -28,7 +28,12 @@
   "features": {
     "clipboard": false,
     "keyboard": false,
-    "mouse": false
+    "mouse": false,
+    "windowResize": {
+      "available": false,
+      "presets": [],
+      "fitToViewport": false
+    }
   },
   "viewerLimit": 0,
   "fallback": {

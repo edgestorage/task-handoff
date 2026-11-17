@@ -422,3 +422,88 @@ test('remote desktop installation and enabled intent stay in the existing app ma
   assert.match(settings, /remoteDesktopInstalled/);
   assert.match(settings, /activeSection === "remote-desktop" && installed/);
 });
+
+test('remote desktop window resize is capability-driven and gated to controlled window sessions', () => {
+  assert.match(viewer, /remoteDesktopSupportsWindowResize/);
+  assert.match(viewer, /features\.windowResize/);
+  assert.match(viewer, /windowResizePresets/);
+  assert.match(viewer, /windowResizeViewportFitSupported/);
+  assert.match(viewer, /fitToViewport === true/);
+  assert.match(viewer, /v-for="preset in windowResizePresets"/);
+  assert.match(viewer, /v-if="windowResizeViewportFitSupported"/);
+
+  const visibility = viewer.slice(viewer.indexOf('const windowResizeMenuVisible'), viewer.indexOf('const windowResizeAvailable'));
+  assert.match(visibility, /session\.value/);
+  assert.match(visibility, /!props\.preview/);
+  assert.match(visibility, /target\.value\.kind === "window"/);
+  assert.match(visibility, /snapshot\.value\?\.isController === true/);
+  assert.match(visibility, /snapshot\.value\?\.phase === "active"/);
+  assert.match(visibility, /snapshot\.value\?\.mediaPaused !== true/);
+  assert.match(visibility, /signalingReady\.value/);
+  assert.match(visibility, /streamReady\.value/);
+  assert.match(visibility, /!surfacePaused\(\)/);
+  assert.match(visibility, /!fallbackSwitching\.value/);
+  assert.match(visibility, /remoteDesktopSupportsWindowResize\(remote\.value\)/);
+});
+
+test('remote desktop window resize sends preset or viewport wire payloads without touching stream resolution', () => {
+  const request = viewer.slice(viewer.indexOf('function requestWindowResize'), viewer.indexOf('function resizeRemoteWindowPreset'));
+  assert.match(request, /RemoteDesktopWindowResizeRequestSchema\.safeParse/);
+  assert.match(request, /RemoteDesktopWindowResizeRequestSchema\.safeParse\(\{ requestId, \.\.\.target \}\)/);
+  assert.match(request, /wire\(control, "window\.resize", parsed\.data\)/);
+  assert.doesNotMatch(request, /stream\.resolution|applyTransportResolution|transportResolution|transportFrameRate|transportCapturePrecision/);
+  assert.match(viewer, /@select="resizeRemoteWindowPreset\(preset\)"/);
+  assert.match(viewer, /@select="resizeRemoteWindowFit"/);
+  assert.match(viewer, /windowResizePresets\.value\.some\(\(candidate\) => candidate\.width === preset\.width && candidate\.height === preset\.height\)/);
+});
+
+test('remote desktop fit measures the entire viewer page area and resends fresh dimensions', () => {
+  const fit = viewer.slice(viewer.indexOf('function resizeRemoteWindowFit'), viewer.indexOf('function handleWindowResizedValue'));
+  assert.match(fit, /viewer\.value\?\.getBoundingClientRect\(\)/);
+  assert.doesNotMatch(fit, /surface\.value/);
+  assert.match(fit, /width: Math\.round\(rect\.width\)/);
+  assert.match(fit, /height: Math\.round\(rect\.height\)/);
+  assert.match(fit, /requestWindowResize\(\{\s+mode: "viewport"/);
+  assert.doesNotMatch(fit, /screen|work.?area|window\.innerWidth|window\.innerHeight/);
+});
+
+test('remote desktop window resize prevents duplicate requests and correlates actual-size responses', () => {
+  assert.match(viewer, /const windowResizePending = ref\(false\)/);
+  assert.match(viewer, /function requestWindowResize[\s\S]*?if \(!windowResizeAvailable\.value\) return/);
+  assert.match(viewer, /windowResizePending\.value = true/);
+  assert.match(viewer, /WINDOW_RESIZE_RESPONSE_TIMEOUT_MS/);
+  assert.match(viewer, /windowResizeTimer = setTimeout\(\(\) => \{[\s\S]*?windowResizeRequestId\.value !== requestId/);
+  assert.match(viewer, /RemoteDesktopWindowResizedPayloadSchema\.safeParse/);
+  assert.match(viewer, /parsed\.data\.requestId !== windowResizeRequestId\.value/);
+  assert.match(viewer, /windowResizeActual\.value = \{ width: parsed\.data\.width, height: parsed\.data\.height \}/);
+  assert.match(viewer, /windowResizePending\.value = false/);
+});
+
+test('remote desktop window resize reports actual, constrained, fit, and structured failure states', () => {
+  const status = viewer.slice(viewer.indexOf('const windowResizeStatusText'), viewer.indexOf('const viewerCount'));
+  const constrained = status.indexOf('actual.width !== request.width || actual.height !== request.height');
+  const viewportFit = status.indexOf('request.mode === "viewport"');
+  const presetSuccess = status.indexOf('windowResizeApplied"');
+  assert.ok(constrained >= 0);
+  assert.ok(viewportFit > constrained);
+  assert.ok(presetSuccess > viewportFit);
+  assert.match(status, /windowResizeConstrained/);
+  assert.match(status, /windowResizeAppliedFit/);
+  assert.match(viewer, /windowResizeConstrained/);
+  assert.match(viewer, /windowResizeAppliedFit/);
+  assert.match(viewer, /windowResizeApplied/);
+  assert.match(viewer, /RemoteDesktopWindowResizeFailedPayloadSchema\.safeParse/);
+  assert.match(viewer, /failWindowResize\(parsed\.data\.code/);
+  assert.match(viewer, /translateApiError\(\s*\{ code: windowResizeErrorCode\.value \}/);
+  assert.match(viewer, /windowResizeTimedOut/);
+  assert.match(viewer, /class="remote-desktop-inline-status" role="status" :title="windowResizeStatusText"/);
+  assert.match(viewer, /value\.type === "window\.resized"/);
+  assert.match(viewer, /value\.type === "window\.resize\.failed"/);
+});
+
+test('remote desktop window resize state is cleared with the viewer lifecycle', () => {
+  assert.match(viewer, /function cleanup\(\) \{\n\s+usedTransportKeys\.value = new Set\(\);\n\s+resetWindowResizeState\(\);/);
+  assert.match(viewer, /function resetWindowResizeState\(\)[\s\S]*?clearWindowResizeTimer\(\)/);
+  assert.match(viewer, /windowResizeStatus\.value = "idle"/);
+  assert.match(viewer, /windowResizeRequestId\.value = ""/);
+});

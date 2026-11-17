@@ -2,7 +2,7 @@
 //! maintained keycode map; Enigo owns XTest/CGEvent/SendInput, not shell commands.
 use crate::{
     channel::Input,
-    traits::{Geometry, PointerMapping},
+    traits::{Geometry, PointerMapping, WindowResizeTarget},
 };
 #[cfg(not(target_os = "macos"))]
 use enigo::{Axis, Button, Coordinate, Mouse};
@@ -192,6 +192,25 @@ impl NativeInput {
         );
         self.pointer_mapping = PointerMapping::from_geometry(geometry);
         Ok(())
+    }
+    pub fn resize_window(&mut self, target: WindowResizeTarget) -> anyhow::Result<Geometry> {
+        #[cfg(target_os = "macos")]
+        if let Some(window) = &self.window {
+            let geometry = window.resize(self.geometry, target)?;
+            self.reconfigure(geometry)?;
+            return Ok(geometry);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(window) = &mut self.window {
+            let geometry = window.resize(target)?;
+            self.reconfigure(geometry)?;
+            return Ok(geometry);
+        }
+        #[cfg(target_os = "windows")]
+        if self.window.is_some() {
+            anyhow::bail!(crate::error::BackendError::WindowResizeUnsupported);
+        }
+        anyhow::bail!(crate::error::BackendError::WindowResizeUnsupported);
     }
     /// The encoded surface can contain letterbox bars around the captured
     /// window and its transient popovers. Keep that viewport separate from the

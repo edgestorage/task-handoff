@@ -149,6 +149,9 @@
             <span v-if="resolution"><Maximize2 :size="12" aria-hidden="true" />{{ resolution }}</span>
             <span v-if="sessionDeadline"><Clock3 :size="12" aria-hidden="true" />{{ sessionDeadline }}</span>
             <span v-if="idleDeadline" class="remote-desktop-idle-deadline">{{ idleDeadline }}</span>
+            <span v-if="windowResizeStatusText" class="remote-desktop-inline-status" role="status" :title="windowResizeStatusText">
+              <AppWindow :size="12" aria-hidden="true" />{{ windowResizeStatusText }}
+            </span>
             <span v-if="clipboardStatus" class="remote-desktop-inline-status" role="status" :title="clipboardStatus">
               <Clipboard :size="12" aria-hidden="true" />{{ clipboardStatus }}
             </span>
@@ -245,6 +248,39 @@
                       <RefreshCw :class="{ 'remote-desktop-spin': transportPolicyReconnecting }" :size="14" aria-hidden="true" />
                       <span>{{ transportPolicyReconnecting ? t("instances.remoteDesktop.applyingConnectionMethods") : t("instances.remoteDesktop.applyConnectionMethods") }}</span>
                     </DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator v-if="windowResizeMenuVisible" />
+                <DropdownMenuSub v-if="windowResizeMenuVisible">
+                  <DropdownMenuSubTrigger :disabled="!windowResizeAvailable && !windowResizePending">
+                    <LoaderCircle v-if="windowResizePending" class="remote-desktop-spin" :size="14" aria-hidden="true" />
+                    <AppWindow v-else :size="14" aria-hidden="true" />
+                    <span>{{ t("instances.remoteDesktop.windowResize") }}</span>
+                    <small class="remote-desktop-menu-value">{{ windowResizeMenuValue }}</small>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent class="remote-desktop-window-resize-menu" :collision-padding="10" :side-offset="4">
+                    <p class="remote-desktop-actions-hint">{{ t("instances.remoteDesktop.windowResizeHint") }}</p>
+                    <DropdownMenuItem
+                      v-for="preset in windowResizePresets"
+                      :key="`${preset.width}x${preset.height}`"
+                      :disabled="!windowResizeAvailable"
+                      @select="resizeRemoteWindowPreset(preset)"
+                    >
+                      <AppWindow :size="14" aria-hidden="true" />
+                      <span class="remote-desktop-resolution-option">
+                        <span>{{ preset.width }} × {{ preset.height }}</span>
+                        <small>{{ t("instances.remoteDesktop.windowResizePresetDetail") }}</small>
+                      </span>
+                      <Check v-if="windowResizeActual?.width === preset.width && windowResizeActual?.height === preset.height" :size="14" class="ml-auto" aria-hidden="true" />
+                    </DropdownMenuItem>
+                    <DropdownMenuItem v-if="windowResizeViewportFitSupported" :disabled="!windowResizeAvailable" @select="resizeRemoteWindowFit">
+                      <Maximize2 :size="14" aria-hidden="true" />
+                      <span class="remote-desktop-resolution-option">
+                        <span>{{ t("instances.remoteDesktop.windowResizeFit") }}</span>
+                        <small>{{ t("instances.remoteDesktop.windowResizeFitDetail") }}</small>
+                      </span>
+                    </DropdownMenuItem>
+                    <p v-if="windowResizeStatusText" class="remote-desktop-window-resize-status" role="status">{{ windowResizeStatusText }}</p>
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
                 <DropdownMenuItem :disabled="!signalingReady || fallbackSwitching || inputResumePending || controlRequestPending" @select="toggleInputEnabled">
@@ -615,9 +651,13 @@ import {
   REMOTE_DESKTOP_MAX_MESSAGE_BYTES,
   REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL,
   DesktopFallbackFrameAssembler,
+  RemoteDesktopWindowResizeFailedPayloadSchema,
+  RemoteDesktopWindowResizeRequestSchema,
+  RemoteDesktopWindowResizedPayloadSchema,
   decodeDesktopFallbackFrame,
   isRemoteDesktopLocalNetworkAddress,
   remoteDesktopSupportsCapturePrecision,
+  remoteDesktopSupportsWindowResize,
   type DesktopCaptureSelection,
   type DesktopFallbackSession,
   type DesktopSessionSnapshot,
@@ -682,6 +722,7 @@ type TargetSelection = { kind: string; sourceRef?: string };
 type TransportResolutionValue = "auto" | "4k" | "2k" | "1080p" | "540p";
 type TransportFrameRateValue = "auto" | "60" | "30" | "24" | "15";
 type TransportCapturePrecisionValue = "auto" | "performance";
+type WindowResizeSelection = { mode: "preset"; width: number; height: number } | { mode: "viewport"; width: number; height: number };
 type ConnectionMethodKey = "p2p" | "websocket" | "turn";
 type ConnectionMethodAvailability = Record<ConnectionMethodKey, boolean>;
 const CONNECTION_METHOD_KEYS: ConnectionMethodKey[] = ["p2p", "websocket", "turn"];
@@ -792,6 +833,15 @@ const fallbackSize = ref<{ width: number; height: number }>();
 const fallbackEncodingDetail = ref("");
 const fallbackDiagnostics = ref<RemoteDesktopFallbackDiagnostics>();
 const documentVisible = ref(typeof document === "undefined" ? true : document.visibilityState !== "hidden");
+const windowResizePending = ref(false);
+const windowResizeStatus = ref<"idle" | "pending" | "success" | "failed">("idle");
+const windowResizeRequestId = ref("");
+const windowResizeRequest = ref<WindowResizeSelection>();
+const windowResizeActual = ref<{ width: number; height: number }>();
+const windowResizeErrorCode = ref("");
+const windowResizeTimedOut = ref(false);
+const WINDOW_RESIZE_RESPONSE_TIMEOUT_MS = 6_000;
+let windowResizeTimer: ReturnType<typeof setTimeout> | undefined;
 
 function persistViewerPreferences() {
   if (props.preview || typeof window === "undefined") return;
@@ -1327,6 +1377,66 @@ const connectionLabel = computed(() => {
 });
 const isController = computed(() => snapshot.value?.isController !== false);
 const hasController = computed(() => snapshot.value?.hasController !== false);
+const windowResizeCapability = computed(() => remote.value?.features.windowResize);
+const windowResizePresets = computed(() => windowResizeCapability.value?.presets ?? []);
+const windowResizeViewportFitSupported = computed(() => windowResizeCapability.value?.fitToViewport === true);
+const windowResizeMenuVisible = computed(() => Boolean(
+  session.value
+  && !props.preview
+  && target.value.kind === "window"
+  && snapshot.value?.isController === true
+  && snapshot.value?.phase === "active"
+  && snapshot.value?.mediaPaused !== true
+  && signalingReady.value
+  && streamReady.value
+  && !surfacePaused()
+  && !fallbackSwitching.value
+  && remoteDesktopSupportsWindowResize(remote.value),
+));
+const windowResizeAvailable = computed(() => windowResizeMenuVisible.value && !windowResizePending.value);
+const windowResizeMenuValue = computed(() => {
+  if (windowResizePending.value) return t("instances.remoteDesktop.windowResizeApplyingShort");
+  if (windowResizeStatus.value === "success" && windowResizeActual.value) {
+    return `${windowResizeActual.value.width} × ${windowResizeActual.value.height}`;
+  }
+  if (windowResizeStatus.value === "failed") return t("instances.remoteDesktop.windowResizeRetry");
+  return t("instances.remoteDesktop.windowResizeChoose");
+});
+const windowResizeStatusText = computed(() => {
+  if (windowResizePending.value) return t("instances.remoteDesktop.windowResizeApplying");
+  if (windowResizeStatus.value === "failed") {
+    if (windowResizeTimedOut.value) return t("instances.remoteDesktop.windowResizeTimedOut");
+    if (windowResizeErrorCode.value) {
+      return translateApiError(
+        { code: windowResizeErrorCode.value },
+        t,
+        t("instances.remoteDesktop.windowResizeFailed"),
+      );
+    }
+    return t("instances.remoteDesktop.windowResizeFailed");
+  }
+  const actual = windowResizeActual.value;
+  const request = windowResizeRequest.value;
+  if (windowResizeStatus.value !== "success" || !actual || !request) return "";
+  if (actual.width !== request.width || actual.height !== request.height) {
+    return t("instances.remoteDesktop.windowResizeConstrained", {
+      width: actual.width,
+      height: actual.height,
+      requestedWidth: request.width,
+      requestedHeight: request.height,
+    });
+  }
+  if (request.mode === "viewport") {
+    return t("instances.remoteDesktop.windowResizeAppliedFit", {
+      width: actual.width,
+      height: actual.height,
+    });
+  }
+  return t("instances.remoteDesktop.windowResizeApplied", {
+    width: actual.width,
+    height: actual.height,
+  });
+});
 const viewerCount = computed(() => snapshot.value?.viewerCount ?? 1);
 const viewerSourceRows = computed(() => {
   const currentRef = target.value.sourceRef;
@@ -2700,6 +2810,14 @@ function handleControlValue(value: any, channel = "control") {
   const inboundSequence = typeof value?.seq === "number" ? value.seq : undefined;
   rememberRemoteDesktopFrame({ direction: "receive", channel, type, sequence: inboundSequence, bytes: new TextEncoder().encode(JSON.stringify(value)).byteLength });
   recordRemoteDesktopDiagnostic("control.message", { channel, controlType: type, inboundSequence });
+  if (value.type === "window.resized") {
+    handleWindowResizedValue(value);
+    return;
+  }
+  if (value.type === "window.resize.failed") {
+    handleWindowResizeFailedValue(value);
+    return;
+  }
   if (value.type === "input.resumed") {
     if (props.preview || surfacePaused() || !inputRequested.value) {
       const control = controlChannel();
@@ -3481,6 +3599,140 @@ function setTransportCapturePrecision(value: string) {
   applyTransportResolution(true);
 }
 
+function clearWindowResizeTimer() {
+  if (windowResizeTimer !== undefined) clearTimeout(windowResizeTimer);
+  windowResizeTimer = undefined;
+}
+
+function resetWindowResizeState() {
+  clearWindowResizeTimer();
+  windowResizePending.value = false;
+  windowResizeStatus.value = "idle";
+  windowResizeRequestId.value = "";
+  windowResizeRequest.value = undefined;
+  windowResizeActual.value = undefined;
+  windowResizeErrorCode.value = "";
+  windowResizeTimedOut.value = false;
+}
+
+function failWindowResize(code: string, timedOut = false, reason = "response") {
+  clearWindowResizeTimer();
+  windowResizePending.value = false;
+  windowResizeStatus.value = "failed";
+  windowResizeErrorCode.value = code;
+  windowResizeTimedOut.value = timedOut;
+  recordRemoteDesktopDiagnostic("window.resize.failed", {
+    reason,
+    code,
+    requestId: windowResizeRequestId.value,
+    mode: windowResizeRequest.value?.mode,
+  });
+}
+
+function requestWindowResize(target: WindowResizeSelection) {
+  if (!windowResizeAvailable.value) return;
+  const control = controlChannel();
+  if (!control) {
+    failWindowResize("REMOTE_DESKTOP_WINDOW_RESIZE_FAILED", false, "control-channel-unavailable");
+    return;
+  }
+  const requestId = createBrowserUuid();
+  const parsed = RemoteDesktopWindowResizeRequestSchema.safeParse({ requestId, ...target });
+  if (!parsed.success) {
+    failWindowResize("REMOTE_DESKTOP_WINDOW_RESIZE_FAILED", false, "invalid-request");
+    return;
+  }
+  clearWindowResizeTimer();
+  windowResizeRequestId.value = requestId;
+  windowResizeRequest.value = parsed.data.mode === "viewport"
+    ? { mode: "viewport", width: parsed.data.width, height: parsed.data.height }
+    : { mode: "preset", width: parsed.data.width, height: parsed.data.height };
+  windowResizeActual.value = undefined;
+  windowResizeErrorCode.value = "";
+  windowResizeTimedOut.value = false;
+  windowResizePending.value = true;
+  windowResizeStatus.value = "pending";
+  recordRemoteDesktopDiagnostic("window.resize.sent", {
+    requestId,
+    mode: parsed.data.mode,
+    width: parsed.data.width,
+    height: parsed.data.height,
+  });
+  if (!wire(control, "window.resize", parsed.data)) {
+    failWindowResize("REMOTE_DESKTOP_WINDOW_RESIZE_FAILED", false, "wire-rejected");
+    return;
+  }
+  windowResizeTimer = setTimeout(() => {
+    windowResizeTimer = undefined;
+    if (!windowResizePending.value || windowResizeRequestId.value !== requestId) return;
+    failWindowResize("REMOTE_DESKTOP_WINDOW_RESIZE_FAILED", true, "timeout");
+  }, WINDOW_RESIZE_RESPONSE_TIMEOUT_MS);
+}
+
+function resizeRemoteWindowPreset(preset: { width: number; height: number }) {
+  if (!windowResizePresets.value.some((candidate) => candidate.width === preset.width && candidate.height === preset.height)) return;
+  requestWindowResize({ mode: "preset", width: preset.width, height: preset.height });
+}
+
+function resizeRemoteWindowFit() {
+  if (!windowResizeViewportFitSupported.value) return;
+  const rect = viewer.value?.getBoundingClientRect();
+  if (!rect) {
+    failWindowResize("REMOTE_DESKTOP_WINDOW_RESIZE_FAILED", false, "viewport-unavailable");
+    return;
+  }
+  requestWindowResize({
+    mode: "viewport",
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  });
+}
+
+function handleWindowResizedValue(value: any) {
+  const parsed = RemoteDesktopWindowResizedPayloadSchema.safeParse(value?.payload);
+  if (!parsed.success) {
+    if (value?.payload?.requestId === windowResizeRequestId.value) {
+      failWindowResize("REMOTE_DESKTOP_WINDOW_RESIZE_FAILED", false, "invalid-response");
+    } else {
+      recordRemoteDesktopDiagnostic("window.resize.invalid", { reason: "invalid-response" });
+    }
+    return;
+  }
+  if (parsed.data.requestId !== windowResizeRequestId.value) {
+    recordRemoteDesktopDiagnostic("window.resize.ignored", { reason: "request-id", requestId: parsed.data.requestId });
+    return;
+  }
+  clearWindowResizeTimer();
+  windowResizePending.value = false;
+  windowResizeStatus.value = "success";
+  windowResizeActual.value = { width: parsed.data.width, height: parsed.data.height };
+  windowResizeErrorCode.value = "";
+  windowResizeTimedOut.value = false;
+  recordRemoteDesktopDiagnostic("window.resize.resized", {
+    requestId: parsed.data.requestId,
+    mode: parsed.data.mode,
+    width: parsed.data.width,
+    height: parsed.data.height,
+  });
+}
+
+function handleWindowResizeFailedValue(value: any) {
+  const parsed = RemoteDesktopWindowResizeFailedPayloadSchema.safeParse(value?.payload);
+  if (!parsed.success) {
+    if (value?.payload?.requestId === windowResizeRequestId.value) {
+      failWindowResize("REMOTE_DESKTOP_WINDOW_RESIZE_FAILED", false, "invalid-failure-response");
+    } else {
+      recordRemoteDesktopDiagnostic("window.resize.invalid", { reason: "invalid-failure-response" });
+    }
+    return;
+  }
+  if (parsed.data.requestId !== windowResizeRequestId.value) {
+    recordRemoteDesktopDiagnostic("window.resize.ignored", { reason: "request-id", requestId: parsed.data.requestId });
+    return;
+  }
+  failWindowResize(parsed.data.code, false, "remote");
+}
+
 async function sendLocalClipboard() {
   if (!clipboard.value || clipboardBusy.value) return;
   try {
@@ -3545,6 +3797,7 @@ async function forceStop() {
 
 function cleanup() {
   usedTransportKeys.value = new Set();
+  resetWindowResizeState();
   resetFallbackRuntime();
   stopWebRTCTransportWatch();
   webrtcPeerConnected.value = false;
@@ -3971,7 +4224,8 @@ onBeforeUnmount(() => {
 :global(.remote-desktop-actions-menu),
 :global(.remote-desktop-clipboard-menu),
 :global(.remote-desktop-connection-methods-menu),
-:global(.remote-desktop-frame-rate-menu) {
+:global(.remote-desktop-frame-rate-menu),
+:global(.remote-desktop-window-resize-menu) {
   box-sizing: border-box;
   width: min(288px, var(--reka-dropdown-menu-content-available-width, calc(100vw - 20px)));
   max-width: calc(100vw - 20px);
@@ -4000,6 +4254,18 @@ onBeforeUnmount(() => {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 400;
+}
+
+:global(.remote-desktop-window-resize-status) {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line-subtle);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 :global(.remote-desktop-resolution-option) {

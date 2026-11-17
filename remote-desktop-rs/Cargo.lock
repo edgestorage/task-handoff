@@ -857,6 +857,7 @@ dependencies = [
  "futures-util",
  "keycode",
  "libc",
+ "objc2 0.6.5",
  "objc2-app-kit",
  "objc2-application-services",
  "objc2-core-foundation",
