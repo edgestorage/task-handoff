@@ -255,6 +255,14 @@ jobs:
         with:
           ref: ${{ inputs.release_tag || github.ref }}
 
+      - name: Check out release helper
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .release-helper
+          sparse-checkout: scripts/run-macos-desktop-release.mjs
+          sparse-checkout-cone-mode: false
+
       - uses: pnpm/action-setup@v6
         with:
           version: 9.15.3
@@ -329,7 +337,7 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: pnpm exec electron-builder --${{ matrix.target }} ${{ matrix.arch_args }} --publish never --config.extraMetadata.version=${{ steps.version.outputs.value }} --config.publish.channel=${{ steps.version.outputs.channel }}
+        run: node .release-helper/scripts/run-macos-desktop-release.mjs -- pnpm exec electron-builder --${{ matrix.target }} ${{ matrix.arch_args }} --publish never --config.extraMetadata.version=${{ steps.version.outputs.value }} --config.publish.channel=${{ steps.version.outputs.channel }}
 
       - name: Verify macOS signing and notarization
         if: matrix.target == 'mac'
