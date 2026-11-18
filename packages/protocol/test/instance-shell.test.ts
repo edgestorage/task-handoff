@@ -15,7 +15,9 @@ import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceHeartbeatSchema,
   ControlledInstanceRegisterSchema,
+  InstanceAppInventorySnapshotSchema,
   controlledInstanceShellCapabilities,
+  instanceAppInventorySignalKey,
   normalizeControlledInstanceCapabilities,
   supportsControlledInstanceShell,
 } from "../src/control-plane.ts";
@@ -170,4 +172,34 @@ test("instance-shell capability survives register and heartbeat wire parsing wit
   assert.deepEqual(register.capabilities.features.instanceShell, capability);
   assert.equal(heartbeat.capabilities?.features.tty, true);
   assert.deepEqual(heartbeat.capabilities?.features.instanceShell, capability);
+});
+
+test("instance app inventory events use semantic rows rather than observation timestamps", () => {
+  const inventory = {
+    observedAt: "2026-11-19T00:00:00.000Z",
+    items: [{
+      id: "opencode",
+      name: "OpenCode",
+      kind: "tty" as const,
+      source: "builtin" as const,
+      availability: "missing-dependency" as const,
+      capabilities: { supportsCwdSelection: false, supportsProfiles: false },
+    }],
+    issues: [],
+  };
+  assert.equal(
+    instanceAppInventorySignalKey(inventory),
+    instanceAppInventorySignalKey({ ...inventory, observedAt: "2026-11-19T00:00:10.000Z" }),
+  );
+  assert.notEqual(
+    instanceAppInventorySignalKey(inventory),
+    instanceAppInventorySignalKey({ ...inventory, items: [{ ...inventory.items[0], availability: "available" }] }),
+  );
+
+  const event = InstanceAppInventorySnapshotSchema.parse({
+    instanceId: "inst_target",
+    revision: 7,
+    appInventory: inventory,
+  });
+  assert.equal(event.appInventory?.items[0]?.id, "opencode");
 });

@@ -1068,6 +1068,7 @@ fn snapshot_locked(
         .collect::<BTreeMap<_, _>>();
     let apps = definitions
         .iter()
+        .filter(|definition| !definition.hidden_from_app_management)
         .map(|definition| {
             let target = detect_managed_app_recipe_target(state.capabilities.platform);
             let detection = detect_managed_app_with_managed_root_for_target(
@@ -1372,6 +1373,7 @@ mod tests {
                 web: None,
             },
             launchable: true,
+            hidden_from_app_management: false,
             detection: vec![crate::ManagedAppDetectionRule::LauncherExecutable {
                 version_args: vec![],
             }],
@@ -1543,6 +1545,24 @@ mod tests {
                     Some(InstallRecipe::Bundled { .. })
                 )
         }));
+    }
+
+    #[test]
+    fn hidden_builtin_apps_are_omitted_from_management_snapshots() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let claude = crate::find_builtin_managed_app("claude").expect("claude");
+        let manager = AppManagementManager::with_parts(
+            temporary.path().join("state"),
+            temporary.path().join("apps"),
+            Arc::new(move || vec![claude.clone()]),
+            Arc::new(Vec::new),
+            Arc::new(|_| {}),
+            Arc::new(|_| {}),
+            Arc::new(|_| {}),
+            None,
+        );
+
+        assert!(manager.snapshot().apps.is_empty());
     }
 
     #[test]

@@ -205,6 +205,13 @@ impl NodeAgentClient {
             .revision
     }
 
+    pub fn wake(&self) {
+        if !self.enabled() {
+            return;
+        }
+        self.inner.wake.notify_one();
+    }
+
     pub fn update_node_agent_url(
         &self,
         node_agent_url: &str,
@@ -1201,6 +1208,7 @@ mod tests {
     struct MockState {
         requests: Arc<Mutex<Vec<ObservedRequest>>>,
         heartbeat_not_found: Arc<AtomicBool>,
+        heartbeat_received: Arc<Notify>,
     }
 
     async fn register(
@@ -1249,6 +1257,7 @@ mod tests {
                     .map(ToString::to_string),
                 body,
             });
+        state.heartbeat_received.notify_one();
         if state.heartbeat_not_found.swap(false, Ordering::SeqCst) {
             return (
                 StatusCode::NOT_FOUND,
@@ -1263,6 +1272,7 @@ mod tests {
         let state = MockState {
             requests: Arc::new(Mutex::new(Vec::new())),
             heartbeat_not_found: Arc::new(AtomicBool::new(false)),
+            heartbeat_received: Arc::new(Notify::new()),
         };
         let app = Router::new()
             .route("/api/node-agent/instances/{id}/register", post(register))
@@ -1276,6 +1286,60 @@ mod tests {
             axum::serve(listener, app).await.expect("mock server");
         });
         (address, state, server)
+    }
+
+    #[tokio::test]
+    async fn inventory_change_wakes_registration_and_reports_latest_inventory_and_capabilities() {
+        let (address, mock, server) = start_mock_node_agent().await;
+        let mut options = config(format!("http://{address}"));
+        options.heartbeat_interval = Duration::from_secs(60);
+        let client = NodeAgentClient::new(options);
+        let current = Arc::new(Mutex::new(snapshot()));
+        let provider = current.clone();
+        client.start(move || provider.lock().expect("snapshot").clone());
+        tokio::time::timeout(Duration::from_secs(2), mock.heartbeat_received.notified())
+            .await
+            .expect("initial registration and heartbeat");
+
+        {
+            let mut latest = current.lock().expect("snapshot");
+            latest.app_inventory.items = vec![json!({
+                "id": "opencode", "name": "OpenCode", "kind": "tty",
+                "source": "builtin", "availability": "available",
+                "capabilities": { "supportsCwdSelection": true, "supportsProfiles": false }
+            })];
+            latest.capabilities.features.ai_session_providers =
+                vec![controlled_instance_protocol::AiSessionProviderCapability {
+                    agent: "opencode".into(),
+                    actions: controlled_instance_protocol::AiSessionProviderActions {
+                        create: true,
+                        ..Default::default()
+                    },
+                    permission_modes: Vec::new(),
+                    timeline: Default::default(),
+                    model_selection: None,
+                    reasoning_effort: None,
+                    hierarchy: None,
+                }];
+        }
+        client.wake();
+        let observed =
+            tokio::time::timeout(Duration::from_secs(2), mock.heartbeat_received.notified()).await;
+        client.stop().await;
+        server.abort();
+        observed.expect("inventory change must not wait for the 60-second heartbeat interval");
+        let requests = mock.requests.lock().expect("requests");
+        assert_eq!(requests.len(), 3, "one registration and two heartbeats");
+        let latest = &requests.last().expect("updated heartbeat").body;
+        assert_eq!(latest["appInventory"]["items"][0]["id"], "opencode");
+        assert_eq!(
+            latest["capabilities"]["features"]["aiSessionProviders"][0]["agent"],
+            "opencode"
+        );
+        assert_eq!(
+            latest["capabilities"]["features"]["aiSessionProviders"][0]["actions"]["create"],
+            true
+        );
     }
 
     #[tokio::test]

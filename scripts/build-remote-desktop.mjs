@@ -137,7 +137,7 @@ async function main() {
   if (!args.debug) cargoArgs.push("--release");
   if (args.features) cargoArgs.push("--features", args.features);
   console.log(`[remote-desktop] building ${profile} for ${process.platform}/${process.arch} with Rust ${toolchain}`);
-  run("cargo", cargoArgs);
+  run("cargo", cargoArgs, { env: { ...process.env, TASK_HANDOFF_REMOTE_DESKTOP_VERSION: version } });
   const binary = path.join(root, "remote-desktop-rs", "target", profile, COMPONENT_BINARY);
   if (!fs.existsSync(binary)) throw new Error(`Cargo did not produce ${binary}.`);
   const packed = await packRemoteDesktopPackage({

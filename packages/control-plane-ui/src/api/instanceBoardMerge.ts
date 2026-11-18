@@ -15,7 +15,10 @@ export function mergeInstanceBoardItem(
   const lifecycleMerged = (previous.stateRevision || 0) <= (incoming.stateRevision || 0)
     ? incoming
     : mergeNewerLifecycleProjection(incoming, previous);
-  return preserveNewerTriggerProjection(previous, lifecycleMerged);
+  const appProjection = (previous.stateRevision || 0) > (incoming.stateRevision || 0)
+    ? { ...lifecycleMerged, appInventory: previous.appInventory, capabilities: previous.capabilities }
+    : lifecycleMerged;
+  return preserveNewerTriggerProjection(previous, appProjection);
 }
 
 function preserveNewerTriggerProjection(previous: InstanceBoardItem, incoming: InstanceBoardItem): InstanceBoardItem {

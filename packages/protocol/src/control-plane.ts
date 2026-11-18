@@ -3231,6 +3231,36 @@ export const InstanceLifecycleEventType = {
   Heartbeat: "instance.lifecycle.heartbeat",
 } as const;
 
+/**
+ * App inventory is projected by the instance board but changes independently of
+ * lifecycle fields. This additive event lets current node agents publish the
+ * authoritative inventory without expanding the lifecycle snapshot wire model;
+ * older Control Plane versions safely treat it as an unknown forwarded event.
+ */
+export const InstanceAppInventoryEventType = {
+  Snapshot: "instance.app-inventory.snapshot",
+} as const;
+
+export const InstanceAppInventorySnapshotSchema = z.object({
+  instanceId: ControlledInstanceSchema.shape.id,
+  revision: z.number().int().min(0),
+  // Missing inventory is an explicit observation for instances that predate the field.
+  appInventory: InstanceAppInventorySchema.optional(),
+  // Reuse the authoritative capability document: provider actions cannot be
+  // inferred from executable availability. Optional for pre-fix event producers.
+  capabilities: ControlledInstanceCapabilitiesSchema.optional(),
+}).strict();
+
+export type InstanceAppInventorySnapshot = z.infer<typeof InstanceAppInventorySnapshotSchema>;
+
+/**
+ * App rows, issues and runtime capabilities form one revisioned projection.
+ * `observedAt` advances on heartbeat observations and must not force a new event.
+ */
+export function instanceAppInventorySignalKey(appInventory: InstanceAppInventory | undefined, capabilities?: ControlledInstanceCapabilities): string {
+  return JSON.stringify({ items: appInventory?.items, issues: appInventory?.issues, capabilities });
+}
+
 export const InstanceLifecycleSnapshotSchema = z.object({
   instanceId: ControlledInstanceSchema.shape.id,
   revision: z.number().int().min(0),

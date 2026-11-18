@@ -35,6 +35,7 @@ import {
   nodeAgentCapabilitiesFromPublicNode,
   safeParseStoredControlledInstance,
   type ControlledInstance,
+  type InstanceAppInventorySnapshot,
   type InstanceLifecycleHeartbeat,
   type InstanceLifecycleSnapshot,
   type Node,
@@ -789,6 +790,25 @@ export class ControlPlaneNodeAgentGateway {
       runtimeVersion: lifecycle.runtimeVersion,
       ready: lifecycle.ready,
       lastHeartbeatAt: lifecycle.lastHeartbeatAt,
+    });
+    snapshot.items = snapshot.items.map((instance, itemIndex) => itemIndex === index ? next : instance);
+    return "applied";
+  }
+
+  applyInstanceAppInventory(node: Node, inventory: InstanceAppInventorySnapshot): InstanceLifecycleApplyResult {
+    const snapshot = this.instanceSnapshots.get(node.id);
+    if (!snapshot || snapshot.connectionKey !== this.fleetConnectionKey(node)) return "missing";
+    const index = snapshot.items.findIndex((instance) => instance.id === inventory.instanceId);
+    if (index < 0) return "missing";
+    const current = snapshot.items[index];
+    if (current.nodeId !== node.id) return "missing";
+    if (current.stateRevision > inventory.revision) return "ignored";
+
+    const next = ControlledInstanceSchema.parse({
+      ...current,
+      stateRevision: Math.max(current.stateRevision, inventory.revision),
+      appInventory: inventory.appInventory,
+      ...(inventory.capabilities ? { capabilities: inventory.capabilities } : {}),
     });
     snapshot.items = snapshot.items.map((instance, itemIndex) => itemIndex === index ? next : instance);
     return "applied";

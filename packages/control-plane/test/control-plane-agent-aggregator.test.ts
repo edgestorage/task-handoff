@@ -187,6 +187,55 @@ test("Node tunnel treats capability changes as invalidation signals", async () =
   assert.deepEqual(refreshed, ["node_one"]);
 });
 
+test("Node tunnel routes app inventory changes as semantic instance events", async () => {
+  const events = new ControlPlaneEventBus();
+  const published: any[] = [];
+  const applied: any[] = [];
+  events.on((event) => published.push(event));
+  const router = new NodeTunnelEventRouter({
+    events,
+    validateInstanceScope: () => true,
+    onInstanceAppInventory: (nodeId, inventory) => {
+      applied.push({ nodeId, inventory });
+      return true;
+    },
+  });
+
+  router.handle("node_one", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: "instance.app-inventory.snapshot",
+      scope: { instanceId: "inst_target" },
+      payload: {
+        instanceId: "inst_target",
+        revision: 9,
+        capabilities: { features: { aiSessionProviders: [{ agent: "opencode", actions: { create: true }, timeline: {} }] } },
+        appInventory: {
+          observedAt: "2026-11-19T00:00:10.000Z",
+          items: [{
+            id: "opencode",
+            name: "OpenCode",
+            kind: "tty",
+            source: "builtin",
+            availability: "available",
+            capabilities: { supportsCwdSelection: false, supportsProfiles: false },
+          }],
+          issues: [],
+        },
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(applied[0]?.nodeId, "node_one");
+  assert.equal(applied[0]?.inventory.revision, 9);
+  assert.equal(published[0]?.type, "instance.app-inventory.snapshot");
+  assert.equal(published[0]?.payload.appInventory.items[0].id, "opencode");
+  assert.equal(applied[0]?.inventory.capabilities.features.aiSessionProviders[0].actions.create, true);
+  assert.equal(published[0]?.payload.capabilities.features.aiSessionProviders[0].actions.create, true);
+  assert.deepEqual(published[0]?.scope, { nodeId: "node_one", instanceId: "inst_target" });
+});
+
 test("Node tunnel translates Node Agent trust changes into the public Control Plane event", () => {
   const events = new ControlPlaneEventBus();
   const published: any[] = [];

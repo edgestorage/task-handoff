@@ -519,6 +519,7 @@ impl AppState {
         let app_management_sessions = app_runtime.clone();
         let app_management_runtime = app_runtime.clone();
         let app_management_ai_sessions = ai_sessions.clone();
+        let app_management_node_agent_client = node_agent_client.clone();
         let desktop_admission =
             Arc::new(std::sync::OnceLock::<std::sync::Weak<AppManagementManager>>::new());
         let desktop_service = {
@@ -621,16 +622,26 @@ impl AppState {
                     }) {
                         desktop_terminal.package_operation_changed();
                     }
-                    let desktop_done = event.job.as_ref().is_some_and(|job| {
-                        job.app_id == controlled_instance_app_runtime::remote_desktop::APP_ID
-                            && !matches!(
-                                job.state,
-                                controlled_instance_protocol::AppManagementJobState::Queued
-                                    | controlled_instance_protocol::AppManagementJobState::Running
-                            )
+                    let terminal_job = event.job.as_ref().is_some_and(|job| {
+                        !matches!(
+                            job.state,
+                            controlled_instance_protocol::AppManagementJobState::Queued
+                                | controlled_instance_protocol::AppManagementJobState::Running
+                        )
                     });
+                    let desktop_done = terminal_job
+                        && event.job.as_ref().is_some_and(|job| {
+                            job.app_id == controlled_instance_app_runtime::remote_desktop::APP_ID
+                        });
                     if let Ok(payload) = serde_json::to_value(event) {
                         let _ = app_management_events.publish("app.management", payload);
+                    }
+                    if terminal_job {
+                        // The instance board projects app inventory from the
+                        // next status report. Wake the registration loop instead
+                        // of waiting for the periodic heartbeat after a terminal
+                        // install/update/uninstall operation.
+                        app_management_node_agent_client.wake();
                     }
                     if desktop_done {
                         let desktop = desktop_terminal.clone();

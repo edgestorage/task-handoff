@@ -226,6 +226,7 @@ impl InstallRecipe {
 pub struct ManagedAppDefinition {
     pub launcher: controlled_instance_protocol::AppCatalogItem,
     pub launchable: bool,
+    pub hidden_from_app_management: bool,
     pub detection: Vec<ManagedAppDetectionRule>,
     pub recipes: Vec<InstallRecipe>,
 }
@@ -397,6 +398,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 None,
             ),
             launchable: true,
+            hidden_from_app_management: false,
             detection: launcher_detection(),
             recipes: vec![bundled_recipe()],
         },
@@ -417,6 +419,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 },
             ),
             launchable: true,
+            hidden_from_app_management: false,
             detection: launcher_detection(),
             recipes: vec![
                 native_recipe(
@@ -491,6 +494,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 Some(vec![]),
             ),
             launchable: true,
+            hidden_from_app_management: false,
             detection: launcher_detection(),
             recipes: vec![
                 native_recipe(
@@ -598,6 +602,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 },
             ),
             launchable: true,
+            hidden_from_app_management: true,
             detection: launcher_detection(),
             recipes: vec![
                 native_recipe(
@@ -700,6 +705,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 app
             },
             launchable: true,
+            hidden_from_app_management: false,
             detection: launcher_detection(),
             recipes: vec![InstallRecipe::SystemPackage {
                 platforms: vec![FinalComputerPlatform::Linux],
@@ -732,6 +738,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 app
             },
             launchable: true,
+            hidden_from_app_management: false,
             detection: launcher_detection(),
             recipes: vec![InstallRecipe::SystemPackage {
                 platforms: vec![FinalComputerPlatform::Linux],
@@ -773,6 +780,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 app
             },
             launchable: true,
+            hidden_from_app_management: false,
             detection: launcher_detection(),
             recipes: vec![bundled_recipe()],
         },
@@ -796,6 +804,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 app
             },
             launchable: true,
+            hidden_from_app_management: false,
             detection: launcher_detection(),
             recipes: vec![bundled_recipe()],
         });
@@ -810,6 +819,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             None,
         ),
         launchable: false,
+        hidden_from_app_management: false,
         detection: launcher_detection(),
         recipes: vec![
             node_recipe(
@@ -2065,6 +2075,7 @@ mod tests {
         assert_eq!(opencode.recipes[0].version(), Some("1.18.30"));
         assert_eq!(opencode.recipes.len(), 8);
         let claude = find_builtin_managed_app("claude").expect("claude");
+        assert!(claude.hidden_from_app_management);
         assert!(matches!(
             claude.recipes[0],
             InstallRecipe::NativePackage { .. }
@@ -2202,6 +2213,7 @@ mod tests {
                 None,
             ),
             launchable: true,
+            hidden_from_app_management: false,
             detection: launcher_detection(),
             recipes: vec![InstallRecipe::Archive {
                 platforms: vec![FinalComputerPlatform::Linux],
@@ -2267,6 +2279,7 @@ mod tests {
                 None,
             ),
             launchable: true,
+            hidden_from_app_management: false,
             detection: launcher_detection(),
             recipes: vec![InstallRecipe::NativePackage {
                 platforms: vec![FinalComputerPlatform::Linux],

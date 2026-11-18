@@ -140,33 +140,47 @@ test("stored custom profiles and controlled instances migrate before strict pars
   assert.equal(stored.imageSnapshot.requestedReference, "docker.io/example/codex:latest");
 });
 
-test("embedded provider returns six stable Market images and retains the last valid snapshot", async () => {
+test("embedded provider returns ten stable Market images and retains the last valid snapshot", async () => {
   const embedded = await new EmbeddedMarketCatalogProvider().loadCatalog();
   assert.equal(embedded.protocolVersion, MARKET_CATALOG_PROTOCOL_VERSION);
   assert.deepEqual(embedded.items.map((item) => item.id), [
+    "market_taskhandoff_base",
+    "market_taskhandoff_desktop_minimal",
+    "market_taskhandoff_desktop_xfce",
     "market_taskhandoff_codex",
     "market_taskhandoff_obscura",
+    "market_taskhandoff_rea",
     "market_taskhandoff_opencode",
-    "market_taskhandoff_ai",
     "market_taskhandoff_webcap",
+    "market_taskhandoff_bcap",
     "market_taskhandoff_browser",
   ]);
   assert.deepEqual(embedded.items.map((item) => item.description), [
+    "Base runtime with terminal only. No AI CLIs, browser, VNC, or desktop environment is bundled.",
+    "Minimal X11 desktop with Xvfb, Openbox, Tint2, jgmenu, and terminal. No AI CLIs, browser, VNC, or Remote Desktop is bundled.",
+    "Complete X11 Xfce desktop with D-Bus and terminal. No AI CLIs, browser, VNC, or Remote Desktop is bundled.",
     "Minimal Codex runtime with terminal and Codex.",
     "Codex runtime with terminal, Codex, and Obscura.",
+    "Codex runtime with terminal, Codex, and REA reverse-engineering tools.",
     "Minimal OpenCode runtime with terminal and OpenCode.",
-    "AI development runtime with Codex, Claude, and terminal.",
     "Browser automation runtime with WebCap, Codex, Claude, Chromium, and VNC.",
+    "Browser automation runtime with BCap, Codex, Claude, Chromium, and VNC.",
     "Full runtime with Codex, Claude, Chromium, VNC, and code-server.",
   ]);
   assert.deepEqual(embedded.items.map((item) => item.localizedDescriptions?.["zh-CN"]), [
+    "仅包含终端的基础运行环境，不预装 AI CLI、浏览器、VNC 或桌面环境。",
+    "包含 Xvfb、Openbox、Tint2、jgmenu 和终端的最小 X11 桌面，不预装 AI CLI、浏览器、VNC 或远程桌面。",
+    "包含 D-Bus 和终端的完整 X11 Xfce 桌面，不预装 AI CLI、浏览器、VNC 或远程桌面。",
     "最小 Codex 运行环境，包含终端和 Codex。",
     "包含终端、Codex 和 Obscura 的运行环境。",
+    "包含终端、Codex 和 REA 逆向工程工具的运行环境。",
     "最小 OpenCode 运行环境，包含终端和 OpenCode。",
-    "AI 开发运行环境，包含 Codex、Claude 和终端。",
     "浏览器自动化运行环境，包含 WebCap、Codex、Claude、Chromium 和 VNC。",
+    "浏览器自动化运行环境，包含 BCap、Codex、Claude、Chromium 和 VNC。",
     "完整运行环境，包含 Codex、Claude、Chromium、VNC 和 code-server。",
   ]);
+  assert.equal(embedded.items.some((item) => item.slug === "ai"), false);
+  for (const item of embedded.items) assert.equal(item.labels["task-handoff.image.profile"], item.slug);
   const market = new MarketCatalogService(embedded);
   const revision = market.getCatalog().revision;
   assert.equal(market.acceptCandidate({ broken: true }).accepted, false);
@@ -174,6 +188,33 @@ test("embedded provider returns six stable Market images and retains the last va
   assert.equal(market.getStatus().state, "failed");
   market.recordRefreshFailure(new Error("offline"));
   assert.equal(market.getStatus().state, "stale");
+});
+
+test("embedded provider honors image reference overrides for new profiles", async () => {
+  const overrides = {
+    TASK_HANDOFF_CONTROLLED_BASE_IMAGE: "registry.example.test/custom-base:v1",
+    TASK_HANDOFF_CONTROLLED_DESKTOP_MINIMAL_IMAGE: "registry.example.test/custom-desktop-minimal:v1",
+    TASK_HANDOFF_CONTROLLED_DESKTOP_XFCE_IMAGE: "registry.example.test/custom-desktop-xfce:v1",
+    TASK_HANDOFF_CONTROLLED_REA_IMAGE: "registry.example.test/custom-rea:v1",
+    TASK_HANDOFF_CONTROLLED_BCAP_IMAGE: "registry.example.test/custom-bcap:v1",
+  };
+  const previous = Object.fromEntries(Object.keys(overrides).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, overrides);
+  try {
+    const bySlug = new Map((await new EmbeddedMarketCatalogProvider().loadCatalog()).items.map((item) => [item.slug, item]));
+    for (const [slug, reference] of [
+      ["base", overrides.TASK_HANDOFF_CONTROLLED_BASE_IMAGE],
+      ["desktop-minimal", overrides.TASK_HANDOFF_CONTROLLED_DESKTOP_MINIMAL_IMAGE],
+      ["desktop-xfce", overrides.TASK_HANDOFF_CONTROLLED_DESKTOP_XFCE_IMAGE],
+      ["rea", overrides.TASK_HANDOFF_CONTROLLED_REA_IMAGE],
+      ["bcap", overrides.TASK_HANDOFF_CONTROLLED_BCAP_IMAGE],
+    ]) assert.equal(bySlug.get(slug).tags[0].reference, reference);
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 test("stored Market caches ignore unknown fields and isolate invalid items", async () => {
@@ -185,7 +226,7 @@ test("stored Market caches ignore unknown fields and isolate invalid items", asy
     items: [...embedded.items, { id: "broken", future: true }],
   }, (warning) => warnings.push(warning));
   const parsed = MarketCatalogSnapshotSchema.parse(cached);
-  assert.equal(parsed.items.length, 6);
+  assert.equal(parsed.items.length, 10);
   assert.ok(warnings.some((warning) => warning.field === "futureField"));
   assert.ok(warnings.some((warning) => warning.itemId === "broken" && warning.field === "invalid-record"));
 });
@@ -199,7 +240,7 @@ test("catalog keeps Custom CRUD separate while exposing unified selectable image
   assert.equal(custom.origin, "custom");
   assert.equal(duplicate.reference, custom.reference);
   assert.equal(catalog.listImages().length, 2);
-  assert.equal(catalog.listImageOptions().length, 8);
+  assert.equal(catalog.listImageOptions().length, 12);
   assert.equal(catalog.resolveImageSelection({ imageId: "market_taskhandoff_browser" }).tag, "latest");
   assert.throws(() => catalog.requireImage("market_taskhandoff_browser"), (error) => error.code === "MARKET_IMAGE_READ_ONLY");
   assert.throws(() => catalog.resolveImageSelection({ imageId: custom.id, tag: "v2" }), (error) => error.code === "CUSTOM_IMAGE_TAG_OVERRIDE");
@@ -301,7 +342,7 @@ test("HTTP keeps Market, Custom, unified options, and node availability as separ
 
   const market = await app.inject({ method: "GET", url: "/api/market/catalog" });
   assert.equal(market.statusCode, 200, market.body);
-  assert.equal(market.json().data.catalog.items.length, 6);
+  assert.equal(market.json().data.catalog.items.length, 10);
   assert.equal(market.json().data.status.source, "embedded");
 
   const emptyCustom = await app.inject({ method: "GET", url: "/api/images" });

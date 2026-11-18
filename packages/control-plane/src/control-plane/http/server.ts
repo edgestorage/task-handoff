@@ -880,6 +880,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const nodeAgentTunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
     connectionRuntime: nodeConnectionRuntime,
     validateInstanceScope: (nodeId, instanceId) => service.nodeOwnsInstance(nodeId, instanceId),
+    onInstanceAppInventory: (nodeId, inventory) => service.applyInstanceAppInventory(nodeId, inventory),
     onInstanceLifecycle: (nodeId, lifecycle) => service.applyInstanceLifecycle(nodeId, lifecycle),
     onInstanceHeartbeat: (nodeId, heartbeat) => service.applyInstanceLifecycleHeartbeat(nodeId, heartbeat),
     onStreamsHello: (instanceId, hello) => {

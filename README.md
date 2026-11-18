@@ -1,7 +1,7 @@
 <div align="center">
   <img src="build/icon.png" alt="TaskHandoff Logo" width="144" height="144">
   <h1>TaskHandoff</h1>
-  <p><strong>A unified control plane for running, managing, and collaborating with AI workspaces across local and remote machines</strong></p>
+  <p><strong>A free, open-source, self-hostable control plane for AI remote work and server operations</strong></p>
   <p>
     <img src="https://img.shields.io/badge/Node.js-24.15%2B-339933?logo=nodedotjs&logoColor=white" alt="Node.js 24.15+">
     <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
@@ -14,9 +14,29 @@
 
 ---
 
-TaskHandoff brings Codex and other AI development work into one control plane. It connects AI sessions spread across machines, workspaces, and chat platforms while managing node enrollment, instance lifecycles, sessions, applications, and message routing.
+TaskHandoff is a free, open-source, self-hostable control plane for AI remote work and server operations. It brings Codex and OpenCode development work into one control plane, connecting AI sessions spread across machines, workspaces, and chat platforms while managing node enrollment, instance lifecycles, sessions, applications, and message routing.
 
 > **Beta:** TaskHandoff is under active development. Breaking changes may land between releases.
+
+## Use Cases
+
+- **Many machines, one control plane** — Connect multiple workstations or servers and let agents work in isolated instances without switching between separate environments.
+- **Code and operate servers from anywhere** — Use Desktop or a browser for full development and server-management workflows, and Mobile or chat for monitoring, approvals, and remote controls.
+- **Run agents in containers** — Give each agent its own Docker-backed isolated instance today. Kubernetes runtime support is still under development.
+
+## Product Focus
+
+TaskHandoff is being developed around three directions:
+
+- **One entry point** for every connected device, workspace, and AI session;
+- **multi-terminal access** across Desktop, browser, Mobile, and chat for remote collaboration;
+- **server management for large-scale environments**, with lifecycle and operational visibility centralized in one Control Plane.
+
+## Current Scope
+
+- **Agent kernels:** Codex and OpenCode only. Claude may remain visible as a compatibility path in existing images or configurations, but it is not a first-class supported kernel.
+- **Remote Desktop:** window-level capture is supported, along with an entire desktop, a single application, or a custom region. Session previews are read-only; open the full viewer to control input.
+- **Instances:** Docker container instances are supported today. A built-in Local Runtime is also available; Kubernetes runtime support is still in development and is not yet a supported deployment target.
 
 ## Interface
 
@@ -34,6 +54,16 @@ Dark mode, with a Story session and a browser running in the container:
 
 ![TaskHandoff Story workspace in dark mode](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-dark-en.png)
 
+### Mobile
+
+<p align="center">
+  <video src="https://docs.thandoff.com/media/mobile/mobile-demo.mp4" controls width="320">
+    <a href="https://docs.thandoff.com/media/mobile/mobile-demo.mp4">Open the TaskHandoff Mobile demo</a>
+  </video>
+</p>
+
+Launch an app from an AI session and inspect it in the built-in browser. [Open the full video](https://docs.thandoff.com/media/mobile/mobile-demo.mp4) or see the [Mobile client guide](https://docs.thandoff.com/en/clients/mobile).
+
 For more interface screenshots, see the [Interface and Workbench guide](https://docs.thandoff.com/en/guide/workbench).
 
 ## Features
@@ -48,6 +78,7 @@ For more interface screenshots, see the [Interface and Workbench guide](https://
 - **Chat integrations** — Route messages, approvals, and actions from Telegram, DingTalk, WeChat, and Feishu/Lark to a selected instance.
 - **Application management** — Install, remove, and run applications on target instances through a trusted built-in catalog.
 - **Mobile client** — Connect an iOS or Android device directly to a user-managed Control Plane for AI sessions, instance operations, applications, and terminals.
+- **Remote Desktop** — View and control a single window, application, full desktop, or custom region from the web, Desktop, or Mobile.
 - **Desktop and server deployment** — Run TaskHandoff as a mobile or desktop application, or as systemd services on Debian and Ubuntu.
 - **English and Chinese UI** — Switch languages instantly or follow the browser language automatically.
 
@@ -77,7 +108,7 @@ TaskHandoff is organized into three runtime layers:
 
 Chat and AI Session state form a cross-layer path: the Control Plane owns chat credentials, bindings, command parsing, and routing, while each target AI Session remains the source of truth for conversation state.
 
-Docker is the primary isolated runtime and supports multiple instances on one node. A built-in Local Runtime is also available on Windows, macOS, and Linux for one controlled instance per host user. Runtime capabilities and adapters keep the same model extensible to Kubernetes without creating a separate UI flow.
+Docker is the primary isolated runtime and supports multiple instances on one node. A built-in Local Runtime is also available on Windows, macOS, and Linux for one controlled instance per host user. The runtime model is designed to support Kubernetes without duplicating the UI flow, but Kubernetes runtime support is still in development and is not yet a supported deployment target.
 
 On Windows nodes, a WSL2 runtime provides a distro-per-instance execution domain alongside Docker and Local. It reuses the same instance API, Node Agent proxy, managed runtime artifact, Git/local-folder workspaces, and recovery path, and is gated behind an explicit node switch for safe rolling upgrades. See [docs/wsl-runtime.md](docs/wsl-runtime.md) for isolation boundaries, the base template build step, and the keep-alive model.
 

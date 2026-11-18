@@ -39,6 +39,7 @@ import {
   type ChatSessionBinding,
   type ControlledInstance,
   type ControlledInstanceHeartbeat,
+  type InstanceAppInventorySnapshot,
   type InstanceLifecycleSnapshot,
   type InstanceLifecycleHeartbeat,
   type CustomImageProfile,
@@ -1595,6 +1596,18 @@ export class ControlPlaneService {
     const instance = this.nodeAgentGateway.instanceFromSnapshot([node], lifecycle.instanceId);
     if (!instance || instance.nodeId !== nodeId) return false;
     return this.nodeAgentGateway.applyInstanceLifecycle(node, lifecycle) === "applied";
+  }
+
+  async applyInstanceAppInventory(nodeId: string, inventory: InstanceAppInventorySnapshot) {
+    const node = this.requireNode(nodeId);
+    const initial = this.nodeAgentGateway.applyInstanceAppInventory(node, inventory);
+    if (initial === "applied") return true;
+    if (initial === "ignored") return false;
+
+    await this.nodeAgentGateway.refreshFleetInstances([node], {}, true);
+    const instance = this.nodeAgentGateway.instanceFromSnapshot([node], inventory.instanceId);
+    if (!instance || instance.nodeId !== nodeId) return false;
+    return this.nodeAgentGateway.applyInstanceAppInventory(node, inventory) === "applied";
   }
 
   async applyInstanceLifecycleHeartbeat(nodeId: string, heartbeat: InstanceLifecycleHeartbeat) {

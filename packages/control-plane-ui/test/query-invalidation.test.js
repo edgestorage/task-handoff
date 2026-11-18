@@ -6,7 +6,7 @@ import {
   controlPlaneDomainQueryKeys,
   invalidateControlPlaneDomains,
 } from "../src/api/queryInvalidation.ts";
-import { controlPlaneEventDomains } from "../src/apps/control-plane/eventInvalidation.ts";
+import { appManagementEventChangesInstanceInventory, controlPlaneEventDomains } from "../src/apps/control-plane/eventInvalidation.ts";
 
 const key = (value) => JSON.stringify(value);
 
@@ -147,4 +147,15 @@ test("node joined events invalidate authoritative topology", () => {
 test("TURN configuration and account events recover their own authoritative snapshots", () => {
   assert.deepEqual(controlPlaneEventDomains([{ type: "desktop-turn.updated", topic: "system" }]), ["desktopTurn"]);
   assert.deepEqual(controlPlaneEventDomains([{ type: "desktop-connection-options.changed", topic: "desktop-connection-options" }]), ["desktopConnectionOptions"]);
+});
+
+test("terminal app operations recover the instance board app inventory", () => {
+  for (const state of ["succeeded", "failed", "cancelled", "interrupted"]) {
+    assert.equal(appManagementEventChangesInstanceInventory({ job: { state } }), true);
+  }
+  for (const state of ["queued", "running"]) {
+    assert.equal(appManagementEventChangesInstanceInventory({ job: { state } }), false);
+  }
+  assert.equal(appManagementEventChangesInstanceInventory({}), false);
+  assert.equal(appManagementEventChangesInstanceInventory(undefined), false);
 });

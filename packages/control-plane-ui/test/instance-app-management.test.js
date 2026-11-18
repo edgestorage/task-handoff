@@ -219,6 +219,10 @@ test("Apps settings exposes capability states, task feedback, safe confirmation,
   assert.doesNotMatch(queries, /packageName|downloadUrl|command|script/);
   assert.match(events, /recoverOpen/);
   assert.match(events, /event\.scope\.instanceId/);
+  assert.match(events, /appManagementEventChangesInstanceInventory/);
+  assert.match(events, /queueInvalidation\(controlPlaneQueryKeys\.instanceBoard\)/);
+  assert.match(events, /InstanceAppInventoryEventType\.Snapshot/);
+  assert.match(events, /applyInstanceAppInventory\(queryClient, inventory\.data\)/);
 });
 
 test("task groups retain every operation and keep the snapshot order untouched", () => {

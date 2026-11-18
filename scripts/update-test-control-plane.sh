@@ -105,6 +105,7 @@ build_remote_desktop_package() {
     -e CARGO_TARGET_DIR="target/local-package-$REMOTE_DESKTOP_ARCH" \
     -e REMOTE_DESKTOP_ARCH="$REMOTE_DESKTOP_ARCH" \
     -e RUST_TOOLCHAIN="$toolchain" \
+    -e TASK_HANDOFF_REMOTE_DESKTOP_VERSION="$VERSION" \
     rust:1.95-bookworm \
     bash -c '
       set -euo pipefail

@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
             std::env::args_os().count() == 2,
             "unexpected version argument"
         );
-        println!("{}", env!("CARGO_PKG_VERSION"));
+        println!("{}", env!("TASK_HANDOFF_REMOTE_DESKTOP_VERSION"));
         return Ok(());
     }
     redirect_stderr_to_instance_log();

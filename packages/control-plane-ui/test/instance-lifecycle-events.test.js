@@ -2,9 +2,46 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient } from "@tanstack/vue-query";
 import { markInstanceTriggerProjectionAuthoritative, mergeInstanceBoardPayload, mergeInstanceBoardQueryData } from "../src/api/instanceBoardMerge.ts";
-import { applyInstanceLifecycle, applyInstanceLifecycleHeartbeat, applyNodeFleetState, applyNodeStateProjection } from "../src/apps/control-plane/instanceLifecycleCache.ts";
+import { applyInstanceAppInventory, applyInstanceLifecycle, applyInstanceLifecycleHeartbeat, applyNodeFleetState, applyNodeStateProjection } from "../src/apps/control-plane/instanceLifecycleCache.ts";
 import { controlPlaneQueryKeys } from "../src/api/queryKeys.ts";
 import { applyInstanceBoardTargetSnapshot } from "../src/apps/control-plane/instanceBoardCache.ts";
+import { aiSessionLaunchableAppsForInstance, launchableAppsForInstance } from "../src/apps/control-plane/useInstanceSessions.ts";
+
+test("installed inventory and provider capabilities reach the AI new-session selector together", () => {
+  const queryClient = new QueryClient();
+  const app = (id) => ({ id, name: id, kind: "tty", source: "builtin", availability: "available", capabilities: {} });
+  const capabilities = (agents) => ({ features: { aiSessionProviders: agents.map((agent) => ({ agent, actions: { create: true }, timeline: {} })) } });
+  const initial = {
+    ...boardInstance("inst_target", 1, "running"),
+    connectionStatus: "online",
+    ready: true,
+    capabilities: capabilities(["codex"]),
+    appInventory: { observedAt: "2026-11-19T00:00:00.000Z", items: [app("codex")], issues: [] },
+  };
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, { data: [initial] });
+  applyInstanceAppInventory(queryClient, {
+    instanceId: initial.id,
+    revision: 2,
+    capabilities: capabilities(["codex", "opencode"]),
+    appInventory: { ...initial.appInventory, observedAt: "2026-11-19T00:00:01.000Z", items: [app("codex"), app("opencode")] },
+  });
+  const installed = queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0];
+  const t = (key) => key;
+  assert.deepEqual(launchableAppsForInstance(installed, t).map((item) => item.id), ["codex", "opencode"], "tab launch menu");
+  assert.deepEqual(aiSessionLaunchableAppsForInstance(installed, t).map((item) => item.id), ["codex", "opencode"], "AI creation additionally requires provider capabilities");
+  const stale = mergeInstanceBoardPayload({ data: [installed] }, { data: [initial] }).data[0];
+  assert.deepEqual(aiSessionLaunchableAppsForInstance(stale, t).map((item) => item.id), ["codex", "opencode"], "late HTTP snapshot cannot revoke the newer provider projection");
+  applyInstanceAppInventory(queryClient, {
+    instanceId: initial.id,
+    revision: 3,
+    capabilities: capabilities(["codex"]),
+    appInventory: initial.appInventory,
+  });
+  const removed = queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0];
+  assert.deepEqual(aiSessionLaunchableAppsForInstance(removed, t).map((item) => item.id), ["codex"], "newer revisions remain authoritative even if observedAt moves backwards");
+  const lateInstalled = mergeInstanceBoardPayload({ data: [removed] }, { data: [installed] }).data[0];
+  assert.deepEqual(aiSessionLaunchableAppsForInstance(lateInstalled, t).map((item) => item.id), ["codex"], "late installed snapshot cannot restore a removed provider");
+});
 
 function boardInstance(id, revision, status = "created") {
   return {
@@ -119,6 +156,76 @@ test("instance lifecycle snapshots patch both global and scoped board caches", (
   assert.equal(applyInstanceLifecycle(queryClient, lifecycle(2, "starting")), true);
   assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0].status, "starting");
   assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.scopedInstanceBoard("inst_target")).data[0].status, "starting");
+});
+
+test("instance app inventory snapshots patch launchable apps and reject stale revisions", () => {
+  const queryClient = new QueryClient();
+  const codex = { id: "codex", name: "Codex", kind: "tty", source: "builtin", availability: "available", capabilities: {} };
+  const target = {
+    ...boardInstance("inst_target", 3),
+    appInventory: { observedAt: "2026-11-19T00:00:00.000Z", items: [codex], issues: [] },
+  };
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, { data: [target], meta: { nodeErrors: [] } });
+
+  assert.equal(applyInstanceAppInventory(queryClient, {
+    instanceId: "inst_target",
+    revision: 4,
+    appInventory: {
+      observedAt: "2026-11-19T00:00:10.000Z",
+      items: [
+        codex,
+        { id: "opencode", name: "OpenCode", kind: "tty", source: "builtin", availability: "available", capabilities: {} },
+      ],
+      issues: [],
+    },
+  }), true);
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0];
+  assert.equal(updated.stateRevision, 4);
+  assert.equal(updated.appInventory.items[1].id, "opencode");
+
+  assert.equal(applyInstanceAppInventory(queryClient, {
+    instanceId: "inst_target",
+    revision: 3,
+    appInventory: { ...target.appInventory, observedAt: "2026-11-19T00:00:15.000Z" },
+  }), true);
+  assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0].appInventory.items[1].id, "opencode");
+
+  const merged = mergeInstanceBoardPayload(
+    queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard),
+    { data: [target], meta: { nodeErrors: [] } },
+  );
+  assert.equal(merged.data[0].appInventory.items[1].id, "opencode");
+});
+
+test("instance lifecycle snapshots at the inventory revision still patch lifecycle fields", () => {
+  const queryClient = new QueryClient();
+  const codex = { id: "codex", name: "Codex", kind: "tty", source: "builtin", availability: "available", capabilities: {} };
+  const target = {
+    ...boardInstance("inst_target", 3, "running"),
+    appInventory: { observedAt: "2026-11-19T00:00:00.000Z", items: [codex], issues: [] },
+  };
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, { data: [target], meta: { nodeErrors: [] } });
+
+  const inventory = {
+    observedAt: "2026-11-19T00:00:10.000Z",
+    items: [
+      codex,
+      { id: "opencode", name: "OpenCode", kind: "tty", source: "builtin", availability: "available", capabilities: {} },
+    ],
+    issues: [],
+  };
+  assert.equal(applyInstanceAppInventory(queryClient, {
+    instanceId: "inst_target",
+    revision: 4,
+    appInventory: inventory,
+  }), true);
+  assert.equal(applyInstanceLifecycle(queryClient, lifecycle(4, "registering")), true);
+
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0];
+  assert.equal(updated.stateRevision, 4);
+  assert.equal(updated.status, "registering");
+  assert.equal(updated.connectionStatus, "online");
+  assert.deepEqual(updated.appInventory, inventory);
 });
 
 test("node fleet events update diagnostics without replacing board rows", () => {

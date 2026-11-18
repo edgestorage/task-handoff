@@ -257,6 +257,100 @@ test("node agent throttles lifecycle liveness while publishing signal changes im
   forwarder.stop();
 });
 
+test("node agent publishes inventory after lifecycle snapshots without heartbeat throttling", () => {
+  const frames = [];
+  const output = new EventEmitter();
+  output.readyState = WebSocket.OPEN;
+  output.send = (value) => frames.push(JSON.parse(String(value)));
+  let now = 0;
+  const forwarder = new NodeAgentInstanceEventForwarder({ listInstances: () => [] }, undefined, {
+    lifecycleHeartbeatIntervalMs: 20_000,
+    now: () => now,
+  });
+  forwarder.addOutput(output);
+  const inventory = (observedAt, opencodeAvailability) => ({
+    observedAt,
+    items: [
+      { id: "codex", name: "Codex", kind: "tty", source: "builtin", availability: "available", capabilities: {} },
+      { id: "opencode", name: "OpenCode", kind: "tty", source: "builtin", availability: opencodeAvailability, capabilities: {} },
+    ],
+    issues: [],
+  });
+  const instance = (overrides = {}) => ControlledInstanceSchema.parse({
+    id: "inst_inventory_events",
+    name: "Inventory events instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_inventory",
+    runtimeId: "runtime_inventory",
+    stateRevision: 1,
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    ready: true,
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: "2026-11-19T00:00:00.000Z",
+    updatedAt: "2026-11-19T00:00:00.000Z",
+    lastHeartbeatAt: "2026-11-19T00:00:00.000Z",
+    appInventory: inventory("2026-11-19T00:00:00.000Z", "missing-dependency"),
+    ...overrides,
+  });
+
+  forwarder.publishInstanceLifecycle(instance());
+  assert.deepEqual(frames.map((frame) => frame.event.type), [
+    "instance.lifecycle.snapshot",
+    "instance.app-inventory.snapshot",
+  ]);
+  assert.equal(frames.at(-1).event.payload.appInventory.items[1].availability, "missing-dependency");
+
+  now = 1_000;
+  const installedCapabilities = { features: { aiSessionProviders: [{ agent: "opencode", actions: { create: true }, timeline: {} }] } };
+  forwarder.publishInstanceLifecycle(instance({
+    stateRevision: 2,
+    updatedAt: "2026-11-19T00:00:01.000Z",
+    lastHeartbeatAt: "2026-11-19T00:00:01.000Z",
+    appInventory: inventory("2026-11-19T00:00:01.000Z", "available"),
+    capabilities: installedCapabilities,
+  }));
+  assert.equal(frames.length, 3, "inventory changes must bypass lifecycle heartbeat throttling");
+  assert.equal(frames.at(-1).event.type, "instance.app-inventory.snapshot");
+  assert.equal(frames.at(-1).event.payload.revision, 2);
+  assert.equal(frames.at(-1).event.payload.appInventory.items[1].availability, "available");
+  assert.equal(frames.at(-1).event.payload.capabilities.features.aiSessionProviders[0].actions.create, true);
+
+  // Availability can stay unchanged while provider actions change. Consumers
+  // must learn that change without waiting for another directory HTTP refresh.
+  forwarder.publishInstanceLifecycle(instance({
+    stateRevision: 3,
+    appInventory: inventory("2026-11-19T00:00:01.000Z", "available"),
+    capabilities: { features: { aiSessionProviders: [{ agent: "opencode", actions: { create: false }, timeline: {} }] } },
+  }));
+  assert.equal(frames.length, 4);
+  assert.equal(frames.at(-1).event.type, "instance.app-inventory.snapshot");
+  assert.equal(frames.at(-1).event.payload.capabilities.features.aiSessionProviders[0].actions.create, false);
+
+  now = 2_000;
+  forwarder.publishInstanceLifecycle(instance({
+    stateRevision: 3,
+    status: "stopped",
+    connectionStatus: "offline",
+    ready: false,
+    updatedAt: "2026-11-19T00:00:02.000Z",
+    lastHeartbeatAt: "2026-11-19T00:00:02.000Z",
+    appInventory: { ...inventory("2026-11-19T00:00:02.000Z", "available"), issues: [{ code: "APP_CATALOG_INVALID", message: "invalid catalog" }] },
+  }));
+  assert.deepEqual(frames.slice(-2).map((frame) => frame.event.type), [
+    "instance.lifecycle.snapshot",
+    "instance.app-inventory.snapshot",
+  ]);
+  assert.equal(frames.at(-2).event.payload.status, "stopped");
+  assert.equal(frames.at(-1).event.payload.appInventory.issues[0].code, "APP_CATALOG_INVALID");
+  forwarder.stop();
+});
+
 test("node agent republishes lifecycle liveness without repeating the snapshot payload", () => {
   const frames = [];
   const output = new EventEmitter();

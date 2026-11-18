@@ -6,6 +6,7 @@ import {
   type Node,
   type InstanceLifecycleSnapshot,
   type InstanceLifecycleHeartbeat,
+  type InstanceAppInventorySnapshot,
 } from "@task-handoff/protocol/control-plane";
 import { COMPACT_EVENT_ENVELOPE_VERSION, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
@@ -236,6 +237,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   constructor(events?: ControlPlaneEventBus, options: {
     onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
     onSessionEvent?: (event: EventEnvelope) => boolean;
+    onInstanceAppInventory?: (nodeId: string, inventory: InstanceAppInventorySnapshot) => boolean | Promise<boolean>;
     onInstanceLifecycle?: (nodeId: string, lifecycle: InstanceLifecycleSnapshot) => boolean | Promise<boolean>;
     onInstanceHeartbeat?: (nodeId: string, heartbeat: InstanceLifecycleHeartbeat) => boolean | Promise<boolean>;
     validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
@@ -256,6 +258,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       events,
       onStreamsHello: options.onStreamsHello,
       onSessionEvent: options.onSessionEvent,
+      onInstanceAppInventory: options.onInstanceAppInventory,
       onInstanceLifecycle: options.onInstanceLifecycle,
       onInstanceHeartbeat: options.onInstanceHeartbeat,
       validateInstanceScope: options.validateInstanceScope,

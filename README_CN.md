@@ -1,7 +1,7 @@
 <div align="center">
   <img src="build/icon.png" alt="TaskHandoff Logo" width="144" height="144">
   <h1>TaskHandoff</h1>
-  <p><strong>面向本地与远程 AI 工作空间的统一运行、管理与协作控制面板</strong></p>
+  <p><strong>免费、开源、可自托管的 AI 远程工作与服务器运维控制面板</strong></p>
   <p>
     <img src="https://img.shields.io/badge/Node.js-24.15%2B-339933?logo=nodedotjs&logoColor=white" alt="Node.js 24.15+">
     <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
@@ -14,9 +14,29 @@
 
 ---
 
-TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散在不同机器、工作空间和聊天入口中的 AI 会话统一到一个控制面板中，并负责节点接入、实例生命周期、会话管理、应用运行和消息路由。
+TaskHandoff 是一个免费、开源、可自托管的 AI 远程工作与服务器运维控制面板，用于集中运行和监管 Codex 与 OpenCode 的 AI 开发工作。它把分散在不同机器、工作空间和聊天入口中的 AI 会话统一到一个控制面板中，并负责节点接入、实例生命周期、会话管理、应用运行和消息路由。
 
 > **Beta 阶段**：TaskHandoff 仍在积极开发中，版本之间可能存在破坏性变更（breaking changes）。
+
+## 适用场景
+
+- **多台设备，一个控制面板**：接入多台工作站或服务器，让 Agent 在隔离实例中工作，不必在多个环境之间来回切换。
+- **随时随地写代码、管理服务器**：使用桌面端或浏览器完成完整开发和服务器管理流程，使用移动端或聊天入口查看进度、处理审批和执行远程控制。
+- **把 Agent 跑在容器中**：当前可为每个 Agent 创建独立的 Docker 隔离实例；Kubernetes 运行时仍在开发中。
+
+## 产品方向
+
+TaskHandoff 主要沿三个方向演进：
+
+- **一个入口**：统一管理所有连接的设备、工作空间和 AI 会话；
+- **多终端接入**：通过桌面端、浏览器、移动端和聊天入口进行远程协作；
+- **面向大规模场景的服务器管理**：在一个 Control Plane 中集中呈现生命周期和运维状态。
+
+## 当前支持范围
+
+- **AI 内核**：当前仅支持 Codex 和 OpenCode。部分既有镜像或配置中可能保留 Claude 兼容入口，但不属于当前首选的受管内核。
+- **远程桌面**：支持窗口级画面共享，也支持整桌面、单个应用和自定义区域。会话预览默认只读，进入完整查看器后才能控制输入。
+- **实例运行时**：当前支持 Docker 容器实例，同时提供本机 Local Runtime；Kubernetes 运行时仍在开发中，尚不是受支持的部署目标。
 
 ## 产品界面
 
@@ -34,6 +54,16 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
 
 ![暗色模式下的 TaskHandoff Story 工作区](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-dark-en.png)
 
+### 移动端
+
+<p align="center">
+  <video src="https://docs.thandoff.com/media/mobile/mobile-demo.mp4" controls width="320">
+    <a href="https://docs.thandoff.com/media/mobile/mobile-demo.mp4">打开 TaskHandoff 移动端演示视频</a>
+  </video>
+</p>
+
+从 AI 会话启动应用，并在内置浏览器中查看预览。[打开完整视频](https://docs.thandoff.com/media/mobile/mobile-demo.mp4)，或查看[移动端使用指南](https://docs.thandoff.com/zh/clients/mobile)。
+
 更多界面截图见 [界面与工作台指南](https://docs.thandoff.com/zh/guide/workbench)。
 
 ## 核心能力
@@ -48,6 +78,7 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
 - **聊天入口整合**：通过适配器接入 Telegram、钉钉、微信和飞书/Lark，将消息、审批和操作路由到指定实例。
 - **应用管理**：通过可信内置目录在目标实例中安装、卸载和运行应用。
 - **移动端客户端**：iOS 或 Android 设备可直接连接用户管理的 Control Plane，访问 AI 会话、实例操作、应用和终端。
+- **远程桌面**：可从 Web、桌面端或移动端查看和控制单个窗口、应用、完整桌面或自定义区域。
 - **移动、桌面与服务器部署**：可作为移动端或桌面应用使用，也可在 Debian/Ubuntu 服务器上部署为 systemd 服务。
 - **中英文界面**：控制平面支持简体中文和英文，可跟随浏览器语言自动切换。
 
@@ -77,7 +108,7 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
 
 聊天与 AI Session 状态构成一条跨层链路：聊天凭据、入口绑定、命令解析和路由由 Control Plane 统一管理，会话状态则以目标实例中的 AI Session 为唯一来源。
 
-Docker 是主要的隔离运行时，支持一个节点运行多个实例。Windows、macOS 和 Linux 节点也内置 Local Runtime，同一宿主用户只能运行一个本机受控实例。整体模型仍可通过运行时能力和适配器扩展到 Kubernetes，无需复制 UI 流程。
+Docker 是主要的隔离运行时，支持一个节点运行多个实例。Windows、macOS 和 Linux 节点也内置 Local Runtime，同一宿主用户只能运行一个本机受控实例。整体模型已按可扩展到 Kubernetes 的方式设计，无需复制 UI 流程；但 Kubernetes 运行时仍在开发中，尚不是受支持的部署目标。
 
 ### 环境模板
 

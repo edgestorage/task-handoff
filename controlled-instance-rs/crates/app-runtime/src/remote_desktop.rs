@@ -56,6 +56,7 @@ pub fn definition() -> ManagedAppDefinition {
             web: None,
         },
         launchable: false,
+        hidden_from_app_management: false,
         detection: vec![ManagedAppDetectionRule::LauncherExecutable {
             version_args: vec!["--version".into()],
         }],

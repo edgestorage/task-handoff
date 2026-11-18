@@ -1,5 +1,5 @@
 import type { QueryClient, QueryFilters } from "@tanstack/vue-query";
-import type { InstanceLifecycleHeartbeat, InstanceLifecycleSnapshot, NodeStateProjectionEvent } from "@task-handoff/protocol/control-plane";
+import type { InstanceAppInventorySnapshot, InstanceLifecycleHeartbeat, InstanceLifecycleSnapshot, NodeStateProjectionEvent } from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneNodeFleetState } from "@task-handoff/protocol/control-plane-directory";
 import type { InstanceBoardItem, InstanceBoardPayload } from "../../api/types";
 import type { Node } from "../../api/types";
@@ -13,7 +13,7 @@ export function applyInstanceLifecycle(queryClient: QueryClient, lifecycle: Inst
   const patch = (instance: InstanceBoardItem): InstanceBoardItem => {
     if (instance.id !== lifecycle.instanceId) return instance;
     matched = true;
-    if ((instance.stateRevision || 0) >= lifecycle.revision) return instance;
+    if ((instance.stateRevision || 0) > lifecycle.revision) return instance;
     const imageProvisioning = lifecycle.imageProvisioning ? {
       phase: lifecycle.imageProvisioning.phase,
       requestedReference: lifecycle.imageProvisioning.requestedReference!,
@@ -53,6 +53,22 @@ export function applyInstanceLifecycle(queryClient: QueryClient, lifecycle: Inst
       lastHeartbeatAt: lifecycle.lastHeartbeatAt,
       observedAt: lifecycle.updatedAt,
       workspace: { ...instance.workspace, ...lifecycle.workspace },
+    };
+  }));
+  return matched;
+}
+
+export function applyInstanceAppInventory(queryClient: QueryClient, inventory: InstanceAppInventorySnapshot) {
+  let matched = false;
+  updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
+    if (instance.id !== inventory.instanceId) return instance;
+    matched = true;
+    if ((instance.stateRevision || 0) > inventory.revision) return instance;
+    return {
+      ...instance,
+      stateRevision: Math.max(instance.stateRevision || 0, inventory.revision),
+      appInventory: inventory.appInventory,
+      ...(inventory.capabilities ? { capabilities: inventory.capabilities } : {}),
     };
   }));
   return matched;

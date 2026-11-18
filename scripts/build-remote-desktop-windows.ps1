@@ -133,6 +133,7 @@ if (-not $SkipBuild) {
   Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
 
   Write-Output "Building MSVC release $Version"
+  $env:TASK_HANDOFF_REMOTE_DESKTOP_VERSION = $Version
   & cargo "+$Toolchain" build --locked --release --target x86_64-pc-windows-msvc --manifest-path $manifest -p desktop-streaming --bin task-handoff-desktop-streaming
   if ($LASTEXITCODE -ne 0) { throw "Cargo MSVC release build failed with exit code $LASTEXITCODE." }
 }

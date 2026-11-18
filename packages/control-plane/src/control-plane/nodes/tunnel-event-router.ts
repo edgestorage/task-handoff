@@ -1,4 +1,6 @@
 import {
+  InstanceAppInventoryEventType,
+  InstanceAppInventorySnapshotSchema,
   ImagePullTerminalEventType,
   ImagePullTerminalFinishedSchema,
   ImagePullTerminalOutputSchema,
@@ -14,6 +16,7 @@ import {
   InstanceResourceMetricsSchema,
   type InstanceLifecycleSnapshot,
   type InstanceLifecycleHeartbeat,
+  type InstanceAppInventorySnapshot,
 } from "@task-handoff/protocol/control-plane";
 import {
   AiSessionEventType,
@@ -70,6 +73,7 @@ type TunnelEventRouterOptions = {
   events?: ControlPlaneEventBus;
   onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
   onSessionEvent?: (event: EventEnvelope) => boolean;
+  onInstanceAppInventory?: (nodeId: string, inventory: InstanceAppInventorySnapshot) => boolean | Promise<boolean>;
   onInstanceLifecycle?: (nodeId: string, lifecycle: InstanceLifecycleSnapshot) => boolean | Promise<boolean>;
   onInstanceHeartbeat?: (nodeId: string, heartbeat: InstanceLifecycleHeartbeat) => boolean | Promise<boolean>;
   validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
@@ -156,6 +160,18 @@ export class NodeTunnelEventRouter {
         if (this.options.onInstanceLifecycle && !(await this.options.onInstanceLifecycle(nodeId, parsed.data))) return;
         this.publishInstanceLiveness(nodeId, scope, parsed.data);
       }, undefined, !this.options.onInstanceLifecycle);
+      return true;
+    }
+    if (eventType === InstanceAppInventoryEventType.Snapshot) {
+      const parsed = safeParseResponse(InstanceAppInventorySnapshotSchema, payload);
+      if (!parsed.success || parsed.data.instanceId !== claimedInstanceId) return true;
+      this.enqueue(nodeId, parsed.data.instanceId, async () => {
+        if (this.options.onInstanceAppInventory && !(await this.options.onInstanceAppInventory(nodeId, parsed.data))) return;
+        this.options.events?.publish(eventType, parsed.data, {
+          topic: "instances",
+          scope: { ...scope, nodeId, instanceId: parsed.data.instanceId },
+        });
+      }, undefined, !this.options.onInstanceAppInventory);
       return true;
     }
     if (eventType === InstanceLifecycleEventType.Heartbeat) {

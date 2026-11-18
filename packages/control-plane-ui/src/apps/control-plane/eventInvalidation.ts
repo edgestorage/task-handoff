@@ -5,6 +5,20 @@ export type InvalidationEvent = {
   topic?: string;
 };
 
+const TERMINAL_APP_MANAGEMENT_JOB_STATES = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
+
+/**
+ * Compatibility for v0.0.57 Node Agents: app operations do not publish the
+ * inventory/capability event introduced after that release. Recover the board
+ * on terminal jobs for those producers. Current producers additionally publish
+ * the revisioned projection; this best-effort HTTP recovery can race its report
+ * and must never be the source of the installed-app state.
+ */
+export function appManagementEventChangesInstanceInventory(event: { job?: { state?: unknown } } | undefined) {
+  const state = event?.job?.state;
+  return typeof state === "string" && TERMINAL_APP_MANAGEMENT_JOB_STATES.has(state);
+}
+
 export function controlPlaneEventDomains(events: InvalidationEvent[]): ControlPlaneQueryDomain[] {
   const topics = new Set(events.map((event) => event.topic).filter(Boolean));
   const domains: ControlPlaneQueryDomain[] = [];

@@ -1,5 +1,7 @@
 import WebSocket from "ws";
 import {
+  InstanceAppInventoryEventType,
+  InstanceAppInventorySnapshotSchema,
   InstanceLifecycleEventType,
   InstanceLifecycleSnapshotSchema,
   ImagePullTerminalEventType,
@@ -10,6 +12,7 @@ import {
   GitProvisioningTerminalOutputSchema,
   InstanceResourceMetricsEventType,
   controlledInstanceAcceptsTraffic,
+  instanceAppInventorySignalKey,
   instanceLifecycleHeartbeat,
   instanceLifecycleSignalKey,
   type GitProvisioningTerminalFinished,
@@ -136,6 +139,7 @@ export class NodeAgentInstanceEventForwarder {
   // republishes every observation, and an observation that only moves the timestamps
   // must not repeat the provisioning/workspace/runtime payload consumers already hold.
   private readonly lifecycleSignalKeyByInstance = new Map<string, string>();
+  private readonly appInventorySignalKeyByInstance = new Map<string, string>();
   private readonly lifecycleHeartbeatPublishedAt = new Map<string, number>();
   private readonly state: NodeAgentInstanceEventState;
   private readonly token?: string;
@@ -209,6 +213,7 @@ export class NodeAgentInstanceEventForwarder {
     this.sessionStreamsHelloByInstance.clear();
     this.sessionAuthorityReplayedOutputs.clear();
     this.lifecycleSignalKeyByInstance.clear();
+    this.appInventorySignalKeyByInstance.clear();
     this.lifecycleHeartbeatPublishedAt.clear();
   }
 
@@ -368,6 +373,12 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   publishInstanceLifecycle(instance: ControlledInstance) {
+    const inventorySignalKey = instanceAppInventorySignalKey(instance.appInventory, instance.capabilities);
+    const previousInventorySignalKey = this.appInventorySignalKeyByInstance.get(instance.id);
+    const inventoryChanged = previousInventorySignalKey !== inventorySignalKey;
+    if (inventoryChanged) {
+      this.appInventorySignalKeyByInstance.set(instance.id, inventorySignalKey);
+    }
     const snapshot = instanceLifecycleSnapshot(instance);
     const signalKey = instanceLifecycleSignalKey(snapshot);
     const previousSignalKey = this.lifecycleSignalKeyByInstance.get(instance.id);
@@ -376,20 +387,34 @@ export class NodeAgentInstanceEventForwarder {
     this.lifecycleSignalKeyByInstance.set(instance.id, signalKey);
     if (!changed) {
       const publishedAt = this.lifecycleHeartbeatPublishedAt.get(instance.id);
-      if (publishedAt !== undefined && now - publishedAt < this.lifecycleHeartbeatIntervalMs) return;
-      this.publish(
-        InstanceLifecycleEventType.Heartbeat,
-        instanceLifecycleHeartbeat(snapshot),
-        { instanceId: instance.id },
-      );
+      if (publishedAt === undefined || now - publishedAt >= this.lifecycleHeartbeatIntervalMs) {
+        this.publish(
+          InstanceLifecycleEventType.Heartbeat,
+          instanceLifecycleHeartbeat(snapshot),
+          { instanceId: instance.id },
+        );
+        this.lifecycleHeartbeatPublishedAt.set(instance.id, now);
+      }
     } else {
       this.publish(
         InstanceLifecycleEventType.Snapshot,
         snapshot,
         { instanceId: instance.id },
       );
+      this.lifecycleHeartbeatPublishedAt.set(instance.id, now);
     }
-    this.lifecycleHeartbeatPublishedAt.set(instance.id, now);
+    if (inventoryChanged && (instance.appInventory !== undefined || previousInventorySignalKey !== undefined)) {
+      this.publish(
+        InstanceAppInventoryEventType.Snapshot,
+        InstanceAppInventorySnapshotSchema.parse({
+          instanceId: instance.id,
+          revision: instance.stateRevision,
+          ...(instance.appInventory ? { appInventory: instance.appInventory } : {}),
+          capabilities: instance.capabilities,
+        }),
+        { instanceId: instance.id },
+      );
+    }
     const terminal = this.imagePullTerminalByInstance.get(instance.id);
     if (instance.imageProvisioning?.phase === "ready" && terminal?.finished?.outcome === "succeeded") {
       this.imagePullTerminalByInstance.delete(instance.id);

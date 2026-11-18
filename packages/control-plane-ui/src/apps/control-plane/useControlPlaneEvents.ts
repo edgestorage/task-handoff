@@ -3,6 +3,8 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
 import { COMPACT_EVENT_ENVELOPE_VERSION, EventKeepalivePongSchema, SessionStreamsHelloEventType, SessionStreamsHelloSchema, normalizeEventEnvelope } from "@task-handoff/protocol/events";
 import {
+  InstanceAppInventoryEventType,
+  InstanceAppInventorySnapshotSchema,
   InstanceLifecycleEventType,
   InstanceLifecycleHeartbeatSchema,
   InstanceLifecycleSnapshotSchema,
@@ -29,9 +31,9 @@ import { getControlledInstanceTriggers } from "../../api/queries.ts";
 import { controlPlaneDomainQueryKeys, type ControlPlaneQueryDomain } from "../../api/queryInvalidation.ts";
 import { createAuthoritativeQueryRecovery } from "./authoritativeQueryRecovery.ts";
 import { recordAiSessionRead } from "./aiSessionReadDiagnostics.ts";
-import { applyInstanceLifecycle, applyInstanceLifecycleHeartbeat, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
+import { applyInstanceAppInventory, applyInstanceLifecycle, applyInstanceLifecycleHeartbeat, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
 import { removeInstanceTriggerBinding, replaceInstanceTriggerSnapshot, upsertInstanceTriggerBinding } from "./instanceTriggerCache.ts";
-import { controlPlaneEventDomains } from "./eventInvalidation.ts";
+import { appManagementEventChangesInstanceInventory, controlPlaneEventDomains } from "./eventInvalidation.ts";
 import { aiSessionMessageDeltaDemand, aiSessionTimelineDemand } from "./useAiSessionEventDemand.ts";
 import {
   AiSessionEventType,
@@ -333,12 +335,25 @@ export function useControlPlaneEvents(input: {
       return input.appSessions.applyEvent({ type: event.type, payload: event.payload } as AppSessionDeltaResponse["events"][number]);
     }
     if (event.type === "app.management" && event.scope?.instanceId && event.payload && typeof event.payload === "object") {
-      return input.appManagement?.applyEvent(event.scope.instanceId, event.payload as AppManagementEvent) || false;
+      const appManagementEvent = event.payload as AppManagementEvent;
+      const handled = input.appManagement?.applyEvent(event.scope.instanceId, appManagementEvent) || false;
+      // Installing or removing an app changes the instance's launchable-app
+      // inventory. That projection is part of the instance board snapshot, not
+      // the app-management stream, so recover the board when the operation ends.
+      if (appManagementEventChangesInstanceInventory(appManagementEvent)) {
+        queueInvalidation(controlPlaneQueryKeys.instanceBoard);
+      }
+      return handled;
     }
     if (event.type === InstanceResourceMetricsEventType.Snapshot && event.payload && typeof event.payload === "object") {
       const metrics = safeParseResponse(InstanceResourceMetricsSchema, event.payload);
       if (!metrics.success || event.scope?.instanceId !== metrics.data.instanceId) return false;
       return input.resourceMetrics?.applyEvent(metrics.data) || false;
+    }
+    if (event.type === InstanceAppInventoryEventType.Snapshot) {
+      const inventory = safeParseResponse(InstanceAppInventorySnapshotSchema, event.payload);
+      if (!inventory.success || event.scope?.instanceId !== inventory.data.instanceId) return false;
+      return applyInstanceAppInventory(queryClient, inventory.data);
     }
     if (event.type === InstanceLifecycleEventType.Snapshot) {
       const lifecycle = safeParseResponse(InstanceLifecycleSnapshotSchema, event.payload);

@@ -112,12 +112,14 @@ jobs:
         shell: bash
         env:
           RUST_TOOLCHAIN: ${{ matrix.arch == 'x64' && 'x86_64-unknown-linux-gnu' || 'aarch64-unknown-linux-gnu' }}
+          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
         run: |
           docker run --rm \
             -v "$PWD:/workspace" \
             -w /workspace/remote-desktop-rs \
             -e CARGO_TARGET_DIR="target/linux-${{ matrix.arch }}" \
             -e RUST_TOOLCHAIN="$RUST_TOOLCHAIN" \
+            -e TASK_HANDOFF_REMOTE_DESKTOP_VERSION="$RELEASE_VERSION" \
             rust:1.95-bookworm \
             bash -c '
               set -euo pipefail
@@ -136,6 +138,8 @@ jobs:
       - name: Build macOS component
         if: matrix.platform == 'darwin'
         shell: bash
+        env:
+          TASK_HANDOFF_REMOTE_DESKTOP_VERSION: ${{ needs.verify.outputs.version }}
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           cargo +1.95.0 build --locked --release --manifest-path remote-desktop-rs/Cargo.toml \
@@ -144,6 +148,8 @@ jobs:
       - name: Build Windows component
         if: matrix.platform == 'win32'
         shell: pwsh
+        env:
+          TASK_HANDOFF_REMOTE_DESKTOP_VERSION: ${{ needs.verify.outputs.version }}
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           cargo +1.95.0 build --locked --release --manifest-path remote-desktop-rs/Cargo.toml `
