@@ -18,6 +18,7 @@ use x11rb::{
             Atom, AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as _,
             EventMask, ImageFormat, ImageOrder, InputFocus, MapState, Pixmap, StackMode, Window,
         },
+        xtest::ConnectionExt as _,
         Event,
     },
     rust_connection::RustConnection,
@@ -28,6 +29,27 @@ pub struct Config {
     pub cookie: Option<Vec<u8>>,
     pub authority: Option<std::path::PathBuf>,
     pub include_cursor: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Probe {
+    pub has_window_manager: bool,
+}
+
+/// Non-destructive X11 capability check shared by preflight and surface
+/// resolution. It opens one connection and validates every extension used by
+/// capture, pointer input, keyboard input, and window enumeration.
+pub fn probe(config: &Config) -> anyhow::Result<Probe> {
+    let (conn, screen_index) = connect(config)?;
+    initialize(&conn)?;
+    conn.randr_query_version(1, 2)?.reply()?;
+    conn.composite_query_version(0, 4)?.reply()?;
+    conn.xtest_get_version(2, 2)?.reply()?;
+    let screen = &conn.setup().roots[screen_index];
+    validate_visual(&conn, screen_index, screen.root_depth, screen.root_visual)?;
+    Ok(Probe {
+        has_window_manager: window_manager_present(&conn, screen.root)?,
+    })
 }
 #[derive(Clone)]
 pub struct DisplayTarget {
@@ -1120,6 +1142,38 @@ fn initialize(conn: &RustConnection) -> anyhow::Result<()> {
     conn.damage_query_version(1, 1)?.reply()?;
     conn.xfixes_query_version(5, 0)?.reply()?;
     Ok(())
+}
+
+fn window_manager_present(conn: &RustConnection, root: Window) -> anyhow::Result<bool> {
+    let supporting_wm = x11_atom(conn, b"_NET_SUPPORTING_WM_CHECK")?;
+    let Some(window) = supporting_wm_window(conn, root, supporting_wm) else {
+        return Ok(false);
+    };
+    if conn
+        .get_window_attributes(window)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_none()
+    {
+        return Ok(false);
+    }
+    Ok(supporting_wm_window(conn, window, supporting_wm) == Some(window))
+}
+
+fn supporting_wm_window(conn: &RustConnection, window: Window, property: Atom) -> Option<Window> {
+    let reply = conn
+        .get_property(false, window, property, AtomEnum::WINDOW, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    if reply.format != 32 || reply.type_ != u32::from(AtomEnum::WINDOW) {
+        return None;
+    }
+    let window = reply
+        .value32()?
+        .next()
+        .filter(|window| *window != x11rb::NONE);
+    window
 }
 fn drawable(target: &DrawableTarget, root: Window) -> u32 {
     match target {

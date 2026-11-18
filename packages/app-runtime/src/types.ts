@@ -122,6 +122,8 @@ export type InstallRecipe = ArchiveOwnershipRecipe | BundledInstallRecipe | Syst
 
 export type ManagedAppDefinition = {
   launcher: AppCatalogItem;
+  /** Kept addressable by app id but omitted from app management listings. */
+  hiddenFromAppManagement?: boolean;
   /**
    * Whether the app can be started as an app session. Management-only apps set
    * this to `false`: they can be installed and uninstalled through App

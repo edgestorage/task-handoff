@@ -11,6 +11,7 @@ export const claudeProvider: ManagedAppProvider = {
     const skipPermissions = envFlag(env, "TASK_HANDOFF_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS")
       || envFlag(env, "TASK_HANDOFF_CLAUDE_SKIP_PERMISSIONS");
     return {
+      hiddenFromAppManagement: true,
       launcher: {
         id: "claude",
         name: "Claude",

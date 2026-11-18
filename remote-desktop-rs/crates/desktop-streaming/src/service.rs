@@ -171,12 +171,8 @@ impl Service {
             }
             #[cfg(target_os = "linux")]
             {
-                let mut config = if self.mode == crate::capture::Mode::Virtual {
-                    self.ensure_surface().await?;
-                    self.surface.as_ref().unwrap().config()
-                } else {
-                    crate::platform::linux::Config::environment(self.show_cursor)?
-                };
+                self.ensure_surface().await?;
+                let mut config = self.surface.as_ref().unwrap().config();
                 config.include_cursor = self.show_cursor;
                 self.catalog = Some(crate::platform::window::WindowCatalog::Linux(
                     crate::platform::linux::WindowCatalog::with_source_salt(
@@ -234,7 +230,7 @@ impl Service {
         if let Some(surface) = &self.surface {
             return (
                 Some(surface.ready.display.clone()),
-                Some(surface.ready.authority.clone()),
+                surface.ready.authority.clone(),
             );
         }
         (

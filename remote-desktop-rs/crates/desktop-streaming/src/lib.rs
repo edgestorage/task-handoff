@@ -14,6 +14,8 @@ pub mod framing;
 pub mod host;
 pub mod input_driver;
 pub mod input_guard;
+#[cfg(target_os = "linux")]
+pub(crate) mod linux_desktop;
 pub mod media;
 pub mod pacing;
 pub mod platform;

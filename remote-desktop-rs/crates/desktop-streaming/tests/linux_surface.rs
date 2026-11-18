@@ -5,7 +5,12 @@ use desktop_streaming::{
     platform::linux::Capture,
     surface,
 };
-use std::{path::Path, time::Duration};
+use std::{
+    io::{BufRead, BufReader},
+    path::Path,
+    process::{Child, Command as ProcessCommand, Stdio},
+    time::{Duration, Instant},
+};
 use x11rb::{connection::Connection, protocol::xproto::ConnectionExt, wrapper::ConnectionExt as _};
 fn binary() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_task-handoff-desktop-streaming"))
@@ -28,7 +33,7 @@ fn pressed(c: &x11rb::rust_connection::RustConnection) -> bool {
 #[tokio::test]
 #[ignore = "requires a disposable Linux test host with Xvfb/Openbox/tint2"]
 async fn private_surface_real_capture_cursor_guard_release_and_lifetime_cleanup() {
-    let surface = surface::Client::spawn(binary()).await.unwrap();
+    let surface = surface::Client::spawn_private(binary()).await.unwrap();
     let config = surface.config();
     let mut capture = Capture::open(&config).unwrap();
     let (conn, _) = {
@@ -396,7 +401,7 @@ async fn damage_acknowledgement_must_precede_image_read_to_preserve_concurrent_r
         xproto::*,
         Event,
     };
-    let surface = surface::Client::spawn(binary()).await.unwrap();
+    let surface = surface::Client::spawn_private(binary()).await.unwrap();
     let config = surface.config();
     let stream = std::os::unix::net::UnixStream::connect(format!(
         "/tmp/.X11-unix/X{}",
@@ -508,7 +513,7 @@ async fn damage_acknowledgement_must_precede_image_read_to_preserve_concurrent_r
 #[ignore = "requires a disposable Linux test host with Xvfb/Openbox/tint2"]
 async fn xfixes_cursor_hotspot_motion_and_transparent_hide_update_captured_pixels() {
     use x11rb::protocol::{xfixes::ConnectionExt as _, xproto::*};
-    let surface = surface::Client::spawn(binary()).await.unwrap();
+    let surface = surface::Client::spawn_private(binary()).await.unwrap();
     let config = surface.config();
     let stream = std::os::unix::net::UnixStream::connect(format!(
         "/tmp/.X11-unix/X{}",
@@ -657,7 +662,7 @@ async fn window_catalog_consumes_real_window_and_capture_uses_window_drawable() 
     use x11rb::protocol::xproto::{AtomEnum, CreateWindowAux, PropMode, WindowClass};
     use x11rb::wrapper::ConnectionExt as _;
 
-    let surface = surface::Client::spawn(binary()).await.unwrap();
+    let surface = surface::Client::spawn_private(binary()).await.unwrap();
     let config = surface.config();
     let stream = std::os::unix::net::UnixStream::connect(format!(
         "/tmp/.X11-unix/X{}",
@@ -788,7 +793,7 @@ async fn window_catalog_consumes_real_window_and_capture_uses_window_drawable() 
 async fn window_pointer_moves_before_validating_the_hit_target() {
     use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
 
-    let surface = surface::Client::spawn(binary()).await.unwrap();
+    let surface = surface::Client::spawn_private(binary()).await.unwrap();
     let config = surface.config();
     let stream = std::os::unix::net::UnixStream::connect(format!(
         "/tmp/.X11-unix/X{}",
@@ -883,7 +888,7 @@ async fn window_pointer_accepts_same_process_menu_popup_inside_the_target() {
         AtomEnum, ConfigureWindowAux, CreateWindowAux, InputFocus, PropMode, StackMode, WindowClass,
     };
 
-    let surface = surface::Client::spawn(binary()).await.unwrap();
+    let surface = surface::Client::spawn_private(binary()).await.unwrap();
     let config = surface.config();
     let stream = std::os::unix::net::UnixStream::connect(format!(
         "/tmp/.X11-unix/X{}",
@@ -1092,7 +1097,7 @@ async fn direct_window_capture_tracks_move_resize_focus_and_unmap() {
         ChangeWindowAttributesAux, ConfigureWindowAux, CreateWindowAux, WindowClass,
     };
 
-    let surface = surface::Client::spawn(binary()).await.unwrap();
+    let surface = surface::Client::spawn_private(binary()).await.unwrap();
     let config = surface.config();
     let stream = std::os::unix::net::UnixStream::connect(format!(
         "/tmp/.X11-unix/X{}",
@@ -1422,6 +1427,81 @@ async fn composite_window_capture_ignores_occlusion_and_tracks_children_popups_r
             .is_err(),
         "dropping capture must release XComposite redirection"
     );
+}
+
+struct KillOnDrop(Child);
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn process_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable Linux test host with Xvfb/Openbox"]
+async fn attached_desktop_survives_surface_shutdown() {
+    let mut xvfb = ProcessCommand::new("Xvfb")
+        .args([
+            "-displayfd",
+            "1",
+            "-screen",
+            "0",
+            "1280x720x24",
+            "-nolisten",
+            "tcp",
+            "-noreset",
+            "-ac",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut display = String::new();
+    BufReader::new(xvfb.stdout.take().unwrap())
+        .read_line(&mut display)
+        .unwrap();
+    let display = format!(":{}", display.trim());
+    let xvfb = KillOnDrop(xvfb);
+    let openbox = KillOnDrop(
+        ProcessCommand::new("openbox")
+            .env("DISPLAY", &display)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let openbox_pid = openbox.0.id();
+    let xvfb_pid = xvfb.0.id();
+    let config = desktop_streaming::platform::linux::Config {
+        display: display.clone(),
+        cookie: None,
+        authority: None,
+        include_cursor: true,
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !desktop_streaming::platform::linux::probe(&config)
+        .is_ok_and(|probe| probe.has_window_manager)
+    {
+        assert!(Instant::now() < deadline, "Openbox did not become ready");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let surface = surface::Client::spawn_attached(binary(), display.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(surface.ready.display, display);
+    assert!(surface.ready.cookie.is_none());
+    assert!(surface.ready.authority.is_none());
+    surface.close().await.unwrap();
+
+    assert!(process_alive(xvfb_pid), "attached Xvfb must survive");
+    assert!(process_alive(openbox_pid), "attached Openbox must survive");
 }
 
 fn pixel(frame: &desktop_streaming::traits::RawFrame, x: usize, y: usize) -> [u8; 3] {

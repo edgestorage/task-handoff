@@ -295,29 +295,31 @@ export class AppManagementManager {
     const jobs = this.store.list();
     const activeJobs = jobs.filter((job) => ACTIVE_STATES.has(job.state));
     const activeByApp = new Map(activeJobs.map((job) => [job.appId, job]));
-    const apps = this.definitions().map((definition) => {
-      const detection = this.detection(definition);
-      const cached = this.ownershipByApp.get(definition.launcher.id);
-      const fingerprint = this.ownershipFingerprint(detection, capabilities);
-      const target = recipeTarget(capabilities);
-      const selected = selectInstallRecipe(definition, capabilities, target).recipe;
-      const source = detection.state === "not-installed" ? "none"
-        : selected?.type === "bundled" ? "bundled"
-          : cached?.fingerprint === fingerprint ? cached.source : "external";
-      const projection = managedAppProjection(definition, detection, capabilities, source, target);
-      const active = activeByApp.get(projection.id);
-      const check = this.updateChecks.get(projection.id);
-      const projected = check ? { ...projection, updateCheck: check } : projection;
-      return active ? {
-        ...projected,
-        canInstall: false,
-        canUninstall: false,
-        canUpdate: false,
-        installReason: { code: "OPERATION_IN_PROGRESS" as const, message: "An app management operation is already in progress." },
-        uninstallReason: { code: "OPERATION_IN_PROGRESS" as const, message: "An app management operation is already in progress." },
-        activeJobId: active.id,
-      } : projected;
-    });
+    const apps = this.definitions()
+      .filter((definition) => !definition.hiddenFromAppManagement)
+      .map((definition) => {
+        const detection = this.detection(definition);
+        const cached = this.ownershipByApp.get(definition.launcher.id);
+        const fingerprint = this.ownershipFingerprint(detection, capabilities);
+        const target = recipeTarget(capabilities);
+        const selected = selectInstallRecipe(definition, capabilities, target).recipe;
+        const source = detection.state === "not-installed" ? "none"
+          : selected?.type === "bundled" ? "bundled"
+            : cached?.fingerprint === fingerprint ? cached.source : "external";
+        const projection = managedAppProjection(definition, detection, capabilities, source, target);
+        const active = activeByApp.get(projection.id);
+        const check = this.updateChecks.get(projection.id);
+        const projected = check ? { ...projection, updateCheck: check } : projection;
+        return active ? {
+          ...projected,
+          canInstall: false,
+          canUninstall: false,
+          canUpdate: false,
+          installReason: { code: "OPERATION_IN_PROGRESS" as const, message: "An app management operation is already in progress." },
+          uninstallReason: { code: "OPERATION_IN_PROGRESS" as const, message: "An app management operation is already in progress." },
+          activeJobId: active.id,
+        } : projected;
+      });
     return AppManagementSnapshotSchema.parse({
       streamId: this.streamId,
       sequence: this.sequence,

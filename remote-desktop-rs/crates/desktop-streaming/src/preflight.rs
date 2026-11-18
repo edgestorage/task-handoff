@@ -23,11 +23,17 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
         "host-desktop"
     }
     .into();
-    let result = check(mode);
-    if let Err(error) = result {
-        let reason = BackendError::from_error(&error).to_string();
-        capability.reason = Some(reason.clone());
-        return capability;
+    match check(mode) {
+        Ok(desktop_source) => {
+            if let Some(desktop_source) = desktop_source {
+                capability.desktop_source = desktop_source.into();
+            }
+        }
+        Err(error) => {
+            let reason = BackendError::from_error(&error).to_string();
+            capability.reason = Some(reason.clone());
+            return capability;
+        }
     }
     capability.available = true;
     capability.status = "ready".into();
@@ -105,7 +111,7 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
     capability.fallback = controlled_instance_protocol::RemoteDesktopFallbackCapabilities::ready();
     capability
 }
-fn check(mode: Mode) -> anyhow::Result<()> {
+fn check(mode: Mode) -> anyhow::Result<Option<&'static str>> {
     anyhow::ensure!(
         matches!(mode, Mode::Local | Mode::Virtual),
         BackendError::PlatformUnsupported
@@ -130,36 +136,25 @@ fn check(mode: Mode) -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!(BackendError::InputPermissionRequired))?;
     }
     #[cfg(target_os = "linux")]
-    if mode == Mode::Virtual {
-        use std::os::unix::fs::PermissionsExt;
-        let paths = std::env::var_os("PATH").unwrap_or_default();
-        for name in ["Xvfb", "openbox", "tint2"] {
-            anyhow::ensure!(
-                std::env::split_paths(&paths).any(|dir| std::fs::metadata(dir.join(name))
-                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)),
-                BackendError::DesktopUnavailable
-            );
+    {
+        let _ = mode;
+        let plan = crate::linux_desktop::resolve()?;
+        if plan.ownership == crate::linux_desktop::DisplayOwnership::Attached {
+            let _input = enigo::Enigo::new(&enigo::Settings {
+                x11_display: Some(plan.config.display.clone()),
+                open_prompt_to_get_permissions: false,
+                ..Default::default()
+            })
+            .map_err(|_| anyhow::anyhow!(BackendError::InputPermissionRequired))?;
         }
-    } else {
-        anyhow::ensure!(
-            std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland"),
-            BackendError::WaylandUnsupported
-        );
-        let display = std::env::var("DISPLAY")
-            .map_err(|_| anyhow::anyhow!(BackendError::NoInteractiveSession))?;
-        // Opens and immediately drops a connection; no readback/capture loop.
-        let _capture = crate::platform::linux::Capture::open(&crate::platform::linux::Config {
-            display: display.clone(),
-            cookie: None,
-            authority: None,
-            include_cursor: true,
-        })?;
-        let _input = enigo::Enigo::new(&enigo::Settings {
-            x11_display: Some(display),
-            open_prompt_to_get_permissions: false,
-            ..Default::default()
-        })
-        .map_err(|_| anyhow::anyhow!(BackendError::InputPermissionRequired))?;
+        let _encoder = crate::encoder::Encoder::new(
+            2_000_000,
+            crate::codec::Limits::default(),
+            20,
+            crate::encoder::Policy::Software,
+            crate::codec::VideoCodec::H264,
+        )?;
+        Ok(Some(plan.desktop_source()))
     }
     #[cfg(target_os = "windows")]
     {
@@ -171,15 +166,18 @@ fn check(mode: Mode) -> anyhow::Result<()> {
         })
         .map_err(|_| anyhow::anyhow!(BackendError::InputPermissionRequired))?;
     }
-    // Codec initialization does not require a desktop or any screen permissions.
-    let _encoder = crate::encoder::Encoder::new(
-        2_000_000,
-        crate::codec::Limits::default(),
-        20,
-        crate::encoder::Policy::Software,
-        crate::codec::VideoCodec::H264,
-    )?;
-    Ok(())
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Codec initialization does not require a desktop or any screen permissions.
+        let _encoder = crate::encoder::Encoder::new(
+            2_000_000,
+            crate::codec::Limits::default(),
+            20,
+            crate::encoder::Policy::Software,
+            crate::codec::VideoCodec::H264,
+        )?;
+        Ok(None)
+    }
 }
 #[cfg(test)]
 mod tests {

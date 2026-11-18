@@ -211,13 +211,18 @@ applications. The bridge is loopback-only; native ICE media can cross the test L
 Do not run this mode against a desktop without authorization. No product entry
 point depends on this crate, and native availability remains false until all gates.
 
-Linux surface dependencies are Xvfb, Openbox, Tint2, jgmenu and X11 extensions
-MIT-SHM, DAMAGE, XFIXES and XTEST. Linux kernel 5.3+ pidfds are required. The keeper
-creates private 0700/0600 Xauthority, a .desktop Applications launcher and XDG menu;
-no AppSession display/process is discovered or adopted. Viewer teardown retains
-surface/applications. Component lifetime EOF ends the owned group; a dedicated
-subreaper also reaps detached launcher descendants, signaling only pinned pidfds
-whose parent is the owned keeper. Local host applications are never included.
+Linux resolves an existing reachable X11 `DISPLAY` first. An EWMH window manager is
+reused as-is; a bare display receives a standard session from
+`/usr/local/share/xsessions` or `/usr/share/xsessions` through `dbus-run-session`.
+Only when no display is usable does the keeper create an owned Xvfb and resolve the
+same session path. With no standard session installed, the built-in Openbox, Tint2,
+and jgmenu desktop remains the fallback. The probe requires MIT-SHM, DAMAGE,
+XFIXES, XTEST, RandR, and Composite; Linux kernel 5.3+ pidfds are required. Owned
+Xvfb uses a private 0700/0600 Xauthority. Attached X servers and their existing
+desktops are never terminated, while process groups started by the keeper are.
+Viewer teardown retains the surface. Component lifetime EOF ends owned groups; a
+dedicated subreaper also reaps detached launcher descendants, signaling only
+pinned pidfds whose parent is the owned keeper.
 
 The independent input guard owns native injection and its 1500 ms monotonic
 heartbeat deadline. Suspend ACK follows release; EOF releases without component
