@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { collectStoryNodeStories, StoryNodeSnapshotMismatchError, storyNodeSnapshot } from "../src/api/storyNodeCatalog.ts";
 import { storyNodeLoadState } from "../src/apps/control-plane/story/storyNodeLoad.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -27,9 +28,27 @@ test("Story catalog reads one query per node instead of one aggregate request", 
   assert.match(queries, /export function storyNodeQueryOptions\(nodeId: string, enabled: MaybeRefOrGetter<boolean> = true\) \{[\s\S]*queryKey: controlPlaneQueryKeys\.stories\(nodeId\)[\s\S]*enabled: Boolean\(nodeId\) && toValue\(enabled\)/);
   assert.match(catalog, /const nodeQueries = useQueries\(\{\n    queries: \(\) => nodeIds\.value\.map\(\(nodeId\) => storyNodeQueryOptions\(nodeId, toValue\(enabled\) && connectionEnabled\(nodeId\)\)\),\n  \}\);/);
   assert.doesNotMatch(catalog, /useStoriesQuery/);
-  assert.match(catalog, /const stories = computed<Story\[\]>\(\(\) => nodeIds\.value\.flatMap\(\(_, index\) => nodeQueries\.value\[index\]\?\.data\?\.stories \|\| \[\]\)\);/);
+  assert.match(catalog, /const stories = computed<Story\[\]>\(\(\) => collectStoryNodeStories\(nodeIds\.value, nodeQueries\.value\)\);/);
   assert.match(catalog, /const loadingNodeIds = computed\(\(\) => nodeIds\.value\.filter\(\(nodeId\) => nodeLoadState\(nodeId\) === "loading"\)\);/);
   assert.match(catalog, /const unavailableNodeIds = computed\(\(\) => nodeIds\.value\.filter\(\(nodeId\) => nodeLoadState\(nodeId\) === "unavailable"\)\);/);
+});
+
+test("Story node snapshots validate ownership and collapse duplicate results", () => {
+  const macStory = { id: "story_mac", ownerNodeId: "node_mac" };
+  const winStory = { id: "story_win", ownerNodeId: "node_win" };
+  const macSnapshot = storyNodeSnapshot("node_mac", { stories: [macStory], unavailableNodeIds: [] });
+  const winSnapshot = storyNodeSnapshot("node_win", { stories: [winStory], unavailableNodeIds: [] });
+
+  assert.equal(macSnapshot.nodeId, "node_mac");
+  assert.deepEqual(
+    collectStoryNodeStories(["node_win", "node_mac"], [{ data: macSnapshot }, { data: winSnapshot }, { data: macSnapshot }]),
+    [winStory, macStory],
+  );
+  assert.deepEqual(collectStoryNodeStories(["node_mac"], [{ data: winSnapshot }]), []);
+  assert.throws(
+    () => storyNodeSnapshot("node_win", { stories: [macStory], unavailableNodeIds: [] }),
+    StoryNodeSnapshotMismatchError,
+  );
 });
 
 test("Story mutations refetch only the node that owns the Story", async () => {

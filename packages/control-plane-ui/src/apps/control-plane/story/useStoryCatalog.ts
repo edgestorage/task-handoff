@@ -2,6 +2,7 @@ import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { useQueries } from "@tanstack/vue-query";
 import type { Story } from "@task-handoff/protocol/stories";
 import { storyNodeQueryOptions, useNodesQuery } from "../../../api/queries";
+import { collectStoryNodeStories } from "../../../api/storyNodeCatalog";
 import { storyNodeLoadState, type StoryNodeLoadState } from "./storyNodeLoad";
 
 export type { StoryNodeLoadState };
@@ -24,14 +25,15 @@ export function useStoryCatalog(enabled: MaybeRefOrGetter<boolean> = true) {
 
   function nodeQuery(nodeId: string) {
     const index = nodeIds.value.indexOf(nodeId);
-    return index < 0 ? undefined : nodeQueries.value[index];
+    const indexed = index < 0 ? undefined : nodeQueries.value[index];
+    return nodeQueries.value.find((query) => query.data?.nodeId === nodeId) ?? indexed;
   }
 
   function nodeLoadState(nodeId: string): StoryNodeLoadState {
     return storyNodeLoadState(nodeId, nodeQuery(nodeId), connectionEnabled(nodeId));
   }
 
-  const stories = computed<Story[]>(() => nodeIds.value.flatMap((_, index) => nodeQueries.value[index]?.data?.stories || []));
+  const stories = computed<Story[]>(() => collectStoryNodeStories(nodeIds.value, nodeQueries.value));
   const loadingNodeIds = computed(() => nodeIds.value.filter((nodeId) => nodeLoadState(nodeId) === "loading"));
   const unavailableNodeIds = computed(() => nodeIds.value.filter((nodeId) => nodeLoadState(nodeId) === "unavailable"));
   const pausedNodeIds = computed(() => nodeIds.value.filter((nodeId) => nodeLoadState(nodeId) === "paused"));

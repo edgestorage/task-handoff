@@ -1,6 +1,7 @@
 import { computed, type MaybeRefOrGetter } from "vue";
 import { useQueries } from "@tanstack/vue-query";
 import { storyDecisionsQueryOptions, storyNodeQueryOptions, useNodesQuery } from "../../../api/queries";
+import { collectStoryNodeStories } from "../../../api/storyNodeCatalog";
 import { storyDecisionInboxItems, storyDecisionNodes } from "./storyDecisionItems";
 
 /**
@@ -13,7 +14,8 @@ export function useStoryDecisionInbox(enabled: MaybeRefOrGetter<boolean> = true)
   const storyQueries = useQueries({
     queries: () => decisionNodes.value.map((node) => storyNodeQueryOptions(node.id, enabled)),
   });
-  const decisionStories = computed(() => decisionNodes.value.flatMap((_, index) => storyQueries.value[index]?.data?.stories || []));
+  const decisionNodeIds = computed(() => decisionNodes.value.map((node) => node.id));
+  const decisionStories = computed(() => collectStoryNodeStories(decisionNodeIds.value, storyQueries.value));
   const decisionQueries = useQueries({
     queries: () => decisionStories.value.map((story) => storyDecisionsQueryOptions(story.id, story.ownerNodeId, enabled)),
   });

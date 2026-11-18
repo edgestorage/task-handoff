@@ -6,6 +6,7 @@ import { mergeAppSessionQueryData } from "./appSessionMerge.ts";
 import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
+import { storyNodeSnapshot, type StoryNodePayload, type StoryNodeSnapshot } from "./storyNodeCatalog.ts";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, GitSshHostKeyProbeResponse, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
 import type { Story, StoryDecision, StoryDecisionDecideInput, StoryDecisionCancelInput } from "@task-handoff/protocol/stories";
@@ -1066,9 +1067,9 @@ export function resolveAiSessionApproval(instanceId: string, sessionId: string, 
   return sharedAiSessionsApi.approval(instanceId, sessionId, decision);
 }
 
-export function listStories(nodeId?: string) {
+export function listStories(nodeId?: string): Promise<StoryNodePayload> {
   const query = nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : "";
-  return getApiData<{ stories: Story[]; unavailableNodeIds: string[] }>(`stories${query}`);
+  return getApiData<StoryNodePayload>(`stories${query}`);
 }
 
 // The event stream owns normal convergence. Keep the last authoritative Story
@@ -1086,9 +1087,13 @@ const storySnapshotQueryOptions = {
  * read one query per node and render nodes as soon as they respond.
  */
 export function storyNodeQueryOptions(nodeId: string, enabled: MaybeRefOrGetter<boolean> = true) {
-  return queryOptions({
+  return queryOptions<StoryNodeSnapshot>({
     queryKey: controlPlaneQueryKeys.stories(nodeId),
-    queryFn: () => listStories(nodeId),
+    queryFn: async ({ queryKey }) => {
+      const keyNodeId = queryKey[1];
+      if (typeof keyNodeId !== "string" || !keyNodeId) throw new Error("Story query key is missing its node id.");
+      return storyNodeSnapshot(keyNodeId, await listStories(keyNodeId));
+    },
     enabled: Boolean(nodeId) && toValue(enabled),
     ...storySnapshotQueryOptions,
   });
@@ -1097,7 +1102,10 @@ export function storyNodeQueryOptions(nodeId: string, enabled: MaybeRefOrGetter<
 export function useStoriesQuery(nodeId?: MaybeRefOrGetter<string | undefined>, enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: computed(() => controlPlaneQueryKeys.stories(toValue(nodeId))),
-    queryFn: () => listStories(toValue(nodeId)),
+    queryFn: async ({ queryKey }) => {
+      const keyNodeId = queryKey[1];
+      return typeof keyNodeId === "string" ? storyNodeSnapshot(keyNodeId, await listStories(keyNodeId)) : listStories();
+    },
     enabled: computed(() => toValue(enabled)),
     ...storySnapshotQueryOptions,
   });
