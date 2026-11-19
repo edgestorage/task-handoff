@@ -101,6 +101,14 @@ export class CodexAppServerSessionProjector {
       });
       return true;
     }
+    if (event.type === "goal") {
+      this.options.registry.applyRealtimeEvent(session.id, {
+        kind: "goal",
+        goal: event.goal,
+        source: "realtime",
+      });
+      return true;
+    }
     if (event.type === "turn-started") {
       this.clearRetryWarning(session.id, event.threadId);
       this.turnErrorsByThread.delete(event.threadId);

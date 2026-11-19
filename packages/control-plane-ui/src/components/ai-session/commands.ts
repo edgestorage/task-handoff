@@ -10,7 +10,7 @@ export type AiSessionCommandCandidate = {
 export const AI_SESSION_COMMANDS: AiSessionCommandCandidate[] = [
   { name: "review", descriptionKey: "sessions.composer.review", requiresIdle: true },
   { name: "rename", descriptionKey: "sessions.composer.rename", argumentHintKey: "sessions.composer.threadName" },
-  { name: "goal", descriptionKey: "sessions.composer.goal", argumentHintKey: "sessions.composer.objective" },
+  { name: "goal", descriptionKey: "sessions.composer.goal", argumentHintKey: "sessions.composer.goalArgument" },
   { name: "compact", descriptionKey: "sessions.composer.compact", requiresIdle: true },
 ];
 

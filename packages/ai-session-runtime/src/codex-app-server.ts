@@ -1,4 +1,4 @@
-import { AI_SESSION_DEFAULT_REASONING_EFFORT, AiSessionReasoningEffortSchema, AiSessionTimelineSchema, AiSessionTurnTimelineSchema, sameAiSessionModelSelection, type AiSessionCommandInput, type AiSessionCommandResult, type AiSessionModelSelection, type AiSessionReasoningEffort, type AiSessionStatus, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, AiSessionGoalSchema, AiSessionReasoningEffortSchema, AiSessionTimelineSchema, AiSessionTurnTimelineSchema, sameAiSessionModelSelection, type AiSessionCommandInput, type AiSessionCommandResult, type AiSessionGoal, type AiSessionModelSelection, type AiSessionReasoningEffort, type AiSessionStatus, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionProviderCreateInput, AiSessionProviderCreateResult, AiSessionProviderForkInput, AiSessionProviderForkResult, AiSessionProviderTimelineItemListener, AiSessionSendInput } from "./ai-session-control";
 import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
@@ -19,6 +19,71 @@ import { CodexThreadTitleGenerator } from "./codex-app-server/session/title-gene
 import { CodexTimelineStore } from "./codex-app-server/session/timeline-store";
 import { CodexAppServerMentions } from "./codex-app-server/mentions";
 import { codexItemTimeline, codexThreadTimeline, mergeCodexTimelineItems } from "./codex-app-server/protocol/timeline";
+
+type CodexGoalCommandAction =
+  | { kind: "clear" }
+  | { kind: "set"; options: { objective?: string; status?: NonNullable<AiSessionGoal["status"]>; tokenBudget?: number | null } };
+
+const GOAL_STATUS_COMMANDS: Record<string, NonNullable<AiSessionGoal["status"]>> = {
+  pause: "paused",
+  resume: "active",
+  active: "active",
+  blocked: "blocked",
+  stall: "blocked",
+  usage: "usageLimited",
+  "usage-limited": "usageLimited",
+  budget: "budgetLimited",
+  complete: "complete",
+};
+
+function parseGoalCommand(argument: string): CodexGoalCommandAction {
+  const trimmed = argument.trim();
+  if (trimmed.toLowerCase() === "clear") return { kind: "clear" };
+  const explicitObjective = /^(?:set|edit)\s+([\s\S]+)$/i.exec(trimmed);
+  if (explicitObjective?.[1]?.trim()) {
+    return { kind: "set", options: { objective: explicitObjective[1].trim(), status: "active" } };
+  }
+  const status = GOAL_STATUS_COMMANDS[trimmed.toLowerCase()];
+  if (status) return { kind: "set", options: { status } };
+  const statusCommand = /^status\s+(\S+)$/i.exec(trimmed);
+  if (statusCommand?.[1]) {
+    const requested = GOAL_STATUS_COMMANDS[statusCommand[1].toLowerCase()];
+    if (requested) return { kind: "set", options: { status: requested } };
+    throw aiSessionControlError("AI_SESSION_GOAL_STATUS_INVALID", `Unknown goal status: ${statusCommand[1]}`, 400);
+  }
+  const budgetCommand = /^budget(?:\s+(.+))?$/i.exec(trimmed);
+  if (budgetCommand) {
+    const value = budgetCommand[1]?.trim();
+    if (!value) throw aiSessionControlError("AI_SESSION_GOAL_BUDGET_INVALID", "A token budget is required.", 400);
+    if (["off", "none", "clear"].includes(value.toLowerCase())) {
+      return { kind: "set", options: { tokenBudget: null } };
+    }
+    if (!/^\d+$/.test(value) || Number(value) <= 0 || !Number.isSafeInteger(Number(value))) {
+      throw aiSessionControlError("AI_SESSION_GOAL_BUDGET_INVALID", "Goal token budget must be a positive integer.", 400);
+    }
+    return { kind: "set", options: { tokenBudget: Number(value) } };
+  }
+  return { kind: "set", options: { objective: trimmed, status: "active" } };
+}
+
+function parseCodexGoal(value: unknown): AiSessionGoal | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const parsed = AiSessionGoalSchema.safeParse({
+    objective: record.objective,
+    status: record.status,
+    tokenBudget: record.tokenBudget,
+    tokensUsed: record.tokensUsed,
+    timeUsedSeconds: record.timeUsedSeconds,
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
+function requireCodexGoal(value: unknown): AiSessionGoal {
+  const goal = parseCodexGoal(value);
+  if (!goal) throw aiSessionControlError("AI_SESSION_GOAL_INVALID_RESPONSE", "Codex returned an invalid goal.", 502);
+  return goal;
+}
 
 export { CodexAppServerClient } from "./codex-app-server/client/client";
 type CodexAppServerBridgeOptions = {
@@ -837,15 +902,33 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       const result = await this.renameSession(session, input.argument || "");
       return { command: input.command, value: result.title };
     }
-    if (input.argument) {
+    const argument = input.argument?.trim();
+    if (argument) {
+      const action = parseGoalCommand(argument);
+      if (action.kind === "clear") {
+        if (!client.clearThreadGoal) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support goals.", 409);
+        await client.clearThreadGoal(threadId, { origin: "user" });
+        this.syncGoal(session.id, null);
+        return { command: input.command, value: "No active goal." };
+      }
       if (!client.setThreadGoal) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support goals.", 409);
-      await client.setThreadGoal(threadId, input.argument);
-      return { command: input.command, value: input.argument };
+      const result = await client.setThreadGoal(threadId, { origin: "user", ...action.options });
+      const goal = requireCodexGoal(result.goal);
+      this.syncGoal(session.id, goal);
+      return { command: input.command, value: goal.objective };
     }
     if (!client.getThreadGoal) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support goals.", 409);
     const result = await client.getThreadGoal(threadId);
-    const goal = result.goal && typeof result.goal === "object" ? result.goal as Record<string, unknown> : undefined;
-    return { command: input.command, value: typeof goal?.objective === "string" ? goal.objective : "No active goal." };
+    const goal = parseCodexGoal(result.goal);
+    if (result.goal !== null && result.goal !== undefined && !goal) {
+      throw aiSessionControlError("AI_SESSION_GOAL_INVALID_RESPONSE", "Codex returned an invalid goal.", 502);
+    }
+    this.syncGoal(session.id, goal || null);
+    return { command: input.command, value: goal?.objective || "No active goal." };
+  }
+
+  private syncGoal(sessionId: string, goal: AiSessionGoal | null) {
+    this.registry.applyRealtimeEvent(sessionId, { kind: "goal", goal, source: "control" });
   }
 
   async renameSession(session: AiSessionStatus, title: string) {

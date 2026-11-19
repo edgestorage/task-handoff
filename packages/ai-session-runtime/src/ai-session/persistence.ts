@@ -2,6 +2,7 @@ import {
   isCurrentAiSessionSubAgent,
   normalizeAiSessionLineage,
   AiSessionMessageAttachmentMetaSchema,
+  AiSessionGoalSchema,
   AiSessionModelSelectionSchema,
   AiSessionReasoningEffortSchema,
   AiSessionQueuedMessageSchema,
@@ -14,6 +15,7 @@ import {
 import { StoryIdSchema } from "@task-handoff/protocol/stories";
 import type {
   AiSessionLifecycle,
+  AiSessionGoal,
   AiSessionMessageAttachment,
   AiSessionMessageAttachmentMeta,
   AiSessionPhase,
@@ -26,7 +28,7 @@ import { compact, messageText, normalizeTurns } from "../ai-session-turns";
 const PERSISTED_AI_SESSION_FIELD_NAMES = [
   "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "lineage", "providerMeta", "modelSelection", "reasoningEffort", "storyId", "appBindingKeys", "actions",
   "activeTurnId", "title", "cwd", "cwdFolderId", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
-  "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
+  "currentTool", "toolCallsSinceLastMessage", "subAgents", "goal", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
   "completedAt", "error", "counters", "queue", "unread",
 ] as const satisfies readonly (keyof AiSessionStatus)[];
 
@@ -35,6 +37,7 @@ const PERSISTED_SESSION_FIELDS = new Set<string>(PERSISTED_AI_SESSION_FIELD_NAME
 export type PersistedAiSession = Pick<AiSessionStatus, typeof PERSISTED_AI_SESSION_FIELD_NAMES[number]>;
 
 const PERSISTED_TOOL_FIELDS = new Set(Object.keys(AiSessionToolSchema.shape));
+const PERSISTED_GOAL_FIELDS = new Set(Object.keys(AiSessionGoalSchema.shape));
 const PERSISTED_SUB_AGENT_FIELDS = new Set(Object.keys(AiSessionSubAgentSchema.shape));
 const PERSISTED_QUEUE_ITEM_FIELDS = new Set(Object.keys(AiSessionQueuedMessageSchema.shape));
 const PERSISTED_ATTACHMENT_META_FIELDS = new Set(Object.keys(AiSessionMessageAttachmentMetaSchema.shape));
@@ -78,6 +81,29 @@ function normalizeTool(value: unknown): AiSessionStatus["currentTool"] {
       : {}),
   };
   const parsed = AiSessionToolSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function normalizeAiSessionGoal(value: unknown): AiSessionGoal | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  warnUnknownFields(record, PERSISTED_GOAL_FIELDS, "goal");
+  if (typeof record.objective !== "string") return undefined;
+  const objective = record.objective.trim();
+  if (!objective) return undefined;
+  const tokenBudget = record.tokenBudget === null
+    ? null
+    : Number.isInteger(record.tokenBudget) && Number(record.tokenBudget) > 0 && Number(record.tokenBudget) <= Number.MAX_SAFE_INTEGER
+      ? Number(record.tokenBudget)
+      : undefined;
+  if (tokenBudget === undefined) return undefined;
+  const parsed = AiSessionGoalSchema.safeParse({
+    objective,
+    status: record.status,
+    tokenBudget,
+    tokensUsed: record.tokensUsed,
+    timeUsedSeconds: record.timeUsedSeconds,
+  });
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -270,6 +296,7 @@ export function decodePersistedAiSession(value: unknown): AiSessionStatus | unde
   const reasoningEffort = AiSessionReasoningEffortSchema.safeParse(record.reasoningEffort);
   const storyId = StoryIdSchema.safeParse(record.storyId);
   const currentTool = normalizeTool(record.currentTool);
+  const goal = normalizeAiSessionGoal(record.goal);
   const completedAt = typeof record.completedAt === "string" && AiSessionStatusSchema.shape.completedAt.safeParse(record.completedAt).success
     ? record.completedAt
     : undefined;
@@ -303,6 +330,7 @@ export function decodePersistedAiSession(value: unknown): AiSessionStatus | unde
     ...(currentTool ? { currentTool } : {}),
     toolCallsSinceLastMessage: normalizeNonNegativeInteger(record.toolCallsSinceLastMessage),
     subAgents: normalizeAiSessionSubAgents(record.subAgents),
+    ...(goal ? { goal } : {}),
     ...(typeof record.transcriptPath === "string" && record.transcriptPath ? { transcriptPath: compact(record.transcriptPath, 4096) } : {}),
     ...(Number.isInteger(record.transcriptSize) && Number(record.transcriptSize) >= 0 ? { transcriptSize: Number(record.transcriptSize) } : {}),
     startedAt: record.startedAt,

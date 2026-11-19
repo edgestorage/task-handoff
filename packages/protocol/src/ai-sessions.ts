@@ -245,6 +245,23 @@ export const AiSessionCountersSchema = z
   .strict()
   .default({ toolCalls: 0, edits: 0, approvals: 0 });
 
+export const AiSessionGoalStatusSchema = z.enum([
+  "active",
+  "paused",
+  "blocked",
+  "usageLimited",
+  "budgetLimited",
+  "complete",
+]);
+
+export const AiSessionGoalSchema = z.object({
+  objective: NonEmptyTrimmedTextSchema.max(4000),
+  status: AiSessionGoalStatusSchema,
+  tokenBudget: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
+  tokensUsed: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  timeUsedSeconds: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+}).strict();
+
 export const AiSessionActionsSchema = z
   .object({
     send: z.boolean().optional(),
@@ -843,6 +860,9 @@ export const AiSessionStatusSchema = z
     currentTool: AiSessionToolSchema.optional(),
     toolCallsSinceLastMessage: z.number().int().min(0).default(0),
     subAgents: AiSessionCurrentSubAgentsSchema.default([]),
+    // Codex app-server owns goal state. This is its latest projected snapshot;
+    // an omitted goal means the provider has not reported one yet.
+    goal: AiSessionGoalSchema.optional(),
     transcriptPath: TrimmedTextSchema.max(4096).optional(),
     transcriptSize: z.number().int().min(0).optional(),
     startedAt: DateTimeStringSchema,
@@ -1124,6 +1144,7 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   currentTool: true,
   toolCallsSinceLastMessage: true,
   subAgents: true,
+  goal: true,
   queue: true,
   startedAt: true,
   updatedAt: true,
@@ -1588,6 +1609,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   currentTool: AiSessionToolSchema.optional(),
   toolCallsSinceLastMessage: z.number().int().min(0).optional(),
   subAgents: AiSessionCurrentSubAgentsSchema.optional(),
+  goal: AiSessionGoalSchema.nullable().optional(),
   transcriptPath: TrimmedTextSchema.max(4096).optional(),
   transcriptSize: z.number().int().min(0).optional(),
   replaceActivity: z.boolean().optional(),
@@ -1596,7 +1618,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
 export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("event"),
   sessionId: NonEmptyTrimmedTextSchema.max(120),
-  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction", "model-selection", "reasoning-effort"]),
+  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction", "model-selection", "reasoning-effort", "goal"]),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   activeTurnId: TrimmedTextSchema.max(240).optional(),
@@ -1613,6 +1635,7 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   toolCallsSinceLastMessage: z.number().int().min(0).optional(),
   subAgents: AiSessionCurrentSubAgentsSchema.optional(),
   contextCompaction: AiSessionContextCompactionSchema.optional(),
+  goal: AiSessionGoalSchema.nullable().optional(),
   counters: z.object({
     toolCalls: z.number().int().min(0).optional(),
     edits: z.number().int().min(0).optional(),
@@ -1635,6 +1658,13 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   }
   if (input.kind === "session-error" && !input.error) {
     context.addIssue({ code: "custom", path: ["error"], message: "session-error events require error" });
+  }
+  if (input.kind === "goal") {
+    if (!Object.prototype.hasOwnProperty.call(input, "goal")) {
+      context.addIssue({ code: "custom", path: ["goal"], message: "goal events require goal (use null when cleared)" });
+    }
+  } else if (input.goal !== undefined) {
+    context.addIssue({ code: "custom", path: ["goal"], message: "goal is only valid for goal events" });
   }
   if (input.kind === "context-compaction") {
     if (!input.contextCompaction) {
@@ -1680,6 +1710,8 @@ export type AiSessionCreationSource = z.infer<typeof AiSessionCreationSourceSche
 export type AiSessionLifecycle = z.infer<typeof AiSessionLifecycleSchema>;
 export type AiSessionPhase = z.infer<typeof AiSessionPhaseSchema>;
 export type AiSessionTool = z.infer<typeof AiSessionToolSchema>;
+export type AiSessionGoalStatus = z.infer<typeof AiSessionGoalStatusSchema>;
+export type AiSessionGoal = z.infer<typeof AiSessionGoalSchema>;
 export type AiSessionTimelineActivityStatus = z.infer<typeof AiSessionTimelineActivityStatusSchema>;
 export type AiSessionTimelineUserMessage = z.infer<typeof AiSessionTimelineUserMessageSchema>;
 export type AiSessionTimelineAgentMessage = z.infer<typeof AiSessionTimelineAgentMessageSchema>;

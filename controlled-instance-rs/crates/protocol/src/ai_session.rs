@@ -14,6 +14,27 @@ pub struct AiSessionCounters {
     pub approvals: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AiSessionGoalStatus {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    Complete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AiSessionGoal {
+    pub objective: String,
+    pub status: AiSessionGoalStatus,
+    pub token_budget: Option<i64>,
+    pub tokens_used: i64,
+    pub time_used_seconds: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiSessionQueue {
@@ -89,6 +110,8 @@ pub struct AiSessionSummary {
     pub tool_calls_since_last_message: u64,
     #[serde(default)]
     pub sub_agents: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<AiSessionGoal>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_agent_count: Option<u64>,
     pub started_at: String,
@@ -515,6 +538,7 @@ mod tests {
             current_tool: None,
             tool_calls_since_last_message: 0,
             sub_agents: Vec::new(),
+            goal: None,
             sub_agent_count: Some(0),
             started_at: "2026-11-02T00:00:00.000Z".to_string(),
             updated_at: "2026-11-02T00:00:00.000Z".to_string(),

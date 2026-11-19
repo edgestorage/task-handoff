@@ -71,6 +71,16 @@ export type CodexThreadSettingsResult = CodexThreadSettings & {
   modelProvider?: string;
 };
 
+export type CodexThreadGoalStatus = "active" | "paused" | "blocked" | "usageLimited" | "budgetLimited" | "complete";
+
+export type CodexThreadGoalSetOptions = {
+  origin?: "user" | "automatic";
+  objective?: string;
+  status?: CodexThreadGoalStatus;
+  /** Omit to keep the current budget; null explicitly removes the budget. */
+  tokenBudget?: number | null;
+};
+
 export type CodexEphemeralStructuredTurnOptions = {
   cwd: string;
   prompt: string;
@@ -122,8 +132,9 @@ export type CodexAppServerClientLike = EventEmitter & {
   unsubscribeThread?: (threadId: string) => Promise<void>;
   startReview?: (threadId: string) => Promise<{ turnId?: string }>;
   setThreadName?: (threadId: string, name: string) => Promise<void>;
-  setThreadGoal?: (threadId: string, objective: string) => Promise<JsonValue>;
+  setThreadGoal?: (threadId: string, options?: CodexThreadGoalSetOptions) => Promise<JsonValue>;
   getThreadGoal?: (threadId: string) => Promise<JsonValue>;
+  clearThreadGoal?: (threadId: string, options?: { origin?: "user" | "automatic" }) => Promise<JsonValue>;
   compactThread?: (threadId: string) => Promise<void>;
   runEphemeralStructuredTurn?: (options: CodexEphemeralStructuredTurnOptions) => Promise<string>;
   respondToApproval?: (request: CodexApprovalRequest, decision: CodexApprovalDecision) => Promise<void>;

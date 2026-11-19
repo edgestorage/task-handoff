@@ -1,6 +1,8 @@
 use crate::AiSession;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
-use controlled_instance_protocol::{AiSessionCounters, AiSessionQueue};
+use controlled_instance_protocol::{
+    AiSessionCounters, AiSessionGoal, AiSessionGoalStatus, AiSessionQueue,
+};
 use serde_json::{Map, Value};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
@@ -92,6 +94,7 @@ fn decode_session(value: &Value) -> Option<AiSession> {
             record.get("toolCallsSinceLastMessage"),
         ),
         sub_agents: normalize_sub_agents(record.get("subAgents")),
+        goal: normalize_goal(record.get("goal")),
         transcript_path: optional_text(record.get("transcriptPath"), 4096),
         transcript_size: non_negative_integer(record.get("transcriptSize")),
         started_at,
@@ -105,6 +108,32 @@ fn decode_session(value: &Value) -> Option<AiSession> {
         counters: normalize_counters(record.get("counters"))?,
         queue,
         unread: record.get("unread") == Some(&Value::Bool(true)),
+    })
+}
+
+fn normalize_goal(value: Option<&Value>) -> Option<AiSessionGoal> {
+    let record = value?.as_object()?;
+    let objective = required_trimmed_text(record.get("objective"), 4000)?;
+    let status =
+        serde_json::from_value::<AiSessionGoalStatus>(record.get("status")?.clone()).ok()?;
+    let token_budget = match record.get("tokenBudget") {
+        Some(Value::Null) => None,
+        Some(value) => {
+            let budget = json_safe_integer(Some(value))?;
+            if budget == 0 {
+                return None;
+            }
+            Some(i64::try_from(budget).ok()?)
+        }
+        None => return None,
+    };
+    Some(AiSessionGoal {
+        objective,
+        status,
+        token_budget,
+        tokens_used: i64::try_from(goal_non_negative_integer(record.get("tokensUsed"))?).ok()?,
+        time_used_seconds: i64::try_from(goal_non_negative_integer(record.get("timeUsedSeconds"))?)
+            .ok()?,
     })
 }
 
@@ -1221,6 +1250,12 @@ fn json_safe_integer(value: Option<&Value>) -> Option<u64> {
         .then_some(number as u64)
 }
 
+fn goal_non_negative_integer(value: Option<&Value>) -> Option<u64> {
+    let number = value?.as_f64()?;
+    (number.is_finite() && number.fract() == 0.0 && (0.0..=MAX_SAFE_INTEGER).contains(&number))
+        .then_some(number as u64)
+}
+
 fn non_negative_integer(value: Option<&Value>) -> Option<u64> {
     value?.as_u64()
 }
@@ -1794,5 +1829,38 @@ mod tests {
             .is_some_and(|id| id.starts_with("turn_legacy_"))));
         assert_eq!(turns[0]["userPrompt"], "legacy id");
         assert_eq!(turns[1]["userPrompt"], "empty legacy id");
+    }
+
+    #[test]
+    fn persistent_goal_round_trips_and_invalid_usage_is_dropped() {
+        let mut session = minimal_session();
+        session["goal"] = json!({
+            "objective": "  Ship it  ",
+            "status": "usageLimited",
+            "tokenBudget": 500,
+            "tokensUsed": 42,
+            "timeUsedSeconds": 7
+        });
+        let goal = decode_persisted_session(&session)
+            .expect("session")
+            .goal
+            .expect("goal");
+        assert_eq!(goal.objective, "Ship it");
+        assert_eq!(goal.status, AiSessionGoalStatus::UsageLimited);
+        assert_eq!(goal.token_budget, Some(500));
+        assert_eq!(goal.tokens_used, 42);
+        assert_eq!(goal.time_used_seconds, 7);
+
+        session["goal"]["tokensUsed"] = json!("42");
+        assert!(decode_persisted_session(&session)
+            .expect("session")
+            .goal
+            .is_none());
+        session["goal"]["tokensUsed"] = json!(42);
+        session["goal"]["objective"] = json!("   ");
+        assert!(decode_persisted_session(&session)
+            .expect("session")
+            .goal
+            .is_none());
     }
 }

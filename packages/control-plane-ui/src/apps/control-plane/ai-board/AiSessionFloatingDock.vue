@@ -174,6 +174,14 @@
         @set-queue-paused="$emit('setQueuePaused', $event)"
         @steer-queued-message="$emit('steerQueuedMessage', $event)"
       />
+      <AiSessionGoalBadge
+        v-if="card.session.goal"
+        class="ai-board-floating-compose-goal"
+        :goal="card.session.goal"
+        :disabled="busy"
+        tone="board"
+        @command="executeGoalCommand"
+      />
       <AiSessionComposer
         ref="composerEl"
         class="ai-board-floating-compose"
@@ -220,6 +228,7 @@ import { useI18n } from "vue-i18n";
 import { Boxes, ChevronDown, ChevronUp, CircleHelp, ExternalLink, Folder } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
+import AiSessionGoalBadge from "../../../components/ai-session/AiSessionGoalBadge.vue";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
 import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionCompactPrompt.vue";
@@ -287,7 +296,7 @@ const props = defineProps<{
   supportsToolActivity: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   cancelEdit: [];
   continueFromTurn: [turnId: string];
   editQueuedMessage: [payload: { queueId: string; message: string }];
@@ -315,6 +324,10 @@ defineEmits<{
   "update:draft": [value: string];
   "update:mentionBindings": [value: AiSessionMentionBinding[]];
 }>();
+
+function executeGoalCommand(argument: "pause" | "resume" | "clear") {
+  emit("command", { command: "goal", argument });
+}
 
 type ResizeHandle = "top" | "left" | "right" | "top-left" | "top-right";
 
@@ -941,6 +954,16 @@ onBeforeUnmount(() => {
 .ai-board-floating-compose-queue {
   z-index: 0;
   margin: 0 28px -1px;
+}
+
+.ai-board-floating-compose-goal {
+  --ai-session-goal-radius: 18px 18px 0 0;
+  z-index: 0;
+  margin: -1px 28px -1px;
+}
+
+.ai-board-floating-compose-queue + .ai-board-floating-compose-goal {
+  --ai-session-goal-radius: 0;
 }
 
 .ai-board-floating-compose-stack > .ai-board-floating-compose {

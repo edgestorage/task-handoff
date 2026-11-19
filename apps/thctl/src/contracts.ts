@@ -730,7 +730,7 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
       { name: "sessionId", description: "AI session ID", required: true },
       { name: "command", description: "Command name (review, rename, goal, compact)", required: true },
     ],
-    options: [{ flags: "--argument <text>", description: "Command argument (thread name for rename, objective for goal)" }],
+    options: [{ flags: "--argument <text>", description: "Command argument (thread name for rename; objective, pause, resume, clear, or budget for goal)" }],
     input: inputOf({ instanceId: z.string(), sessionId: z.string(), command: z.string(), argument: z.string().optional() }),
     output: AiSessionCommandResultSchema,
     handler: aiSessionCommand,

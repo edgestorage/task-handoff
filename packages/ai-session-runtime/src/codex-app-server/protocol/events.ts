@@ -1,3 +1,4 @@
+import { AiSessionGoalSchema, type AiSessionGoal } from "@task-handoff/protocol/ai-sessions";
 import { codexSubAgentUpdates, codexToolDescriptor, isoTimestampFromMs, isoTimestampFromSeconds } from "./items";
 import type { CodexAppServerEvent, CodexThread, CodexThreadStatus, JsonValue } from "./types";
 import { asRecord } from "./values";
@@ -10,6 +11,14 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
   if (method === "thread/status/changed" && typeof params.threadId === "string") return { type: "thread-status", threadId: params.threadId, status: (params.status || {}) as CodexThreadStatus };
   if (method === "thread/closed" && typeof params.threadId === "string") return { type: "thread-closed", threadId: params.threadId };
   if (method === "thread/name/updated" && typeof params.threadId === "string" && typeof params.threadName === "string") return { type: "thread-name", threadId: params.threadId, name: params.threadName };
+  if (method === "thread/goal/updated" && typeof params.threadId === "string") {
+    const goal = codexThreadGoal(params.goal);
+    const projected = goal && goal.threadId === params.threadId ? projectCodexThreadGoal(goal) : undefined;
+    return projected ? { type: "goal", threadId: params.threadId, goal: projected } : undefined;
+  }
+  if (method === "thread/goal/cleared" && typeof params.threadId === "string") {
+    return { type: "goal", threadId: params.threadId, goal: null };
+  }
   if (method === "thread/compacted" && typeof params.threadId === "string" && typeof params.turnId === "string") {
     return { type: "context-compaction", threadId: params.threadId, turnId: params.turnId, itemId: `context_compaction:${params.turnId}`, status: "completed" };
   }
@@ -68,6 +77,44 @@ export function codexNotification(method: string, params: JsonValue): CodexAppSe
     if (item.type === "agentMessage" && typeof params.turnId === "string" && typeof item.id === "string" && typeof item.text === "string") return { type: "agent-message-completed", threadId: params.threadId, turnId: params.turnId, itemId: item.id, timelineItem: withItemStatus(item, method), text: item.text };
   }
   return undefined;
+}
+
+type CodexThreadGoal = {
+  threadId: string;
+  objective: string;
+  status: string;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+function codexThreadGoal(value: unknown): CodexThreadGoal | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.threadId !== "string"
+    || typeof record.objective !== "string"
+    || typeof record.status !== "string"
+    || (record.tokenBudget !== null && typeof record.tokenBudget !== "number")
+    || typeof record.tokensUsed !== "number"
+    || typeof record.timeUsedSeconds !== "number"
+    || typeof record.createdAt !== "number"
+    || typeof record.updatedAt !== "number"
+  ) return undefined;
+  return record as CodexThreadGoal;
+}
+
+function projectCodexThreadGoal(goal: CodexThreadGoal): AiSessionGoal | undefined {
+  const parsed = AiSessionGoalSchema.safeParse({
+    objective: goal.objective,
+    status: goal.status,
+    tokenBudget: goal.tokenBudget,
+    tokensUsed: goal.tokensUsed,
+    timeUsedSeconds: goal.timeUsedSeconds,
+  });
+  return parsed.success ? parsed.data : undefined;
 }
 
 function withItemStatus(item: JsonValue, method: "item/started" | "item/completed"): JsonValue {

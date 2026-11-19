@@ -2335,6 +2335,17 @@
   margin: 0 28px -1px;
 }
 
+.session-ai-compose-goal {
+  --ai-session-goal-radius: 18px 18px 0 0;
+  z-index: 0;
+  margin: -1px 28px -1px;
+}
+
+.session-ai-compose-decisions + .session-ai-compose-goal,
+.session-ai-compose-queue + .session-ai-compose-goal {
+  --ai-session-goal-radius: 0;
+}
+
 /* 决策比排队信息优先：决策卡贴在输入框上方，排队信息接在决策卡下面组成同一张上浮卡片。 */
 .session-ai-compose-decisions {
   z-index: 0;

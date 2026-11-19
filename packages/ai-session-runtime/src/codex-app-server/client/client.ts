@@ -6,7 +6,7 @@ import WebSocket from "ws";
 import { commandInvocation } from "@task-handoff/core/core/command-invocation";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
-import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexEphemeralStructuredTurnOptions, CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
+import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexEphemeralStructuredTurnOptions, CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadGoalSetOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
 import { approvalResponseForRequest, codexApprovalRequest } from "../protocol/approvals";
 import { codexNotification } from "../protocol/events";
 import { turnIdFromResult } from "../protocol/turn-control";
@@ -711,12 +711,16 @@ export class CodexAppServerClient extends EventEmitter {
     await this.request("thread/name/set", { threadId, name });
   }
 
-  setThreadGoal(threadId: string, objective: string) {
-    return this.request("thread/goal/set", { threadId, objective });
+  setThreadGoal(threadId: string, options: CodexThreadGoalSetOptions = {}) {
+    return this.request("thread/goal/set", { threadId, ...options });
   }
 
   getThreadGoal(threadId: string) {
     return this.request("thread/goal/get", { threadId });
+  }
+
+  clearThreadGoal(threadId: string, options: { origin?: "user" | "automatic" } = {}) {
+    return this.request("thread/goal/clear", { threadId, ...options });
   }
 
   async compactThread(threadId: string) {

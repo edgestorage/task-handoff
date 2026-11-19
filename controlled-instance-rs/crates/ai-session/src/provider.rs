@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_protocol::{
     mint_entity_id, AiSessionAttachmentKind, AiSessionAttachmentScopeType, AiSessionCommandInput,
-    AiSessionCommandResult, AiSessionConversationAttachment, AiSessionHistoryItem,
+    AiSessionCommandResult, AiSessionConversationAttachment, AiSessionGoal, AiSessionHistoryItem,
     AiSessionMentionCatalog, AiSessionMentionFileSearch, AiSessionMessageAttachmentMeta,
     AiSessionProviderCapability, AiSessionProviderTimelineCapabilities, AiSessionQueue,
     AiSessionTimeline, AiSessionTurnTimeline,
@@ -487,6 +487,10 @@ pub enum ProviderEvent {
         item_id: String,
         text: String,
         observed_at: Option<String>,
+    },
+    GoalUpdated {
+        provider_session_id: String,
+        goal: Option<AiSessionGoal>,
     },
     TimelineItem {
         provider_session_id: String,
@@ -1399,6 +1403,7 @@ impl AiSessionController {
                 current_tool: None,
                 tool_calls_since_last_message: 0,
                 sub_agents: Vec::new(),
+                goal: None,
                 transcript_path: None,
                 transcript_size: None,
                 started_at,
@@ -1826,6 +1831,7 @@ impl AiSessionController {
             current_tool: None,
             tool_calls_since_last_message: 0,
             sub_agents: Vec::new(),
+            goal: None,
             transcript_path: None,
             transcript_size: None,
             started_at: now_iso(),
@@ -2799,6 +2805,7 @@ impl AiSessionController {
                     current_tool: None,
                     tool_calls_since_last_message: 0,
                     sub_agents: Vec::new(),
+                    goal: None,
                     transcript_path: None,
                     transcript_size: None,
                     started_at: timestamp.clone(),
@@ -3163,6 +3170,16 @@ impl AiSessionController {
                     true
                 })
             }
+            ProviderEvent::GoalUpdated {
+                provider_session_id,
+                goal,
+            } => self.update_by_provider_id(&provider_session_id, |session| {
+                if session.goal == goal {
+                    return false;
+                }
+                session.goal = goal.clone();
+                true
+            }),
             ProviderEvent::TimelineItem { .. } | ProviderEvent::TimelineItemDelta { .. } => false,
             ProviderEvent::SubAgentSnapshot {
                 provider_session_id,
@@ -3912,6 +3929,7 @@ mod tests {
             current_tool: None,
             tool_calls_since_last_message: 0,
             sub_agents: Vec::new(),
+            goal: None,
             transcript_path: None,
             transcript_size: None,
             started_at: "2026-11-02T00:00:00.000Z".to_string(),

@@ -13,7 +13,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_core::atomic::write_atomic;
 use controlled_instance_protocol::{
-    AiSessionCounters, AiSessionHistoryItem, AiSessionLatestTurnRef, AiSessionQueue,
+    AiSessionCounters, AiSessionGoal, AiSessionHistoryItem, AiSessionLatestTurnRef, AiSessionQueue,
     AiSessionSummary, AiSessionsSnapshot, AI_SESSION_SNAPSHOT_LIMIT,
 };
 use serde::{Deserialize, Serialize};
@@ -154,6 +154,8 @@ pub struct AiSession {
     #[serde(default)]
     pub sub_agents: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<AiSessionGoal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_size: Option<u64>,
@@ -212,6 +214,7 @@ impl AiSession {
             current_tool: None,
             tool_calls_since_last_message: 0,
             sub_agents: Vec::new(),
+            goal: previous.and_then(|session| session.goal.clone()),
             transcript_path: None,
             transcript_size: None,
             started_at,
@@ -340,6 +343,7 @@ impl AiSession {
             current_tool,
             tool_calls_since_last_message: self.tool_calls_since_last_message,
             sub_agents: Vec::new(),
+            goal: self.goal.clone(),
             sub_agent_count: Some(self.sub_agents.len() as u64),
             started_at: self.started_at.clone(),
             updated_at: self.updated_at.clone(),
@@ -1283,6 +1287,7 @@ mod tests {
             current_tool: None,
             tool_calls_since_last_message: 0,
             sub_agents: Vec::new(),
+            goal: None,
             transcript_path: None,
             transcript_size: None,
             started_at: "2026-11-02T00:00:00.000Z".to_string(),

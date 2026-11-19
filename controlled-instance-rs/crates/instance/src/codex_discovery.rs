@@ -162,6 +162,7 @@ pub(crate) fn project_new_codex_session(
         current_tool: None,
         tool_calls_since_last_message: 0,
         sub_agents: summary.sub_agents.clone(),
+        goal: None,
         transcript_path: None,
         transcript_size: None,
         started_at,

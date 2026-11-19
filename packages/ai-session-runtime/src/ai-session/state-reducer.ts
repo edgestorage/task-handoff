@@ -1,4 +1,5 @@
 import type {
+  AiSessionGoal,
   AiSessionLifecycle,
   AiSessionRealtimeInput,
   AiSessionSnapshotInput,
@@ -20,6 +21,7 @@ import {
 } from "../ai-session-turns";
 import {
   normalizeAiSessionCounters,
+  normalizeAiSessionGoal,
   normalizeAiSessionLifecycle,
   normalizeAiSessionPhase,
   normalizeAiSessionQueue,
@@ -63,6 +65,7 @@ export type AiSessionPatch = Partial<
 > & {
   counters?: Partial<AiSessionStatus["counters"]>;
   userMessage?: AiSessionUserMessageDetail;
+  goal?: AiSessionGoal | null;
 };
 
 export type ApplyAiSessionPatchOptions = {
@@ -121,7 +124,12 @@ function buildAiSessionPatch(
     interrupt: status === "running" || status === "waiting",
   };
 
-  const { userMessage: _userMessage, ...sessionPatch } = patch;
+  const { userMessage: _userMessage, goal: goalPatch, ...sessionPatch } = patch;
+  const goal = goalPatch === null
+    ? undefined
+    : goalPatch !== undefined
+      ? normalizeAiSessionGoal(goalPatch)
+      : current.goal;
   return {
     ...current,
     ...sessionPatch,
@@ -152,6 +160,7 @@ function buildAiSessionPatch(
     counters,
     queue: patch.queue ? normalizeAiSessionQueue(patch.queue) : current.queue,
     subAgents: patch.subAgents !== undefined ? normalizeAiSessionSubAgents(patch.subAgents) : current.subAgents,
+    goal,
   };
 }
 
@@ -193,6 +202,7 @@ const AI_SESSION_BUSINESS_KEYS = [
   "currentTool",
   "toolCallsSinceLastMessage",
   "subAgents",
+  "goal",
   "transcriptPath",
   "transcriptSize",
   "startedAt",
@@ -298,6 +308,13 @@ export function reduceAiSessionRealtime(
 ): AiSessionStatus | undefined {
   const updatedAt = event.observedAt ?? current.updatedAt;
   const meta = turnMeta(event);
+  if (event.kind === "goal") {
+    return applyAiSessionPatch(current, { goal: event.goal }, {
+      updatedAt,
+      meta,
+      suppressTurnUpdate: true,
+    });
+  }
   if (event.kind === "send-ack") {
     const userPrompt = messageText(event.userPrompt);
     return applyAiSessionPatch(current, {
@@ -519,6 +536,7 @@ export function reduceAiSessionSnapshot(
     subAgents: staleActivitySnapshot
       ? current.subAgents
       : event.subAgents !== undefined ? event.subAgents : current.subAgents,
+    goal: event.goal === undefined ? current.goal : event.goal,
   }, {
     updatedAt: event.observedAt ?? current.updatedAt,
     meta,

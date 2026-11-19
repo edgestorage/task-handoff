@@ -9,12 +9,13 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
 use controlled_instance_protocol::{
     codex_model_provider_id, AiSessionAttachmentKind, AiSessionCommandInput, AiSessionCommandName,
-    AiSessionCommandResult, AiSessionHierarchyCapabilities, AiSessionMentionCandidate,
-    AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionDiagnosticCategory,
-    AiSessionMentionFileSearch, AiSessionMentionKind, AiSessionModelSelectionCapabilities,
-    AiSessionProviderActions, AiSessionProviderCapability, AiSessionProviderTimelineCapabilities,
-    AiSessionReasoningEffortCapabilities, AiSessionTimeline, AiSessionTimelineActivityStatus,
-    AiSessionTimelineItem, AiSessionTurnTimeline, AI_SESSION_MAX_INLINE_FILE_BYTES,
+    AiSessionCommandResult, AiSessionGoal, AiSessionGoalStatus, AiSessionHierarchyCapabilities,
+    AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic,
+    AiSessionMentionDiagnosticCategory, AiSessionMentionFileSearch, AiSessionMentionKind,
+    AiSessionModelSelectionCapabilities, AiSessionProviderActions, AiSessionProviderCapability,
+    AiSessionProviderTimelineCapabilities, AiSessionReasoningEffortCapabilities, AiSessionTimeline,
+    AiSessionTimelineActivityStatus, AiSessionTimelineItem, AiSessionTurnTimeline,
+    AI_SESSION_MAX_INLINE_FILE_BYTES,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Map, Value};
@@ -47,6 +48,7 @@ const THREAD_SETTINGS_UPDATE_MIN_VERSION: [u64; 3] = [0, 133, 0];
 const NATIVE_TIMELINE_MIN_VERSION: [u64; 3] = [0, 145, 0];
 const STRUCTURED_TURN_TIMEOUT: Duration = Duration::from_secs(30);
 const STRUCTURED_RESPONSE_MAX_BYTES: usize = 8 * 1024;
+const MAX_GOAL_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CodexSubAgentObservation {
@@ -2594,11 +2596,31 @@ impl CodexAppServerClient {
     async fn set_thread_goal(
         &self,
         provider_session_id: &str,
-        objective: &str,
+        options: CodexThreadGoalSetOptions,
     ) -> Result<Value, CodexRpcError> {
+        let mut params = Map::new();
+        params.insert("threadId".to_string(), json!(provider_session_id));
+        params.insert("origin".to_string(), json!("user"));
+        if let Some(objective) = options.objective {
+            params.insert("objective".to_string(), json!(objective));
+        }
+        if let Some(status) = options.status {
+            params.insert("status".to_string(), json!(goal_status_wire(status)));
+        }
+        if let Some(token_budget) = options.token_budget {
+            params.insert(
+                "tokenBudget".to_string(),
+                token_budget.map_or(Value::Null, |budget| json!(budget)),
+            );
+        }
+        self.request_rpc("thread/goal/set", Value::Object(params))
+            .await
+    }
+
+    async fn clear_thread_goal(&self, provider_session_id: &str) -> Result<Value, CodexRpcError> {
         self.request_rpc(
-            "thread/goal/set",
-            json!({ "threadId": provider_session_id, "objective": objective }),
+            "thread/goal/clear",
+            json!({ "threadId": provider_session_id, "origin": "user" }),
         )
         .await
     }
@@ -3445,30 +3467,69 @@ impl AiSessionControlProvider for CodexAppServerProvider {
             }
             AiSessionCommandName::Goal => {
                 if let Some(argument) = input.argument.as_deref() {
-                    self.client
-                        .set_thread_goal(provider_session_id, argument)
-                        .await
-                        .map_err(command_rpc_error)?;
-                    return Ok(AiSessionCommandResult {
-                        command: input.command,
-                        value: Some(argument.to_string()),
-                        turn_id: None,
-                    });
+                    match parse_goal_command(argument)? {
+                        CodexGoalCommandAction::Clear => {
+                            self.client
+                                .clear_thread_goal(provider_session_id)
+                                .await
+                                .map_err(command_rpc_error)?;
+                            publish_thread_goal(&self.client, provider_session_id, None);
+                            return Ok(AiSessionCommandResult {
+                                command: input.command,
+                                value: Some("No active goal.".to_string()),
+                                turn_id: None,
+                            });
+                        }
+                        CodexGoalCommandAction::Set(options) => {
+                            let result = self
+                                .client
+                                .set_thread_goal(provider_session_id, options)
+                                .await
+                                .map_err(command_rpc_error)?;
+                            let goal = result.get("goal").and_then(codex_thread_goal).ok_or_else(
+                                || {
+                                    ProviderError::bad_gateway(
+                                        "AI_SESSION_GOAL_INVALID_RESPONSE",
+                                        "Codex returned an invalid goal.",
+                                    )
+                                },
+                            )?;
+                            publish_thread_goal(
+                                &self.client,
+                                provider_session_id,
+                                Some(goal.clone()),
+                            );
+                            return Ok(AiSessionCommandResult {
+                                command: input.command,
+                                value: Some(goal.objective),
+                                turn_id: None,
+                            });
+                        }
+                    }
                 }
                 let result = self
                     .client
                     .get_thread_goal(provider_session_id)
                     .await
                     .map_err(command_rpc_error)?;
-                let objective = result
-                    .get("goal")
-                    .and_then(Value::as_object)
-                    .and_then(|goal| goal.get("objective"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("No active goal.");
+                let goal = match result.get("goal") {
+                    None | Some(Value::Null) => None,
+                    Some(goal) => {
+                        Some(Some(goal).and_then(codex_thread_goal).ok_or_else(|| {
+                            ProviderError::bad_gateway(
+                                "AI_SESSION_GOAL_INVALID_RESPONSE",
+                                "Codex returned an invalid goal.",
+                            )
+                        })?)
+                    }
+                };
+                publish_thread_goal(&self.client, provider_session_id, goal.clone());
                 Ok(AiSessionCommandResult {
                     command: input.command,
-                    value: Some(objective.to_string()),
+                    value: Some(
+                        goal.map(|goal| goal.objective)
+                            .unwrap_or_else(|| "No active goal.".to_string()),
+                    ),
                     turn_id: None,
                 })
             }
@@ -3590,6 +3651,194 @@ fn command_rpc_error(error: CodexRpcError) -> ProviderError {
     } else {
         ProviderError::new("AI_SESSION_RPC_FAILED", error.message, 502)
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct CodexThreadGoalSetOptions {
+    objective: Option<String>,
+    status: Option<AiSessionGoalStatus>,
+    /// `None` keeps the current budget; `Some(None)` clears it.
+    token_budget: Option<Option<i64>>,
+}
+
+#[derive(Debug, Clone)]
+enum CodexGoalCommandAction {
+    Clear,
+    Set(CodexThreadGoalSetOptions),
+}
+
+fn goal_status_wire(status: AiSessionGoalStatus) -> &'static str {
+    match status {
+        AiSessionGoalStatus::Active => "active",
+        AiSessionGoalStatus::Paused => "paused",
+        AiSessionGoalStatus::Blocked => "blocked",
+        AiSessionGoalStatus::UsageLimited => "usageLimited",
+        AiSessionGoalStatus::BudgetLimited => "budgetLimited",
+        AiSessionGoalStatus::Complete => "complete",
+    }
+}
+
+fn goal_status_command(value: &str) -> Option<AiSessionGoalStatus> {
+    match value.to_ascii_lowercase().as_str() {
+        "pause" => Some(AiSessionGoalStatus::Paused),
+        "resume" | "active" => Some(AiSessionGoalStatus::Active),
+        "blocked" | "stall" => Some(AiSessionGoalStatus::Blocked),
+        "usage" | "usage-limited" => Some(AiSessionGoalStatus::UsageLimited),
+        "budget" => Some(AiSessionGoalStatus::BudgetLimited),
+        "complete" => Some(AiSessionGoalStatus::Complete),
+        _ => None,
+    }
+}
+
+fn command_remainder<'a>(input: &'a str, command: &str) -> Option<&'a str> {
+    if !input
+        .get(..command.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(command))
+    {
+        return None;
+    }
+    let rest = &input[command.len()..];
+    rest.chars()
+        .next()
+        .filter(|value| value.is_whitespace())
+        .map(|_| rest.trim_start())
+}
+
+fn budget_command_remainder(input: &str) -> Option<&str> {
+    const COMMAND: &str = "budget";
+    if !input
+        .get(..COMMAND.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(COMMAND))
+    {
+        return None;
+    }
+    let rest = &input[COMMAND.len()..];
+    if rest.is_empty() {
+        return Some("");
+    }
+    rest.chars()
+        .next()
+        .filter(|value| value.is_whitespace())
+        .map(|_| rest.trim_start())
+}
+
+fn parse_goal_command(argument: &str) -> Result<CodexGoalCommandAction, ProviderError> {
+    let trimmed = argument.trim();
+    if trimmed.eq_ignore_ascii_case("clear") {
+        return Ok(CodexGoalCommandAction::Clear);
+    }
+    for command in ["set", "edit"] {
+        if let Some(objective) = command_remainder(trimmed, command) {
+            let objective = objective.trim();
+            if !objective.is_empty() {
+                return Ok(CodexGoalCommandAction::Set(CodexThreadGoalSetOptions {
+                    objective: Some(objective.to_string()),
+                    status: Some(AiSessionGoalStatus::Active),
+                    token_budget: None,
+                }));
+            }
+        }
+    }
+    if let Some(status) = goal_status_command(trimmed) {
+        return Ok(CodexGoalCommandAction::Set(CodexThreadGoalSetOptions {
+            objective: None,
+            status: Some(status),
+            token_budget: None,
+        }));
+    }
+    let words = trimmed.split_whitespace().collect::<Vec<_>>();
+    if words.len() == 2 && words[0].eq_ignore_ascii_case("status") {
+        return match goal_status_command(words[1]) {
+            Some(status) => Ok(CodexGoalCommandAction::Set(CodexThreadGoalSetOptions {
+                objective: None,
+                status: Some(status),
+                token_budget: None,
+            })),
+            None => Err(ProviderError::new(
+                "AI_SESSION_GOAL_STATUS_INVALID",
+                format!("Unknown goal status: {}", words[1]),
+                400,
+            )),
+        };
+    }
+    if let Some(value) = budget_command_remainder(trimmed) {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(ProviderError::new(
+                "AI_SESSION_GOAL_BUDGET_INVALID",
+                "A token budget is required.",
+                400,
+            ));
+        }
+        if matches!(
+            value.to_ascii_lowercase().as_str(),
+            "off" | "none" | "clear"
+        ) {
+            return Ok(CodexGoalCommandAction::Set(CodexThreadGoalSetOptions {
+                token_budget: Some(None),
+                ..CodexThreadGoalSetOptions::default()
+            }));
+        }
+        let budget = if value.chars().all(|character| character.is_ascii_digit()) {
+            value.parse::<i64>().ok().filter(|budget| *budget > 0)
+        } else {
+            None
+        };
+        let Some(budget) = budget else {
+            return Err(ProviderError::new(
+                "AI_SESSION_GOAL_BUDGET_INVALID",
+                "Goal token budget must be a positive integer.",
+                400,
+            ));
+        };
+        return Ok(CodexGoalCommandAction::Set(CodexThreadGoalSetOptions {
+            token_budget: Some(Some(budget)),
+            ..CodexThreadGoalSetOptions::default()
+        }));
+    }
+    Ok(CodexGoalCommandAction::Set(CodexThreadGoalSetOptions {
+        objective: Some(trimmed.to_string()),
+        status: Some(AiSessionGoalStatus::Active),
+        token_budget: None,
+    }))
+}
+
+fn codex_thread_goal(value: &Value) -> Option<AiSessionGoal> {
+    let record = value.as_object()?;
+    let objective = record.get("objective")?.as_str()?.trim();
+    if objective.is_empty() || objective.encode_utf16().count() > 4000 {
+        return None;
+    }
+    let status =
+        serde_json::from_value::<AiSessionGoalStatus>(record.get("status")?.clone()).ok()?;
+    let token_budget = match record.get("tokenBudget")? {
+        Value::Null => None,
+        value => {
+            let budget = value.as_f64()?;
+            if !budget.is_finite()
+                || budget.fract() != 0.0
+                || !(1.0..=MAX_GOAL_SAFE_INTEGER).contains(&budget)
+            {
+                return None;
+            }
+            Some(budget as i64)
+        }
+    };
+    let tokens_used = goal_non_negative_integer(record.get("tokensUsed"))?;
+    let time_used_seconds = goal_non_negative_integer(record.get("timeUsedSeconds"))?;
+    Some(AiSessionGoal {
+        objective: objective.to_string(),
+        status,
+        token_budget,
+        tokens_used,
+        time_used_seconds,
+    })
+}
+
+fn goal_non_negative_integer(value: Option<&Value>) -> Option<i64> {
+    let number = value?.as_f64()?;
+    (number.is_finite() && number.fract() == 0.0 && (0.0..=MAX_GOAL_SAFE_INTEGER).contains(&number))
+        .then_some(number as i64)
 }
 
 fn collect_mention_result(
@@ -3804,6 +4053,17 @@ fn publish_thread_snapshot(client: &CodexAppServerClient, snapshot: &CodexThread
     let _ = client.inner.events.send(ProviderEvent::SubAgentSnapshot {
         provider_session_id: snapshot.provider_session_id.clone(),
         sub_agents: snapshot.sub_agents.clone(),
+    });
+}
+
+fn publish_thread_goal(
+    client: &CodexAppServerClient,
+    provider_session_id: &str,
+    goal: Option<AiSessionGoal>,
+) {
+    let _ = client.inner.events.send(ProviderEvent::GoalUpdated {
+        provider_session_id: provider_session_id.to_string(),
+        goal,
     });
 }
 
@@ -4489,6 +4749,32 @@ async fn emit_notification(inner: &Arc<ClientInner>, method: &str, params: &Valu
             });
         }
         "thread/name/updated" => {}
+        "thread/goal/updated" => {
+            let Some(goal) = params.get("goal") else {
+                return;
+            };
+            if goal.get("threadId").and_then(Value::as_str) != Some(provider_session_id) {
+                return;
+            }
+            if let Some(goal) = codex_thread_goal(goal) {
+                publish_thread_goal(
+                    &CodexAppServerClient {
+                        inner: inner.clone(),
+                    },
+                    provider_session_id,
+                    Some(goal),
+                );
+            }
+        }
+        "thread/goal/cleared" => {
+            publish_thread_goal(
+                &CodexAppServerClient {
+                    inner: inner.clone(),
+                },
+                provider_session_id,
+                None,
+            );
+        }
         "thread/closed" => {
             clear_thread_approvals(inner, provider_session_id).await;
             inner
@@ -5852,6 +6138,264 @@ mod tests {
         assert!(provider.take_armed_title_generation("thread-2").is_none());
     }
 
+    #[test]
+    fn parses_goal_commands_with_codex_compatible_semantics() {
+        match parse_goal_command("pause").unwrap() {
+            CodexGoalCommandAction::Set(options) => {
+                assert_eq!(options.status, Some(AiSessionGoalStatus::Paused));
+                assert!(options.objective.is_none());
+            }
+            CodexGoalCommandAction::Clear => panic!("expected set"),
+        }
+        match parse_goal_command("set pause").unwrap() {
+            CodexGoalCommandAction::Set(options) => {
+                assert_eq!(options.objective.as_deref(), Some("pause"));
+                assert_eq!(options.status, Some(AiSessionGoalStatus::Active));
+            }
+            CodexGoalCommandAction::Clear => panic!("expected set"),
+        }
+        match parse_goal_command("budget off").unwrap() {
+            CodexGoalCommandAction::Set(options) => assert_eq!(options.token_budget, Some(None)),
+            CodexGoalCommandAction::Clear => panic!("expected set"),
+        }
+        match parse_goal_command("budget 500").unwrap() {
+            CodexGoalCommandAction::Set(options) => {
+                assert_eq!(options.token_budget, Some(Some(500)))
+            }
+            CodexGoalCommandAction::Clear => panic!("expected set"),
+        }
+        assert!(matches!(
+            parse_goal_command("CLEAR").unwrap(),
+            CodexGoalCommandAction::Clear
+        ));
+        let status_error = parse_goal_command("status unknown").unwrap_err();
+        assert_eq!(status_error.code, "AI_SESSION_GOAL_STATUS_INVALID");
+        assert_eq!(status_error.status_code, 400);
+        let budget_error = parse_goal_command("budget 0").unwrap_err();
+        assert_eq!(budget_error.code, "AI_SESSION_GOAL_BUDGET_INVALID");
+        assert_eq!(budget_error.status_code, 400);
+        match parse_goal_command("budget").unwrap() {
+            CodexGoalCommandAction::Set(options) => {
+                assert_eq!(options.status, Some(AiSessionGoalStatus::BudgetLimited))
+            }
+            CodexGoalCommandAction::Clear => panic!("expected set"),
+        }
+    }
+
+    #[test]
+    fn parses_codex_thread_goals_and_rejects_invalid_usage() {
+        let goal = codex_thread_goal(&json!({
+            "threadId": "thread-1",
+            "objective": "  Ship it  ",
+            "status": "budgetLimited",
+            "tokenBudget": 500,
+            "tokensUsed": 42,
+            "timeUsedSeconds": 7,
+            "createdAt": 1,
+            "updatedAt": 2,
+        }))
+        .unwrap();
+        assert_eq!(goal.objective, "Ship it");
+        assert_eq!(goal.status, AiSessionGoalStatus::BudgetLimited);
+        assert_eq!(goal.token_budget, Some(500));
+        assert_eq!(goal.tokens_used, 42);
+        assert_eq!(goal.time_used_seconds, 7);
+        assert!(codex_thread_goal(&json!({
+            "objective": "Ship it",
+            "status": "active",
+            "tokenBudget": null,
+            "tokensUsed": "42",
+            "timeUsedSeconds": 7,
+        }))
+        .is_none());
+        assert!(codex_thread_goal(&json!({
+            "objective": " ",
+            "status": "active",
+            "tokenBudget": null,
+            "tokensUsed": 42,
+            "timeUsedSeconds": 7,
+        }))
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn goal_notifications_publish_updates_and_clears() {
+        let client = test_client();
+        let mut events = client.inner.events.subscribe();
+        emit_notification(
+            &client.inner,
+            "thread/goal/updated",
+            &json!({
+                "threadId": "thread-1",
+                "goal": {
+                    "threadId": "thread-1",
+                    "objective": "Ship it",
+                    "status": "active",
+                    "tokenBudget": null,
+                    "tokensUsed": 1,
+                    "timeUsedSeconds": 2,
+                    "createdAt": 3,
+                    "updatedAt": 4,
+                },
+            }),
+        )
+        .await;
+        match events.recv().await.unwrap() {
+            ProviderEvent::GoalUpdated {
+                provider_session_id,
+                goal,
+            } => {
+                assert_eq!(provider_session_id, "thread-1");
+                assert_eq!(goal.unwrap().objective, "Ship it");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        emit_notification(
+            &client.inner,
+            "thread/goal/cleared",
+            &json!({ "threadId": "thread-1" }),
+        )
+        .await;
+        match events.recv().await.unwrap() {
+            ProviderEvent::GoalUpdated { goal, .. } => assert!(goal.is_none()),
+            other => panic!("unexpected event: {other:?}"),
+        }
+        emit_notification(
+            &client.inner,
+            "thread/goal/updated",
+            &json!({
+                "threadId": "thread-1",
+                "goal": {
+                    "threadId": "thread-2",
+                    "objective": "Ignore me",
+                    "status": "active",
+                    "tokenBudget": null,
+                    "tokensUsed": 1,
+                    "timeUsedSeconds": 2,
+                    "createdAt": 3,
+                    "updatedAt": 4,
+                },
+            }),
+        )
+        .await;
+        assert!(events.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn goal_rpc_sends_user_origin_and_optional_fields() {
+        let client = test_client();
+        let mut written = rpc_test_transport(&client).await;
+        let server = client.clone();
+        let responder = tokio::spawn(async move {
+            let request: Value = serde_json::from_str(&written.recv().await.unwrap()).unwrap();
+            assert_eq!(request["method"], "thread/goal/set");
+            assert_eq!(request["params"]["threadId"], "thread-1");
+            assert_eq!(request["params"]["origin"], "user");
+            assert_eq!(request["params"]["objective"], "Ship it");
+            assert_eq!(request["params"]["status"], "active");
+            assert!(request["params"].get("tokenBudget").is_none());
+            server
+                .inner
+                .pending
+                .lock()
+                .await
+                .remove(&request["id"].as_u64().unwrap())
+                .unwrap()
+                .send(Ok(json!({
+                    "goal": {
+                        "threadId": "thread-1",
+                        "objective": "Ship it",
+                        "status": "active",
+                        "tokenBudget": null,
+                        "tokensUsed": 1,
+                        "timeUsedSeconds": 2,
+                        "createdAt": 3,
+                        "updatedAt": 4,
+                    }
+                })))
+                .unwrap();
+
+            let request: Value = serde_json::from_str(&written.recv().await.unwrap()).unwrap();
+            assert_eq!(request["method"], "thread/goal/set");
+            assert_eq!(request["params"]["tokenBudget"], Value::Null);
+            assert!(request["params"].get("objective").is_none());
+            server
+                .inner
+                .pending
+                .lock()
+                .await
+                .remove(&request["id"].as_u64().unwrap())
+                .unwrap()
+                .send(Ok(json!({
+                    "goal": {
+                        "threadId": "thread-1",
+                        "objective": "Ship it",
+                        "status": "active",
+                        "tokenBudget": null,
+                        "tokensUsed": 1,
+                        "timeUsedSeconds": 2,
+                        "createdAt": 3,
+                        "updatedAt": 4,
+                    }
+                })))
+                .unwrap();
+
+            let request: Value = serde_json::from_str(&written.recv().await.unwrap()).unwrap();
+            assert_eq!(request["method"], "thread/goal/clear");
+            assert_eq!(request["params"]["origin"], "user");
+            server
+                .inner
+                .pending
+                .lock()
+                .await
+                .remove(&request["id"].as_u64().unwrap())
+                .unwrap()
+                .send(Ok(json!({ "cleared": true })))
+                .unwrap();
+
+            let request: Value = serde_json::from_str(&written.recv().await.unwrap()).unwrap();
+            assert_eq!(request["method"], "thread/goal/get");
+            server
+                .inner
+                .pending
+                .lock()
+                .await
+                .remove(&request["id"].as_u64().unwrap())
+                .unwrap()
+                .send(Ok(json!({ "goal": null })))
+                .unwrap();
+        });
+
+        let set = client
+            .set_thread_goal(
+                "thread-1",
+                CodexThreadGoalSetOptions {
+                    objective: Some("Ship it".to_string()),
+                    status: Some(AiSessionGoalStatus::Active),
+                    token_budget: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(set["goal"]["objective"], "Ship it");
+        client
+            .set_thread_goal(
+                "thread-1",
+                CodexThreadGoalSetOptions {
+                    token_budget: Some(None),
+                    ..CodexThreadGoalSetOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        client.clear_thread_goal("thread-1").await.unwrap();
+        assert_eq!(
+            client.get_thread_goal("thread-1").await.unwrap()["goal"],
+            Value::Null
+        );
+        responder.await.unwrap();
+    }
+
     fn test_approval(id: u64) -> CodexApprovalRequest {
         CodexApprovalRequest {
             response_id: id,
@@ -5896,6 +6440,7 @@ mod tests {
             current_tool: None,
             tool_calls_since_last_message: 0,
             sub_agents: Vec::new(),
+            goal: None,
             transcript_path: None,
             transcript_size: None,
             started_at: "2026-11-02T00:00:00.000Z".to_string(),

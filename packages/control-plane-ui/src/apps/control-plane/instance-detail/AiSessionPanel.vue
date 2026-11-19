@@ -1173,6 +1173,14 @@
             @set-queue-paused="setSelectedQueuePaused(selectedSession.id, $event)"
             @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
           />
+          <AiSessionGoalBadge
+            v-if="selectedSession.goal"
+            class="session-ai-compose-goal"
+            :goal="selectedSession.goal"
+            :disabled="aiSessionActionBusy"
+            tone="detail"
+            @command="executeSelectedGoalCommand"
+          />
           <AiSessionComposer
             ref="composerEl"
             v-model="messageDraft"
@@ -1403,6 +1411,7 @@ import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCa
 import AiSessionRenameDialog from "../../../components/ai-session/AiSessionRenameDialog.vue";
 import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMarks.vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
+import AiSessionGoalBadge from "../../../components/ai-session/AiSessionGoalBadge.vue";
 import AiSessionStickyContext from "../../../components/ai-session/AiSessionStickyContext.vue";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
@@ -3974,6 +3983,10 @@ async function executeSelectedSessionCommand(input: AiSessionCommandInput) {
   } finally {
     aiSessionActionBusy.value = false;
   }
+}
+
+function executeSelectedGoalCommand(argument: "pause" | "resume" | "clear") {
+  void executeSelectedSessionCommand({ command: "goal", argument });
 }
 
 async function steerMessageDraft() {

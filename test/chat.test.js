@@ -59,6 +59,7 @@ const {
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
 const { AiSessionDiscoveryCoordinator } = require("../packages/ai-session-runtime/src/ai-session-discovery.ts");
 const { AiSessionHistoryStore } = require("../packages/ai-session-runtime/src/ai-session-history-store.ts");
+const { normalizeAiSessionGoal } = require("../packages/ai-session-runtime/src/ai-session/persistence.ts");
 const { CodexAppServerClient, CodexAppServerSessionBridge } = require("../packages/ai-session-runtime/src/codex-app-server.ts");
 const { CodexAppServerApprovalCoordinator } = require("../packages/ai-session-runtime/src/codex-app-server/session/approval-coordinator.ts");
 const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex-app-server/session/timeline-store.ts");
@@ -4737,6 +4738,96 @@ test("codex app server protocol parses retry and realtime error notifications", 
   });
 });
 
+test("codex app server protocol parses goal notifications", () => {
+  const goal = {
+    threadId: "thread_goal",
+    objective: "Ship the goal support",
+    status: "active",
+    tokenBudget: 20_000,
+    tokensUsed: 120,
+    timeUsedSeconds: 9,
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  assert.deepEqual(codexNotification("thread/goal/updated", {
+    threadId: "thread_goal",
+    turnId: "turn_goal",
+    goal,
+  }), {
+    type: "goal",
+    threadId: "thread_goal",
+    goal: {
+      objective: "Ship the goal support",
+      status: "active",
+      tokenBudget: 20_000,
+      tokensUsed: 120,
+      timeUsedSeconds: 9,
+    },
+  });
+  assert.deepEqual(codexNotification("thread/goal/cleared", { threadId: "thread_goal" }), {
+    type: "goal",
+    threadId: "thread_goal",
+    goal: null,
+  });
+  assert.equal(codexNotification("thread/goal/updated", {
+    threadId: "thread_goal",
+    goal: { ...goal, threadId: "thread_other" },
+  }), undefined);
+});
+
+test("ai session goals survive realtime events, snapshots, and persistence", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-goal-"));
+  const dir = path.join(root, "ai-sessions");
+  const goal = {
+    objective: "Finish the migration",
+    status: "active",
+    tokenBudget: 5_000,
+    tokensUsed: 300,
+    timeUsedSeconds: 42,
+  };
+  const registry = createAiSessionRegistry({ dir });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread_goal_state", cwd: "/workspace", status: "idle", phase: "unknown" });
+  const updated = registry.applyRealtimeEvent(session.id, { kind: "goal", goal });
+  assert.deepEqual(updated.goal, goal);
+  assert.equal(updated.turns.length, 0);
+  const summary = AiSessionSummarySchema.parse(registry.snapshot().sessions.find((entry) => entry.id === session.id));
+  assert.deepEqual(summary.goal, goal);
+  assert.deepEqual(createAiSessionRegistry({ dir }).get(session.id).goal, goal);
+  const cleared = reduceAiSessionSnapshot(updated, {
+    type: "snapshot",
+    sessionId: session.id,
+    source: "control",
+    goal: null,
+  });
+  assert.equal(cleared.goal, undefined);
+  assert.equal(normalizeAiSessionGoal({ ...goal, objective: "   " }), undefined);
+  assert.equal(normalizeAiSessionGoal({ ...goal, tokensUsed: "300" }), undefined);
+  assert.equal(normalizeAiSessionGoal({ ...goal, timeUsedSeconds: -1 }), undefined);
+});
+
+test("codex app server bridge projects goal notifications and clears them", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-goal-projection-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexGoalClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_goal_projection"]; }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexGoalClient());
+  const session = registry.start({ agent: "codex", providerSessionId: "thread_goal_projection", cwd: "/workspace", status: "idle", phase: "unknown" });
+  const goal = {
+    objective: "Project the goal",
+    status: "paused",
+    tokenBudget: null,
+    tokensUsed: 7,
+    timeUsedSeconds: 1,
+  };
+  bridge["applyProviderEvent"]({ type: "goal", threadId: "thread_goal_projection", goal });
+  assert.deepEqual(registry.get(session.id).goal, goal);
+  bridge["applyProviderEvent"]({ type: "goal", threadId: "thread_goal_projection", goal: null });
+  assert.equal(registry.get(session.id).goal, undefined);
+});
+
 test("codex app server bridge emits raw message deltas without persisting partial snapshots", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-message-delta-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -6220,8 +6311,33 @@ test("codex command facade invokes structured app-server methods", async () => {
     async startReview(threadId) { calls.push(["review", threadId]); return { turnId: "turn_review" }; }
     async setThreadName(threadId, name) { calls.push(["rename", threadId, name]); }
     async readThread(threadId) { return { id: threadId, name: "New name", cwd: "/workspace", status: { type: "idle" } }; }
-    async setThreadGoal(threadId, objective) { calls.push(["goal-set", threadId, objective]); return { goal: { objective } }; }
-    async getThreadGoal(threadId) { calls.push(["goal-get", threadId]); return { goal: { objective: "Ship it" } }; }
+    async setThreadGoal(threadId, options) {
+      calls.push(["goal-set", threadId, options]);
+      return { goal: {
+        threadId,
+        objective: options.objective || "Ship it",
+        status: options.status || "active",
+        tokenBudget: options.tokenBudget === undefined ? null : options.tokenBudget,
+        tokensUsed: 12,
+        timeUsedSeconds: 3,
+        createdAt: 1,
+        updatedAt: 2,
+      } };
+    }
+    async getThreadGoal(threadId) {
+      calls.push(["goal-get", threadId]);
+      return { goal: {
+        threadId,
+        objective: "Ship it",
+        status: "paused",
+        tokenBudget: 500,
+        tokensUsed: 12,
+        timeUsedSeconds: 3,
+        createdAt: 1,
+        updatedAt: 2,
+      } };
+    }
+    async clearThreadGoal(threadId, options) { calls.push(["goal-clear", threadId, options]); return { cleared: true }; }
     async compactThread(threadId) { calls.push(["compact", threadId]); }
   }
   const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexCommandsClient());
@@ -6232,14 +6348,45 @@ test("codex command facade invokes structured app-server methods", async () => {
   bridge["applyProviderEvent"]({ type: "thread-name", threadId: "thread_commands", name: "New name" });
   assert.equal(registry.get(session.id).title, "New name");
   assert.deepEqual(await bridge.executeCommand(session, { command: "goal", argument: "Ship it" }), { command: "goal", value: "Ship it" });
+  assert.deepEqual(registry.get(session.id).goal, {
+    objective: "Ship it",
+    status: "active",
+    tokenBudget: null,
+    tokensUsed: 12,
+    timeUsedSeconds: 3,
+  });
+  assert.deepEqual(await bridge.executeCommand(session, { command: "goal", argument: "pause" }), { command: "goal", value: "Ship it" });
+  assert.deepEqual(await bridge.executeCommand(session, { command: "goal", argument: "budget 500" }), { command: "goal", value: "Ship it" });
+  assert.deepEqual(await bridge.executeCommand(session, { command: "goal", argument: "budget off" }), { command: "goal", value: "Ship it" });
+  assert.deepEqual(await bridge.executeCommand(session, { command: "goal", argument: "clear" }), { command: "goal", value: "No active goal." });
+  assert.equal(registry.get(session.id).goal, undefined);
   assert.deepEqual(await bridge.executeCommand(session, { command: "goal" }), { command: "goal", value: "Ship it" });
+  assert.deepEqual(registry.get(session.id).goal, {
+    objective: "Ship it",
+    status: "paused",
+    tokenBudget: 500,
+    tokensUsed: 12,
+    timeUsedSeconds: 3,
+  });
   assert.deepEqual(await bridge.executeCommand(session, { command: "compact" }), { command: "compact" });
   assert.deepEqual(calls, [
     ["review", "thread_commands"],
-    ["goal-set", "thread_commands", "Ship it"],
+    ["goal-set", "thread_commands", { origin: "user", objective: "Ship it", status: "active" }],
+    ["goal-set", "thread_commands", { origin: "user", status: "paused" }],
+    ["goal-set", "thread_commands", { origin: "user", tokenBudget: 500 }],
+    ["goal-set", "thread_commands", { origin: "user", tokenBudget: null }],
+    ["goal-clear", "thread_commands", { origin: "user" }],
     ["goal-get", "thread_commands"],
     ["compact", "thread_commands"],
   ]);
+  await assert.rejects(
+    () => bridge.executeCommand(session, { command: "goal", argument: "status unknown" }),
+    (error) => error?.code === "AI_SESSION_GOAL_STATUS_INVALID" && error?.statusCode === 400,
+  );
+  await assert.rejects(
+    () => bridge.executeCommand(session, { command: "goal", argument: "budget 0" }),
+    (error) => error?.code === "AI_SESSION_GOAL_BUDGET_INVALID" && error?.statusCode === 400,
+  );
   await assert.rejects(
     () => bridge.executeCommand({ ...session, status: "running" }, { command: "review" }),
     (error) => error?.code === "AI_SESSION_BUSY",

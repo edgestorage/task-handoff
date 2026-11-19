@@ -617,6 +617,7 @@ mod tests {
             current_tool: None,
             tool_calls_since_last_message: 0,
             sub_agents: Vec::new(),
+            goal: None,
             transcript_path: None,
             transcript_size: None,
             started_at: String::new(),

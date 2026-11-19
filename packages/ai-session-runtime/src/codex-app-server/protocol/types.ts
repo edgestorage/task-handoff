@@ -1,4 +1,4 @@
-import type { AiSessionReasoningEffort, AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionGoal, AiSessionReasoningEffort, AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 
 export type JsonValue = Record<string, unknown>;
 export type CodexUserInput =
@@ -66,6 +66,7 @@ export type CodexAppServerEvent =
   | { type: "thread-status"; threadId: string; status: CodexThreadStatus }
   | { type: "thread-closed"; threadId: string }
   | { type: "thread-name"; threadId: string; name: string }
+  | { type: "goal"; threadId: string; goal: AiSessionGoal | null }
   | { type: "turn-started"; threadId: string; turnId?: string; observedAt?: string }
   | { type: "turn-error"; threadId: string; turnId: string; error: string; willRetry: boolean }
   | { type: "turn-completed"; threadId: string; turnId?: string; status?: string; error?: string; observedAt?: string }
