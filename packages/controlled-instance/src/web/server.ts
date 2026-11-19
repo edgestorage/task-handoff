@@ -1065,10 +1065,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       }
     },
   });
-  // OpenCode is an optional managed app. Do not register its session provider
-  // when the executable is unavailable: discovery runs periodically and would
-  // otherwise turn a missing local dependency into a repeated error storm.
-  const openCodeAvailable = appRuntime.catalog().some((app) => app.id === "opencode");
   const retainCodexTimelineHistory = () => {
     if (typeof codexAppServer.retainTimelineHistory !== "function") return;
     try {
@@ -1156,34 +1152,41 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       hierarchy: { subagents: false },
     },
   });
-  if (openCodeAvailable) {
-    aiSessionProviders.register({
+  // Keep the provider registered independently of executable availability so a
+  // post-start install becomes visible without restarting the instance. The
+  // capability projection filters it against the authoritative app inventory;
+  // discovery is gated here because optional apps may stay uninstalled.
+  aiSessionProviders.register({
+    agent: "opencode",
+    controlProvider: openCode,
+    discoveryProvider: {
+      id: openCode.id,
+      refresh: (context) => appRuntime.catalog().some((app) => app.id === "opencode")
+        ? openCode.refresh(context)
+        : undefined,
+    },
+    ensureReady: async () => {
+      appRuntime.ensureSharedResource("opencode");
+      await openCode.ensureReady();
+    },
+    capability: {
       agent: "opencode",
-      controlProvider: openCode,
-      discoveryProvider: openCode,
-      ensureReady: async () => {
-        appRuntime.ensureSharedResource("opencode");
-        await openCode.ensureReady();
+      actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, rename: true, approvalDecisions: ["allow", "deny"] },
+      permissionModes: ["ask", "auto-review", "full-access"],
+      timeline: { sessionRead: true, turnRead: true, liveItems: true },
+      modelSelection: {
+        selectModelAtCreate: true,
+        selectProviderAtCreate: true,
+        selectModelAtResume: false,
+        selectProviderAtResume: false,
+        switchModelWithinProvider: true,
+        switchProviderDuringSession: true,
+        stableIdentity: true,
       },
-      capability: {
-        agent: "opencode",
-        actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, rename: true, approvalDecisions: ["allow", "deny"] },
-        permissionModes: ["ask", "auto-review", "full-access"],
-        timeline: { sessionRead: true, turnRead: true, liveItems: true },
-        modelSelection: {
-          selectModelAtCreate: true,
-          selectProviderAtCreate: true,
-          selectModelAtResume: false,
-          selectProviderAtResume: false,
-          switchModelWithinProvider: true,
-          switchProviderDuringSession: true,
-          stableIdentity: true,
-        },
-        reasoningEffort: { selectAtCreate: true, updateDuringSession: true },
-        hierarchy: { subagents: true },
-      },
-    });
-  }
+      reasoningEffort: { selectAtCreate: true, updateDuringSession: true },
+      hierarchy: { subagents: true },
+    },
+  });
   const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory, (agent) => Boolean(aiSessionProviders.get(agent)));
   const unsubscribeTimelineItems = aiSessionController.subscribeTimelineItems((timelineItem) => {
     aiSessionTimelineItemDeltas.flush({

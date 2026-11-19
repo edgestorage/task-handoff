@@ -439,9 +439,11 @@ impl AppState {
         );
         ai_session_controller.register_provider(ai_session_codex.clone());
         ai_session_controller.register_provider(ai_session_claude.clone());
-        if app_runtime.catalog().iter().any(|app| app.id == "opencode") {
-            ai_session_controller.register_provider(ai_session_opencode.clone());
-        }
+        // Provider registration is independent from executable availability.
+        // The capability document filters providers against app inventory, so a
+        // post-start install becomes visible without restarting the instance.
+        // Discovery remains inventory-gated in refresh_all_ai_sessions.
+        ai_session_controller.register_provider(ai_session_opencode.clone());
         ai_session_controller.set_story_agent_tool_resolver(Arc::new(story_tools.clone()));
         let ai_session_resume = Arc::new(AiSessionResumeCoordinator::default());
         let ai_session_fork = Arc::new(AiSessionForkCoordinator::new(
@@ -2558,7 +2560,24 @@ fn controlled_instance_capabilities(
         "opencode" => 2,
         _ => 3,
     });
-    capabilities.features.ai_session_timeline = ai_session_controller.timeline_capabilities();
+    let provider_agents = providers
+        .iter()
+        .map(|provider| provider.agent.as_str())
+        .collect::<HashSet<_>>();
+    let mut timeline = ai_session_controller.timeline_capabilities();
+    timeline
+        .session_read_agents
+        .retain(|agent| provider_agents.contains(agent.as_str()));
+    timeline
+        .turn_read_agents
+        .retain(|agent| provider_agents.contains(agent.as_str()));
+    timeline
+        .live_item_agents
+        .retain(|agent| provider_agents.contains(agent.as_str()));
+    timeline
+        .tool_activity_agents
+        .retain(|agent| provider_agents.contains(agent.as_str()));
+    capabilities.features.ai_session_timeline = timeline;
     capabilities.features.ai_session_providers = providers;
     let agents = capabilities
         .features

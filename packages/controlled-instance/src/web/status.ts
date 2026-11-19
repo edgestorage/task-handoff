@@ -207,6 +207,13 @@ export function controlledInstanceCapabilities(
   const available = inventory.items.filter((item) => item.availability === "available");
   const availableAppIds = new Set(available.map((item) => item.id));
   const availableProviders = aiSessionProviders.filter((provider) => availableAppIds.has(provider.agent));
+  const availableProviderAgents = new Set(availableProviders.map((provider) => provider.agent));
+  const availableTimeline = {
+    sessionReadAgents: aiSessionTimeline.sessionReadAgents.filter((agent) => availableProviderAgents.has(agent)),
+    turnReadAgents: aiSessionTimeline.turnReadAgents.filter((agent) => availableProviderAgents.has(agent)),
+    liveItemAgents: aiSessionTimeline.liveItemAgents.filter((agent) => availableProviderAgents.has(agent)),
+    toolActivityAgents: aiSessionTimeline.toolActivityAgents.filter((agent) => availableProviderAgents.has(agent)),
+  };
   return ControlledInstanceCapabilitiesSchema.parse({
     features: {
       remoteDesktop,
@@ -246,7 +253,7 @@ export function controlledInstanceCapabilities(
       repositoryWorktreeMoveToMain: true,
       aiSessionSendIdempotency: true,
       aiSessionQueuePause: true,
-      aiSessionTimeline,
+      aiSessionTimeline: availableTimeline,
       aiSessionProviders: availableProviders,
       instanceShell: {
         protocolVersion: INSTANCE_SHELL_PROTOCOL_VERSION,

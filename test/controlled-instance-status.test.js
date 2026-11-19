@@ -171,6 +171,35 @@ test("instance capabilities are projected from available inventory items", () =>
   assert.equal("protocolVersion" in capabilities, false);
 });
 
+test("instance capability timeline is limited to providers available in inventory", () => {
+  const capabilities = controlledInstanceCapabilities({
+    appInventory: () => ({
+      observedAt: new Date().toISOString(),
+      issues: [],
+      items: [
+        { id: "codex", kind: "tty", availability: "available" },
+        { id: "opencode", kind: "tty", availability: "missing-dependency" },
+      ],
+    }),
+  }, {
+    sessionReadAgents: ["codex", "opencode"],
+    turnReadAgents: ["codex", "opencode"],
+    liveItemAgents: ["codex", "opencode"],
+    toolActivityAgents: ["codex", "opencode"],
+  }, [
+    { agent: "codex", actions: { create: true, send: true }, timeline: { sessionRead: true, turnRead: true, liveItems: true } },
+    { agent: "opencode", actions: { create: true, send: true }, timeline: { sessionRead: true, turnRead: true, liveItems: true } },
+  ]);
+
+  assert.deepEqual(capabilities.features.aiSessionProviders.map((provider) => provider.agent), ["codex"]);
+  assert.deepEqual(capabilities.features.aiSessionTimeline, {
+    sessionReadAgents: ["codex"],
+    turnReadAgents: ["codex"],
+    liveItemAgents: ["codex"],
+    toolActivityAgents: ["codex"],
+  });
+});
+
 test("controlled instance capability normalization isolates malformed feature domains", () => {
   const malformed = {
     futureDocumentField: "preserved",
