@@ -2,6 +2,7 @@ import { nextTick, type Ref } from "vue";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal as XTermTerminal } from "@xterm/xterm";
 import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
+import { applyTerminalTheme, terminalTheme, watchTerminalTheme } from "./terminalTheme.ts";
 import { BoundedInactiveLruCache } from "./terminalPreviewCache";
 import { canPublishTerminalResize } from "./terminalResizeOwnership.ts";
 import { TtyStreamConnection } from "./ttyStreamConnection.ts";
@@ -18,16 +19,6 @@ let terminalPreviewParkingElement: HTMLElement | undefined;
 function loadTerminalModules() {
   return terminalModules ||= Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")])
     .then(([xterm, fit]) => ({ Terminal: xterm.Terminal, FitAddon: fit.FitAddon }));
-}
-
-function terminalTheme() {
-  const styles = window.getComputedStyle(document.documentElement);
-  return {
-    background: styles.getPropertyValue("--terminal-bg").trim(),
-    foreground: styles.getPropertyValue("--terminal-text").trim(),
-    cursor: styles.getPropertyValue("--status-success").trim(),
-    selectionBackground: styles.getPropertyValue("--terminal-selection").trim(),
-  };
 }
 
 function terminalPreviewCacheId(scope: string, key: string) {
@@ -96,6 +87,7 @@ class CachedTerminalPreview {
     this.host = host;
     await this.ensureTerminal(host);
     if (this.disposed || !this.active || this.host !== host || !this.terminal || !this.container) return;
+    this.applyTheme();
     this.container.style.width = "100%";
     this.container.style.height = "100%";
     if (this.container.parentElement !== host) host.appendChild(this.container);
@@ -138,6 +130,10 @@ class CachedTerminalPreview {
     window.removeEventListener("focus", this.handleWindowFocus);
     window.removeEventListener("blur", this.handleWindowBlur);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+  }
+
+  applyTheme() {
+    if (this.terminal) applyTerminalTheme(this.terminal);
   }
 
   private async ensureTerminal(host: HTMLElement) {
@@ -372,6 +368,10 @@ export function useTerminalPreview(
   let attachedEntry: CachedTerminalPreview | undefined;
   let attachedHost: HTMLElement | undefined;
   let mountGeneration = 0;
+
+  watchTerminalTheme(() => {
+    for (const entry of terminalPreviewCache.values()) entry.applyTheme();
+  });
 
   async function mountTerminalPreview() {
     const generation = ++mountGeneration;

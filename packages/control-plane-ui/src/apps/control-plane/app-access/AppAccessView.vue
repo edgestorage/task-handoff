@@ -32,6 +32,7 @@ import type { SupportedLocale } from "../../../i18n/locale";
 import { getApiData } from "../../../api/client";
 import type { AppSession } from "../../../api/types";
 import { TtyStreamConnection } from "../ttyStreamConnection.ts";
+import { applyTerminalTheme, terminalTheme, watchTerminalTheme } from "../terminalTheme.ts";
 import "./app-access.css";
 import { translateApiError } from "../../../i18n/apiError";
 import AppSessionViewer from "../shared/AppSessionViewer.vue";
@@ -55,7 +56,12 @@ const access = ref<AppAccessSession | undefined>();
 const terminalHost = ref<HTMLElement | null>(null);
 const streamState = ref<"connecting" | "connected" | "reconnecting" | "expired">("connecting");
 let cleanupTerminal: (() => void) | undefined;
+let mountedTerminal: import("@xterm/xterm").Terminal | undefined;
 const { locale, t } = useI18n();
+
+watchTerminalTheme(() => {
+  if (mountedTerminal) applyTerminalTheme(mountedTerminal);
+});
 
 const mode = computed(() => (window.location.pathname.includes("/vnc") ? "vnc" : window.location.pathname.includes("/web") ? "web" : "tty"));
 const token = computed(() => new URLSearchParams(window.location.search).get("token") || "");
@@ -81,16 +87,6 @@ function websocketUrl(path: string) {
   return url.toString();
 }
 
-function terminalTheme() {
-  const styles = window.getComputedStyle(document.documentElement);
-  return {
-    background: styles.getPropertyValue("--terminal-bg").trim() || "#050505",
-    foreground: styles.getPropertyValue("--terminal-text").trim() || "#e8e8e8",
-    cursor: styles.getPropertyValue("--status-success").trim() || "#24d7c8",
-    selectionBackground: styles.getPropertyValue("--terminal-selection").trim() || "#31464f",
-  };
-}
-
 async function mountTerminal() {
   await nextTick();
   const host = terminalHost.value;
@@ -106,6 +102,7 @@ async function mountTerminal() {
     fontSize: 14,
     theme: terminalTheme(),
   });
+  mountedTerminal = terminal;
   const fit = new FitAddon();
   let stream: TtyStreamConnection | undefined;
   let restoringSnapshot = false;
@@ -178,6 +175,7 @@ async function mountTerminal() {
   cleanupTerminal = () => {
     window.removeEventListener("resize", resize);
     stream?.stop();
+    if (mountedTerminal === terminal) mountedTerminal = undefined;
     terminal.dispose();
   };
 }

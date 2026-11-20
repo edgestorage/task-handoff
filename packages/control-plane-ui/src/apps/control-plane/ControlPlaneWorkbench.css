@@ -523,7 +523,7 @@
 }
 
 :global(.control-plane-instance-menu-item.selected strong) {
-  color: hsl(var(--primary));
+  color: var(--text-strong);
 }
 
 :global(.control-plane-instance-menu-copy) {
@@ -552,7 +552,7 @@
 }
 
 :global(.control-plane-instance-menu-check) {
-  color: hsl(var(--primary));
+  color: var(--text-strong);
   margin-top: 1px;
 }
 
@@ -618,7 +618,7 @@
 
 :global(.control-plane-settings-menu-item.selected) {
   background: var(--surface-active);
-  color: hsl(var(--primary));
+  color: var(--text-strong);
 }
 
 :global(.control-plane-node-filter-menu.control-plane-node-filter-menu) {
@@ -698,7 +698,7 @@
 }
 
 :global(.control-plane-node-filter-menu-item.selected strong) {
-  color: hsl(var(--primary));
+  color: var(--text-strong);
 }
 
 :global(.control-plane-node-filter-menu .control-plane-node-filter-menu-item .status-dot) {
@@ -725,7 +725,7 @@
 }
 
 :global(.control-plane-node-filter-menu-check) {
-  color: hsl(var(--primary));
+  color: var(--text-strong);
   margin-top: 0;
 }
 
@@ -979,7 +979,7 @@
 .control-plane-settings-trigger.inline-flex.active,
 .control-plane-user-trigger.inline-flex.active {
   background: var(--surface-active);
-  color: hsl(var(--primary));
+  color: var(--workbench-view-selection-fg, hsl(var(--accent-foreground)));
 }
 
 .control-plane-update-indicator {
@@ -1050,7 +1050,7 @@
 
 .control-plane-actions .story-resource-toggle.active {
   background: var(--surface-active);
-  color: hsl(var(--primary));
+  color: var(--workbench-view-selection-fg, hsl(var(--accent-foreground)));
 }
 
 .control-plane-actions .action-inbox-trigger-empty.inline-flex {

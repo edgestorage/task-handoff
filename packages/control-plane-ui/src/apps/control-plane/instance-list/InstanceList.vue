@@ -463,7 +463,6 @@ function openNewInstanceFromTemporaryList() {
   border-right: 1px solid var(--line);
   background: linear-gradient(180deg, var(--surface) 0%, var(--surface-inset) 100%);
   color: var(--terminal-text);
-  box-shadow: inset -1px 0 0 var(--workspace-grid);
   padding: 10px;
 }
 
@@ -911,8 +910,8 @@ function openNewInstanceFromTemporaryList() {
 }
 
 .status-dot[data-state="online"] {
-  background: var(--brand-accent);
-  box-shadow: 0 0 14px var(--focus-ring);
+  background: var(--status-success);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--status-success) 58%, transparent);
 }
 
 .status-dot[data-state="offline"] {

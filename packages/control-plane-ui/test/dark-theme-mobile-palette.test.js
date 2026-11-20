@@ -70,16 +70,14 @@ function contrast(foreground, background) {
   return (high + 0.05) / (low + 0.05);
 }
 
-test("control plane dark surfaces, text, and status colors follow the mobile dark palette", () => {
+test("control plane dark surfaces, text, status colors, and primary use the expected palette", () => {
   const mappings = {
     background: "background",
     foreground: "text",
     card: "surface",
-    primary: "primary",
     border: "border",
     "muted-foreground": "textMuted",
     destructive: "destructiveButton",
-    ring: "primary",
     "workspace-bg": "background",
     surface: "surface",
     "surface-raised": "surfaceRaised",
@@ -89,9 +87,6 @@ test("control plane dark surfaces, text, and status colors follow the mobile dar
     "text-muted": "textMuted",
     line: "border",
     "line-strong": "workbenchCardBorder",
-    "brand-accent": "primary",
-    "brand-accent-soft": "primarySoft",
-    "terminal-bg": "code",
     "terminal-text": "codeText",
     "status-success": "sessionActive",
     "status-success-bg": "sessionActiveSoft",
@@ -104,6 +99,12 @@ test("control plane dark surfaces, text, and status colors follow the mobile dar
   for (const [token, mobileToken] of Object.entries(mappings)) {
     assertMobileColor(token, mobileToken);
   }
+  assert.equal(darkRules.get("primary"), "206.7 5.9% 30%");
+  assert.equal(darkRules.get("ring"), "206.7 5.9% 30%");
+  assert.equal(darkRules.get("brand-accent"), "#484d51");
+  assert.equal(darkRules.get("brand-accent-soft"), "#292d30");
+  assert.equal(darkRules.get("brand-accent-muted"), "#8f979d");
+  assert.equal(darkRules.get("terminal-bg"), "#17181c");
   assert.equal(darkRules.get("text-strong"), "var(--text)");
 });
 

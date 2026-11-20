@@ -1,20 +1,15 @@
 import { nextTick, type Ref } from "vue";
+import { applyTerminalTheme, terminalTheme, watchTerminalTheme } from "../terminalTheme.ts";
 import { TtyStreamConnection } from "../ttyStreamConnection.ts";
-
-function terminalTheme() {
-  const styles = window.getComputedStyle(document.documentElement);
-  return {
-    background: styles.getPropertyValue("--terminal-bg").trim(),
-    foreground: styles.getPropertyValue("--terminal-text").trim(),
-    cursor: styles.getPropertyValue("--status-success").trim(),
-    selectionBackground: styles.getPropertyValue("--terminal-selection").trim(),
-  };
-}
 
 export function useBoardTerminalPreviews(boardMode: Ref<boolean>, interactive: Ref<boolean>) {
   const boardTerminalHosts = new Map<string, { url: string; element: HTMLElement }>();
-  const boardTerminalCleanups = new Map<string, { url: string; interactive: boolean; cleanup: () => void }>();
+  const boardTerminalCleanups = new Map<string, { url: string; interactive: boolean; applyTheme: () => void; cleanup: () => void }>();
   const boardTerminalGenerations = new Map<string, number>();
+
+  watchTerminalTheme(() => {
+    for (const terminal of boardTerminalCleanups.values()) terminal.applyTheme();
+  });
 
   function setBoardTerminalHost(instanceId: string, url: string, element: unknown) {
     if (element instanceof HTMLElement && url) {
@@ -187,6 +182,7 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>, interactive: R
     boardTerminalCleanups.set(instanceId, {
       url: target.url,
       interactive: terminalInteractive,
+      applyTheme: () => applyTerminalTheme(terminal),
       cleanup: () => {
         if (refreshFrame !== undefined) {
           window.cancelAnimationFrame(refreshFrame);

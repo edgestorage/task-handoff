@@ -27,6 +27,7 @@ import type { GitProvisioningProgress } from "@task-handoff/protocol/control-pla
 import { Button } from "../../../components/ui/button";
 import { Progress } from "../../../components/ui/progress";
 import { gitProvisioningStatusKeys, translateStatus } from "../../../i18n/status.ts";
+import { applyTerminalTheme, terminalTheme, watchTerminalTheme } from "../terminalTheme.ts";
 import { useI18n } from "vue-i18n";
 
 const props = defineProps<{ progress: GitProvisioningProgress }>();
@@ -39,6 +40,9 @@ let resizeObserver: ResizeObserver | undefined;
 let renderedTail = "";
 
 const title = computed(() => translateStatus(gitProvisioningStatusKeys, props.progress.status, t));
+watchTerminalTheme(() => {
+  if (terminal) applyTerminalTheme(terminal);
+});
 const detail = computed(() => {
   const { objects, percent } = props.progress;
   const parts = [objects ? t("instances.gitProvisioning.objects", { received: objects.received, total: objects.total }) : t("instances.gitProvisioning.waitingForOutput")];
@@ -81,14 +85,6 @@ function syncTerminal(tail: string) {
   if (tail.startsWith(renderedTail)) terminal.write(tail.slice(renderedTail.length));
   else { terminal.reset(); terminal.write(tail); }
   renderedTail = tail;
-}
-
-function terminalTheme() {
-  const styles = window.getComputedStyle(document.documentElement);
-  return {
-    background: styles.getPropertyValue("--terminal-bg").trim() || "#050505",
-    foreground: styles.getPropertyValue("--terminal-text").trim() || "#e8e8e8",
-  };
 }
 
 watch(() => props.progress.terminalTail || "", syncTerminal);

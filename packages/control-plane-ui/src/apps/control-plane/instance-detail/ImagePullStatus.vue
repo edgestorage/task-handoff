@@ -29,6 +29,7 @@ import { Progress } from "../../../components/ui/progress";
 import { useControlPlaneLocale } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../i18n/presentation.ts";
 import { imagePullStatusKeys, translateStatus } from "../../../i18n/status.ts";
+import { applyTerminalTheme, terminalTheme, watchTerminalTheme } from "../terminalTheme.ts";
 import { useI18n } from "vue-i18n";
 
 const props = defineProps<{ progress: ImagePullProgress }>();
@@ -42,6 +43,9 @@ let resizeObserver: ResizeObserver | undefined;
 let renderedTail = "";
 
 const title = computed(() => translateStatus(imagePullStatusKeys, props.progress.status, t));
+watchTerminalTheme(() => {
+  if (terminal) applyTerminalTheme(terminal);
+});
 const detail = computed(() => {
   const { layers, bytes, percent } = props.progress;
   const parts = [layers.total ? t("instances.imagePull.layersReady", { completed: layers.completed, total: layers.total }) : t("instances.imagePull.waitingForLayers")];
@@ -88,14 +92,6 @@ function syncTerminal(tail: string) {
   if (tail.startsWith(renderedTail)) terminal.write(tail.slice(renderedTail.length));
   else { terminal.reset(); terminal.write(tail); }
   renderedTail = tail;
-}
-
-function terminalTheme() {
-  const styles = window.getComputedStyle(document.documentElement);
-  return {
-    background: styles.getPropertyValue("--terminal-bg").trim() || "#050505",
-    foreground: styles.getPropertyValue("--terminal-text").trim() || "#e8e8e8",
-  };
 }
 
 watch(() => props.progress.terminalTail || "", syncTerminal);

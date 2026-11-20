@@ -4624,9 +4624,8 @@ onBeforeUnmount(() => {
 }
 
 .remote-desktop-target.selected {
-  border-color: color-mix(in srgb, var(--brand-accent) 58%, var(--line));
-  background: color-mix(in srgb, var(--brand-accent-soft) 72%, var(--surface-inset));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand-accent) 24%, transparent);
+  border-color: var(--line-strong);
+  background: var(--surface-active);
 }
 
 .remote-desktop-target-icon {
@@ -4730,7 +4729,7 @@ onBeforeUnmount(() => {
 }
 
 .remote-desktop-source-row.selected {
-  background: var(--brand-accent-soft);
+  background: var(--surface-active);
   color: var(--text-strong);
 }
 
@@ -5100,13 +5099,14 @@ onBeforeUnmount(() => {
 }
 
 .remote-desktop-scope-option.selected {
-  background: var(--brand-accent-soft);
+  background: var(--surface-active);
+  color: var(--text-strong);
 }
 
 .remote-desktop-scope-option > svg:last-child {
   flex: 0 0 auto;
   margin-left: auto;
-  color: var(--brand-accent-muted);
+  color: var(--text-muted);
 }
 
 .remote-desktop-scope-option-icon {

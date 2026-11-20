@@ -39,7 +39,7 @@ test("resource toggle follows account controls and is separated as its own tool"
   assert.doesNotMatch(workbench, /<template v-if="storyMode && !settingsMode">[\s\S]*story-resource-toggle/);
   assert.match(workbench, /class="control-plane-icon-button story-resource-toggle"[\s\S]*:disabled="!storyResourceTargetAiSessionId"/);
   assert.match(workbenchStyles, /\.control-plane-actions \.control-plane-icon-button\.inline-flex:not\(\.active\):hover \{[\s\S]*background: var\(--surface-hover\);/);
-  assert.match(workbenchStyles, /\.control-plane-actions \.story-resource-toggle\.active \{\s*background: var\(--surface-active\);\s*color: hsl\(var\(--primary\)\);\s*\}/);
+  assert.match(workbenchStyles, /\.control-plane-actions \.story-resource-toggle\.active \{\s*background: var\(--surface-active\);\s*color: var\(--workbench-view-selection-fg, hsl\(var\(--accent-foreground\)\)\);\s*\}/);
   assert.doesNotMatch(workbenchStyles, /\.control-plane-actions \.story-resource-toggle\.active \{[^}]*border-color/);
 });
 
