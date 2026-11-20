@@ -2,19 +2,18 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const ts = require("typescript");
+const { nodeRouteSurface, normalizedPath } = require("./fixtures/controlled-instance-route-surface.js");
 
 const root = path.resolve(__dirname, "..");
 const serverPath = path.join(root, "controlled-instance-rs", "crates", "instance", "src", "server.rs");
 const remoteDesktopPath = path.join(root, "controlled-instance-rs", "crates", "instance", "src", "remote_desktop.rs");
 const matrixPath = path.join(root, "controlled-instance-rs", "docs", "http-route-matrix.md");
 
-const BASELINE_HEADING = "## `v0.0.46` compatibility baseline";
-const TARGET_HEADING = "## Target-current Node extensions after `v0.0.46`";
-const BASELINE_ROUTE_COUNT = 201;
+const BASELINE_HEADING = "## `v0.0.47` compatibility baseline";
+const TARGET_HEADING = "## Target-current Node extensions after `v0.0.47`";
+const BASELINE_ROUTE_COUNT = 202;
 const TARGET_ROUTE_COUNT = 222;
 const POST_BASELINE_ROUTES = new Set([
-  "GET /api/internal/instance-shell",
   "GET /api/apps/install-environment",
   "PUT /api/apps/install-environment",
   "POST /api/apps/install-environment/test",
@@ -41,218 +40,8 @@ const WEB_PROXY_ALIAS_PATH = "/api/apps/sessions/{}/web/";
 const WEB_PROXY_PATH = "/api/apps/sessions/{}/web/*";
 const RUST_SENTINEL_ROUTE = "ANY /api/*";
 
-function normalizedPath(value) {
-  return value
-    .replace(/\{\*rest\}/g, "*")
-    .replace(/\{[^}]+\}/g, "{}")
-    .replace(/:[^/]+/g, "{}");
-}
-
 function sorted(values) {
   return [...values].sort();
-}
-
-function sourceFiles(directory) {
-  const files = [];
-  const visit = (target) => {
-    for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
-      const child = path.join(target, entry.name);
-      if (entry.isDirectory()) visit(child);
-      else if (entry.isFile() && entry.name.endsWith(".ts")) files.push(child);
-    }
-  };
-  visit(directory);
-  return files;
-}
-
-function staticRoutePaths(expression, sourceFile) {
-  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return [expression.text];
-  if (!ts.isTemplateExpression(expression) || expression.templateSpans.length !== 1) return [];
-  const span = expression.templateSpans[0];
-  const variable = span.expression.getText(sourceFile);
-  if (variable === "segment" && expression.head.text === "/api/") {
-    return [
-      `/api/ai-sessions${span.literal.text}`,
-      `/api/apps/sessions${span.literal.text}`,
-    ];
-  }
-  if (variable !== "base") return [];
-  return [
-    `/api/ai-sessions/:id/repository${expression.head.text}${span.literal.text}`,
-    `/api/apps/sessions/:id/repository${expression.head.text}${span.literal.text}`,
-  ];
-}
-
-function objectProperty(object, name, sourceFile) {
-  if (!ts.isObjectLiteralExpression(object)) return undefined;
-  for (const property of object.properties) {
-    if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) continue;
-    const propertyName = property.name.getText(sourceFile).replace(/^['"]|['"]$/g, "");
-    if (propertyName !== name) continue;
-    return ts.isPropertyAssignment(property) ? property.initializer : property.name;
-  }
-  return undefined;
-}
-
-function isWebSocketOptions(object, sourceFile) {
-  const websocket = objectProperty(object, "websocket", sourceFile);
-  return Boolean(
-    (websocket && websocket.kind === ts.SyntaxKind.TrueKeyword)
-      || objectProperty(object, "wsHandler", sourceFile),
-  );
-}
-
-function collectMethodVariables(sourceFile) {
-  const methodVariables = new Map();
-  const visit = (node) => {
-    if (ts.isForOfStatement(node)
-      && ts.isVariableDeclarationList(node.initializer)
-      && node.initializer.declarations.length === 1) {
-      const declaration = node.initializer.declarations[0];
-      let values = node.expression;
-      while (ts.isAsExpression(values) || ts.isParenthesizedExpression(values)) values = values.expression;
-      if (ts.isIdentifier(declaration.name) && ts.isArrayLiteralExpression(values)) {
-        methodVariables.set(
-          declaration.name.text,
-          values.elements.filter(ts.isStringLiteral).map((entry) => entry.text.toUpperCase()),
-        );
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return methodVariables;
-}
-
-function collectRouteReceivers(sourceFile) {
-  const receivers = new Set(["app"]);
-  const visit = (node) => {
-    if (ts.isCallExpression(node)
-      && ts.isPropertyAccessExpression(node.expression)
-      && ts.isIdentifier(node.expression.expression)
-      && node.expression.expression.text === "app"
-      && node.expression.name.text === "register") {
-      for (const argument of node.arguments) {
-        if ((ts.isArrowFunction(argument) || ts.isFunctionExpression(argument))
-          && argument.parameters[0]
-          && ts.isIdentifier(argument.parameters[0].name)) {
-          receivers.add(argument.parameters[0].name.text);
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return receivers;
-}
-
-function resolveMethods(expression, methodVariables) {
-  if (ts.isIdentifier(expression) && methodVariables.has(expression.text)) return methodVariables.get(expression.text);
-  if (ts.isStringLiteral(expression)) return [expression.text.toUpperCase()];
-  if (!ts.isArrayLiteralExpression(expression)) return undefined;
-  if (!expression.elements.every(ts.isStringLiteral)) return undefined;
-  return expression.elements.map((entry) => entry.text.toUpperCase());
-}
-
-function addRoute(routes, method, routePath, websocket, origin) {
-  const normalized = normalizedPath(routePath);
-  const key = `${method} ${normalized}`;
-  const previous = routes.get(key);
-  routes.set(key, {
-    method,
-    path: normalized,
-    websocket: websocket || Boolean(previous?.websocket),
-    origin,
-  });
-}
-
-function nodeRouteSurface() {
-  const routes = new Map();
-  const unresolved = [];
-  const upgradeListeners = [];
-  const sourceRoot = path.join(root, "packages", "controlled-instance", "src");
-
-  for (const file of sourceFiles(sourceRoot)) {
-    const source = fs.readFileSync(file, "utf8");
-    const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    const methodVariables = collectMethodVariables(sourceFile);
-    const routeReceivers = collectRouteReceivers(sourceFile);
-    const relativeFile = path.relative(root, file);
-
-    const recordUnresolved = (node, detail) => {
-      const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-      unresolved.push(`${relativeFile}:${line} ${detail}`);
-    };
-
-    const visit = (node) => {
-      if (ts.isCallExpression(node)
-        && ts.isPropertyAccessExpression(node.expression)
-        && ts.isIdentifier(node.expression.expression)
-        && routeReceivers.has(node.expression.expression.text)) {
-        const methodName = node.expression.name.text;
-
-        if (["get", "post", "put", "patch", "delete", "all"].includes(methodName)) {
-          if (node.arguments.length === 0) {
-            recordUnresolved(node, `app.${methodName}() has no path`);
-          } else {
-            const paths = staticRoutePaths(node.arguments[0], sourceFile);
-            if (paths.length === 0) recordUnresolved(node, `app.${methodName}() has a non-static path`);
-            const websocket = Boolean(node.arguments[1] && isWebSocketOptions(node.arguments[1], sourceFile));
-            for (const routePath of paths) {
-              addRoute(
-                routes,
-                methodName === "all" ? "ANY" : methodName.toUpperCase(),
-                routePath,
-                websocket,
-                `${relativeFile}:${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}`,
-              );
-            }
-          }
-        } else if (methodName === "route") {
-          const route = node.arguments[0];
-          if (!route || !ts.isObjectLiteralExpression(route)) {
-            recordUnresolved(node, "app.route() registration is not an object literal");
-          } else {
-            const routePath = objectProperty(route, "url", sourceFile);
-            const method = objectProperty(route, "method", sourceFile);
-            const paths = routePath ? staticRoutePaths(routePath, sourceFile) : [];
-            const methods = method ? resolveMethods(method, methodVariables) : undefined;
-            if (paths.length === 0) recordUnresolved(node, "app.route() has a non-static url");
-            if (!methods || methods.length === 0) recordUnresolved(node, "app.route() has an unresolved method set");
-            const websocket = isWebSocketOptions(route, sourceFile);
-            for (const pathValue of paths) {
-              for (const routeMethod of methods || []) {
-                addRoute(
-                  routes,
-                  routeMethod,
-                  pathValue,
-                  websocket,
-                  `${relativeFile}:${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}`,
-                );
-              }
-            }
-          }
-        }
-      }
-
-      if (ts.isCallExpression(node)
-        && ts.isPropertyAccessExpression(node.expression)
-        && node.expression.name.text === "on"
-        && node.arguments[0]
-        && ts.isStringLiteral(node.arguments[0])
-        && node.arguments[0].text === "upgrade") {
-        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-        upgradeListeners.push(`${relativeFile}:${line}`);
-        recordUnresolved(node, "direct server upgrade listener");
-      }
-
-      ts.forEachChild(node, visit);
-    };
-
-    visit(sourceFile);
-  }
-
-  return { routes, unresolved, upgradeListeners };
 }
 
 function matrixRouteSurface(markdown) {
@@ -375,37 +164,40 @@ function functionSupportsWebSocket(name, functions, seen = new Set()) {
 }
 
 function rustRouteSurface() {
+  const server = fs.readFileSync(serverPath, "utf8");
+  const testModule = server.lastIndexOf("#[cfg(test)]");
+  assert.notEqual(testModule, -1, "server.rs must keep tests behind #[cfg(test)]");
+  const serverProduction = server.slice(0, testModule);
+  const desktop = serverProduction.includes(".merge(crate::remote_desktop::routes(")
+    ? fs.readFileSync(remoteDesktopPath, "utf8").split("#[cfg(test)]")[0]
+    : "";
+  const production = `${serverProduction}\n${desktop}`;
+  const functions = rustFunctions(production);
   const routes = new Map();
   const unresolved = [];
-  for (const sourcePath of [serverPath, remoteDesktopPath]) {
-    const source = fs.readFileSync(sourcePath, "utf8");
-    const testModule = source.lastIndexOf("#[cfg(test)]");
-    assert.notEqual(testModule, -1, `${path.basename(sourcePath)} must keep tests behind #[cfg(test)]`);
-    const production = source.slice(0, testModule);
-    const functions = rustFunctions(production);
-    for (const block of routeBlocks(production)) {
-      const route = parseRustRoute(block, block.slice(0, 80));
-      if (!route) {
-        unresolved.push(`${path.basename(sourcePath)}: unparsed .route() registration`);
-        continue;
-      }
-      if (route.methods.size === 0) unresolved.push(`${path.basename(sourcePath)}: no methods for ${route.path}`);
-      const paths = route.path.includes("{prefix}")
-        ? [
-          route.path.replace("{prefix}", "/api/ai-sessions/{id}/repository"),
-          route.path.replace("{prefix}", "/api/apps/sessions/{id}/repository"),
-        ]
-        : [route.path];
-      for (const routePath of paths) {
-        for (const [method, handler] of route.methods) {
-          const key = `${method} ${normalizedPath(routePath)}`;
-          routes.set(key, {
-            method,
-            path: normalizedPath(routePath),
-            websocket: method === "GET" && functionSupportsWebSocket(handler, functions),
-            handler,
-          });
-        }
+
+  for (const block of routeBlocks(production)) {
+    const route = parseRustRoute(block, block.slice(0, 80));
+    if (!route) {
+      unresolved.push("unparsed .route() registration");
+      continue;
+    }
+    if (route.methods.size === 0) unresolved.push(`no methods for ${route.path}`);
+    const paths = route.path.includes("{prefix}")
+      ? [
+        route.path.replace("{prefix}", "/api/ai-sessions/{id}/repository"),
+        route.path.replace("{prefix}", "/api/apps/sessions/{id}/repository"),
+      ]
+      : [route.path];
+    for (const routePath of paths) {
+      for (const [method, handler] of route.methods) {
+        const key = `${method} ${normalizedPath(routePath)}`;
+        routes.set(key, {
+          method,
+          path: normalizedPath(routePath),
+          websocket: method === "GET" && functionSupportsWebSocket(handler, functions),
+          handler,
+        });
       }
     }
   }
@@ -413,8 +205,36 @@ function rustRouteSurface() {
   return { routes, unresolved };
 }
 
+const releaseRouteSnapshot = JSON.parse(fs.readFileSync(
+  path.join(root, "controlled-instance-rs/docs/fixtures/node-routes-v0.0.47.json"), "utf8",
+));
+
+function wireRoutes(routes) {
+  return routes.map(({ method, path: routePath, websocket }) =>
+    `${method} ${routePath} websocket=${websocket}`,
+  ).sort();
+}
+
+test("matrix compatibility baseline matches pinned release registrations", () => {
+  const baseline = matrixRouteSurface(fs.readFileSync(matrixPath, "utf8"))
+    .filter((route) => route.section === "baseline");
+  assert.deepEqual(wireRoutes(baseline), wireRoutes(releaseRouteSnapshot.routes));
+});
+
+test("migration inventory and route evidence use the same compatibility release", () => {
+  const inventory = JSON.parse(fs.readFileSync(
+    path.join(root, "controlled-instance-rs/docs/migration-inventory.json"), "utf8",
+  ));
+  assert.equal(inventory.compatibilityBaseline, releaseRouteSnapshot.source.ref);
+  const versions = fs.readFileSync(
+    path.join(root, "controlled-instance-rs/crates/protocol/src/versions.rs"), "utf8",
+  );
+  const rustBaseline = versions.match(/pub const COMPATIBILITY_BASELINE: &str = "([^"]+)";/)?.[1];
+  assert.equal(rustBaseline, inventory.compatibilityBaseline);
+});
+
 test("Node registrations define the baseline and target-current matrix", () => {
-  const node = nodeRouteSurface();
+  const node = nodeRouteSurface(root);
   const matrix = matrixRouteSurface(fs.readFileSync(matrixPath, "utf8"));
   const baseline = matrix.filter((route) => route.section === "baseline");
   const targetCurrent = matrix.filter((route) => route.section === "target-current");
@@ -446,7 +266,7 @@ test("Node registrations define the baseline and target-current matrix", () => {
 });
 
 test("Rust production router exactly matches the Node route contract", () => {
-  const node = nodeRouteSurface();
+  const node = nodeRouteSurface(root);
   const rust = rustRouteSurface();
   const nodeKeys = new Set(node.routes.keys());
   const actual = new Map();

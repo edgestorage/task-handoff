@@ -1,0 +1,1023 @@
+{
+  "source": "HEAD 9b2d6e17; Node production close/HTTP/event owner; fixed Date; provider mock only",
+  "expected": {
+    "samples": {
+      "ai": {
+        "initial": {
+          "streamId": "ai-removal",
+          "revision": 1,
+          "lastEventAt": "2026-11-05T00:00:00.000Z",
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "ai_target",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-target",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "target",
+                "cwd": "/workspace",
+                "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                "unread": false,
+                "turnCount": 0,
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgentCount": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-04T23:59:59.000Z",
+                "updatedAt": "2026-11-04T23:59:59.000Z"
+              },
+              {
+                "id": "ai_survivor",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-survivor",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "survivor",
+                "cwd": "/workspace",
+                "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                "unread": false,
+                "turnCount": 0,
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgentCount": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-04T23:59:58.000Z",
+                "updatedAt": "2026-11-04T23:59:58.000Z"
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:00.000Z"
+          }
+        },
+        "updated": {
+          "streamId": "ai-removal",
+          "revision": 2,
+          "lastEventAt": "2026-11-05T00:00:01.000Z",
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "ai_target",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-target",
+                "storyId": "story-before-removal",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "target",
+                "cwd": "/workspace",
+                "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                "unread": false,
+                "turnCount": 0,
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgentCount": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-04T23:59:59.000Z",
+                "updatedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "ai_survivor",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-survivor",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "survivor",
+                "cwd": "/workspace",
+                "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                "unread": false,
+                "turnCount": 0,
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgentCount": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-04T23:59:58.000Z",
+                "updatedAt": "2026-11-04T23:59:58.000Z"
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:01.000Z"
+          }
+        },
+        "removed": {
+          "streamId": "ai-removal",
+          "revision": 3,
+          "lastEventAt": "2026-11-05T00:00:02.000Z",
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "ai_survivor",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-survivor",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "survivor",
+                "cwd": "/workspace",
+                "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                "unread": false,
+                "turnCount": 0,
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgentCount": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-04T23:59:58.000Z",
+                "updatedAt": "2026-11-04T23:59:58.000Z"
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        },
+        "noop": {
+          "streamId": "ai-removal",
+          "revision": 3,
+          "lastEventAt": "2026-11-05T00:00:02.000Z",
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "ai_survivor",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-survivor",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "survivor",
+                "cwd": "/workspace",
+                "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                "unread": false,
+                "turnCount": 0,
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgentCount": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-04T23:59:58.000Z",
+                "updatedAt": "2026-11-04T23:59:58.000Z"
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        },
+        "delta": {
+          "streamId": "ai-removal",
+          "instanceId": "standalone",
+          "sinceRevision": 1,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 1,
+          "syncRequired": false,
+          "events": [
+            {
+              "type": "ai-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "ai-removal",
+                  "instanceId": "standalone",
+                  "revision": 2,
+                  "previousRevision": 1,
+                  "traceId": "<ai-trace-2>",
+                  "generatedAt": "2026-11-05T00:00:01.000Z",
+                  "reason": "control-action"
+                },
+                "upserted": [
+                  {
+                    "id": "ai_target",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-target",
+                    "storyId": "story-before-removal",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "target",
+                    "cwd": "/workspace",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-04T23:59:59.000Z",
+                    "updatedAt": "2026-11-05T00:00:01.000Z",
+                    "unread": false,
+                    "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                    "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                    "turnCount": 0,
+                    "subAgentCount": 0
+                  }
+                ],
+                "removed": []
+              }
+            },
+            {
+              "type": "ai-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "ai-removal",
+                  "instanceId": "standalone",
+                  "revision": 3,
+                  "previousRevision": 2,
+                  "traceId": "<ai-trace-3>",
+                  "generatedAt": "2026-11-05T00:00:02.000Z",
+                  "reason": "control-action"
+                },
+                "upserted": [],
+                "removed": [
+                  "ai_target"
+                ]
+              }
+            }
+          ]
+        },
+        "events": [
+          {
+            "type": "ai-session.snapshot",
+            "payload": {
+              "meta": {
+                "streamId": "ai-removal",
+                "instanceId": "standalone",
+                "revision": 1,
+                "previousRevision": 0,
+                "traceId": "<ai-trace-1>",
+                "generatedAt": "2026-11-05T00:00:00.000Z",
+                "reason": "startup"
+              },
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "sessions": [
+                  {
+                    "id": "ai_target",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-target",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "target",
+                    "cwd": "/workspace",
+                    "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                    "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                    "unread": false,
+                    "turnCount": 0,
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-04T23:59:59.000Z",
+                    "updatedAt": "2026-11-04T23:59:59.000Z"
+                  },
+                  {
+                    "id": "ai_survivor",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-survivor",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "survivor",
+                    "cwd": "/workspace",
+                    "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                    "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                    "unread": false,
+                    "turnCount": 0,
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-04T23:59:58.000Z",
+                    "updatedAt": "2026-11-04T23:59:58.000Z"
+                  }
+                ],
+                "updatedAt": "2026-11-05T00:00:00.000Z"
+              }
+            }
+          },
+          {
+            "type": "ai-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "ai-removal",
+                "instanceId": "standalone",
+                "revision": 2,
+                "previousRevision": 1,
+                "traceId": "<ai-trace-2>",
+                "generatedAt": "2026-11-05T00:00:01.000Z",
+                "reason": "control-action"
+              },
+              "upserted": [
+                {
+                  "id": "ai_target",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-target",
+                  "storyId": "story-before-removal",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "target",
+                  "cwd": "/workspace",
+                  "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-04T23:59:59.000Z",
+                  "updatedAt": "2026-11-05T00:00:01.000Z"
+                }
+              ],
+              "removed": []
+            }
+          },
+          {
+            "type": "ai-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "ai-removal",
+                "instanceId": "standalone",
+                "revision": 3,
+                "previousRevision": 2,
+                "traceId": "<ai-trace-3>",
+                "generatedAt": "2026-11-05T00:00:02.000Z",
+                "reason": "control-action"
+              },
+              "upserted": [],
+              "removed": [
+                "ai_target"
+              ]
+            }
+          }
+        ],
+        "boundaryDelta": {
+          "streamId": "ai-removal",
+          "instanceId": "standalone",
+          "sinceRevision": 2,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 3,
+          "syncRequired": false,
+          "events": [
+            {
+              "type": "ai-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "ai-removal",
+                  "instanceId": "standalone",
+                  "revision": 3,
+                  "previousRevision": 2,
+                  "traceId": "<ai-trace-3>",
+                  "generatedAt": "2026-11-05T00:00:02.000Z",
+                  "reason": "control-action"
+                },
+                "upserted": [],
+                "removed": [
+                  "ai_target"
+                ]
+              }
+            }
+          ]
+        },
+        "expiredDelta": {
+          "streamId": "ai-removal",
+          "instanceId": "standalone",
+          "sinceRevision": 2,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 4,
+          "syncRequired": true,
+          "events": []
+        }
+      },
+      "app": {
+        "initial": {
+          "streamId": "app-removal",
+          "revision": 1,
+          "lastEventAt": "2026-11-05T00:00:00.000Z",
+          "snapshot": {
+            "runningCount": 2,
+            "problemCount": 0,
+            "sessions": [
+              {
+                "id": "app_target",
+                "appId": "terminal-tty",
+                "title": "Target",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/target",
+                  "logDir": "/tmp/target-logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_target"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              },
+              {
+                "id": "app_survivor",
+                "appId": "terminal-tty",
+                "title": "Survivor",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/survivor",
+                  "logDir": "/tmp/survivor-logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_survivor"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:00.000Z"
+          }
+        },
+        "updated": {
+          "streamId": "app-removal",
+          "revision": 2,
+          "lastEventAt": "2026-11-05T00:00:01.000Z",
+          "snapshot": {
+            "runningCount": 2,
+            "problemCount": 0,
+            "sessions": [
+              {
+                "id": "app_target",
+                "appId": "terminal-tty",
+                "title": "Renamed target",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/target",
+                  "logDir": "/tmp/target-logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_target"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              },
+              {
+                "id": "app_survivor",
+                "appId": "terminal-tty",
+                "title": "Survivor",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/survivor",
+                  "logDir": "/tmp/survivor-logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_survivor"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:01.000Z"
+          }
+        },
+        "removed": {
+          "streamId": "app-removal",
+          "revision": 3,
+          "lastEventAt": "2026-11-05T00:00:02.000Z",
+          "snapshot": {
+            "runningCount": 1,
+            "problemCount": 0,
+            "sessions": [
+              {
+                "id": "app_survivor",
+                "appId": "terminal-tty",
+                "title": "Survivor",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/survivor",
+                  "logDir": "/tmp/survivor-logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_survivor"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        },
+        "noop": {
+          "streamId": "app-removal",
+          "revision": 3,
+          "lastEventAt": "2026-11-05T00:00:02.000Z",
+          "snapshot": {
+            "runningCount": 1,
+            "problemCount": 0,
+            "sessions": [
+              {
+                "id": "app_survivor",
+                "appId": "terminal-tty",
+                "title": "Survivor",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/survivor",
+                  "logDir": "/tmp/survivor-logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_survivor"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        },
+        "delta": {
+          "streamId": "app-removal",
+          "instanceId": "standalone",
+          "sinceRevision": 1,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 1,
+          "syncRequired": false,
+          "events": [
+            {
+              "type": "app-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "app-removal",
+                  "instanceId": "standalone",
+                  "revision": 2,
+                  "previousRevision": 1,
+                  "traceId": "<app-trace-2>",
+                  "generatedAt": "2026-11-05T00:00:01.000Z",
+                  "reason": "app-session-updated"
+                },
+                "session": {
+                  "id": "app_target",
+                  "appId": "terminal-tty",
+                  "title": "Renamed target",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:00.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/target",
+                    "logDir": "/tmp/target-logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_target"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              }
+            },
+            {
+              "type": "app-session.removed",
+              "payload": {
+                "meta": {
+                  "streamId": "app-removal",
+                  "instanceId": "standalone",
+                  "revision": 3,
+                  "previousRevision": 2,
+                  "traceId": "<app-trace-3>",
+                  "generatedAt": "2026-11-05T00:00:02.000Z",
+                  "reason": "app-session-deleted"
+                },
+                "sessionId": "app_target",
+                "tombstone": {
+                  "id": "app_target",
+                  "appId": "terminal-tty",
+                  "title": "Renamed target",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:00.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/target",
+                    "logDir": "/tmp/target-logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_target"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                },
+                "expiresAt": "2026-11-05T01:00:02.000Z"
+              }
+            }
+          ]
+        },
+        "events": [
+          {
+            "type": "app-session.snapshot",
+            "payload": {
+              "meta": {
+                "streamId": "app-removal",
+                "instanceId": "standalone",
+                "revision": 1,
+                "previousRevision": 0,
+                "traceId": "<app-trace-1>",
+                "generatedAt": "2026-11-05T00:00:00.000Z",
+                "reason": "app-session-created"
+              },
+              "snapshot": {
+                "runningCount": 2,
+                "problemCount": 0,
+                "sessions": [
+                  {
+                    "id": "app_target",
+                    "appId": "terminal-tty",
+                    "title": "Target",
+                    "kind": "tty",
+                    "status": "running",
+                    "createdAt": "2026-11-05T00:00:00.000Z",
+                    "updatedAt": "2026-11-05T00:00:00.000Z",
+                    "paths": {
+                      "sessionDir": "/tmp/target",
+                      "logDir": "/tmp/target-logs"
+                    },
+                    "bindings": [
+                      {
+                        "type": "app-session",
+                        "id": "app_target"
+                      }
+                    ],
+                    "workspace": {
+                      "cwd": "/workspace"
+                    }
+                  },
+                  {
+                    "id": "app_survivor",
+                    "appId": "terminal-tty",
+                    "title": "Survivor",
+                    "kind": "tty",
+                    "status": "running",
+                    "createdAt": "2026-11-05T00:00:00.000Z",
+                    "updatedAt": "2026-11-05T00:00:00.000Z",
+                    "paths": {
+                      "sessionDir": "/tmp/survivor",
+                      "logDir": "/tmp/survivor-logs"
+                    },
+                    "bindings": [
+                      {
+                        "type": "app-session",
+                        "id": "app_survivor"
+                      }
+                    ],
+                    "workspace": {
+                      "cwd": "/workspace"
+                    }
+                  }
+                ],
+                "updatedAt": "2026-11-05T00:00:00.000Z"
+              }
+            }
+          },
+          {
+            "type": "app-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "app-removal",
+                "instanceId": "standalone",
+                "revision": 2,
+                "previousRevision": 1,
+                "traceId": "<app-trace-2>",
+                "generatedAt": "2026-11-05T00:00:01.000Z",
+                "reason": "app-session-updated"
+              },
+              "session": {
+                "id": "app_target",
+                "appId": "terminal-tty",
+                "title": "Renamed target",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/target",
+                  "logDir": "/tmp/target-logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_target"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            }
+          },
+          {
+            "type": "app-session.removed",
+            "payload": {
+              "meta": {
+                "streamId": "app-removal",
+                "instanceId": "standalone",
+                "revision": 3,
+                "previousRevision": 2,
+                "traceId": "<app-trace-3>",
+                "generatedAt": "2026-11-05T00:00:02.000Z",
+                "reason": "app-session-deleted"
+              },
+              "sessionId": "app_target",
+              "tombstone": {
+                "id": "app_target",
+                "appId": "terminal-tty",
+                "title": "Renamed target",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/target",
+                  "logDir": "/tmp/target-logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_target"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              },
+              "expiresAt": "2026-11-05T01:00:02.000Z"
+            }
+          }
+        ],
+        "boundaryDelta": {
+          "streamId": "app-removal",
+          "instanceId": "standalone",
+          "sinceRevision": 2,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 3,
+          "syncRequired": false,
+          "events": [
+            {
+              "type": "app-session.removed",
+              "payload": {
+                "meta": {
+                  "streamId": "app-removal",
+                  "instanceId": "standalone",
+                  "revision": 3,
+                  "previousRevision": 2,
+                  "traceId": "<app-trace-3>",
+                  "generatedAt": "2026-11-05T00:00:02.000Z",
+                  "reason": "app-session-deleted"
+                },
+                "sessionId": "app_target",
+                "tombstone": {
+                  "id": "app_target",
+                  "appId": "terminal-tty",
+                  "title": "Renamed target",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:00.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/target",
+                    "logDir": "/tmp/target-logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_target"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                },
+                "expiresAt": "2026-11-05T01:00:02.000Z"
+              }
+            }
+          ]
+        },
+        "expiredDelta": {
+          "streamId": "app-removal",
+          "instanceId": "standalone",
+          "sinceRevision": 2,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 4,
+          "syncRequired": true,
+          "events": []
+        }
+      }
+    },
+    "sourceEffects": {
+      "close": {
+        "disposition": "closed",
+        "aiSessionId": "ai_target",
+        "providerSessionId": "provider-target",
+        "creationSource": "ai-session"
+      },
+      "repeat": {
+        "disposition": "already-closed",
+        "aiSessionId": "ai_target",
+        "providerSessionId": "provider-target",
+        "creationSource": "ai-session"
+      },
+      "providerCalls": [
+        [
+          "archive",
+          "provider-target"
+        ],
+        [
+          "unsubscribe",
+          "provider-target"
+        ]
+      ]
+    }
+  }
+}

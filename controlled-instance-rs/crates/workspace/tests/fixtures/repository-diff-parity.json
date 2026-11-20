@@ -1,0 +1,517 @@
+[
+  {
+    "name": "plain untracked",
+    "scope": "untracked",
+    "hex": "68656c6c6f0a",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": false,
+      "complete": true,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "diff --git a/example.txt b/example.txt\nnew file mode 100644\n--- /dev/null\n+++ b/example.txt\n@@ -0,0 +1,1 @@\n+hello\n",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "new file mode 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- /dev/null"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -0,0 +1,1 @@",
+          "oldStart": 0,
+          "oldCount": 0,
+          "newStart": 1,
+          "newCount": 1,
+          "hunkId": "hunk:0:0:1:1"
+        },
+        {
+          "kind": "addition",
+          "content": "hello",
+          "newLine": 1
+        }
+      ],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "initial BOM",
+    "scope": "untracked",
+    "hex": "efbbbf68656c6c6f0a",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": false,
+      "complete": true,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "diff --git a/example.txt b/example.txt\nnew file mode 100644\n--- /dev/null\n+++ b/example.txt\n@@ -0,0 +1,1 @@\n+hello\n",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "new file mode 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- /dev/null"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -0,0 +1,1 @@",
+          "oldStart": 0,
+          "oldCount": 0,
+          "newStart": 1,
+          "newCount": 1,
+          "hunkId": "hunk:0:0:1:1"
+        },
+        {
+          "kind": "addition",
+          "content": "hello",
+          "newLine": 1
+        }
+      ],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "double BOM",
+    "scope": "untracked",
+    "hex": "efbbbfefbbbf68656c6c6f0a",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": false,
+      "complete": true,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "diff --git a/example.txt b/example.txt\nnew file mode 100644\n--- /dev/null\n+++ b/example.txt\n@@ -0,0 +1,1 @@\n+﻿hello\n",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "new file mode 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- /dev/null"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -0,0 +1,1 @@",
+          "oldStart": 0,
+          "oldCount": 0,
+          "newStart": 1,
+          "newCount": 1,
+          "hunkId": "hunk:0:0:1:1"
+        },
+        {
+          "kind": "addition",
+          "content": "﻿hello",
+          "newLine": 1
+        }
+      ],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "BOM only",
+    "scope": "untracked",
+    "hex": "efbbbf",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": false,
+      "complete": true,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "diff --git a/example.txt b/example.txt\nnew file mode 100644\n--- /dev/null\n+++ b/example.txt\n@@ -0,0 +1,1 @@\n",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "new file mode 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- /dev/null"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -0,0 +1,1 @@",
+          "oldStart": 0,
+          "oldCount": 0,
+          "newStart": 1,
+          "newCount": 1,
+          "hunkId": "hunk:0:0:1:1"
+        }
+      ],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "embedded BOM",
+    "scope": "untracked",
+    "hex": "68656c6c6fefbbbf0a",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": false,
+      "complete": true,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "diff --git a/example.txt b/example.txt\nnew file mode 100644\n--- /dev/null\n+++ b/example.txt\n@@ -0,0 +1,1 @@\n+hello﻿\n",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "new file mode 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- /dev/null"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -0,0 +1,1 @@",
+          "oldStart": 0,
+          "oldCount": 0,
+          "newStart": 1,
+          "newCount": 1,
+          "hunkId": "hunk:0:0:1:1"
+        },
+        {
+          "kind": "addition",
+          "content": "hello﻿",
+          "newLine": 1
+        }
+      ],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "empty untracked",
+    "scope": "untracked",
+    "hex": "",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": false,
+      "complete": true,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "diff --git a/example.txt b/example.txt\nnew file mode 100644\n--- /dev/null\n+++ b/example.txt\n@@ -0,0 +1,1 @@\n",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "new file mode 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- /dev/null"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -0,0 +1,1 @@",
+          "oldStart": 0,
+          "oldCount": 0,
+          "newStart": 1,
+          "newCount": 1,
+          "hunkId": "hunk:0:0:1:1"
+        }
+      ],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "NUL is binary",
+    "scope": "untracked",
+    "hex": "68656c6c6f00776f726c64",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": true,
+      "complete": false,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "",
+      "lines": [],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "invalid UTF8 is binary",
+    "scope": "untracked",
+    "hex": "efbbbfff",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": true,
+      "complete": false,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "",
+      "lines": [],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "bounded unicode diff",
+    "scope": "untracked",
+    "hex": "e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880e4b8ade69687f09f9880",
+    "byteLimit": 131,
+    "expected": {
+      "binary": false,
+      "complete": false,
+      "truncated": true,
+      "byteLimit": 131,
+      "content": "diff --git a/example.txt b/example.txt\nnew file mode 100644\n--- /dev/null\n+++ b/example.txt\n@@ -0,0 +1,1 @@\n+中文😀中文😀",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "new file mode 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- /dev/null"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -0,0 +1,1 @@",
+          "oldStart": 0,
+          "oldCount": 0,
+          "newStart": 1,
+          "newCount": 1,
+          "hunkId": "hunk:0:0:1:1"
+        },
+        {
+          "kind": "addition",
+          "content": "中文😀中文😀",
+          "newLine": 1
+        }
+      ],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "binary phrase in text",
+    "scope": "unstaged",
+    "hex": "42696e6172792066696c657320617265206f7264696e61727920776f7264730a",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": false,
+      "complete": true,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "diff --git a/example.txt b/example.txt\nindex e79c5e8..047a917 100644\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-initial\n+Binary files are ordinary words\n",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "index e79c5e8..047a917 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- a/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -1 +1 @@",
+          "oldStart": 1,
+          "oldCount": 1,
+          "newStart": 1,
+          "newCount": 1,
+          "hunkId": "hunk:1:1:1:1"
+        },
+        {
+          "kind": "deletion",
+          "content": "initial",
+          "oldLine": 1
+        },
+        {
+          "kind": "addition",
+          "content": "Binary files are ordinary words",
+          "newLine": 1
+        }
+      ],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "binary phrase across lines",
+    "scope": "unstaged",
+    "hex": "42696e6172792066696c6573206172650a6e6f74206120646966666572206d61726b65720a",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": false,
+      "complete": true,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "diff --git a/example.txt b/example.txt\nindex e79c5e8..68b95ba 100644\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1,2 @@\n-initial\n+Binary files are\n+not a differ marker\n",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "index e79c5e8..68b95ba 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- a/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -1 +1,2 @@",
+          "oldStart": 1,
+          "oldCount": 1,
+          "newStart": 1,
+          "newCount": 2,
+          "hunkId": "hunk:1:1:1:2"
+        },
+        {
+          "kind": "deletion",
+          "content": "initial",
+          "oldLine": 1
+        },
+        {
+          "kind": "addition",
+          "content": "Binary files are",
+          "newLine": 1
+        },
+        {
+          "kind": "addition",
+          "content": "not a differ marker",
+          "newLine": 2
+        }
+      ],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "binary git output",
+    "scope": "unstaged",
+    "hex": "68656c6c6f00776f726c64",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": true,
+      "complete": false,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "",
+      "lines": [],
+      "contextGaps": []
+    }
+  },
+  {
+    "name": "plain tracked",
+    "scope": "unstaged",
+    "hex": "68656c6c6f0a",
+    "byteLimit": 524288,
+    "expected": {
+      "binary": false,
+      "complete": true,
+      "truncated": false,
+      "byteLimit": 524288,
+      "content": "diff --git a/example.txt b/example.txt\nindex e79c5e8..ce01362 100644\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-initial\n+hello\n",
+      "lines": [
+        {
+          "kind": "metadata",
+          "content": "diff --git a/example.txt b/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "index e79c5e8..ce01362 100644"
+        },
+        {
+          "kind": "metadata",
+          "content": "--- a/example.txt"
+        },
+        {
+          "kind": "metadata",
+          "content": "+++ b/example.txt"
+        },
+        {
+          "kind": "hunk",
+          "content": "@@ -1 +1 @@",
+          "oldStart": 1,
+          "oldCount": 1,
+          "newStart": 1,
+          "newCount": 1,
+          "hunkId": "hunk:1:1:1:1"
+        },
+        {
+          "kind": "deletion",
+          "content": "initial",
+          "oldLine": 1
+        },
+        {
+          "kind": "addition",
+          "content": "hello",
+          "newLine": 1
+        }
+      ],
+      "contextGaps": []
+    }
+  }
+]

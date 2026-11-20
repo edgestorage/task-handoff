@@ -1,0 +1,405 @@
+{
+  "discovery": [
+    {
+      "name": "needs-object",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "running",
+        "needs": {}
+      },
+      "expected": {
+        "status": "running",
+        "phase": "thinking",
+        "providerState": "running",
+        "stateSource": null
+      }
+    },
+    {
+      "name": "needs-empty-array",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "running",
+        "needs": []
+      },
+      "expected": {
+        "status": "idle",
+        "phase": "unknown",
+        "providerState": "running",
+        "stateSource": null
+      }
+    },
+    {
+      "name": "needs-null-array",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "running",
+        "needs": [
+          null
+        ]
+      },
+      "expected": {
+        "status": "idle",
+        "phase": "unknown",
+        "providerState": "running",
+        "stateSource": null
+      }
+    },
+    {
+      "name": "needs-empty-string-array",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "running",
+        "needs": [
+          "  "
+        ]
+      },
+      "expected": {
+        "status": "idle",
+        "phase": "unknown",
+        "providerState": "running",
+        "stateSource": null
+      }
+    },
+    {
+      "name": "needs-nested-empty-array",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "running",
+        "needs": [
+          []
+        ]
+      },
+      "expected": {
+        "status": "idle",
+        "phase": "unknown",
+        "providerState": "running",
+        "stateSource": null
+      }
+    },
+    {
+      "name": "needs-text-array",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "running",
+        "needs": [
+          null,
+          "go"
+        ]
+      },
+      "expected": {
+        "status": "running",
+        "phase": "thinking",
+        "providerState": "running",
+        "stateSource": null
+      }
+    },
+    {
+      "name": "needs-false",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "running",
+        "needs": false
+      },
+      "expected": {
+        "status": "running",
+        "phase": "thinking",
+        "providerState": "running",
+        "stateSource": null
+      }
+    },
+    {
+      "name": "needs-zero",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "running",
+        "needs": 0
+      },
+      "expected": {
+        "status": "running",
+        "phase": "thinking",
+        "providerState": "running",
+        "stateSource": null
+      }
+    },
+    {
+      "name": "needs-null",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "running",
+        "needs": null
+      },
+      "expected": {
+        "status": "idle",
+        "phase": "unknown",
+        "providerState": "running",
+        "stateSource": null
+      }
+    },
+    {
+      "name": "optional-job-metadata-invalid",
+      "job": {
+        "short": "a1b2c3d4",
+        "sessionId": "claude-parity-provider",
+        "state": "waiting",
+        "pid": "bad-pid",
+        "nonce": {
+          "future": true
+        },
+        "attempt": "old",
+        "startedAt": [],
+        "detail": "needs attention"
+      },
+      "expected": {
+        "status": "waiting",
+        "phase": "unknown",
+        "providerState": "waiting",
+        "stateSource": null
+      }
+    }
+  ],
+  "subscriptions": [
+    {
+      "name": "settled-array-outcome",
+      "message": {
+        "type": "settled",
+        "outcome": [
+          "waiting"
+        ]
+      },
+      "expected": {
+        "status": "waiting",
+        "phase": "unknown",
+        "providerState": "waiting",
+        "stateSource": "settled.outcome"
+      }
+    },
+    {
+      "name": "array-observed-state",
+      "message": {
+        "state": [
+          "waiting"
+        ]
+      },
+      "expected": {
+        "status": "running",
+        "phase": "thinking",
+        "providerState": "waiting",
+        "stateSource": "message.state"
+      }
+    },
+    {
+      "name": "empty-array-state-falls-through",
+      "message": {
+        "state": [
+          null
+        ],
+        "patch": {
+          "state": "blocked"
+        }
+      },
+      "expected": {
+        "status": "running",
+        "phase": "thinking",
+        "providerState": "blocked",
+        "stateSource": "patch.state"
+      }
+    },
+    {
+      "name": "long-array-state",
+      "message": {
+        "state": [
+          "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ]
+      },
+      "expected": {
+        "status": "running",
+        "phase": "thinking",
+        "providerState": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...",
+        "stateSource": "message.state"
+      }
+    },
+    {
+      "name": "record-optional-metadata-invalid",
+      "message": {
+        "type": "snapshot",
+        "record": {
+          "short": "a1b2c3d4",
+          "sessionId": "claude-parity-provider",
+          "state": "waiting",
+          "pid": "bad-pid"
+        }
+      },
+      "expected": {
+        "status": "waiting",
+        "phase": "unknown",
+        "providerState": "waiting",
+        "stateSource": "record.state"
+      }
+    }
+  ],
+  "messages": [
+    {
+      "name": "without-attachments",
+      "message": "  hello  ",
+      "files": [],
+      "expected": "  hello  \n"
+    },
+    {
+      "name": "file-message-trim",
+      "message": "  hello  ",
+      "files": [
+        {
+          "kind": "file",
+          "path": "/attachment.txt"
+        }
+      ],
+      "expected": "hello\n\n文件路径：/attachment.txt\n"
+    },
+    {
+      "name": "attachment-only",
+      "message": " \n ",
+      "files": [
+        {
+          "kind": "image",
+          "path": "/attachment.txt"
+        }
+      ],
+      "expected": "图片路径：/attachment.txt\n"
+    },
+    {
+      "name": "separate-kind-indexes",
+      "message": "\n describe \n",
+      "files": [
+        {
+          "kind": "image",
+          "path": "/attachment.txt"
+        },
+        {
+          "kind": "file",
+          "path": "/attachment.txt"
+        },
+        {
+          "kind": "image",
+          "path": "/attachment.txt"
+        }
+      ],
+      "expected": "describe\n\n图片1路径：/attachment.txt\n文件路径：/attachment.txt\n图片2路径：/attachment.txt\n"
+    }
+  ],
+  "errors": [
+    {
+      "action": "send",
+      "response": {
+        "ok": false,
+        "code": "ENOENT",
+        "error": ""
+      },
+      "expected": {
+        "code": "AI_SESSION_SEND_FAILED",
+        "message": "Claude reply failed: ENOENT"
+      }
+    },
+    {
+      "action": "send",
+      "response": {
+        "ok": false,
+        "error": "missing worker"
+      },
+      "expected": {
+        "code": "AI_SESSION_SEND_FAILED",
+        "message": "missing worker"
+      }
+    },
+    {
+      "action": "steer",
+      "response": {
+        "ok": false,
+        "code": "ENOENT",
+        "error": ""
+      },
+      "expected": {
+        "code": "AI_SESSION_SEND_FAILED",
+        "message": "Claude reply failed: ENOENT"
+      }
+    },
+    {
+      "action": "steer",
+      "response": {
+        "ok": false,
+        "error": "missing worker"
+      },
+      "expected": {
+        "code": "AI_SESSION_SEND_FAILED",
+        "message": "missing worker"
+      }
+    },
+    {
+      "action": "interrupt",
+      "response": {
+        "ok": false,
+        "code": "ENOENT",
+        "error": ""
+      },
+      "expected": {
+        "code": "AI_SESSION_INTERRUPT_FAILED",
+        "message": "Claude interrupt failed: ENOENT"
+      }
+    },
+    {
+      "action": "interrupt",
+      "response": {
+        "ok": false,
+        "error": "missing worker"
+      },
+      "expected": {
+        "code": "AI_SESSION_INTERRUPT_FAILED",
+        "message": "missing worker"
+      }
+    },
+    {
+      "action": "send",
+      "response": {
+        "ok": false,
+        "code": "",
+        "error": ""
+      },
+      "expected": {
+        "code": "AI_SESSION_SEND_FAILED",
+        "message": "Claude reply failed: unknown"
+      }
+    },
+    {
+      "action": "steer",
+      "response": {
+        "ok": false,
+        "code": "",
+        "error": ""
+      },
+      "expected": {
+        "code": "AI_SESSION_SEND_FAILED",
+        "message": "Claude reply failed: unknown"
+      }
+    },
+    {
+      "action": "interrupt",
+      "response": {
+        "ok": false,
+        "code": "",
+        "error": ""
+      },
+      "expected": {
+        "code": "AI_SESSION_INTERRUPT_FAILED",
+        "message": "Claude interrupt failed: unknown"
+      }
+    }
+  ]
+}

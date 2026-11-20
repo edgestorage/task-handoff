@@ -1,0 +1,555 @@
+{
+  "expected": {
+    "C01": {
+      "first": {
+        "transport": "unix",
+        "endpoint": "unix://<socket>",
+        "socketPath": "<socket>",
+        "pid": "<child-1>",
+        "command": "<managed-codex>",
+        "args": [
+          "app-server",
+          "--listen",
+          "unix://<socket>"
+        ],
+        "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+      },
+      "duplicate": {
+        "transport": "unix",
+        "endpoint": "unix://<socket>",
+        "socketPath": "<socket>",
+        "pid": "<child-1>",
+        "command": "<managed-codex>",
+        "args": [
+          "app-server",
+          "--listen",
+          "unix://<socket>"
+        ],
+        "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+      },
+      "second": {
+        "transport": "unix",
+        "endpoint": "unix://<socket>",
+        "socketPath": "<socket>",
+        "pid": "<child-1>",
+        "command": "<managed-codex>",
+        "args": [
+          "app-server",
+          "--listen",
+          "unix://<socket>"
+        ],
+        "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+      },
+      "greeting": "one",
+      "shared": {
+        "owner": {
+          "transport": "unix",
+          "endpoint": "unix://<socket>",
+          "socketPath": "<socket>",
+          "pid": "<child-1>",
+          "command": "<managed-codex>",
+          "args": [
+            "app-server",
+            "--listen",
+            "unix://<socket>"
+          ],
+          "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+        },
+        "socketExists": true,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": true,
+            "groupAlive": true
+          }
+        ]
+      },
+      "unknownReleased": {
+        "owner": {
+          "transport": "unix",
+          "endpoint": "unix://<socket>",
+          "socketPath": "<socket>",
+          "pid": "<child-1>",
+          "command": "<managed-codex>",
+          "args": [
+            "app-server",
+            "--listen",
+            "unix://<socket>"
+          ],
+          "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+        },
+        "socketExists": true,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": true,
+            "groupAlive": true
+          }
+        ]
+      },
+      "oneReleased": {
+        "owner": {
+          "transport": "unix",
+          "endpoint": "unix://<socket>",
+          "socketPath": "<socket>",
+          "pid": "<child-1>",
+          "command": "<managed-codex>",
+          "args": [
+            "app-server",
+            "--listen",
+            "unix://<socket>"
+          ],
+          "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+        },
+        "socketExists": true,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": true,
+            "groupAlive": true
+          }
+        ]
+      },
+      "repeatReleased": {
+        "owner": {
+          "transport": "unix",
+          "endpoint": "unix://<socket>",
+          "socketPath": "<socket>",
+          "pid": "<child-1>",
+          "command": "<managed-codex>",
+          "args": [
+            "app-server",
+            "--listen",
+            "unix://<socket>"
+          ],
+          "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+        },
+        "socketExists": true,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": true,
+            "groupAlive": true
+          }
+        ]
+      },
+      "lastReleased": {
+        "owner": null,
+        "socketExists": false,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": false,
+            "groupAlive": false
+          }
+        ]
+      }
+    },
+    "C02": {
+      "error": {
+        "code": "CODEX_APP_SERVER_START_FAILED"
+      },
+      "failed": {
+        "owner": null,
+        "socketExists": false,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": "<descendant-1>",
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "exit"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": false,
+            "groupAlive": false
+          }
+        ]
+      },
+      "retry": {
+        "transport": "unix",
+        "endpoint": "unix://<socket>",
+        "socketPath": "<socket>",
+        "pid": "<child-2>",
+        "command": "<managed-codex>",
+        "args": [
+          "app-server",
+          "--listen",
+          "unix://<socket>"
+        ],
+        "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+      },
+      "greeting": "two",
+      "recovered": {
+        "owner": {
+          "transport": "unix",
+          "endpoint": "unix://<socket>",
+          "socketPath": "<socket>",
+          "pid": "<child-2>",
+          "command": "<managed-codex>",
+          "args": [
+            "app-server",
+            "--listen",
+            "unix://<socket>"
+          ],
+          "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+        },
+        "socketExists": true,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": "<descendant-1>",
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "exit"
+          },
+          {
+            "pid": "<child-2>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "two",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": false,
+            "groupAlive": false
+          },
+          {
+            "pid": "<child-2>",
+            "alive": true,
+            "groupAlive": true
+          }
+        ]
+      },
+      "released": {
+        "owner": null,
+        "socketExists": false,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": "<descendant-1>",
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "exit"
+          },
+          {
+            "pid": "<child-2>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "two",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": false,
+            "groupAlive": false
+          },
+          {
+            "pid": "<child-2>",
+            "alive": false,
+            "groupAlive": false
+          }
+        ]
+      }
+    },
+    "C03": {
+      "first": {
+        "transport": "unix",
+        "endpoint": "unix://<socket>",
+        "socketPath": "<socket>",
+        "pid": "<child-1>",
+        "command": "<managed-codex>",
+        "args": [
+          "app-server",
+          "--listen",
+          "unix://<socket>"
+        ],
+        "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+      },
+      "greetingOne": "one",
+      "second": {
+        "transport": "unix",
+        "endpoint": "unix://<socket>",
+        "socketPath": "<socket>",
+        "pid": "<child-2>",
+        "command": "<managed-codex>",
+        "args": [
+          "app-server",
+          "--listen",
+          "unix://<socket>"
+        ],
+        "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+      },
+      "greetingTwo": "two",
+      "replaced": {
+        "owner": {
+          "transport": "unix",
+          "endpoint": "unix://<socket>",
+          "socketPath": "<socket>",
+          "pid": "<child-2>",
+          "command": "<managed-codex>",
+          "args": [
+            "app-server",
+            "--listen",
+            "unix://<socket>"
+          ],
+          "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+        },
+        "socketExists": true,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "ready"
+          },
+          {
+            "pid": "<child-2>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "two",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": false,
+            "groupAlive": false
+          },
+          {
+            "pid": "<child-2>",
+            "alive": true,
+            "groupAlive": true
+          }
+        ]
+      },
+      "oldReleased": {
+        "owner": {
+          "transport": "unix",
+          "endpoint": "unix://<socket>",
+          "socketPath": "<socket>",
+          "pid": "<child-2>",
+          "command": "<managed-codex>",
+          "args": [
+            "app-server",
+            "--listen",
+            "unix://<socket>"
+          ],
+          "logPath": "<root>/logs/app-sessions/codex-app-server/codex-app-server.log"
+        },
+        "socketExists": true,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "ready"
+          },
+          {
+            "pid": "<child-2>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "two",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": false,
+            "groupAlive": false
+          },
+          {
+            "pid": "<child-2>",
+            "alive": true,
+            "groupAlive": true
+          }
+        ]
+      },
+      "lastReleased": {
+        "owner": null,
+        "socketExists": false,
+        "launches": [
+          {
+            "pid": "<child-1>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "one",
+            "mode": "ready"
+          },
+          {
+            "pid": "<child-2>",
+            "childPid": null,
+            "endpoint": "unix://<socket>",
+            "args": [
+              "app-server",
+              "--listen",
+              "unix://<socket>"
+            ],
+            "cwd": "<root>",
+            "marker": "two",
+            "mode": "ready"
+          }
+        ],
+        "processes": [
+          {
+            "pid": "<child-1>",
+            "alive": false,
+            "groupAlive": false
+          },
+          {
+            "pid": "<child-2>",
+            "alive": false,
+            "groupAlive": false
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { EventEmitter } from "node:events";
 import crypto from "node:crypto";
 import path from "node:path";
 import { Transform, type Readable } from "node:stream";
@@ -133,8 +134,12 @@ export class AiSessionConversationAttachmentStore {
   private maxFileAttachmentBytes: number;
   private readonly onWarning?: (reason: string) => void;
   private retentionDays: number;
+  private readonly contentChanges = new EventEmitter();
   private readonly manifests = new Map<string, AttachmentManifest>();
   private readonly drafts = new Map<string, DraftManifest>();
+  // A pipeline owns its temporary path until it settles, including after the
+  // public upload ID has been canceled and reused by another generation.
+  private readonly activeDraftFiles = new Set<string>();
 
   constructor(
     paths: Pick<TaskHandoffStoragePaths, "dataDir">,
@@ -156,6 +161,11 @@ export class AiSessionConversationAttachmentStore {
     this.restoreDrafts();
     this.cleanupUnreferencedBlobs();
     this.gc();
+  }
+
+  onContentChange(listener: () => void) {
+    this.contentChanges.on("change", listener);
+    return () => { this.contentChanges.off("change", listener); };
   }
 
   setRetentionDays(days: number) {
@@ -203,6 +213,7 @@ export class AiSessionConversationAttachmentStore {
         callback(null, chunk);
       },
     });
+    this.activeDraftFiles.add(temporary);
     try {
       await pipeline(input.source, meter, fs.createWriteStream(temporary, { flags: "wx", mode: 0o600 }));
       if (size !== input.size) {
@@ -232,6 +243,8 @@ export class AiSessionConversationAttachmentStore {
       try { fs.unlinkSync(temporary); } catch {}
       this.cleanupUnreferencedBlobs();
       throw error;
+    } finally {
+      this.activeDraftFiles.delete(temporary);
     }
   }
 
@@ -427,6 +440,16 @@ export class AiSessionConversationAttachmentStore {
     attachments: readonly AiSessionConversationAttachment[],
   ): AiSessionConversationAttachment[] {
     this.gc();
+    return this.projectMessageAttachments(sessionId, messageId, attachments);
+  }
+
+  // Pure owner projection for summaries: snapshot publication must not run GC
+  // or recursively trigger another authority publish.
+  projectMessageAttachments(
+    sessionId: string,
+    messageId: string,
+    attachments: readonly AiSessionConversationAttachment[],
+  ): AiSessionConversationAttachment[] {
     const manifests = this.messageManifests(sessionId, messageId);
     if (!manifests.length) {
       return attachments.map((attachment) => ({ ...attachment, contentState: "missing" as const }));
@@ -522,8 +545,7 @@ export class AiSessionConversationAttachmentStore {
 
   releaseSession(sessionId: string) {
     const ids = [...this.manifests.values()].filter((manifest) => manifest.sessionId === sessionId).map((manifest) => manifest.id);
-    for (const id of ids) this.removeManifest(id);
-    return ids.length;
+    return ids.filter((id) => this.removeManifest(id)).length;
   }
 
   gc() {
@@ -551,6 +573,9 @@ export class AiSessionConversationAttachmentStore {
       this.saveManifest(next);
       this.removeBlobIfUnreferenced(manifest.blobHash);
       expiredContent += 1;
+      // Notify after this durable transition, including successes preceding a
+      // later GC failure. Consumers re-project the owner, never patch raw turns.
+      this.contentChanges.emit("change");
     }
     return { removedDrafts, expiredContent };
   }
@@ -770,16 +795,28 @@ export class AiSessionConversationAttachmentStore {
   }
 
   private writeManifestFile(manifest: AttachmentManifest) {
-    writeFileAtomic.sync(this.manifestPath(manifest.id), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    try {
+      writeFileAtomic.sync(this.manifestPath(manifest.id), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    } catch (cause) {
+      this.onWarning?.(`attachment manifest write failed for ${manifest.id}: ${safeError(cause)}`);
+      throw Object.assign(new Error("AI session attachment manifest could not be persisted.", { cause }), {
+        code: "AI_SESSION_ATTACHMENT_IO_FAILED", statusCode: 500,
+      });
+    }
   }
 
   private removeManifest(id: string) {
     const manifest = this.manifests.get(id);
     if (!manifest) return false;
-    this.manifests.delete(id);
+    // The disk manifest owns the blob across restarts. A failed unlink must
+    // retain its in-memory owner too, so cleanup cannot delete its content.
     try { fs.unlinkSync(this.manifestPath(id)); } catch (error) {
-      if (!isMissing(error)) this.onWarning?.(`attachment manifest cleanup failed for ${id}`);
+      if (!isMissing(error)) {
+        this.onWarning?.(`attachment manifest cleanup failed for ${id}`);
+        return false;
+      }
     }
+    this.manifests.delete(id);
     this.removeBlobIfUnreferenced(manifest.blobHash);
     return true;
   }
@@ -811,7 +848,7 @@ export class AiSessionConversationAttachmentStore {
     let entries: fs.Dirent[] = [];
     try { entries = fs.readdirSync(this.blobDir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
-      if (!entry.isFile() || referenced.has(entry.name)) continue;
+      if (!entry.isFile() || referenced.has(entry.name) || this.activeDraftFiles.has(path.join(this.blobDir, entry.name))) continue;
       try { fs.unlinkSync(path.join(this.blobDir, entry.name)); } catch (error) {
         if (!isMissing(error)) this.onWarning?.("unreferenced attachment blob cleanup failed");
       }

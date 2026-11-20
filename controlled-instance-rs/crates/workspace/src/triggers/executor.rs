@@ -241,6 +241,7 @@ mod tests {
                 provider_turn_id: Some("provider-turn-1".to_string()),
                 decision: Some("allow".to_string()),
                 queue_id: Some("queue-1".to_string()),
+                completion_text: None,
             },
         });
         assert_eq!(complete["decision"], "allow");

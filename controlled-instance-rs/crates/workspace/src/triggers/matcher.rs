@@ -235,4 +235,43 @@ mod tests {
             Some(PathBuf::from("/workspace/project"))
         );
     }
+
+    #[test]
+    fn matcher_matches_shared_node_fixtures() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../instance/tests/fixtures/trigger-matcher-parity.json"
+        ))
+        .expect("trigger matcher fixtures");
+        let mut mismatches = Vec::new();
+        for fixture in fixtures["cases"].as_array().expect("cases") {
+            let globs = fixture["globs"]
+                .as_array()
+                .expect("globs")
+                .iter()
+                .map(|value| value.as_str().expect("glob").to_string())
+                .collect::<Vec<_>>();
+            let ignored = fixture["ignored"]
+                .as_array()
+                .expect("ignored")
+                .iter()
+                .map(|value| value.as_str().expect("ignore").to_string())
+                .collect::<Vec<_>>();
+            let matcher = FileTriggerMatcher::new(&globs, &ignored).expect("matcher");
+            let mut actual = serde_json::Map::new();
+            for relative in fixture["paths"].as_object().expect("paths").keys() {
+                actual.insert(
+                    relative.clone(),
+                    serde_json::Value::Bool(matcher.matches(relative).expect("match")),
+                );
+            }
+            let actual = serde_json::Value::Object(actual);
+            if actual != fixture["expected"] {
+                mismatches.push(format!(
+                    "{}: actual={}, expected={}",
+                    fixture["name"], actual, fixture["expected"]
+                ));
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
 }

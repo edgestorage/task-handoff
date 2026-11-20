@@ -1,0 +1,1010 @@
+[
+  {
+    "name": "limit=\"0x10\"",
+    "suffix": "files/search?query=example&limit=0x10",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0x10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0x10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0x10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0x10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0X10\"",
+    "suffix": "files/search?query=example&limit=0X10",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0X10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0X10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0X10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0X10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0b10\"",
+    "suffix": "files/search?query=example&limit=0b10",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0b10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0b10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0b10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0b10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0B10\"",
+    "suffix": "files/search?query=example&limit=0B10",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0B10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0B10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0B10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0B10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0o10\"",
+    "suffix": "files/search?query=example&limit=0o10",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0o10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0o10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0o10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0o10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0O10\"",
+    "suffix": "files/search?query=example&limit=0O10",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0O10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0O10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0O10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0O10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"1e2\"",
+    "suffix": "files/search?query=example&limit=1e2",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"1e2\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=1e2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"1e2\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=1e2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"﻿16﻿\"",
+    "suffix": "files/search?query=example&limit=%EF%BB%BF16%EF%BB%BF",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"﻿16﻿\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=%EF%BB%BF16%EF%BB%BF",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"﻿16﻿\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=%EF%BB%BF16%EF%BB%BF",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\" 16 \"",
+    "suffix": "files/search?query=example&limit=+16+",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\" 16 \"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=+16+",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\" 16 \"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=+16+",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"\"",
+    "suffix": "files/search?query=example&limit=",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0\"",
+    "suffix": "files/search?query=example&limit=0",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"201\"",
+    "suffix": "files/search?query=example&limit=201",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too big: expected number to be <=200",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"201\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=201",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"201\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=201",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_NOT_WORKTREE",
+        "message": "Repository is unavailable.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"-1\"",
+    "suffix": "files/search?query=example&limit=-1",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"-1\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=-1",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"-1\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=-1",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"1.5\"",
+    "suffix": "files/search?query=example&limit=1.5",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected int, received number",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"1.5\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=1.5",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected int, received number",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"1.5\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=1.5",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected int, received number",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"Infinity\"",
+    "suffix": "files/search?query=example&limit=Infinity",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received Infinity",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"Infinity\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=Infinity",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received Infinity",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"Infinity\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=Infinity",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received Infinity",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"inf\"",
+    "suffix": "files/search?query=example&limit=inf",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"inf\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=inf",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"inf\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=inf",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"+inf\"",
+    "suffix": "files/search?query=example&limit=%2Binf",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"+inf\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=%2Binf",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"+inf\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=%2Binf",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"NaN\"",
+    "suffix": "files/search?query=example&limit=NaN",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"NaN\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=NaN",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"NaN\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=NaN",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0x\"",
+    "suffix": "files/search?query=example&limit=0x",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0x\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0x",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0x\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0x",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"+0x10\"",
+    "suffix": "files/search?query=example&limit=%2B0x10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"+0x10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=%2B0x10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"+0x10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=%2B0x10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0b2\"",
+    "suffix": "files/search?query=example&limit=0b2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0b2\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0b2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0b2\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0b2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"9007199254740992\"",
+    "suffix": "files/search?query=example&limit=9007199254740992",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too big: expected int to be <=9007199254740991; Too big: expected number to be <=200",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"9007199254740992\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=9007199254740992",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too big: expected int to be <=9007199254740991; Too big: expected number to be <=2097152",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"9007199254740992\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=9007199254740992",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too big: expected int to be <=9007199254740991; Too big: expected number to be <=3000",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"1e100\"",
+    "suffix": "files/search?query=example&limit=1e100",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too big: expected int to be <=9007199254740991; Too big: expected number to be <=200",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"1e100\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=1e100",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too big: expected int to be <=9007199254740991; Too big: expected number to be <=2097152",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"1e100\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=1e100",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too big: expected int to be <=9007199254740991; Too big: expected number to be <=3000",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"16\"",
+    "suffix": "files/search?query=example&limit=%C2%8516%C2%85",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"16\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=%C2%8516%C2%85",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"16\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=%C2%8516%C2%85",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"-Infinity\"",
+    "suffix": "files/search?query=example&limit=-Infinity",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received -Infinity",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"-Infinity\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=-Infinity",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received -Infinity",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"-Infinity\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=-Infinity",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received -Infinity",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"-9007199254740992\"",
+    "suffix": "files/search?query=example&limit=-9007199254740992",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected int to be >=-9007199254740991; Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"-9007199254740992\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=-9007199254740992",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected int to be >=-9007199254740991; Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"-9007199254740992\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=-9007199254740992",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected int to be >=-9007199254740991; Too small: expected number to be >=1",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0x+10\"",
+    "suffix": "files/search?query=example&limit=0x%2B10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0x+10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0x%2B10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0x+10\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0x%2B10",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "limit=\"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"",
+    "suffix": "files/search?query=example&limit=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received Infinity",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "byteLimit=\"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"",
+    "suffix": "diff?path=example.txt&scope=untracked&byteLimit=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received Infinity",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "contextLines=\"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"",
+    "suffix": "diff?path=example.txt&scope=untracked&contextLines=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received Infinity",
+        "retryable": false
+      }
+    }
+  }
+]

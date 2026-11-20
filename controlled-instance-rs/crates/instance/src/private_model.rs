@@ -212,8 +212,7 @@ impl ControlledModelConfig {
         &self,
         value: Value,
     ) -> Result<ManagedModelConfigApplyResult, ManagedModelError> {
-        let catalog = parse_instance_private_model_catalog(value, None)
-            .map_err(|error| ManagedModelError::invalid("PRIVATE_MODEL_CATALOG_INVALID", error))?;
+        let catalog = parse_catalog(value, None)?;
         let mut state = self.lock();
         state.catalog = Some(catalog);
         state.source = "live-sync".to_string();
@@ -1180,11 +1179,7 @@ fn read_catalog(
     if let Some(serialized) = process_environment.get("TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON") {
         let value = serde_json::from_str::<Value>(serialized)
             .map_err(|error| ManagedModelError::invalid("PRIVATE_MODEL_CATALOG_INVALID", error))?;
-        let catalog = parse_instance_private_model_catalog(
-            value,
-            expected_instance_id(process_environment).as_deref(),
-        )
-        .map_err(|error| ManagedModelError::invalid("PRIVATE_MODEL_CATALOG_INVALID", error))?;
+        let catalog = parse_catalog(value, expected_instance_id(process_environment).as_deref())?;
         return Ok((Some(catalog), "environment".to_string()));
     }
     if process_environment
@@ -1199,12 +1194,24 @@ fn read_catalog(
     let Some(value) = root.get("modelCatalog").cloned() else {
         return Ok((None, "none".to_string()));
     };
-    let catalog = parse_instance_private_model_catalog(
-        value,
-        expected_instance_id(process_environment).as_deref(),
-    )
-    .map_err(|error| ManagedModelError::invalid("PRIVATE_MODEL_CATALOG_INVALID", error))?;
+    let catalog = parse_catalog(value, expected_instance_id(process_environment).as_deref())?;
     Ok((Some(catalog), "private-config-file".to_string()))
+}
+
+fn parse_catalog(
+    value: Value,
+    expected_instance_id: Option<&str>,
+) -> Result<InstancePrivateModelCatalog, ManagedModelError> {
+    parse_instance_private_model_catalog(value, expected_instance_id).map_err(|error| match error {
+        controlled_instance_protocol::PrivateModelCatalogParseError::InstanceIdentityMismatch => {
+            ManagedModelError::new(
+                "PRIVATE_MODEL_CATALOG_IDENTITY_MISMATCH",
+                "Private model catalog instance identity does not match this runtime.",
+                400,
+            )
+        }
+        error => ManagedModelError::invalid("PRIVATE_MODEL_CATALOG_INVALID", error.to_string()),
+    })
 }
 
 fn read_codex_settings(
@@ -1597,6 +1604,45 @@ mod tests {
         }
     }
 
+    fn selection_projection(
+        config: &ControlledModelConfig,
+        agent: &str,
+        requested: Option<&AiSessionModelSelection>,
+        intent: AiSessionModelSelectionIntent,
+    ) -> Value {
+        match config.resolve_selection(agent, requested, intent) {
+            Ok(Some(selection)) => json!({
+                "modelEntityId": selection.model_entity_id,
+                "modelName": selection.model_name,
+                "modelUpstreamName": selection.model_upstream_name,
+            }),
+            Ok(None) => Value::Null,
+            Err(error) => json!({
+                "code": error.code,
+                "statusCode": error.status_code,
+                "message": error.message,
+            }),
+        }
+    }
+
+    fn source_projection(config: &ControlledModelConfig) -> Value {
+        let snapshot = config.catalog_snapshot();
+        let catalog = {
+            let state = config.lock();
+            state.catalog.as_ref().map(|catalog| {
+                let has_key = serde_json::to_string(catalog)
+                    .expect("catalog json")
+                    .contains("secret");
+                json!({
+                    "instanceId": catalog.instance_id(),
+                    "entityIds": catalog.entities().into_iter().map(|entity| entity.id).collect::<Vec<_>>(),
+                    "hasKey": has_key,
+                })
+            })
+        };
+        json!({ "source": snapshot.source, "catalog": catalog })
+    }
+
     #[test]
     fn direct_catalog_configures_codex_and_exposes_no_key_in_summary() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1756,6 +1802,174 @@ mod tests {
     }
 
     #[test]
+    fn live_catalog_materializes_for_restart_and_invalid_input_keeps_previous_state() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let environment = model_environment(root.path());
+        let mut process = process_environment(root.path());
+        process.insert(
+            "TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON".to_string(),
+            direct_catalog().to_string(),
+        );
+        let config = ControlledModelConfig::load(
+            "ins_0000000000000",
+            ControlMode::Controlled,
+            &environment,
+            process.clone(),
+            "2026-11-02T00:00:01.000Z",
+        )
+        .expect("model config");
+        let config_path = root.path().join("home/.codex/config.toml");
+        assert_eq!(
+            read_codex_config(&config_path).expect("initial config")["model"].as_str(),
+            Some("upstream-primary")
+        );
+
+        let next_catalog = json!({
+            "protocolVersion": "2026-08-27",
+            "instanceId": "ins_0000000000000",
+            "entities": [{
+                "id": "model-secondary",
+                "protocols": ["openai-responses"],
+                "modelNames": [{
+                    "upstreamName": "upstream-secondary",
+                    "name": "Secondary Label",
+                    "order": 0
+                }],
+                "endpoint": "https://secondary.example/v1",
+                "key": "secondary-secret"
+            }],
+            "updatedAt": "2026-11-02T00:00:02.000Z"
+        });
+        let applied = config
+            .apply_catalog(next_catalog.clone())
+            .expect("live catalog apply");
+        assert!(applied.applied);
+        assert!(applied.config_updated);
+        let parsed = read_codex_config(&config_path).expect("live config");
+        assert_eq!(parsed["model"].as_str(), Some("upstream-secondary"));
+        assert_eq!(
+            parsed["model_providers"]["task-handoff-model-secondary"]["base_url"].as_str(),
+            Some("https://secondary.example/v1")
+        );
+        assert_eq!(
+            config.managed_environment_value(
+                "TASK_HANDOFF_CODEX_PROVIDER_TASK_HANDOFF_MODEL_SECONDARY_API_KEY"
+            ),
+            Some("secondary-secret".to_string())
+        );
+        assert!(config
+            .managed_environment_value(
+                "TASK_HANDOFF_CODEX_PROVIDER_TASK_HANDOFF_MODEL_PRIMARY_API_KEY"
+            )
+            .is_none());
+        let snapshot = config.catalog_snapshot();
+        assert_eq!(snapshot.source, "live-sync");
+        assert_eq!(
+            snapshot.catalog.as_ref().expect("catalog").entities[0].id,
+            "model-secondary"
+        );
+
+        // A restarted instance receives the same catalog from the node-agent
+        // private configuration and must materialize the same Codex config.
+        let mut restarted_process = process_environment(root.path());
+        restarted_process.insert(
+            "TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON".to_string(),
+            next_catalog.to_string(),
+        );
+        let restarted = ControlledModelConfig::load(
+            "ins_0000000000000",
+            ControlMode::Controlled,
+            &environment,
+            restarted_process,
+            "2026-11-02T00:00:03.000Z",
+        )
+        .expect("restarted model config");
+        let parsed = read_codex_config(&config_path).expect("restarted config");
+        assert_eq!(parsed["model"].as_str(), Some("upstream-secondary"));
+        assert_eq!(
+            restarted
+                .resolve_selection("codex", None, AiSessionModelSelectionIntent::Session)
+                .expect("selection")
+                .expect("selected model")
+                .model_entity_id,
+            "model-secondary"
+        );
+
+        let before_invalid = fs::read_to_string(&config_path).expect("config bytes");
+        let error = restarted
+            .apply_catalog(json!({ "protocolVersion": "2026-08-27" }))
+            .expect_err("invalid catalog must be rejected");
+        assert_eq!(error.code, "PRIVATE_MODEL_CATALOG_INVALID");
+        assert_eq!(error.status_code, 400);
+        assert_eq!(
+            restarted
+                .catalog_snapshot()
+                .catalog
+                .as_ref()
+                .expect("catalog")
+                .entities[0]
+                .id,
+            "model-secondary"
+        );
+        assert_eq!(
+            fs::read_to_string(&config_path).expect("config survives"),
+            before_invalid
+        );
+    }
+
+    #[test]
+    fn live_catalog_write_failure_surfaces_and_can_be_retried() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let environment = model_environment(root.path());
+        let mut process = process_environment(root.path());
+        process.insert(
+            "TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON".to_string(),
+            direct_catalog().to_string(),
+        );
+        let config = ControlledModelConfig::load(
+            "ins_0000000000000",
+            ControlMode::Controlled,
+            &environment,
+            process,
+            "2026-11-02T00:00:01.000Z",
+        )
+        .expect("model config");
+        let codex_home = root.path().join("home/.codex");
+        fs::remove_dir_all(&codex_home).expect("remove codex home");
+        fs::write(&codex_home, "not a directory").expect("blocking codex home");
+        let next_catalog = json!({
+            "protocolVersion": "2026-08-27",
+            "instanceId": "ins_0000000000000",
+            "entities": [{
+                "id": "model-secondary",
+                "protocols": ["openai-responses"],
+                "modelNames": [{
+                    "upstreamName": "upstream-secondary",
+                    "name": "Secondary Label",
+                    "order": 0
+                }],
+                "endpoint": "https://secondary.example/v1",
+                "key": "secondary-secret"
+            }],
+            "updatedAt": "2026-11-02T00:00:02.000Z"
+        });
+        let error = config
+            .apply_catalog(next_catalog.clone())
+            .expect_err("blocked codex home must fail the write");
+        assert_eq!(error.code, "MODEL_CONFIG_WRITE_FAILED");
+        assert_eq!(error.status_code, 500);
+
+        fs::remove_file(&codex_home).expect("remove blocking file");
+        fs::create_dir_all(&codex_home).expect("restore codex home");
+        config
+            .apply_catalog(next_catalog)
+            .expect("retry after restoring the directory");
+        let parsed =
+            read_codex_config(&root.path().join("home/.codex/config.toml")).expect("retry config");
+        assert_eq!(parsed["model"].as_str(), Some("upstream-secondary"));
+    }
+
+    #[test]
     fn codex_settings_sanitize_unknown_fields_before_strict_parsing() {
         let settings = parse_codex_instance_settings(json!({
             "modelVerbosity": "high",
@@ -1876,6 +2090,285 @@ mod tests {
             .expect("default selection")
             .expect("default model");
         assert_eq!(default.model_entity_id, "model-primary");
+    }
+
+    #[test]
+    fn model_selection_projection_matches_node_fixture() {
+        let fixture: Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/private-model-selection-parity.json"
+            ))
+            .expect("fixture"),
+        )
+        .expect("fixture json");
+        let catalog = json!({
+            "protocolVersion": "2026-08-27",
+            "instanceId": "ins_0000000000000",
+            "entities": [{
+                "id": "model-primary",
+                "endpoint": "https://models.example/v1",
+                "key": "secret",
+                "protocols": ["openai-responses"],
+                "modelNames": [
+                    {"name": "Primary Label", "upstreamName": "upstream-primary", "order": 0},
+                    {"name": "Secondary Label", "upstreamName": "upstream-secondary", "order": 1}
+                ]
+            }],
+            "updatedAt": "2026-11-20T00:00:00.000Z"
+        });
+        let mut renamed = catalog.clone();
+        renamed["entities"][0]["modelNames"] = json!([
+            {"name": "Renamed Primary", "upstreamName": "upstream-primary", "order": 0},
+            {"name": "Secondary Label", "upstreamName": "upstream-secondary", "order": 1}
+        ]);
+        let mut colliding = catalog.clone();
+        colliding["entities"][0]["modelNames"] = json!([
+            {"name": "shared", "upstreamName": "upstream-a", "order": 0},
+            {"name": "upstream-a", "upstreamName": "shared", "order": 1}
+        ]);
+        let root = tempfile::tempdir().expect("tempdir");
+        let environment = model_environment(root.path());
+        let mut process = process_environment(root.path());
+        process.insert(
+            "TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON".to_string(),
+            catalog.to_string(),
+        );
+        process.insert(
+            "TASK_HANDOFF_INSTANCE_ID".to_string(),
+            "ins_0000000000000".to_string(),
+        );
+        let config = ControlledModelConfig::load(
+            "ins_0000000000000",
+            ControlMode::Controlled,
+            &environment,
+            process,
+            "2026-11-02T00:00:01.000Z",
+        )
+        .expect("model config");
+        let default = selection_projection(
+            &config,
+            "codex",
+            None,
+            AiSessionModelSelectionIntent::Target,
+        );
+        let unsupported = selection_projection(
+            &config,
+            "unknown",
+            None,
+            AiSessionModelSelectionIntent::Target,
+        );
+        let stale_entity = AiSessionModelSelection {
+            model_entity_id: "removed".to_string(),
+            model_name: "Primary Label".to_string(),
+            model_upstream_name: None,
+        };
+        let stale_entity_target = selection_projection(
+            &config,
+            "codex",
+            Some(&stale_entity),
+            AiSessionModelSelectionIntent::Target,
+        );
+        let stale_entity_session = selection_projection(
+            &config,
+            "codex",
+            Some(&stale_entity),
+            AiSessionModelSelectionIntent::Session,
+        );
+        let stale_name = AiSessionModelSelection {
+            model_entity_id: "model-primary".to_string(),
+            model_name: "removed-model".to_string(),
+            model_upstream_name: None,
+        };
+        let stale_name_target = selection_projection(
+            &config,
+            "codex",
+            Some(&stale_name),
+            AiSessionModelSelectionIntent::Target,
+        );
+        let stale_name_session = selection_projection(
+            &config,
+            "codex",
+            Some(&stale_name),
+            AiSessionModelSelectionIntent::Session,
+        );
+
+        config.apply_catalog(renamed).expect("renamed catalog");
+        let stored_label = AiSessionModelSelection {
+            model_entity_id: "model-primary".to_string(),
+            model_name: "Primary Label".to_string(),
+            model_upstream_name: Some("upstream-primary".to_string()),
+        };
+        let renamed_session = selection_projection(
+            &config,
+            "codex",
+            Some(&stored_label),
+            AiSessionModelSelectionIntent::Session,
+        );
+        let upstream_client_name = AiSessionModelSelection {
+            model_entity_id: "model-primary".to_string(),
+            model_name: "upstream-primary".to_string(),
+            model_upstream_name: None,
+        };
+        let upstream_client_name = selection_projection(
+            &config,
+            "codex",
+            Some(&upstream_client_name),
+            AiSessionModelSelectionIntent::Target,
+        );
+
+        config.apply_catalog(colliding).expect("colliding catalog");
+        let colliding = AiSessionModelSelection {
+            model_entity_id: "model-primary".to_string(),
+            model_name: "shared".to_string(),
+            model_upstream_name: None,
+        };
+        let colliding = selection_projection(
+            &config,
+            "codex",
+            Some(&colliding),
+            AiSessionModelSelectionIntent::Target,
+        );
+        config.apply_catalog(catalog).expect("base catalog");
+        let summary = serde_json::to_value(
+            config
+                .catalog_snapshot()
+                .catalog
+                .expect("private model catalog summary"),
+        )
+        .expect("summary");
+        let actual = json!({
+            "scenarios": [
+                {"name": "default", "result": default},
+                {"name": "unsupported-agent", "result": unsupported},
+                {"name": "renamed-session", "result": renamed_session},
+                {"name": "upstream-client-name", "result": upstream_client_name},
+                {"name": "colliding-identity-wins", "result": colliding},
+                {"name": "stale-entity-target", "error": stale_entity_target},
+                {"name": "stale-entity-session", "error": stale_entity_session},
+                {"name": "stale-name-target", "error": stale_name_target},
+                {"name": "stale-name-session", "error": stale_name_session}
+            ],
+            "summary": summary,
+            "summaryLeaksKey": summary.to_string().contains("secret")
+        });
+        assert_eq!(actual, fixture);
+    }
+
+    #[test]
+    fn private_model_catalog_source_and_identity_errors_match_node_fixture() {
+        let fixture: Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/private-model-source-parity.json"
+            ))
+            .expect("fixture"),
+        )
+        .expect("fixture json");
+        let catalog = json!({
+            "protocolVersion": "2026-08-27",
+            "instanceId": "ins_0000000000000",
+            "entities": [{
+                "id": "model-primary",
+                "endpoint": "https://models.example/v1",
+                "key": "secret",
+                "protocols": ["openai-responses"],
+                "modelNames": [{"name": "Primary Label", "upstreamName": "upstream-primary", "order": 0}]
+            }],
+            "updatedAt": "2026-11-20T00:00:00.000Z"
+        });
+        let root = tempfile::tempdir().expect("tempdir");
+        let environment = model_environment(root.path());
+
+        let mut process = process_environment(root.path());
+        process.insert(
+            "TASK_HANDOFF_INSTANCE_ID".to_string(),
+            "ins_0000000000000".to_string(),
+        );
+        process.insert(
+            "TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON".to_string(),
+            catalog.to_string(),
+        );
+        let environment_config = ControlledModelConfig::load(
+            "ins_0000000000000",
+            ControlMode::Controlled,
+            &environment,
+            process,
+            "2026-11-02T00:00:01.000Z",
+        )
+        .expect("environment catalog");
+        let environment_source = source_projection(&environment_config);
+
+        let mut process = process_environment(root.path());
+        process.insert(
+            "TASK_HANDOFF_INSTANCE_ID".to_string(),
+            "ins_0000000000000".to_string(),
+        );
+        process.insert(
+            "TASK_HANDOFF_PRIVATE_CONFIG_LOADED".to_string(),
+            "1".to_string(),
+        );
+        let loaded_without_catalog = ControlledModelConfig::load(
+            "ins_0000000000000",
+            ControlMode::Controlled,
+            &environment,
+            process,
+            "2026-11-02T00:00:01.000Z",
+        )
+        .expect("loaded without catalog");
+        let loaded_without_catalog_source = source_projection(&loaded_without_catalog);
+
+        let private_config_path = root.path().join("private-config.json");
+        std::fs::write(
+            &private_config_path,
+            json!({ "modelCatalog": catalog }).to_string(),
+        )
+        .expect("private config");
+        let mut process = process_environment(root.path());
+        process.insert(
+            "TASK_HANDOFF_INSTANCE_ID".to_string(),
+            "ins_0000000000000".to_string(),
+        );
+        process.insert(
+            "TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH".to_string(),
+            private_config_path.display().to_string(),
+        );
+        let file_config = ControlledModelConfig::load(
+            "ins_0000000000000",
+            ControlMode::Controlled,
+            &environment,
+            process,
+            "2026-11-02T00:00:01.000Z",
+        )
+        .expect("private config catalog");
+        let file_source = source_projection(&file_config);
+
+        let mut process = process_environment(root.path());
+        process.insert(
+            "TASK_HANDOFF_INSTANCE_ID".to_string(),
+            "ins_other".to_string(),
+        );
+        process.insert(
+            "TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON".to_string(),
+            catalog.to_string(),
+        );
+        let error = ControlledModelConfig::load(
+            "ins_other",
+            ControlMode::Controlled,
+            &environment,
+            process,
+            "2026-11-02T00:00:01.000Z",
+        )
+        .expect_err("identity mismatch must fail");
+        let actual = json!({
+            "sources": [environment_source, loaded_without_catalog_source, file_source],
+            "identityMismatch": {
+                "code": error.code,
+                "message": error.message,
+                "leaksKey": error.message.contains("secret")
+            }
+        });
+        assert_eq!(actual, fixture);
     }
 
     #[test]

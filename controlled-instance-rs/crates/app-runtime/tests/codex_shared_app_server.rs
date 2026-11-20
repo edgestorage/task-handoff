@@ -441,6 +441,7 @@ async fn start_proxy_on_available_port(
     panic!("could not reserve a Codex proxy port");
 }
 
+#[allow(clippy::result_large_err)]
 async fn spawn_bearer_echo_server(expected: &'static str) -> (u16, JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await

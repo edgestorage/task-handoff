@@ -445,6 +445,38 @@ struct SharedOpenCodeServer {
     consumers: Arc<Mutex<HashSet<String>>>,
 }
 
+// The startup future owns both the entire process group and its endpoint,
+// including while readiness is pending. Child::kill_on_drop only kills the root.
+struct PendingCodexAppServer {
+    child: Option<Child>,
+    // try_wait reaps the root and clears Child::id; its group can still live.
+    pid: Option<u32>,
+    upstream: Option<CodexAppServerUpstream>,
+}
+
+impl PendingCodexAppServer {
+    fn commit(mut self) -> Child {
+        let child = self.child.take().expect("started Codex app-server");
+        self.upstream = None;
+        self.pid = None;
+        child
+    }
+}
+
+impl Drop for PendingCodexAppServer {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            if let Some(pid) = self.pid.take() {
+                terminate_process_group(pid);
+            }
+            let _ = child.start_kill();
+        }
+        if let Some(upstream) = self.upstream.take() {
+            remove_upstream_artifacts(&upstream);
+        }
+    }
+}
+
 #[derive(Clone)]
 struct SharedCodexAppServer {
     id: String,
@@ -1116,19 +1148,23 @@ impl AppRuntime {
         let mut args = story_mcp_args(&environment);
         args.push("app-server".to_string());
         args.extend(plan.listen_args.clone());
+        let mut pending = PendingCodexAppServer {
+            child: None,
+            pid: None,
+            upstream: Some(plan.upstream.clone()),
+        };
         let invocation =
             invoke_command(&executable.display().to_string(), &args, &cwd, &environment)?;
-        let mut child = spawn_app_server(&invocation, &cwd, &environment, &log_path).await?;
-        if let Err(error) = wait_until_ready(&mut child, &plan).await {
-            if let Some(pid) = child.id() {
-                terminate_process_group(pid);
-            }
-            let _ = child.start_kill();
-            remove_upstream_artifacts(&plan.upstream);
-            return Err(AppRuntimeError::CodexAppServerStartFailed(
-                error.to_string(),
-            ));
-        }
+        let child = spawn_app_server(&invocation, &cwd, &environment, &log_path).await?;
+        pending.pid = child.id();
+        pending.child = Some(child);
+        wait_until_ready(
+            pending.child.as_mut().expect("started Codex app-server"),
+            &plan,
+        )
+        .await
+        .map_err(|error| AppRuntimeError::CodexAppServerStartFailed(error.to_string()))?;
+        let child = pending.commit();
         let pid = child.id();
         let id = uuid::Uuid::new_v4().to_string();
         let server = SharedCodexAppServer {
@@ -2705,9 +2741,10 @@ impl AppRuntime {
             label,
             critical,
         } = options;
-        let executable = crate::catalog::resolve_executable(command, env, cwd.to_str())
-            .ok_or_else(|| AppRuntimeError::missing_command(command))?;
-        let invocation = invoke_command(&executable.display().to_string(), args, cwd, env)?;
+        let invocation = invoke_command(command, args, cwd, env)?;
+        if invocation.resolver.is_none() {
+            return Err(AppRuntimeError::missing_command(command));
+        }
         if let Some(parent) = log_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|error| AppRuntimeError::storage(error.to_string()))?;
@@ -3972,9 +4009,7 @@ impl AppRuntime {
             }),
         );
         sanitize_persisted_optional_fields(&mut record);
-        serde_json::from_value::<AppSession>(Value::Object(record))
-            .ok()
-            .map(controlled_instance_protocol::normalize_app_session)
+        serde_json::from_value::<AppSession>(Value::Object(record)).ok()
     }
 
     fn recover_persisted_session(&self, mut session: AppSession) -> AppSession {
@@ -5591,6 +5626,56 @@ fn prepare_vscode_web_session(session_dir: &Path) {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    mod codex_shared_owner_parity {
+        include!("codex_shared_owner_parity.rs");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn gui_processes_keep_the_resolvers_launch_environment() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("tempdir");
+        let bin = root.path().join("nvm-bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        for (name, script) in [
+            ("parity-gui", "#!/bin/sh\nexec parity-helper\n"),
+            ("parity-helper", "#!/bin/sh\nexit 0\n"),
+        ] {
+            let path = bin.join(name);
+            std::fs::write(&path, script).expect("script");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+        }
+        let runtime = AppRuntime::new(storage(root.path()), root.path());
+        let env = BTreeMap::from([
+            (
+                "PATH".to_string(),
+                root.path().join("empty").display().to_string(),
+            ),
+            ("NVM_BIN".to_string(), bin.display().to_string()),
+        ]);
+        let log = root.path().join("gui.log");
+        let mut process = runtime
+            .spawn_gui_process(
+                "parity-gui",
+                &[],
+                root.path(),
+                &env,
+                SpawnGuiProcessOptions {
+                    log_path: &log,
+                    label: "Parity GUI",
+                    critical: true,
+                },
+            )
+            .expect("spawn");
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), process.child.wait())
+            .await
+            .expect("exit timeout")
+            .expect("exit");
+        assert!(status.success(), "GUI process exit: {status}");
+    }
+
     fn storage(root: &Path) -> StoragePaths {
         StoragePaths {
             config_path: root.join("config.json"),
@@ -5778,6 +5863,13 @@ mod tests {
                 .display()
                 .to_string()
         );
+        assert!(
+            session.bindings.is_empty(),
+            "derived bindings must remain out of the raw persisted session"
+        );
+        let snapshot = AppSessionsSnapshot::all(vec![session]);
+        assert_eq!(snapshot.sessions[0].bindings.len(), 1);
+        assert_eq!(snapshot.sessions[0].bindings[0].kind, "app-session");
     }
 
     #[test]

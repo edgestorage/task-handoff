@@ -18,23 +18,25 @@ export const AiSessionPersistenceSettingsInputSchema = z.object({
   maxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
 }).strict();
 
+// Disk readers keep known values when another version adds fields. Request
+// inputs use the separate strict schema above.
 const AiSessionPersistenceSettingsV1Schema = z.object({
   schemaVersion: z.literal(1),
   historyLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT),
-}).strict();
+}).strip();
 
 const AiSessionPersistenceSettingsV2Schema = z.object({
   schemaVersion: z.literal(2),
   historyLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT),
   attachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS),
-}).strict();
+}).strip();
 
 const AiSessionPersistenceSettingsSchema = z.object({
   schemaVersion: z.literal(3),
   historyLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT),
   attachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS),
   maxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES),
-}).strict();
+}).strip();
 
 export type AiSessionPersistenceSettings = z.infer<typeof AiSessionPersistenceSettingsSchema>;
 

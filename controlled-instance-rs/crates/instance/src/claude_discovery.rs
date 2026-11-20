@@ -4,6 +4,7 @@ use controlled_instance_core::claude::{
     claude_home_from_env, claude_sessions_dir, control_socket_path_from_env,
     find_claude_transcript_path, find_claude_transcript_path_in,
 };
+use controlled_instance_core::text::js_string;
 use controlled_instance_protocol::{mint_entity_id, AiSessionQueue, AppSession};
 use serde_json::{json, Map, Value};
 use std::{
@@ -56,7 +57,7 @@ pub(crate) fn refresh_claude_sessions(
     refresh_claude_sessions_with_home(sessions, jobs, app_sessions, claude_home.as_deref())
 }
 
-fn refresh_claude_sessions_with_home(
+pub(crate) fn refresh_claude_sessions_with_home(
     sessions: &AiSessionRuntime,
     jobs: &[ClaudeDaemonJob],
     app_sessions: &[AppSession],
@@ -560,11 +561,11 @@ pub(crate) fn apply_claude_subscribe_message(
     let update = sessions
         .update(&existing.id, |session| {
             let before = session.clone();
-            if let Some(lifecycle) = lifecycle {
-                session.status = lifecycle.status().to_string();
-                session.phase = lifecycle.phase().to_string();
-            }
-            session.actions = Some(actions.clone());
+            session.apply_metadata_snapshot_lifecycle(
+                lifecycle.map(ClaudeLifecycle::status),
+                lifecycle.map(ClaudeLifecycle::phase),
+                actions.clone(),
+            );
             let mut provider_meta = session
                 .provider_meta
                 .as_ref()
@@ -664,7 +665,6 @@ fn merge_claude_snapshot(session: &mut AiSession, snapshot: ClaudeSnapshot<'_>) 
     }
     session.provider_meta = Some(snapshot.provider_meta.clone());
     session.app_binding_keys = Some(snapshot.app_binding_keys.to_vec());
-    session.actions = Some(snapshot.actions.clone());
     session.title = Some(snapshot.title.to_string());
     if let Some(cwd) = snapshot.cwd {
         session.cwd = Some(cwd.to_string());
@@ -672,8 +672,11 @@ fn merge_claude_snapshot(session: &mut AiSession, snapshot: ClaudeSnapshot<'_>) 
     if let Some(transcript_path) = snapshot.transcript_path {
         session.transcript_path = Some(transcript_path.to_string());
     }
-    session.status = snapshot.lifecycle.status().to_string();
-    session.phase = snapshot.lifecycle.phase().to_string();
+    session.apply_metadata_snapshot_lifecycle(
+        Some(snapshot.lifecycle.status()),
+        Some(snapshot.lifecycle.phase()),
+        snapshot.actions.clone(),
+    );
     *session != before
 }
 
@@ -789,9 +792,10 @@ fn claude_provider_meta(
             ]),
         ),
     ] {
-        if let Some(value) = compact_optional(value, 80) {
-            meta.insert(key.to_string(), json!(value));
-        }
+        meta.insert(
+            key.to_string(),
+            json!(compact_optional(value, 80).unwrap_or_default()),
+        );
     }
     Value::Object(meta)
 }
@@ -864,17 +868,7 @@ fn claude_actions(status: Option<&str>, has_app_session: bool) -> Value {
 fn has_work_signal(job: &ClaudeDaemonJob) -> bool {
     compact_optional(job.detail.as_deref(), 500).is_some()
         || compact_optional(job.intent.as_deref(), 500).is_some()
-        || job.needs.as_ref().is_some_and(value_has_text)
-}
-
-fn value_has_text(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::String(value) => !value.trim().is_empty(),
-        Value::Array(values) => !values.is_empty(),
-        Value::Object(values) => !values.is_empty(),
-        _ => true,
-    }
+        || compact_json_value(job.needs.as_ref(), 500).is_some()
 }
 
 struct ClaudeSubscribeState<'a> {
@@ -963,15 +957,12 @@ fn compact_optional(value: Option<&str>, max: usize) -> Option<String> {
 }
 
 fn compact_value(value: Option<&Value>) -> Option<String> {
-    match value? {
-        Value::String(value) => compact_optional(Some(value), 80),
-        Value::Number(value) => Some(value.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        Value::Array(values) if values.is_empty() => None,
-        Value::Object(_) => Some("[object Object]".to_string()),
-        Value::Null => None,
-        value => Some(value.to_string()),
-    }
+    compact_json_value(value, 80)
+}
+
+fn compact_json_value(value: Option<&Value>, max: usize) -> Option<String> {
+    let value = value.filter(|value| !value.is_null())?;
+    compact_optional(Some(&js_string(value)), max)
 }
 
 fn compact(value: &str, max: usize) -> String {
@@ -1058,6 +1049,62 @@ mod tests {
             detail: Some("working".to_string()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn claude_discovery_and_subscriptions_match_shared_node_fixtures() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../../ai-session/tests/fixtures/claude-projection-parity.json"
+        ))
+        .expect("fixtures");
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut mismatches = Vec::new();
+        for kind in ["discovery", "subscriptions"] {
+            for fixture in fixtures[kind].as_array().expect("cases") {
+                let sessions = AiSessionRuntime::new("test", None);
+                let raw_job = fixture.get("job").cloned().unwrap_or_else(|| {
+                    json!({
+                        "short": "a1b2c3d4", "sessionId": "claude-parity-provider",
+                        "state": "running", "detail": "working"
+                    })
+                });
+                let job: ClaudeDaemonJob = match serde_json::from_value(raw_job) {
+                    Ok(job) => job,
+                    Err(error) => {
+                        mismatches.push(format!("{}: job rejected: {error}", fixture["name"]));
+                        continue;
+                    }
+                };
+                let mut app = app_session("a1b2c3d4");
+                app.ai = Some(json!({ "claude": {
+                    "short": "a1b2c3d4", "controlSock": "/tmp/claude-parity.sock"
+                }}));
+                refresh_claude_sessions_with_home(&sessions, &[job], &[app], Some(root.path()))
+                    .expect("refresh");
+                if let Some(message) = fixture.get("message") {
+                    apply_claude_subscribe_message(
+                        &sessions,
+                        "a1b2c3d4",
+                        Path::new("/tmp/claude-parity.sock"),
+                        message,
+                    )
+                    .expect("event");
+                }
+                let session = sessions.list().into_iter().next().expect("session");
+                let meta = session.provider_meta.as_ref().expect("meta");
+                let actual = json!({
+                    "status": session.status, "phase": session.phase,
+                    "providerState": meta.get("state"), "stateSource": meta.get("stateSource")
+                });
+                if actual != fixture["expected"] {
+                    mismatches.push(format!(
+                        "{}: actual={actual}, expected={}",
+                        fixture["name"], fixture["expected"]
+                    ));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     fn claude_home(root: &Path) -> PathBuf {

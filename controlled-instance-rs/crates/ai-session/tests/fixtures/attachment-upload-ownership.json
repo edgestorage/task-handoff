@@ -1,0 +1,126 @@
+{
+  "unit": "U11.1",
+  "source": {
+    "head": "9b2d6e17cce4a6a65d00f2ed4504f45546256edf",
+    "baseline": "v0.0.47",
+    "contract": "A failed upload must not delete another in-flight generation's file; source bug fixed before recording expected output",
+    "recordedAfter": "Node activeDraftFiles ownership fix, protecting current pipelines from cleanup; no wire/schema changes",
+    "owner": "packages/ai-session-runtime/src/ai-session-conversation-attachment-store.ts",
+    "ownerSha256": "ff7b6f7fc627ffe7b79f76acf0c10360933f1bf96b4c6ac34a4d632b83cee81c",
+    "clock": "per-run fixed clock; exact one-day TTL retained; absolute clock timestamps not compared"
+  },
+  "cases": [
+    {
+      "name": "different-id-failure",
+      "action": "fail",
+      "sameId": false,
+      "expected": {
+        "first": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content exceeded its declared size.",
+          "statusCode": 400
+        },
+        "offset": {
+          "attachmentId": "cia_000000000000000000000002",
+          "offset": 3
+        },
+        "survivor": {
+          "id": "cia_000000000000000000000002",
+          "size": 3,
+          "hex": "414243",
+          "sha256": "b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78",
+          "scopeType": "create-request",
+          "scopeId": "source-test",
+          "ttlMs": 86400000
+        },
+        "reopenedHex": "414243",
+        "remainingBlobs": [
+          "b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78"
+        ]
+      }
+    },
+    {
+      "name": "different-id-cancel",
+      "action": "cancel",
+      "sameId": false,
+      "expected": {
+        "first": {
+          "removed": true
+        },
+        "offset": {
+          "attachmentId": "cia_000000000000000000000002",
+          "offset": 3
+        },
+        "survivor": {
+          "id": "cia_000000000000000000000002",
+          "size": 3,
+          "hex": "414243",
+          "sha256": "b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78",
+          "scopeType": "create-request",
+          "scopeId": "source-test",
+          "ttlMs": 86400000
+        },
+        "reopenedHex": "414243",
+        "remainingBlobs": [
+          "b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78"
+        ]
+      }
+    },
+    {
+      "name": "same-id-cancel-replacement",
+      "action": "cancel",
+      "sameId": true,
+      "expected": {
+        "first": {
+          "removed": true
+        },
+        "offset": {
+          "attachmentId": "cia_000000000000000000000001",
+          "offset": 3
+        },
+        "survivor": {
+          "id": "cia_000000000000000000000001",
+          "size": 3,
+          "hex": "414243",
+          "sha256": "b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78",
+          "scopeType": "create-request",
+          "scopeId": "source-test",
+          "ttlMs": 86400000
+        },
+        "reopenedHex": "414243",
+        "remainingBlobs": [
+          "b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78"
+        ]
+      }
+    },
+    {
+      "name": "same-id-short-complete-replacement",
+      "action": "complete",
+      "sameId": true,
+      "expected": {
+        "first": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content did not match its declared size.",
+          "statusCode": 400
+        },
+        "offset": {
+          "attachmentId": "cia_000000000000000000000001",
+          "offset": 3
+        },
+        "survivor": {
+          "id": "cia_000000000000000000000001",
+          "size": 3,
+          "hex": "414243",
+          "sha256": "b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78",
+          "scopeType": "create-request",
+          "scopeId": "source-test",
+          "ttlMs": 86400000
+        },
+        "reopenedHex": "414243",
+        "remainingBlobs": [
+          "b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78"
+        ]
+      }
+    }
+  ]
+}

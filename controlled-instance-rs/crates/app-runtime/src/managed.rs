@@ -15,6 +15,8 @@ use serde_json::Value;
 use tokio::process::Command;
 
 use crate::{
+    command_invocation::{command_invocation, CommandInvocation, CommandInvocationOptions},
+    executable_resolver::ExecutableResolverOptions,
     native_package::{
         detect_managed_app_recipe_target, managed_native_app_launcher, managed_native_app_root,
         read_native_app_manifest, valid_native_launch_path, ManagedAppRecipeLibc,
@@ -1047,11 +1049,11 @@ fn little_version(
     launcher: &controlled_instance_protocol::AppCatalogItem,
 ) -> Option<String> {
     let command = rule.command(launcher)?;
-    let executable = find_executable(command, launcher)?;
     let output = command_output_with_timeout(
-        executable.as_os_str(),
+        command,
         rule.version_args(),
         &launcher.env.clone().unwrap_or_default(),
+        launcher.cwd.as_deref(),
         Duration::from_secs(2),
         1024,
     )?;
@@ -1329,17 +1331,38 @@ fn reason(code: ManagedAppActionReasonCode, message: &str) -> ManagedAppActionRe
 
 use ManagedAppActionReasonCode::{AlreadyInstalled, Bundled, ExternallyManaged, NotInstalled};
 
-fn command_output_with_timeout(
-    executable: &std::ffi::OsStr,
+fn managed_command_invocation(
+    command: &str,
     args: &[String],
     overrides: &BTreeMap<String, String>,
+    cwd: Option<&str>,
+) -> Option<CommandInvocation> {
+    let mut resolver = ExecutableResolverOptions::default();
+    resolver.env.extend(overrides.clone());
+    if let Some(cwd) = cwd {
+        resolver.cwd = PathBuf::from(cwd);
+    }
+    let invocation =
+        command_invocation(command, args, &CommandInvocationOptions::from(resolver)).ok()?;
+    invocation.resolver.is_some().then_some(invocation)
+}
+
+fn command_output_with_timeout(
+    executable: &str,
+    args: &[String],
+    overrides: &BTreeMap<String, String>,
+    cwd: Option<&str>,
     timeout: Duration,
     max_bytes: usize,
 ) -> Option<std::process::Output> {
-    let mut command = std::process::Command::new(executable);
-    command.args(args).stdin(Stdio::null());
-    for (name, value) in overrides {
-        command.env(name, value);
+    let invocation = managed_command_invocation(executable, args, overrides, cwd)?;
+    let mut command = std::process::Command::new(invocation.executable);
+    command
+        .args(invocation.args)
+        .envs(invocation.env)
+        .stdin(Stdio::null());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
     }
     let mut child = command
         .stdout(Stdio::piped())
@@ -1367,11 +1390,13 @@ fn command_output_with_timeout(
 }
 
 async fn quick_command(name: &str, args: &[&str]) -> Option<std::process::Output> {
-    let executable = resolve_executable(name, &BTreeMap::new(), None)?;
+    let args = args.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let invocation = managed_command_invocation(name, &args, &BTreeMap::new(), None)?;
     let output = tokio::time::timeout(
         Duration::from_secs(2),
-        Command::new(executable)
-            .args(args)
+        Command::new(invocation.executable)
+            .args(invocation.args)
+            .envs(invocation.env)
             .stdin(Stdio::null())
             .kill_on_drop(true)
             .output(),
@@ -1436,15 +1461,14 @@ pub fn detect_final_computer_capabilities_sync() -> FinalComputerCapabilities {
     let privilege = if uid == 0 {
         AppInstallPrivilege::Root
     } else {
-        let sudo = resolve_executable("sudo", &BTreeMap::new(), None).and_then(|executable| {
-            command_output_with_timeout(
-                executable.as_os_str(),
-                &["-n".to_string(), "true".to_string()],
-                &BTreeMap::new(),
-                Duration::from_secs(2),
-                1024,
-            )
-        });
+        let sudo = command_output_with_timeout(
+            "sudo",
+            &["-n".to_string(), "true".to_string()],
+            &BTreeMap::new(),
+            None,
+            Duration::from_secs(2),
+            1024,
+        );
         if sudo.is_some_and(|output| output.status.success()) {
             AppInstallPrivilege::PasswordlessSudo
         } else {
@@ -1453,19 +1477,17 @@ pub fn detect_final_computer_capabilities_sync() -> FinalComputerCapabilities {
     };
     let installer_access = if installers.contains(&AppInstaller::Npm) {
         let read = |args: &[String]| -> String {
-            resolve_executable("npm", &BTreeMap::new(), None)
-                .and_then(|executable| {
-                    command_output_with_timeout(
-                        executable.as_os_str(),
-                        args,
-                        &BTreeMap::new(),
-                        Duration::from_secs(2),
-                        1024 * 1024,
-                    )
-                })
-                .filter(|output| output.status.success())
-                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-                .unwrap_or_default()
+            command_output_with_timeout(
+                "npm",
+                args,
+                &BTreeMap::new(),
+                None,
+                Duration::from_secs(2),
+                1024 * 1024,
+            )
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .unwrap_or_default()
         };
         let prefix = read(&["prefix".to_string(), "--global".to_string()]);
         let root = read(&["root".to_string(), "--global".to_string()]);
@@ -1499,24 +1521,10 @@ pub fn detect_final_computer_capabilities_sync() -> FinalComputerCapabilities {
 async fn passwordless_sudo() -> bool {
     #[cfg(unix)]
     {
-        let Some(executable) = resolve_executable("sudo", &BTreeMap::new(), None) else {
-            return false;
-        };
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            Command::new(executable)
-                .args(["-n", "true"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .status(),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .map(|status| status.success())
-        .unwrap_or(false)
+        quick_command("sudo", &["-n", "true"])
+            .await
+            .map(|output| output.status.success())
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     false
@@ -1590,18 +1598,8 @@ pub async fn detect_final_computer_capabilities() -> FinalComputerCapabilities {
 }
 
 async fn ownership_command(executable: &str, args: &[String]) -> Option<(i32, String, String)> {
-    let resolved = resolve_executable(executable, &BTreeMap::new(), None)?;
-    let output = tokio::time::timeout(
-        Duration::from_secs(2),
-        Command::new(resolved)
-            .args(args)
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = quick_command(executable, &args).await?;
     Some((
         output.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&output.stdout).to_string(),
@@ -2034,6 +2032,33 @@ pub fn validate_managed_definition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_version_detection_keeps_the_resolvers_launch_environment() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("tempdir");
+        let bin = root.path().join("nvm-bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        for (name, script) in [
+            ("parity-version", "#!/bin/sh\nexec parity-helper\n"),
+            ("parity-helper", "#!/bin/sh\nprintf '1.2.3\\n'\n"),
+        ] {
+            let path = bin.join(name);
+            std::fs::write(&path, script).expect("script");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+        }
+        let launcher = serde_json::from_value(serde_json::json!({
+            "id": "parity", "name": "Parity", "kind": "tty", "command": "parity-version",
+            "env": {"PATH": root.path().join("empty"), "NVM_BIN": bin}
+        }))
+        .expect("launcher");
+        let rule = ManagedAppDetectionRule::LauncherExecutable {
+            version_args: vec!["--version".to_string()],
+        };
+        assert_eq!(little_version(&rule, &launcher).as_deref(), Some("1.2.3"));
+    }
 
     fn capabilities(privilege: AppInstallPrivilege) -> FinalComputerCapabilities {
         FinalComputerCapabilities {

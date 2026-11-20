@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex,
+        Arc, Mutex,
     },
 };
 use thiserror::Error;
@@ -43,13 +43,30 @@ pub enum AiSessionHistoryError {
     Io(#[from] std::io::Error),
     #[error("AI session history serialization failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("AI session history commit failed: {commit}; detail rollback failed: {rollback}")]
+    Rollback {
+        commit: Box<AiSessionHistoryError>,
+        rollback: std::io::Error,
+    },
 }
 
-#[derive(Debug)]
+type HistoryResourceReleaser = dyn Fn(&str) + Send + Sync;
+
 pub struct AiSessionHistoryStore {
     directory: PathBuf,
     limit: AtomicUsize,
     io: Mutex<()>,
+    on_remove: Option<Arc<HistoryResourceReleaser>>,
+}
+
+impl std::fmt::Debug for AiSessionHistoryStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AiSessionHistoryStore")
+            .field("directory", &self.directory)
+            .field("limit", &self.limit)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,7 +92,20 @@ impl AiSessionHistoryStore {
             directory,
             limit: AtomicUsize::new(limit),
             io: Mutex::new(()),
+            on_remove: None,
         }
+    }
+
+    /// Resources are released only after a destructive history commit.
+    /// Activation transfers ownership back to the active session instead.
+    pub fn with_resource_releaser(
+        data_dir: &Path,
+        limit: Option<usize>,
+        release: impl Fn(&str) + Send + Sync + 'static,
+    ) -> Self {
+        let mut store = Self::new(data_dir, limit);
+        store.on_remove = Some(Arc::new(release));
+        store
     }
 
     pub fn retention_limit(&self) -> usize {
@@ -86,6 +116,14 @@ impl AiSessionHistoryStore {
         &self,
         limit: usize,
     ) -> Result<AiSessionHistoryRetentionResult, AiSessionHistoryError> {
+        self.set_retention_limit_with_index_writer(limit, |items| self.write_index(items))
+    }
+
+    fn set_retention_limit_with_index_writer(
+        &self,
+        limit: usize,
+        write_index: impl FnOnce(&[AiSessionHistoryItem]) -> Result<(), AiSessionHistoryError>,
+    ) -> Result<AiSessionHistoryRetentionResult, AiSessionHistoryError> {
         if !(1..=AI_SESSION_HISTORY_MAX_LIMIT).contains(&limit) {
             return Err(AiSessionHistoryError::InvalidLimit);
         }
@@ -94,7 +132,6 @@ impl AiSessionHistoryStore {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let current = self.reload_locked()?.items;
-        self.limit.store(limit, Ordering::SeqCst);
         let retained = sort_and_limit(current.clone(), limit);
         let retained_ids = retained
             .iter()
@@ -106,9 +143,12 @@ impl AiSessionHistoryStore {
             .map(|item| item.id.clone())
             .collect::<Vec<_>>();
         if !removed_ids.is_empty() {
-            self.write_index(&retained)?;
-            self.remove_details(&removed_ids);
+            write_index(&retained)?;
         }
+        // Publish the policy only after the index commit; otherwise a later
+        // reload could silently evict records after this operation failed.
+        self.limit.store(limit, Ordering::SeqCst);
+        self.remove_entries(&removed_ids, true);
         Ok(AiSessionHistoryRetentionResult { limit, removed_ids })
     }
 
@@ -166,13 +206,27 @@ impl AiSessionHistoryStore {
         item: AiSessionHistoryItem,
         turns: &[Value],
     ) -> Result<AiSessionHistoryItem, AiSessionHistoryError> {
+        self.upsert_with_writers(
+            item,
+            turns,
+            |item, turns| self.write_detail(item, turns),
+            |items| self.write_index(items),
+        )
+    }
+
+    fn upsert_with_writers(
+        &self,
+        item: AiSessionHistoryItem,
+        turns: &[Value],
+        write_detail: impl FnOnce(&AiSessionHistoryItem, &[Value]) -> Result<(), AiSessionHistoryError>,
+        write_index: impl FnOnce(&[AiSessionHistoryItem]) -> Result<(), AiSessionHistoryError>,
+    ) -> Result<AiSessionHistoryItem, AiSessionHistoryError> {
         let _guard = self
             .io
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let item = sanitize_item(item).ok_or(AiSessionHistoryError::InvalidItem)?;
         let previous = self.reload_locked()?.items;
-        self.write_detail(&item, &sanitize_turns(turns.to_vec(), 50))?;
         let mut next = previous
             .iter()
             .filter(|candidate| {
@@ -184,8 +238,55 @@ impl AiSessionHistoryStore {
             .collect::<Vec<_>>();
         next.push(item.clone());
         next = sort_and_limit(next, self.retention_limit());
-        if next != previous {
-            self.write_index(&next)?;
+        let index_path = self.directory.join("index.json");
+        let detail_path = self.detail_path(&item.id);
+        let index_changed = next != previous;
+        let previous_index = if index_changed {
+            read_optional_file(&index_path)?
+        } else {
+            None
+        };
+        let previous_detail = if index_changed {
+            read_optional_file(&detail_path)?
+        } else {
+            None
+        };
+        let committed = write_detail(&item, &sanitize_turns(turns.to_vec(), 50)).and_then(|()| {
+            if index_changed {
+                write_index(&next)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(commit) = committed {
+            // Either atomic writer may fail after replacing its file.
+            // Restore the old body only if the old index is confirmed;
+            // otherwise retain the body paired with the new/uncertain index.
+            if index_changed {
+                let unchanged = match read_optional_file(&index_path) {
+                    Ok(current) => current == previous_index,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "failed history commit state could not be verified; detail retained");
+                        false
+                    }
+                };
+                if unchanged {
+                    let restored = match previous_detail {
+                        Some(bytes) => write_atomic(&detail_path, &bytes, Some(0o600)),
+                        None => match std::fs::remove_file(&detail_path) {
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                            result => result,
+                        },
+                    };
+                    if let Err(rollback) = restored {
+                        return Err(AiSessionHistoryError::Rollback {
+                            commit: Box::new(commit),
+                            rollback,
+                        });
+                    }
+                }
+            }
+            return Err(commit);
         }
         let retained = next
             .iter()
@@ -196,28 +297,24 @@ impl AiSessionHistoryStore {
             .filter(|candidate| !retained.contains(candidate.id.as_str()))
             .map(|candidate| candidate.id.clone())
             .collect::<Vec<_>>();
-        self.remove_details(&removed_ids);
+        self.remove_entries(&removed_ids, true);
         Ok(item)
     }
 
     pub fn remove(&self, id: &str) -> Result<bool, AiSessionHistoryError> {
-        let _guard = self
-            .io
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut items = self.reload_locked()?.items;
-        if !items.iter().any(|item| item.id == id) {
-            return Ok(false);
-        }
-        let removed = subtree_ids(&items, id);
-        items.retain(|item| !removed.contains(&item.id));
-        self.write_index(&items)?;
-        self.remove_details(&removed.into_iter().collect::<Vec<_>>());
-        Ok(true)
+        self.remove_selected_with_index_writer(
+            |items| subtree_ids(items, id),
+            true,
+            |items| self.write_index(items),
+        )
     }
 
     pub fn activate(&self, id: &str) -> Result<bool, AiSessionHistoryError> {
-        self.remove_by_ids(&[id.to_string()])
+        self.remove_selected_with_index_writer(
+            |_| HashSet::from([id.to_string()]),
+            false,
+            |items| self.write_index(items),
+        )
     }
 
     pub fn activate_identity(
@@ -225,45 +322,44 @@ impl AiSessionHistoryStore {
         agent: &str,
         provider_session_id: &str,
     ) -> Result<bool, AiSessionHistoryError> {
-        let _guard = self
-            .io
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut items = self.reload_locked()?.items;
-        let before = items.len();
-        let removed = items
-            .iter()
-            .filter(|item| item.agent == agent && item.provider_session_id == provider_session_id)
-            .map(|item| item.id.clone())
-            .collect::<Vec<_>>();
-        items.retain(|item| item.agent != agent || item.provider_session_id != provider_session_id);
-        if items.len() == before {
-            return Ok(false);
-        }
-        self.write_index(&items)?;
-        self.remove_details(&removed);
-        Ok(true)
+        self.remove_selected_with_index_writer(
+            |items| {
+                items
+                    .iter()
+                    .filter(|item| {
+                        item.agent == agent && item.provider_session_id == provider_session_id
+                    })
+                    .map(|item| item.id.clone())
+                    .collect()
+            },
+            false,
+            |items| self.write_index(items),
+        )
     }
 
-    fn remove_by_ids(&self, ids: &[String]) -> Result<bool, AiSessionHistoryError> {
+    fn remove_selected_with_index_writer(
+        &self,
+        select: impl FnOnce(&[AiSessionHistoryItem]) -> HashSet<String>,
+        release_resources: bool,
+        write_index: impl FnOnce(&[AiSessionHistoryItem]) -> Result<(), AiSessionHistoryError>,
+    ) -> Result<bool, AiSessionHistoryError> {
         let _guard = self
             .io
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut items = self.reload_locked()?.items;
-        let removed = ids.iter().cloned().collect::<HashSet<_>>();
+        let removed = select(&items);
         let removed_ids = items
             .iter()
             .filter(|item| removed.contains(&item.id))
             .map(|item| item.id.clone())
             .collect::<Vec<_>>();
-        let before = items.len();
-        items.retain(|item| !removed.contains(&item.id));
-        if items.len() == before {
+        if removed_ids.is_empty() {
             return Ok(false);
         }
-        self.write_index(&items)?;
-        self.remove_details(&removed_ids);
+        items.retain(|item| !removed.contains(&item.id));
+        write_index(&items)?;
+        self.remove_entries(&removed_ids, release_resources);
         Ok(true)
     }
 
@@ -321,14 +417,30 @@ impl AiSessionHistoryStore {
         let loaded = self.load_locked();
         if loaded.rewrite {
             self.write_index(&loaded.items)?;
-            self.remove_details(&loaded.removed_ids);
+            self.remove_entries(&loaded.removed_ids, true);
         }
         Ok(loaded)
     }
 
     fn remove_details(&self, ids: &[String]) {
         for id in ids {
-            let _ = std::fs::remove_file(self.detail_path(id));
+            if let Err(error) = std::fs::remove_file(self.detail_path(id)) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(id = %id, error = %error, "AI session history detail cleanup failed");
+                }
+            }
+        }
+    }
+
+    fn remove_entries(&self, ids: &[String], release_resources: bool) {
+        self.remove_details(ids);
+        if let Some(release) = self.on_remove.as_ref().filter(|_| release_resources) {
+            let mut released = HashSet::new();
+            for id in ids {
+                if released.insert(id) {
+                    release(id);
+                }
+            }
         }
     }
 
@@ -432,6 +544,14 @@ impl AiSessionHistoryStore {
         self.directory
             .join("details")
             .join(format!("{digest}.json"))
+    }
+}
+
+fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>, std::io::Error> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -1122,6 +1242,12 @@ fn insert_optional(map: &mut Map<String, Value>, key: &str, value: Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod persistence_parity {
+        include!("history_persistence_parity.rs");
+    }
+    mod retention_parity {
+        include!("history_retention_parity.rs");
+    }
     use serde_json::json;
 
     fn item(id: &str, provider: &str) -> AiSessionHistoryItem {

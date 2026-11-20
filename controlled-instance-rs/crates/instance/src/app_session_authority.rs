@@ -20,7 +20,7 @@ pub struct AppSessionAuthority {
     instance_id: String,
     stream_id: String,
     revision: u64,
-    last_event_at: String,
+    started_at: String,
     last_snapshot: Option<AppSessionsSnapshot>,
     history: VecDeque<RetainedAppEvent>,
 }
@@ -40,7 +40,7 @@ impl AppSessionAuthority {
             instance_id: instance_id.into(),
             stream_id: stream_id.into(),
             revision: 0,
-            last_event_at: started_at,
+            started_at,
             last_snapshot: None,
             history: VecDeque::new(),
         }
@@ -52,6 +52,10 @@ impl AppSessionAuthority {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub fn published_snapshot(&self) -> Option<&AppSessionsSnapshot> {
+        self.last_snapshot.as_ref()
     }
 
     pub fn earliest_retained_revision(&self) -> u64 {
@@ -69,7 +73,16 @@ impl AppSessionAuthority {
         AppSessionsState {
             stream_id: self.stream_id.clone(),
             revision: self.revision,
-            last_event_at: self.last_event_at.clone(),
+            // The Node state endpoint reports the last *retained* event's
+            // timestamp, falling back to process start when delta pruning
+            // empties history. State reads themselves do not prune; revision
+            // remains the authoritative ordering key across this fallback.
+            last_event_at: self
+                .history
+                .back()
+                .and_then(|event| event.payload["meta"]["generatedAt"].as_str())
+                .unwrap_or(&self.started_at)
+                .to_string(),
             snapshot,
         }
     }
@@ -78,6 +91,39 @@ impl AppSessionAuthority {
         &mut self,
         snapshot: AppSessionsSnapshot,
         reason: &str,
+    ) -> Option<AppSessionAuthorityEvent> {
+        self.prepare_with_retention_clock(snapshot, reason, || Utc::now().timestamp_millis())
+    }
+
+    fn prepare_with_retention_clock(
+        &mut self,
+        snapshot: AppSessionsSnapshot,
+        reason: &str,
+        now_ms: impl FnOnce() -> i64,
+    ) -> Option<AppSessionAuthorityEvent> {
+        self.prepare_with_clocks(snapshot, reason, now_iso, now_ms)
+    }
+
+    fn prepare_with_clocks(
+        &mut self,
+        snapshot: AppSessionsSnapshot,
+        reason: &str,
+        generated_at: impl FnOnce() -> String,
+        now_ms: impl FnOnce() -> i64,
+    ) -> Option<AppSessionAuthorityEvent> {
+        self.prepare_with_event_clocks(snapshot, reason, generated_at, now_ms, || {
+            (Utc::now() + Duration::milliseconds(APP_SESSION_TOMBSTONE_RETENTION_MS))
+                .to_rfc3339_opts(SecondsFormat::Millis, true)
+        })
+    }
+
+    fn prepare_with_event_clocks(
+        &mut self,
+        snapshot: AppSessionsSnapshot,
+        reason: &str,
+        generated_at: impl FnOnce() -> String,
+        now_ms: impl FnOnce() -> i64,
+        expires_at: impl FnOnce() -> String,
     ) -> Option<AppSessionAuthorityEvent> {
         if self.last_snapshot.as_ref() == Some(&snapshot) {
             return None;
@@ -88,7 +134,7 @@ impl AppSessionAuthority {
             return None;
         }
         self.revision = self.revision.saturating_add(1);
-        let generated_at = now_iso();
+        let generated_at = generated_at();
         let mut meta = json!({
             "streamId": self.stream_id,
             "instanceId": self.instance_id,
@@ -128,8 +174,7 @@ impl AppSessionAuthority {
                     "meta": meta,
                     "sessionId": session_id,
                     "tombstone": tombstone,
-                    "expiresAt": (Utc::now() + Duration::milliseconds(APP_SESSION_TOMBSTONE_RETENTION_MS))
-                        .to_rfc3339_opts(SecondsFormat::Millis, true),
+                    "expiresAt": expires_at(),
                 }),
             ),
             (true, [SnapshotChange::Upsert { session }]) => (
@@ -142,15 +187,21 @@ impl AppSessionAuthority {
             ),
         };
         self.last_snapshot = Some(snapshot);
-        self.last_event_at = generated_at;
-        self.remember(event_type, &payload);
+        self.remember(event_type, &payload, now_ms());
         Some(AppSessionAuthorityEvent {
             event_type: event_type.to_string(),
             payload,
         })
     }
 
-    pub fn delta(&self, stream_id: &str, since_revision: f64) -> Value {
+    pub fn delta(&mut self, stream_id: &str, since_revision: f64) -> Value {
+        self.delta_at(stream_id, since_revision, Utc::now().timestamp_millis())
+    }
+
+    fn delta_at(&mut self, stream_id: &str, since_revision: f64, now_ms: i64) -> Value {
+        // Idle streams expire too. Prune before every guard so even current,
+        // future and mismatched-stream requests report the retained boundary.
+        self.prune_history(now_ms);
         let latest_revision = self.revision;
         let earliest_retained_revision = self
             .history
@@ -206,21 +257,24 @@ impl AppSessionAuthority {
         )
     }
 
-    fn remember(&mut self, event_type: &str, payload: &Value) {
-        let now = Utc::now().timestamp_millis();
-        while self
-            .history
-            .front()
-            .is_some_and(|event| event.created_at_ms < now - EVENT_RETENTION_MS)
-        {
-            self.history.pop_front();
-        }
+    fn remember(&mut self, event_type: &str, payload: &Value, now: i64) {
+        self.prune_history(now);
         self.history.push_back(RetainedAppEvent {
             event_type: event_type.to_string(),
             payload: payload.clone(),
             revision: self.revision,
             created_at_ms: now,
         });
+    }
+
+    fn prune_history(&mut self, now_ms: i64) {
+        while self
+            .history
+            .front()
+            .is_some_and(|event| event.created_at_ms < now_ms - EVENT_RETENTION_MS)
+        {
+            self.history.pop_front();
+        }
     }
 }
 
@@ -310,6 +364,43 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod removal_parity {
+        use super::*;
+        type Authority = AppSessionAuthority;
+        type Snapshot = AppSessionsSnapshot;
+        const TOPIC: &str = "app";
+        fn publish(authority: &mut Authority, snapshot: Snapshot, revision: u64) -> Option<Value> {
+            let offset = (revision as i64 - 1) * 1000;
+            let reason = match revision {
+                1 => "app-session-created",
+                2 => "app-session-updated",
+                _ => "app-session-deleted",
+            };
+            authority
+                .prepare_with_event_clocks(
+                    snapshot,
+                    reason,
+                    || at(offset),
+                    || START_MS + offset,
+                    || at(offset + APP_SESSION_TOMBSTONE_RETENTION_MS),
+                )
+                .map(|event| json!({"type":event.event_type,"payload":event.payload}))
+        }
+        include!("session_removal_parity.rs");
+    }
+    mod epoch_parity {
+        use super::*;
+        type Authority = AppSessionAuthority;
+        type Snapshot = AppSessionsSnapshot;
+        const TOPIC: &str = "app";
+        include!("session_epoch_parity.rs");
+    }
+    mod parity {
+        include!("app_session_authority_parity.rs");
+    }
+    mod clock_parity {
+        include!("app_session_clock_parity.rs");
+    }
     fn session(id: &str, status: &str, title: &str) -> AppSession {
         serde_json::from_value(json!({
             "id": id,

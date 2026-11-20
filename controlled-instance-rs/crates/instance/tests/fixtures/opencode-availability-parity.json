@@ -1,0 +1,26 @@
+[
+  {
+    "state": "missing-dependency",
+    "provider": false,
+    "sessionRead": false,
+    "turnRead": false,
+    "liveItems": false,
+    "toolActivity": false
+  },
+  {
+    "state": "available",
+    "provider": true,
+    "sessionRead": true,
+    "turnRead": true,
+    "liveItems": true,
+    "toolActivity": true
+  },
+  {
+    "state": "missing-dependency",
+    "provider": false,
+    "sessionRead": false,
+    "turnRead": false,
+    "liveItems": false,
+    "toolActivity": false
+  }
+]

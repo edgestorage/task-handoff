@@ -2367,6 +2367,279 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn worktree_creation_rejects_stale_occupied_and_missing_branches() {
+        let repository = repository();
+        run_git(repository.path(), &["branch", "feature/free"]);
+        let managed = tempfile::tempdir().expect("managed root");
+        let service = make_service(repository.path(), managed.path());
+        let target = target(repository.path());
+        let sessions = empty_inventory();
+        let resolved = require_repository(service.resolve(&target).await).expect("resolved");
+        let snapshot = resolved.context.snapshot_id.clone().expect("snapshot");
+
+        let stale = service
+            .create_worktree(
+                &target,
+                &sessions,
+                RepositoryCreateWorktreeRequest::ExistingBranch {
+                    branch_name: "feature/free".to_string(),
+                    expected_snapshot_id: format!("{snapshot}-stale"),
+                },
+            )
+            .await
+            .expect_err("stale snapshot must be rejected");
+        assert_eq!(stale.code, "REPOSITORY_STATE_STALE");
+
+        let free = service
+            .create_worktree(
+                &target,
+                &sessions,
+                RepositoryCreateWorktreeRequest::ExistingBranch {
+                    branch_name: "feature/free".to_string(),
+                    expected_snapshot_id: snapshot.clone(),
+                },
+            )
+            .await
+            .expect("free branch worktree");
+        let free_path = managed_path_for(managed.path(), &free.worktree_id);
+        assert_eq!(
+            run_git(&free_path, &["branch", "--show-current"]),
+            "feature/free"
+        );
+
+        let occupied = service
+            .create_worktree(
+                &target,
+                &sessions,
+                RepositoryCreateWorktreeRequest::ExistingBranch {
+                    branch_name: "main".to_string(),
+                    expected_snapshot_id: snapshot.clone(),
+                },
+            )
+            .await
+            .expect("occupied existing branch detaches");
+        let occupied_path = managed_path_for(managed.path(), &occupied.worktree_id);
+        assert_eq!(run_git(&occupied_path, &["branch", "--show-current"]), "");
+        assert_eq!(
+            run_git(&occupied_path, &["rev-parse", "HEAD"]),
+            run_git(repository.path(), &["rev-parse", "main"])
+        );
+        let occupied_item = occupied
+            .worktrees
+            .items
+            .iter()
+            .find(|item| item.summary.id == occupied.worktree_id)
+            .expect("occupied item");
+        assert_eq!(
+            occupied_item.summary.head.state,
+            controlled_instance_protocol::RepositoryHeadState::Detached
+        );
+        assert_ne!(free.worktree_id, occupied.worktree_id);
+
+        let conflict = service
+            .create_worktree(
+                &target,
+                &sessions,
+                RepositoryCreateWorktreeRequest::NewBranch {
+                    branch_name: "feature/free".to_string(),
+                    start_ref: "HEAD".to_string(),
+                    expected_snapshot_id: snapshot.clone(),
+                },
+            )
+            .await
+            .expect_err("new branch cannot reuse an occupied branch");
+        assert_eq!(conflict.code, "REPOSITORY_BRANCH_OCCUPIED");
+
+        let missing = service
+            .create_worktree(
+                &target,
+                &sessions,
+                RepositoryCreateWorktreeRequest::ExistingBranch {
+                    branch_name: "feature/missing".to_string(),
+                    expected_snapshot_id: snapshot,
+                },
+            )
+            .await
+            .expect_err("missing branch must be rejected");
+        assert_eq!(missing.code, "REPOSITORY_BRANCH_INVALID");
+    }
+
+    #[tokio::test]
+    async fn ai_session_worktrees_are_idempotent_and_detach_occupied_refs() {
+        let repository = repository();
+        run_git(repository.path(), &["branch", "feature/free"]);
+        let managed = tempfile::tempdir().expect("managed root");
+        let service = make_service(repository.path(), managed.path());
+        let target = target(repository.path());
+        let sessions = empty_inventory();
+        let resolved = require_repository(service.resolve(&target).await).expect("resolved");
+        let repository_id = resolved
+            .context
+            .repository_id
+            .as_deref()
+            .expect("repository id");
+
+        let head = service
+            .create_worktree_for_ai_session(
+                &target,
+                &sessions,
+                RepositoryWorktreeRef::Head,
+                "session-head",
+            )
+            .await
+            .expect("head worktree");
+        let head_path =
+            managed_worktree_path(&service, repository_id, "HEAD", Some("session-head"));
+        assert_eq!(run_git(&head_path, &["branch", "--show-current"]), "");
+        assert_eq!(
+            run_git(&head_path, &["rev-parse", "HEAD"]),
+            run_git(repository.path(), &["rev-parse", "HEAD"])
+        );
+
+        let repeated = service
+            .create_worktree_for_ai_session(
+                &target,
+                &sessions,
+                RepositoryWorktreeRef::Head,
+                "session-head",
+            )
+            .await
+            .expect("idempotent head worktree");
+        assert_eq!(repeated.worktree_id, head.worktree_id);
+
+        let main = service
+            .create_worktree_for_ai_session(
+                &target,
+                &sessions,
+                RepositoryWorktreeRef::Branch {
+                    name: "main".to_string(),
+                },
+                "session-main",
+            )
+            .await
+            .expect("occupied main detaches");
+        let main_path =
+            managed_worktree_path(&service, repository_id, "main", Some("session-main"));
+        assert_eq!(run_git(&main_path, &["branch", "--show-current"]), "");
+        assert_eq!(
+            run_git(&main_path, &["rev-parse", "HEAD"]),
+            run_git(repository.path(), &["rev-parse", "main"])
+        );
+        assert_ne!(main.worktree_id, head.worktree_id);
+
+        let free = service
+            .create_worktree_for_ai_session(
+                &target,
+                &sessions,
+                RepositoryWorktreeRef::Branch {
+                    name: "feature/free".to_string(),
+                },
+                "session-free",
+            )
+            .await
+            .expect("free branch attaches");
+        let free_path = managed_worktree_path(
+            &service,
+            repository_id,
+            "feature/free",
+            Some("session-free"),
+        );
+        assert_eq!(
+            run_git(&free_path, &["branch", "--show-current"]),
+            "feature/free"
+        );
+
+        let occupied = service
+            .create_worktree_for_ai_session(
+                &target,
+                &sessions,
+                RepositoryWorktreeRef::Branch {
+                    name: "feature/free".to_string(),
+                },
+                "session-free-second",
+            )
+            .await
+            .expect("occupied free branch detaches");
+        let occupied_path = managed_worktree_path(
+            &service,
+            repository_id,
+            "feature/free",
+            Some("session-free-second"),
+        );
+        assert_eq!(run_git(&occupied_path, &["branch", "--show-current"]), "");
+        assert_eq!(
+            run_git(&occupied_path, &["rev-parse", "HEAD"]),
+            run_git(repository.path(), &["rev-parse", "feature/free"])
+        );
+        assert_ne!(free.worktree_id, occupied.worktree_id);
+    }
+
+    #[tokio::test]
+    async fn ai_session_creation_preserves_preexisting_unregistered_destination() {
+        let repository = repository();
+        let managed = tempfile::tempdir().expect("managed root");
+        let service = make_service(repository.path(), managed.path());
+        let target = target(repository.path());
+        let sessions = empty_inventory();
+        let resolved = require_repository(service.resolve(&target).await).expect("resolved");
+        let repository_id = resolved
+            .context
+            .repository_id
+            .as_deref()
+            .expect("repository id");
+        let destination =
+            managed_worktree_path(&service, repository_id, "HEAD", Some("preexisting"));
+        fs::create_dir_all(&destination).expect("preexisting destination");
+        let marker = destination.join("keep.txt");
+        fs::write(&marker, "owned by somebody else\n").expect("marker");
+
+        let error = service
+            .create_worktree_for_ai_session(
+                &target,
+                &sessions,
+                RepositoryWorktreeRef::Head,
+                "preexisting",
+            )
+            .await
+            .expect_err("preexisting destination must be refused");
+        assert_eq!(error.code, "REPOSITORY_WORKTREE_UNSAFE");
+        assert_eq!(
+            fs::read_to_string(&marker).expect("marker survives"),
+            "owned by somebody else\n"
+        );
+        assert!(!managed.path().join("registry.json").exists());
+    }
+
+    fn managed_worktree_path(
+        service: &RepositoryService,
+        repository_id: &str,
+        ref_label: &str,
+        request_id: Option<&str>,
+    ) -> PathBuf {
+        service
+            .managed_worktree_registry
+            .allocate(repository_id, ref_label, request_id)
+            .expect("managed worktree path")
+    }
+
+    fn managed_path_for(managed_root: &Path, worktree_id: &str) -> PathBuf {
+        let registry: Value = serde_json::from_slice(
+            &fs::read(managed_root.join("registry.json")).expect("registry"),
+        )
+        .expect("registry json");
+        PathBuf::from(
+            registry["entries"]
+                .as_array()
+                .expect("registry entries")
+                .iter()
+                .find(|entry| entry["worktreeId"] == worktree_id)
+                .expect("registered worktree")["path"]
+                .as_str()
+                .expect("worktree path"),
+        )
+    }
+
+    #[tokio::test]
     async fn failed_git_add_aborts_the_preparing_registry_and_cleans_the_destination() {
         let repository = repository();
         run_git(repository.path(), &["branch", "already-exists"]);

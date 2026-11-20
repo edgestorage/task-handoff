@@ -1,0 +1,226 @@
+[
+  {
+    "name": "missing token still authenticates before schema",
+    "type": "application/json",
+    "auth": false,
+    "body": {
+      "text": "{}"
+    },
+    "expected": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "AGENT_TOOL_FORBIDDEN",
+          "message": "Agent tool token is required."
+        }
+      }
+    }
+  },
+  {
+    "name": "invalid JSON precedes token authentication",
+    "type": "application/json",
+    "auth": false,
+    "body": {
+      "text": "{"
+    },
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "name": "unsupported media precedes token authentication",
+    "type": "application/xml",
+    "auth": false,
+    "body": {
+      "text": "<x/>"
+    },
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "name": "octet stream is not buffered before token authentication",
+    "type": "application/octet-stream",
+    "auth": false,
+    "body": {
+      "base64": "AAEC"
+    },
+    "expected": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "AGENT_TOOL_FORBIDDEN",
+          "message": "Agent tool token is required."
+        }
+      }
+    }
+  },
+  {
+    "name": "missing token with valid JSON",
+    "type": "application/json",
+    "auth": false,
+    "body": {
+      "text": "{\"provider\":\"opencode\",\"providerSessionId\":\"fixture-session\",\"tool\":\"story_list_content\",\"arguments\":{}}"
+    },
+    "expected": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "AGENT_TOOL_FORBIDDEN",
+          "message": "Agent tool token is required."
+        }
+      }
+    }
+  },
+  {
+    "name": "authenticated schema failure lists zod issues",
+    "type": "application/json",
+    "auth": true,
+    "body": {
+      "text": "{}"
+    },
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "STORY_TOOL_FAILED",
+          "message": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"opencode\"\n    ],\n    \"path\": [\n      \"provider\"\n    ],\n    \"message\": \"Invalid input: expected \\\"opencode\\\"\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"providerSessionId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"story_list_content\",\n            \"story_get_content\",\n            \"story_set_content\",\n            \"story_list_actions\",\n            \"story_run_action\",\n            \"story_list_automations\",\n            \"story_create_automation\",\n            \"story_update_automation\",\n            \"story_delete_automation\",\n            \"story_run_automation\",\n            \"story_list_automation_runs\",\n            \"story_list_ai_sessions\",\n            \"story_get_ai_session\",\n            \"story_get_ai_session_turn\",\n            \"story_request_decision\"\n          ],\n          \"path\": [],\n          \"message\": \"Invalid option: expected one of \\\"story_list_content\\\"|\\\"story_get_content\\\"|\\\"story_set_content\\\"|\\\"story_list_actions\\\"|\\\"story_run_action\\\"|\\\"story_list_automations\\\"|\\\"story_create_automation\\\"|\\\"story_update_automation\\\"|\\\"story_delete_automation\\\"|\\\"story_run_automation\\\"|\\\"story_list_automation_runs\\\"|\\\"story_list_ai_sessions\\\"|\\\"story_get_ai_session\\\"|\\\"story_get_ai_session_turn\\\"|\\\"story_request_decision\\\"\"\n        }\n      ],\n      [\n        {\n          \"code\": \"invalid_value\",\n          \"values\": [\n            \"agent_run\"\n          ],\n          \"path\": [],\n          \"message\": \"Invalid input: expected \\\"agent_run\\\"\"\n        }\n      ]\n    ],\n    \"path\": [\n      \"tool\"\n    ],\n    \"message\": \"Invalid input\"\n  }\n]"
+        }
+      }
+    }
+  },
+  {
+    "name": "authenticated text body is not an invocation object",
+    "type": "text/plain",
+    "auth": true,
+    "body": {
+      "text": "hello"
+    },
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "STORY_TOOL_FAILED",
+          "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
+        }
+      }
+    }
+  },
+  {
+    "name": "authenticated array body is not an invocation object",
+    "type": "application/json",
+    "auth": true,
+    "body": {
+      "text": "[]"
+    },
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "STORY_TOOL_FAILED",
+          "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received array\"\n  }\n]"
+        }
+      }
+    }
+  },
+  {
+    "name": "authenticated unknown field is rejected",
+    "type": "application/json",
+    "auth": true,
+    "body": {
+      "text": "{\"provider\":\"opencode\",\"providerSessionId\":\"fixture-session\",\"tool\":\"story_list_content\",\"arguments\":{},\"extra\":true}"
+    },
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "STORY_TOOL_FAILED",
+          "message": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
+        }
+      }
+    }
+  },
+  {
+    "name": "authenticated non-opencode provider is rejected",
+    "type": "application/json",
+    "auth": true,
+    "body": {
+      "text": "{\"provider\":\"codex\",\"providerSessionId\":\"fixture-session\",\"tool\":\"story_list_content\",\"arguments\":{}}"
+    },
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "STORY_TOOL_FAILED",
+          "message": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"opencode\"\n    ],\n    \"path\": [\n      \"provider\"\n    ],\n    \"message\": \"Invalid input: expected \\\"opencode\\\"\"\n  }\n]"
+        }
+      }
+    }
+  },
+  {
+    "name": "authenticated blank call id is rejected",
+    "type": "application/json",
+    "auth": true,
+    "body": {
+      "text": "{\"provider\":\"opencode\",\"providerSessionId\":\"fixture-session\",\"tool\":\"story_list_content\",\"arguments\":{},\"callId\":\"   \"}"
+    },
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "STORY_TOOL_FAILED",
+          "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"callId\"\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  }\n]"
+        }
+      }
+    }
+  },
+  {
+    "name": "authenticated missing provider session returns not found",
+    "type": "application/json",
+    "auth": true,
+    "body": {
+      "text": "{\"provider\":\"opencode\",\"providerSessionId\":\"missing\",\"tool\":\"story_list_content\",\"arguments\":{}}"
+    },
+    "expected": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_NOT_FOUND",
+          "message": "AI Session was not found for the Story tool call."
+        }
+      }
+    }
+  },
+  {
+    "name": "declared oversized body is rejected before authentication",
+    "type": "application/json",
+    "auth": false,
+    "body": {
+      "repeat": {
+        "unit": " ",
+        "count": 262145
+      }
+    },
+    "expected": {
+      "status": 413,
+      "body": {
+        "statusCode": 413,
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "error": "Payload Too Large",
+        "message": "Request body is too large"
+      }
+    }
+  }
+]

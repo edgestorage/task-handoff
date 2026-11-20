@@ -90,19 +90,35 @@ impl EventBus {
     }
 
     pub fn new_event(&self, event_type: impl Into<String>, payload: Value) -> EventEnvelope<Value> {
+        let _clients = self
+            .clients
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.allocate_event(event_type, payload)
+    }
+
+    fn allocate_event(
+        &self,
+        event_type: impl Into<String>,
+        payload: Value,
+    ) -> EventEnvelope<Value> {
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
         EventEnvelope::new(sequence, event_type, payload)
     }
 
     pub fn publish(&self, event_type: impl Into<String>, payload: Value) -> EventEnvelope<Value> {
-        let event = self.new_event(event_type, payload);
+        // Sequence allocation and delivery share one boundary. A publisher
+        // cannot reserve an older seq and deliver it after a newer bootstrap
+        // or another publisher's event.
+        let mut clients = self
+            .clients
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let event = self.allocate_event(event_type, payload);
         self.prune_settled_transient_replay(&event);
         self.retain_transient(&event);
         let _ = self.sender.send(event.clone());
-        self.clients
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .retain(|_, sender| sender.send(event.clone()).is_ok());
+        clients.retain(|_, sender| sender.send(event.clone()).is_ok());
         event
     }
 
@@ -111,17 +127,30 @@ impl EventBus {
     }
 
     pub fn subscribe_client(&self) -> EventClientSubscription {
+        self.connect_client(Vec::new()).0
+    }
+
+    pub(crate) fn connect_client(
+        &self,
+        initial: Vec<(&str, Value)>,
+    ) -> (EventClientSubscription, Vec<EventEnvelope<Value>>) {
+        let mut clients = self
+            .clients
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let bootstrap = initial
+            .into_iter()
+            .map(|(kind, payload)| self.allocate_event(kind, payload))
+            .collect();
         let id = self.next_client.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = mpsc::unbounded_channel();
-        self.clients
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(id, sender);
-        EventClientSubscription {
+        clients.insert(id, sender);
+        let subscription = EventClientSubscription {
             id,
             clients: self.clients.clone(),
             receiver,
-        }
+        };
+        (subscription, bootstrap)
     }
 
     pub fn latest_revision(&self) -> u64 {
@@ -403,6 +432,73 @@ fn drop_superseded_item_snapshots(replay: &mut ReplayState, item_key: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connection_bootstrap_is_private_and_drop_releases_the_subscription() {
+        let bus = EventBus::new(8);
+        let mut existing = bus.subscribe_client();
+        let (mut connected, bootstrap) = bus.connect_client(vec![
+            ("streams.hello", serde_json::json!({"revision": 1})),
+            ("app.management", serde_json::json!({})),
+        ]);
+        assert_eq!(
+            bootstrap.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        let update = bus.publish("app-session.patch", serde_json::json!({"revision": 2}));
+        assert_eq!(update.seq, 3);
+        assert_eq!(
+            existing.recv().await.expect("existing client").id,
+            update.id
+        );
+        assert_eq!(connected.recv().await.expect("new client").id, update.id);
+        assert_eq!(bus.clients.read().expect("clients").len(), 2);
+        drop(connected);
+        assert_eq!(bus.clients.read().expect("clients").len(), 1);
+        drop(existing);
+        assert!(bus.clients.read().expect("clients").is_empty());
+    }
+
+    #[tokio::test]
+    async fn parallel_publishers_deliver_in_envelope_sequence_after_bootstrap() {
+        let bus = EventBus::new(8);
+        let (mut connected, bootstrap) = bus.connect_client(vec![
+            ("streams.hello", serde_json::json!({})),
+            ("app.management", serde_json::json!({})),
+        ]);
+        let start = Arc::new(std::sync::Barrier::new(4));
+        std::thread::scope(|scope| {
+            for publisher in 0..4 {
+                let bus = bus.clone();
+                let start = start.clone();
+                scope.spawn(move || {
+                    start.wait();
+                    for index in 0..32 {
+                        bus.publish(
+                            "instance.updated",
+                            serde_json::json!({"publisher": publisher, "index": index}),
+                        );
+                    }
+                });
+            }
+        });
+        let mut previous = bootstrap.last().expect("bootstrap").seq;
+        let mut seen = HashSet::new();
+        for _ in 0..128 {
+            let event = connected.recv().await.expect("published event");
+            assert_eq!(
+                event.seq,
+                previous + 1,
+                "sequence allocation and fanout must share order"
+            );
+            previous = event.seq;
+            assert!(seen.insert((
+                event.payload["publisher"].as_u64().unwrap(),
+                event.payload["index"].as_u64().unwrap()
+            )));
+        }
+        assert_eq!(seen.len(), 128);
+    }
     use controlled_instance_protocol::event_topic;
     use serde_json::json;
 

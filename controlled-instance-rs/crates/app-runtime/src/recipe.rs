@@ -170,6 +170,17 @@ pub struct AppRecipeExecutionContext {
     pub on_output: Option<RecipeOutputHook>,
 }
 
+#[async_trait::async_trait]
+pub trait AppRecipeRunner: Send + Sync {
+    async fn execute_with_policy(
+        &self,
+        operation: AppManagementOperation,
+        recipe: &InstallRecipe,
+        context: &AppRecipeExecutionContext,
+        frozen_policy: Option<&AppInstallExecutionPolicy>,
+    ) -> Result<String, AppRecipeExecutionError>;
+}
+
 #[derive(Clone)]
 pub struct AppRecipeExecutor {
     install_base_dir: PathBuf,
@@ -178,6 +189,20 @@ pub struct AppRecipeExecutor {
     install_environment: Option<AppInstallEnvironmentManager>,
     #[cfg(test)]
     archive_fixture: Option<Vec<u8>>,
+}
+
+#[async_trait::async_trait]
+impl AppRecipeRunner for AppRecipeExecutor {
+    async fn execute_with_policy(
+        &self,
+        operation: AppManagementOperation,
+        recipe: &InstallRecipe,
+        context: &AppRecipeExecutionContext,
+        frozen_policy: Option<&AppInstallExecutionPolicy>,
+    ) -> Result<String, AppRecipeExecutionError> {
+        AppRecipeExecutor::execute_with_policy(self, operation, recipe, context, frozen_policy)
+            .await
+    }
 }
 
 impl AppRecipeExecutor {
@@ -197,6 +222,12 @@ impl AppRecipeExecutor {
         install_environment: AppInstallEnvironmentManager,
     ) -> Self {
         self.install_environment = Some(install_environment);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_archive_fixture(mut self, artifact: Vec<u8>) -> Self {
+        self.archive_fixture = Some(artifact);
         self
     }
 
@@ -1528,6 +1559,7 @@ fn extract_native_tarball(path: &Path, destination: &Path) -> Result<(), AppReci
         let mut entry = entry.map_err(archive_extraction_error)?;
         let header = entry.header();
         let kind = header.entry_type();
+        let mode = header.mode().unwrap_or(0o644);
         if kind.is_symlink() || kind.is_hard_link() {
             return Err(AppRecipeExecutionError::new(
                 "unsafe_archive",
@@ -1575,7 +1607,6 @@ fn extract_native_tarball(path: &Path, destination: &Path) -> Result<(), AppReci
             fs::create_dir_all(parent).map_err(archive_extraction_error)?;
         }
         let mut output = fs::File::create(&target).map_err(archive_extraction_error)?;
-        let mode = header.mode().unwrap_or(0o644);
         let copied = std::io::copy(&mut entry, &mut output).map_err(archive_extraction_error)?;
         total = total.saturating_add(copied);
         if total > MAX_EXTRACTED_BYTES {
@@ -1852,7 +1883,7 @@ async fn apt_refresh_command(
     ))
 }
 
-fn valid_node_version(value: &str) -> bool {
+pub(crate) fn valid_node_version(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 121
         && value
@@ -2623,6 +2654,7 @@ fn extract_archive(
         let mut entry = entry.map_err(archive_extraction_error)?;
         let header = entry.header();
         let kind = header.entry_type();
+        let mode = header.mode().unwrap_or(0o644);
         if kind.is_symlink() || kind.is_hard_link() {
             return Err(AppRecipeExecutionError::new(
                 "unsafe_archive",
@@ -2647,6 +2679,13 @@ fn extract_archive(
         let target = destination.join(relative);
         if kind.is_dir() {
             fs::create_dir_all(&target).map_err(archive_extraction_error)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = (mode & 0o755) | 0o600;
+                fs::set_permissions(&target, fs::Permissions::from_mode(mode))
+                    .map_err(archive_extraction_error)?;
+            }
             continue;
         }
         if let Some(parent) = target.parent() {
@@ -2663,6 +2702,13 @@ fn extract_archive(
             ));
         }
         output.flush().map_err(archive_extraction_error)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = (mode & 0o755) | 0o600;
+            fs::set_permissions(&target, fs::Permissions::from_mode(mode))
+                .map_err(archive_extraction_error)?;
+        }
     }
     Ok(())
 }

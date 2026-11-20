@@ -495,16 +495,9 @@ fn revision_hash(value: &Value) -> String {
 }
 
 fn canonical_value(value: &Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(items.iter().map(canonical_value).collect()),
-        Value::Object(object) => Value::Object(
-            object
-                .iter()
-                .map(|(key, value)| (key.clone(), canonical_value(value)))
-                .collect(),
-        ),
-        _ => value.clone(),
-    }
+    let mut canonical = value.clone();
+    canonical.sort_all_objects();
+    canonical
 }
 
 fn now_iso() -> String {
@@ -516,6 +509,22 @@ mod tests {
     use super::*;
     use controlled_instance_protocol::AiSessionAttachmentContentState;
     use serde_json::json;
+
+    #[test]
+    fn timeline_revisions_ignore_nested_object_key_order() {
+        let first: Value = serde_json::from_str(
+            r#"{"items":[{"text":"hello","id":"m1"}],"providerSessionId":"p1"}"#,
+        )
+        .expect("first");
+        let reordered: Value = serde_json::from_str(
+            r#"{"providerSessionId":"p1","items":[{"id":"m1","text":"hello"}]}"#,
+        )
+        .expect("reordered");
+        assert_eq!(revision_hash(&first), revision_hash(&reordered));
+        let mut changed = reordered;
+        changed["items"][0]["text"] = json!("changed");
+        assert_ne!(revision_hash(&first), revision_hash(&changed));
+    }
 
     fn item(id: &str, turn_id: &str, text: &str) -> AiSessionTimelineItem {
         AiSessionTimelineItem::AiMessage {

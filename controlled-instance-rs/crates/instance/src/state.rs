@@ -17,6 +17,7 @@ use controlled_instance_protocol::{
     project_ai_sessions_snapshot_for_consumer, AiSessionHistoryItem, AiSessionsSnapshot,
     AiSessionsState, AppCounts, ControlledInstanceCapabilities, EventEnvelope,
     InstanceStatusSnapshot, WorkspaceGitStatus, WorkspaceStatus, WorkspaceStorageStatus,
+    SESSION_STREAM_PROTOCOL_VERSION,
 };
 use controlled_instance_workspace::{
     triggers::{local_instance_id, TriggerExecutor, TriggerManager, TriggerStore},
@@ -55,7 +56,7 @@ use crate::{
         recoverable_session_threads,
     },
     config::InstanceConfig,
-    events::EventBus,
+    events::{EventBus, EventClientSubscription},
     instance_shell::InstanceShellRuntime,
     node_agent_client::NodeAgentClient,
     private_model::ControlledModelConfig,
@@ -208,6 +209,10 @@ pub struct AppState {
     codex_discovery_lock: Arc<tokio::sync::Mutex<()>>,
     claude_discovery_lock: Arc<tokio::sync::Mutex<()>>,
     claude_subscriptions: Arc<Mutex<BTreeMap<String, ClaudeSubscriptionHandle>>>,
+    // Test-only observation after the real subscriber has processed a frame,
+    // including diagnostic frames that correctly leave the owner unchanged.
+    #[cfg(test)]
+    claude_observations: tokio::sync::broadcast::Sender<Value>,
     ai_session_orphaned_app_sessions: Arc<Mutex<BTreeMap<String, Instant>>>,
     ai_session_orphan_retention: Duration,
     git_credential_broker_installed: Arc<AtomicBool>,
@@ -307,6 +312,23 @@ impl AppState {
         auth: WebAuthState,
         node_agent_client: NodeAgentClient,
     ) -> anyhow::Result<Self> {
+        let managed_app_root = std::env::var_os("TASK_HANDOFF_MANAGED_APP_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| config.storage_paths.data_dir.join("managed-apps"));
+        Self::try_new_with_node_agent_client_and_managed_app_root(
+            config,
+            auth,
+            node_agent_client,
+            managed_app_root,
+        )
+    }
+
+    fn try_new_with_node_agent_client_and_managed_app_root(
+        config: InstanceConfig,
+        auth: WebAuthState,
+        node_agent_client: NodeAgentClient,
+        managed_app_root: PathBuf,
+    ) -> anyhow::Result<Self> {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let ai_session_orphan_retention =
             std::env::var("TASK_HANDOFF_AI_SESSION_ORPHAN_RETENTION_MS")
@@ -337,25 +359,29 @@ impl AppState {
             &config.storage_paths.data_dir,
         ));
         let initial_persistence_settings = ai_session_persistence_settings.get();
-        let ai_session_history = Arc::new(AiSessionHistoryStore::new(
-            &config.storage_paths.data_dir,
-            Some(initial_persistence_settings.history_limit),
-        ));
-        let ai_session_timeline =
-            Arc::new(AiSessionTimelineStore::new(&config.storage_paths.data_dir));
-        retain_codex_timeline_history(&ai_sessions, &ai_session_history, &ai_session_timeline);
         let ai_session_attachments = Arc::new(AiSessionConversationAttachmentStore::new(
             &config.storage_paths.data_dir,
         ));
         ai_session_attachments
             .set_max_file_attachment_bytes(initial_persistence_settings.max_file_attachment_bytes)
             .map_err(|error| anyhow::anyhow!(error))?;
-        let _ = ai_session_attachments
-            .set_retention_days(initial_persistence_settings.attachment_retention_days);
+        ai_session_attachments
+            .set_retention_days(initial_persistence_settings.attachment_retention_days)?;
+        ai_sessions.set_conversation_attachments(ai_session_attachments.clone());
+        let ai_session_history = Arc::new(AiSessionHistoryStore::with_resource_releaser(
+            &config.storage_paths.data_dir,
+            Some(initial_persistence_settings.history_limit),
+            {
+                let attachments = ai_session_attachments.clone();
+                move |session_id| {
+                    attachments.release_session(session_id);
+                }
+            },
+        ));
+        let ai_session_timeline =
+            Arc::new(AiSessionTimelineStore::new(&config.storage_paths.data_dir));
+        retain_codex_timeline_history(&ai_sessions, &ai_session_history, &ai_session_timeline);
         let ai_session_attachment_streams = Arc::new(ai_session_attachments.draft_streams());
-        let managed_app_root = std::env::var_os("TASK_HANDOFF_MANAGED_APP_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config.storage_paths.data_dir.join("managed-apps"));
         let app_management_state_dir = config.storage_paths.runtime_dir.join("app-management");
         let install_environment = AppInstallEnvironmentManager::new(
             config.storage_paths.data_dir.clone(),
@@ -763,6 +789,8 @@ impl AppState {
             codex_discovery_lock: Arc::new(tokio::sync::Mutex::new(())),
             claude_discovery_lock: Arc::new(tokio::sync::Mutex::new(())),
             claude_subscriptions: Arc::new(Mutex::new(BTreeMap::new())),
+            #[cfg(test)]
+            claude_observations: tokio::sync::broadcast::channel(128).0,
             ai_session_orphaned_app_sessions: Arc::new(Mutex::new(BTreeMap::new())),
             ai_session_orphan_retention,
             git_credential_broker_installed: Arc::new(AtomicBool::new(false)),
@@ -1047,6 +1075,8 @@ impl AppState {
                             );
                         }
                     }
+                    #[cfg(test)]
+                    let _ = state.claude_observations.send(message);
                 }
             });
             self.claude_subscriptions
@@ -1366,13 +1396,43 @@ impl AppState {
             .flatten()
     }
 
-    fn start_ai_session_event_projection(&self) {
+    pub(crate) fn start_ai_session_event_projection(&self) {
         if self
             .ai_session_event_projection_started
             .swap(true, Ordering::SeqCst)
         {
             return;
         }
+        let mut content_changes = self.ai_session_attachments.subscribe_content_changes();
+        let mut shutdown = self.shutdown_receiver();
+        let state = self.clone();
+        tokio::spawn(async move {
+            let hour = Duration::from_secs(60 * 60);
+            // Match the hourly owner sweep without an immediate startup tick.
+            let mut gc = tokio::time::interval_at(tokio::time::Instant::now() + hour, hour);
+            gc.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                if *shutdown.borrow() {
+                    break;
+                }
+                tokio::select! {
+                    // A due sweep must not outlive a simultaneously ready shutdown.
+                    biased;
+                    _ = shutdown.changed() => break,
+                    _ = gc.tick() => {
+                        if let Err(error) = state.ai_session_attachments.gc() {
+                            tracing::warn!(?error, "AI session attachment garbage collection failed; will retry.");
+                        }
+                    }
+                    changed = content_changes.changed() => {
+                        if changed.is_err() { break; }
+                        // Snapshot projection is pure: it cannot run GC or
+                        // recursively acquire the authority publication lock.
+                        state.publish_ai_session_snapshot("provider-event");
+                    }
+                }
+            }
+        });
         for agent in ["codex", "opencode"] {
             let Ok(provider) = self.ai_session_controller.provider(agent) else {
                 continue;
@@ -1766,11 +1826,17 @@ impl AppState {
     }
 
     pub fn app_sessions_state(&self) -> controlled_instance_protocol::AppSessionsState {
-        let snapshot = self.app_runtime.snapshot();
-        self.app_session_authority
+        let authority = self
+            .app_session_authority
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .state(snapshot)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Runtime notifications are asynchronous. A published revision names
+        // the authority snapshot, never an unconsumed runtime mutation.
+        let snapshot = authority
+            .published_snapshot()
+            .cloned()
+            .unwrap_or_else(|| self.app_runtime.snapshot());
+        authority.state(snapshot)
     }
 
     pub fn app_sessions_delta(&self, stream_id: &str, since_revision: f64) -> Value {
@@ -1793,12 +1859,14 @@ impl AppState {
     }
 
     pub fn publish_app_session_snapshot(&self, reason: &str) -> Option<EventEnvelope<Value>> {
-        let snapshot = self.app_runtime.snapshot();
-        let prepared = self
+        // Keep the authority revision and its emitted event in one critical
+        // section, also used by connection bootstrap. Capture after acquiring
+        // the owner so concurrent callers cannot publish a stale snapshot.
+        let mut authority = self
             .app_session_authority
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .prepare(snapshot, reason);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prepared = authority.prepare(self.app_runtime.snapshot(), reason);
         let Some(prepared) = prepared else {
             self.stream_diagnostics
                 .app_unchanged_refreshes
@@ -1815,14 +1883,79 @@ impl AppState {
         self.without_agent_run_member_sessions(snapshot)
     }
 
-    pub fn ai_session_startup_snapshot_event(&self, subagents: bool) -> EventEnvelope<Value> {
-        let state = self.ai_sessions_state();
-        let snapshot = project_ai_sessions_snapshot_for_consumer(state.snapshot, subagents);
-        let payload = self
+    pub(crate) fn connect_event_stream(
+        &self,
+        includes_authority_snapshot: bool,
+        subagents: bool,
+    ) -> (EventClientSubscription, Vec<EventEnvelope<Value>>) {
+        self.connect_event_stream_before_registration(includes_authority_snapshot, subagents, || {})
+    }
+
+    // Keep the registration boundary explicit so tests can place a mutation
+    // there without sleeping, replacing the transport, or rewriting its logic.
+    pub(crate) fn connect_event_stream_before_registration(
+        &self,
+        includes_authority_snapshot: bool,
+        subagents: bool,
+        before_registration: impl FnOnce(),
+    ) -> (EventClientSubscription, Vec<EventEnvelope<Value>>) {
+        before_registration();
+        // Lock order is app authority -> AI authority -> EventBus clients.
+        // Publishers hold only their authority through EventBus delivery.
+        // Nothing under the bus lock calls back into an authority.
+        let app_authority = self
+            .app_session_authority
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ai_authority = self
             .ai_session_authority
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .snapshot_payload(snapshot, "startup");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut initial = vec![(
+            "streams.hello",
+            json!({
+                "protocolVersion": SESSION_STREAM_PROTOCOL_VERSION,
+                "streams": [
+                    {"topic": "ai.sessions", "instanceId": self.config.instance_id,
+                     "streamId": ai_authority.stream_id(), "latestRevision": ai_authority.revision(),
+                     "earliestRetainedRevision": ai_authority.earliest_retained_revision()},
+                    {"topic": "app.sessions", "instanceId": self.config.instance_id,
+                     "streamId": app_authority.stream_id(), "latestRevision": app_authority.revision(),
+                     "earliestRetainedRevision": app_authority.earliest_retained_revision()},
+                ],
+            }),
+        )];
+        if includes_authority_snapshot {
+            let snapshot = ai_authority
+                .published_snapshot()
+                .cloned()
+                .unwrap_or_else(|| self.ai_sessions_snapshot());
+            let snapshot = project_ai_sessions_snapshot_for_consumer(snapshot, subagents);
+            initial.push((
+                "ai-session.snapshot",
+                ai_authority.snapshot_payload(snapshot, "startup"),
+            ));
+        }
+        // Build payloads before entering the bus: management can independently
+        // publish while holding its own lock; the bus never acquires that lock.
+        initial.push((
+            "app.management",
+            serde_json::to_value(self.app_management.snapshot_event()).unwrap_or(Value::Null),
+        ));
+        self.events.connect_client(initial)
+    }
+
+    pub fn ai_session_startup_snapshot_event(&self, subagents: bool) -> EventEnvelope<Value> {
+        let authority = self
+            .ai_session_authority
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let snapshot = authority
+            .published_snapshot()
+            .cloned()
+            .unwrap_or_else(|| self.ai_sessions_snapshot());
+        let snapshot = project_ai_sessions_snapshot_for_consumer(snapshot, subagents);
+        let payload = authority.snapshot_payload(snapshot, "startup");
         self.events.new_event("ai-session.snapshot", payload)
     }
 
@@ -1940,12 +2073,12 @@ impl AppState {
     ) -> Option<EventEnvelope<serde_json::Value>> {
         self.ai_session_message_deltas
             .flush_all(FlushReason::AuthoritativeEvent);
-        let snapshot = self.ai_sessions_snapshot();
-        let prepared = self
+        let mut authority = self
             .ai_session_authority
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .prepare(snapshot.clone(), reason);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let snapshot = self.ai_sessions_snapshot();
+        let prepared = authority.prepare(snapshot.clone(), reason);
         if reason == "discovery-scan" {
             if prepared.is_some() {
                 self.stream_diagnostics
@@ -2279,12 +2412,11 @@ impl AppState {
                 provider.unsubscribe_session(&provider_session_id).await?;
             }
             if delete {
-                self.ai_session_history
-                    .remove(&original.id)
-                    .map_err(|error| {
-                        ProviderError::new("AI_SESSION_DELETE_FAILED", error.to_string(), 500)
-                    })?;
-                self.ai_session_attachments.release_session(&original.id);
+                if !self.ai_session_history.remove(&original.id).map_err(|error| {
+                    ProviderError::new("AI_SESSION_DELETE_FAILED", error.to_string(), 500)
+                })? {
+                    self.ai_session_attachments.release_session(&original.id);
+                }
             } else {
                 let item =
                     AiSessionHistoryStore::from_session(original, now_iso()).ok_or_else(|| {
@@ -2379,12 +2511,15 @@ impl AppState {
                     ProviderError::new("AI_SESSION_STORE_FAILED", error.to_string(), 500)
                 })?;
             }
-            self.ai_session_history
+            if !self
+                .ai_session_history
                 .remove(session_id)
                 .map_err(|error| {
                     ProviderError::new("AI_SESSION_DELETE_FAILED", error.to_string(), 500)
-                })?;
-            self.ai_session_attachments.release_session(session_id);
+                })?
+            {
+                self.ai_session_attachments.release_session(session_id);
+            }
             Ok(())
         }
         .await;
@@ -2738,4 +2873,16 @@ fn codex_app_server_target(
             token_file,
         },
     }
+}
+
+#[cfg(all(test, unix))]
+mod claude_interaction_parity {
+    use super::*;
+    include!("state/claude_interaction_parity.rs");
+}
+
+#[cfg(all(test, unix))]
+mod app_management_terminal_notification_parity {
+    use super::*;
+    include!("state/app_management_terminal_notification_parity.rs");
 }

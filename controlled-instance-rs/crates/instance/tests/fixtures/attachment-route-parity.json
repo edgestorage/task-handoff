@@ -1,0 +1,498 @@
+[
+  {
+    "name": "binary upload",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "<draft-id>",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 5,
+          "expiresAt": "<expiresAt>"
+        }
+      }
+    }
+  },
+  {
+    "name": "short content",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5",
+    "unit": "hell",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content did not match its declared size."
+        }
+      }
+    }
+  },
+  {
+    "name": "plain text upload",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5",
+    "unit": "hello",
+    "generatedId": true,
+    "type": "text/plain",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "<draft-id>",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 5,
+          "expiresAt": "<expiresAt>"
+        }
+      }
+    }
+  },
+  {
+    "name": "BOM text upload",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5",
+    "unit": "﻿hello",
+    "generatedId": true,
+    "type": "text/plain",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content exceeded its declared size."
+        }
+      }
+    }
+  },
+  {
+    "name": "JSON array upload",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5",
+    "unit": "[\"hello\"]",
+    "generatedId": true,
+    "type": "application/json",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "<draft-id>",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 5,
+          "expiresAt": "<expiresAt>"
+        }
+      }
+    }
+  },
+  {
+    "name": "JSON object upload",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5",
+    "unit": "{}",
+    "generatedId": true,
+    "type": "application/json",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"body\" argument must be of type function or an instance of Blob, ReadableStream, WritableStream, Stream, Iterable, AsyncIterable, or Promise or { readable, writable } pair. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "JSON string upload",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5",
+    "unit": "\"hello\"",
+    "generatedId": true,
+    "type": "application/json",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "<draft-id>",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 5,
+          "expiresAt": "<expiresAt>"
+        }
+      }
+    }
+  },
+  {
+    "name": "duplicate scope",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5&scopeId=other",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "scopeId: Invalid input: expected string, received array"
+        }
+      }
+    }
+  },
+  {
+    "name": "duplicate size",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5&size=5",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "size: Invalid input: expected number, received NaN"
+        }
+      }
+    }
+  },
+  {
+    "name": "unknown query keys",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5&z=1&a=2",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "body: Unrecognized keys: \"z\", \"a\""
+        }
+      }
+    }
+  },
+  {
+    "name": "multiple invalid query fields",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeId=x&scopeId=y&size=0&what=1",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "scopeType: Invalid option: expected one of \"session\"|\"create-request\"; scopeId: Invalid input: expected string, received array; kind: Invalid option: expected one of \"image\"|\"file\"; name: Invalid input: expected string, received undefined; mime: Invalid input: expected string, received undefined; size: Too small: expected number to be >0; body: Unrecognized key: \"what\""
+        }
+      }
+    }
+  },
+  {
+    "name": "invalid size numeric",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=Infinity",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "size: Invalid input: expected number, received Infinity"
+        }
+      }
+    }
+  },
+  {
+    "name": "invalid percent path identity",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=%61%ZZ&mime=text%2Fplain&size=5",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "<draft-id>",
+          "kind": "file",
+          "name": "%61%ZZ",
+          "mime": "text/plain",
+          "size": 5,
+          "expiresAt": "<expiresAt>"
+        }
+      }
+    }
+  },
+  {
+    "name": "binary empty content",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5",
+    "unit": "",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content did not match its declared size."
+        }
+      }
+    }
+  },
+  {
+    "name": "hex size",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=0x5",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "<draft-id>",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 5,
+          "expiresAt": "<expiresAt>"
+        }
+      }
+    }
+  },
+  {
+    "name": "BOM size",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=%EF%BB%BF5",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "<draft-id>",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 5,
+          "expiresAt": "<expiresAt>"
+        }
+      }
+    }
+  },
+  {
+    "name": "safe integer overflow",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=9007199254740992",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "size: Too big: expected int to be <=9007199254740991; size: Too big: expected number to be <=20971520"
+        }
+      }
+    }
+  },
+  {
+    "name": "negative safe integer overflow",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=-9007199254740992",
+    "unit": "hello",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "size: Too small: expected int to be >=-9007199254740991; size: Too small: expected number to be >0"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel duplicate scope",
+    "method": "DELETE",
+    "url": "/api/ai-session-attachments/drafts/att_ffffffffffffffffffffffff?scopeType=create-request&scopeId=x&scopeId=y",
+    "unit": "",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "scopeId: Invalid input: expected string, received array"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel unknown query order",
+    "method": "DELETE",
+    "url": "/api/ai-session-attachments/drafts/att_ffffffffffffffffffffffff?scopeType=create-request&scopeId=x&z=1&a=2",
+    "unit": "",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "body: Unrecognized keys: \"z\", \"a\""
+        }
+      }
+    }
+  },
+  {
+    "name": "binary missing session before size limit",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=session&scopeId=upload-test&kind=file&name=notes.txt&mime=text%2Fplain&size=5",
+    "unit": "x",
+    "generatedId": true,
+    "repeat": 23068672,
+    "expected": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_NOT_FOUND",
+          "message": "AI session not found."
+        }
+      }
+    }
+  },
+  {
+    "name": "begin large stream",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_0123456789abcdef01234567\",\"scopeType\":\"create-request\",\"scopeId\":\"upload-test\",\"kind\":\"image\",\"name\":\"stream.txt\",\"mime\":\"image/png\",\"size\":800000}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_0123456789abcdef01234567",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append duplicate offset",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_0123456789abcdef01234567?offset=0&offset=0",
+    "unit": "hello",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "offset: Invalid input: expected number, received NaN"
+        }
+      }
+    }
+  },
+  {
+    "name": "append unknown query order",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_0123456789abcdef01234567?offset=0&z=1&a=2",
+    "unit": "hello",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "body: Unrecognized keys: \"z\", \"a\""
+        }
+      }
+    }
+  },
+  {
+    "name": "missing stream before body limit",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_ffffffffffffffffffffffff?offset=0",
+    "unit": "x",
+    "type": "application/octet-stream",
+    "repeat": 600000,
+    "expected": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND",
+          "message": "AI session attachment upload not found."
+        }
+      }
+    }
+  },
+  {
+    "name": "bad id before body limit",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/bad-id?offset=0",
+    "unit": "x",
+    "type": "application/octet-stream",
+    "repeat": 600000,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_INVALID",
+          "message": "body: Invalid string: must match pattern /^cia_[a-f0-9]{24}$/"
+        }
+      }
+    }
+  },
+  {
+    "name": "large binary stream append",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_0123456789abcdef01234567?offset=0",
+    "unit": "x",
+    "type": "application/octet-stream",
+    "repeat": 600000,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_0123456789abcdef01234567",
+          "offset": 600000
+        }
+      }
+    }
+  },
+  {
+    "name": "stale offset after large append",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_0123456789abcdef01234567?offset=0",
+    "unit": "x",
+    "type": "application/octet-stream",
+    "repeat": 600000,
+    "expected": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_OFFSET_MISMATCH",
+          "message": "AI session attachment upload offset does not match."
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel stream",
+    "method": "DELETE",
+    "url": "/api/ai-session-attachments/draft-streams/cia_0123456789abcdef01234567",
+    "unit": "",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "removed": true
+        }
+      }
+    }
+  }
+]

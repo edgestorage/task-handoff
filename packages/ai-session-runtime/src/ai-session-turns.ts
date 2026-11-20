@@ -191,7 +191,9 @@ export function normalizeTurns(values?: unknown[], meta: TurnMeta = {}) {
       updatedAt: record.updatedAt,
       completedAt: record.completedAt,
     };
-    if (turn.userPrompt || turn.userMessages?.length || turn.summary || turn.lastMessage || turn.contextCompactions?.length) {
+    // An identified lifecycle is authoritative even before prompt/response
+    // content arrives (for example, a turn can finish before send-ack).
+    if ((record.id && record.status) || turn.userPrompt || turn.userMessages?.length || turn.summary || turn.lastMessage || turn.contextCompactions?.length) {
       turns.push(turn);
     }
   }
@@ -576,11 +578,24 @@ export function updateTurns(
       });
     }
   } else if (patch.status || patch.phase) {
-    const last = activeTurnId
+    let last = activeTurnId
       ? turns[findTurnIndex(turns, { id: activeTurnId })]
       : patch.status === "idle" || patch.status === "failed"
         ? turns.at(-1)
         : undefined;
+    if (!last && activeTurnId && patch.status) {
+      last = {
+        id: activeTurnId,
+        ...meta,
+        status: turnStatusFromSessionStatus(patch.status),
+        phase: patch.phase,
+        revision: 1,
+        startedAt: updatedAt,
+        updatedAt,
+        ...(patch.status === "idle" || patch.status === "failed" ? { completedAt: patch.completedAt || updatedAt } : {}),
+      };
+      turns.push(last);
+    }
     if (last) {
       const status = turnStatusFromSessionStatus(patch.status, last.status);
       const phase = (patch.phase as AiSessionPhase | undefined) || last.phase;

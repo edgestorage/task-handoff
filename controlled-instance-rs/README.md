@@ -1,6 +1,6 @@
 # Controlled Instance Rust Runtime
 
-This workspace is the Rust implementation of the TaskHandoff controlled-instance runtime. Node remains the repository's default runtime and the `v0.0.46` compatibility baseline; select Rust explicitly with `TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION=rust`. This workspace does not move, delete, or silently fall back to the Node implementation.
+This workspace is the Rust implementation of the TaskHandoff controlled-instance runtime. Node remains the default runtime, behavioral reference, and rollback implementation; select Rust explicitly with `TASK_HANDOFF_CONTROLLED_INSTANCE_IMPLEMENTATION=rust`. The historical compatibility fixture is pinned to `v0.0.47` as described in `docs/baseline-v0.0.47.md`. This workspace does not silently fall back to Node.
 
 The only approved exceptions are:
 
@@ -22,6 +22,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo check --workspace --all-targets --target x86_64-pc-windows-gnu
 ```
 
+The AppSession consumer differential test also requires the repository's Node.js toolchain and existing workspace dependencies. It sends Rust authority output to the existing TypeScript reducer, Control Plane aggregator and UI store, and compares them with an isolated Node HTTP source. Node is used only by this test; missing prerequisites fail explicitly rather than skipping parity coverage.
+
 The Windows GNU check is a compile/type check of `cfg(windows)` code, not a Windows runtime test. It catches Unix-only assumptions but does not prove ConPTY, Job Object, process-tree, signal, or filesystem behavior; those require a Windows runtime on the supported target matrix.
 
 ## Migration and differential gates
@@ -36,7 +38,7 @@ openspec validate rewrite-controlled-instance-in-rust --strict
 ```
 
 - `check-controlled-instance-rust-migration.mjs` verifies import-closure coverage, Rust ownership, referenced tests, the frozen UI boundary, approved adapters, and the absence of a Node business fallback. It is an ownership/implementation gate, not proof of behavioral parity.
-- `controlled-instance-route-contract.test.js` compares `v0.0.46` and target-current Node route registrations with the matrix and Rust production router. The baseline has 201 explicit registrations, including five WebSocket upgrades; target-current Node has 202, with the only extension being `GET /api/internal/instance-shell`.
+- `controlled-instance-route-contract.test.js` compares the pinned `v0.0.47` route snapshot, matrix, target-current Node registrations and Rust production router. The baseline has 202 explicit registrations, including six WebSocket upgrades and `GET /api/internal/instance-shell`; there are no target-current registration additions. Regenerate the source snapshot with `node scripts/controlled-instance-route-baseline.mjs --ref v0.0.47` and compare the output before replacing evidence.
 - `controlled-instance-differential.mjs` starts Node and Rust runtimes and compares normalized HTTP responses for the currently scripted scenarios. It does not yet provide the unified HTTP/WS/CLI/persistence/provider harness required by OpenSpec task 2.4.
 - OpenSpec strict validation checks the proposal artifacts; it does not replace runtime acceptance on `192.168.139.109`.
 

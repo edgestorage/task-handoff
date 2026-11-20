@@ -1,0 +1,2669 @@
+{
+  "scenarios": [
+    {
+      "id": "C01-steer",
+      "initial": {
+        "messages": [
+          {
+            "info": {
+              "id": "msg-active",
+              "sessionID": "s-u045",
+              "role": "user",
+              "time": {
+                "created": 1793923201000
+              }
+            },
+            "parts": [
+              {
+                "id": "u-active",
+                "sessionID": "s-u045",
+                "messageID": "msg-active",
+                "type": "text",
+                "text": "Initial prompt"
+              }
+            ]
+          }
+        ],
+        "status": "busy",
+        "updated": 1793923202000,
+        "permissions": []
+      },
+      "steps": [
+        {
+          "name": "steer-rejected",
+          "action": "steer",
+          "message": " Next 世界 ",
+          "hold": true,
+          "failure": {
+            "path": "/session/s-u045/prompt_async",
+            "message": "fixture steer rejected"
+          },
+          "unchanged": true
+        },
+        {
+          "name": "steer-ack",
+          "action": "steer",
+          "message": " Next 世界 ",
+          "hold": true
+        }
+      ],
+      "expected": {
+        "results": [
+          {
+            "name": "steer-rejected",
+            "error": {
+              "message": "fixture steer rejected",
+              "statusCode": 503,
+              "code": "AI_SESSION_CONTROL_FAILED"
+            }
+          },
+          {
+            "name": "steer-ack",
+            "provider": "opencode",
+            "action": "steer",
+            "turnId": "msg-active",
+            "providerTurnId": "msg-active",
+            "decision": null,
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Next 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Next 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    },
+                    {
+                      "id": "$prompt2",
+                      "text": "Next 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/session/s-u045/prompt_async",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "messageID": "$prompt1",
+              "parts": [
+                {
+                  "type": "text",
+                  "text": "Next 世界"
+                }
+              ]
+            }
+          },
+          {
+            "method": "POST",
+            "path": "/session/s-u045/prompt_async",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "messageID": "$prompt2",
+              "parts": [
+                {
+                  "type": "text",
+                  "text": "Next 世界"
+                }
+              ]
+            }
+          }
+        ],
+        "transport": [
+          {
+            "path": "/global/event",
+            "authorized": true
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 0,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "steer-rejected",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 0,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "steer-ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Next 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Next 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    },
+                    {
+                      "id": "$prompt2",
+                      "text": "Next 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "reread",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 3,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    },
+                    {
+                      "id": "$prompt2",
+                      "text": "Next 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "s-u045",
+          "status": "running",
+          "phase": "responding",
+          "activeTurnId": "msg-active",
+          "userPrompt": "Initial prompt",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": false,
+          "error": null,
+          "turns": [
+            {
+              "id": "msg-active",
+              "providerTurnId": "msg-active",
+              "status": "running",
+              "phase": "responding",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 3,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "msg-active",
+                  "text": "Initial prompt",
+                  "attachments": []
+                },
+                {
+                  "id": "$prompt2",
+                  "text": "Next 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ],
+          "actions": {
+            "send": true,
+            "interrupt": true,
+            "approval": false,
+            "fork": true,
+            "rename": true,
+            "close": true
+          }
+        }
+      }
+    },
+    {
+      "id": "C02-interrupt",
+      "initial": {
+        "messages": [
+          {
+            "info": {
+              "id": "msg-active",
+              "sessionID": "s-u045",
+              "role": "user",
+              "time": {
+                "created": 1793923201000
+              }
+            },
+            "parts": [
+              {
+                "id": "u-active",
+                "sessionID": "s-u045",
+                "messageID": "msg-active",
+                "type": "text",
+                "text": "Initial prompt"
+              }
+            ]
+          }
+        ],
+        "status": "busy",
+        "updated": 1793923202000,
+        "permissions": []
+      },
+      "steps": [
+        {
+          "name": "abort-rejected",
+          "action": "interrupt",
+          "hold": true,
+          "failure": {
+            "path": "/session/s-u045/abort",
+            "message": "fixture abort rejected"
+          },
+          "unchanged": true
+        },
+        {
+          "name": "abort-ack",
+          "action": "interrupt",
+          "hold": true
+        },
+        {
+          "name": "aborted-snapshot",
+          "snapshot": {
+            "messages": [
+              {
+                "info": {
+                  "id": "msg-active",
+                  "sessionID": "s-u045",
+                  "role": "user",
+                  "time": {
+                    "created": 1793923201000
+                  }
+                },
+                "parts": [
+                  {
+                    "id": "u-active",
+                    "sessionID": "s-u045",
+                    "messageID": "msg-active",
+                    "type": "text",
+                    "text": "Initial prompt"
+                  }
+                ]
+              },
+              {
+                "info": {
+                  "id": "a-stopped",
+                  "sessionID": "s-u045",
+                  "role": "assistant",
+                  "parentID": "msg-active",
+                  "time": {
+                    "created": 1793923203000,
+                    "completed": 1793923206000
+                  }
+                },
+                "parts": [
+                  {
+                    "id": "stopped-text",
+                    "messageID": "a-stopped",
+                    "sessionID": "s-u045",
+                    "type": "text",
+                    "text": "Stopped"
+                  }
+                ]
+              }
+            ],
+            "status": "idle",
+            "updated": 1793923206000,
+            "permissions": []
+          },
+          "event": {
+            "directory": "/workspace",
+            "payload": {
+              "type": "session.status",
+              "properties": {
+                "sessionID": "s-u045",
+                "status": {
+                  "type": "idle"
+                }
+              }
+            }
+          },
+          "wait": {
+            "status": "idle",
+            "activeTurnId": null,
+            "lastMessage": "Stopped"
+          }
+        }
+      ],
+      "expected": {
+        "results": [
+          {
+            "name": "abort-rejected",
+            "error": {
+              "message": "fixture abort rejected",
+              "statusCode": 503,
+              "code": "AI_SESSION_CONTROL_FAILED"
+            }
+          },
+          {
+            "name": "abort-ack",
+            "provider": "opencode",
+            "action": "interrupt",
+            "turnId": "msg-active",
+            "providerTurnId": "msg-active",
+            "decision": null,
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/session/s-u045/abort",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": null
+          },
+          {
+            "method": "POST",
+            "path": "/session/s-u045/abort",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": null
+          }
+        ],
+        "transport": [
+          {
+            "path": "/global/event",
+            "authorized": true
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 0,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "abort-rejected",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 0,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "abort-ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "aborted-snapshot",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": "Stopped",
+              "lastMessageItemId": "stopped-text",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": "Stopped",
+                  "lastMessageItemId": "stopped-text",
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "reread",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": "Stopped",
+              "lastMessageItemId": "stopped-text",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": "Stopped",
+                  "lastMessageItemId": "stopped-text",
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "s-u045",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Initial prompt",
+          "summary": null,
+          "lastMessage": "Stopped",
+          "lastMessageItemId": "stopped-text",
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "msg-active",
+              "providerTurnId": "msg-active",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": "Stopped",
+              "lastMessageItemId": "stopped-text",
+              "revision": 1,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "msg-active",
+                  "text": "Initial prompt",
+                  "attachments": []
+                }
+              ]
+            }
+          ],
+          "actions": {
+            "send": true,
+            "interrupt": false,
+            "approval": false,
+            "fork": true,
+            "rename": true,
+            "close": true
+          }
+        }
+      }
+    },
+    {
+      "id": "C03-allow",
+      "initial": {
+        "messages": [
+          {
+            "info": {
+              "id": "msg-active",
+              "sessionID": "s-u045",
+              "role": "user",
+              "time": {
+                "created": 1793923201000
+              }
+            },
+            "parts": [
+              {
+                "id": "u-active",
+                "sessionID": "s-u045",
+                "messageID": "msg-active",
+                "type": "text",
+                "text": "Initial prompt"
+              }
+            ]
+          }
+        ],
+        "status": "busy",
+        "updated": 1793923202000,
+        "permissions": [
+          {
+            "id": "per/u046",
+            "sessionID": "s-u045",
+            "permission": "bash",
+            "patterns": [
+              "pwd"
+            ],
+            "metadata": {},
+            "always": []
+          }
+        ]
+      },
+      "steps": [
+        {
+          "name": "reply-rejected",
+          "action": "approval",
+          "decision": "allow",
+          "failure": {
+            "path": "/permission/per%2Fu046/reply",
+            "message": "fixture reply rejected"
+          },
+          "unchanged": true,
+          "snapshot": {
+            "messages": [
+              {
+                "info": {
+                  "id": "msg-active",
+                  "sessionID": "s-u045",
+                  "role": "user",
+                  "time": {
+                    "created": 1793923201000
+                  }
+                },
+                "parts": [
+                  {
+                    "id": "u-active",
+                    "sessionID": "s-u045",
+                    "messageID": "msg-active",
+                    "type": "text",
+                    "text": "Initial prompt"
+                  }
+                ]
+              }
+            ],
+            "status": "busy",
+            "updated": 1793923202000,
+            "permissions": [
+              {
+                "id": "per/u046",
+                "sessionID": "s-u045",
+                "permission": "bash",
+                "patterns": [
+                  "ls -la"
+                ],
+                "metadata": {},
+                "always": []
+              }
+            ]
+          }
+        },
+        {
+          "name": "reply-ack-still-waiting",
+          "action": "approval",
+          "decision": "allow"
+        },
+        {
+          "name": "permission-cleared",
+          "snapshot": {
+            "messages": [
+              {
+                "info": {
+                  "id": "msg-active",
+                  "sessionID": "s-u045",
+                  "role": "user",
+                  "time": {
+                    "created": 1793923201000
+                  }
+                },
+                "parts": [
+                  {
+                    "id": "u-active",
+                    "sessionID": "s-u045",
+                    "messageID": "msg-active",
+                    "type": "text",
+                    "text": "Initial prompt"
+                  }
+                ]
+              }
+            ],
+            "status": "busy",
+            "updated": 1793923206000,
+            "permissions": []
+          },
+          "event": {
+            "directory": "/workspace",
+            "payload": {
+              "type": "permission.replied",
+              "properties": {
+                "sessionID": "s-u045",
+                "requestID": "per/u046",
+                "reply": "once"
+              }
+            }
+          },
+          "wait": {
+            "status": "running",
+            "phase": "responding"
+          }
+        }
+      ],
+      "expected": {
+        "results": [
+          {
+            "name": "reply-rejected",
+            "error": {
+              "message": "fixture reply rejected",
+              "statusCode": 503,
+              "code": "AI_SESSION_CONTROL_FAILED"
+            }
+          },
+          {
+            "name": "reply-ack-still-waiting",
+            "provider": "opencode",
+            "action": "approval",
+            "turnId": null,
+            "providerTurnId": null,
+            "decision": "allow",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": true,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/permission/per%2Fu046/reply",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "reply": "once"
+            }
+          },
+          {
+            "method": "POST",
+            "path": "/permission/per%2Fu046/reply",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "reply": "once"
+            }
+          }
+        ],
+        "transport": [
+          {
+            "path": "/global/event",
+            "authorized": true
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": true,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "reply-rejected",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": true,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "reply-ack-still-waiting",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": true,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "permission-cleared",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "reread",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "s-u045",
+          "status": "running",
+          "phase": "responding",
+          "activeTurnId": "msg-active",
+          "userPrompt": "Initial prompt",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": false,
+          "error": null,
+          "turns": [
+            {
+              "id": "msg-active",
+              "providerTurnId": "msg-active",
+              "status": "running",
+              "phase": "responding",
+              "userPrompt": "Initial prompt",
+              "summary": "bash: pwd",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 1,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "msg-active",
+                  "text": "Initial prompt",
+                  "attachments": []
+                }
+              ]
+            }
+          ],
+          "actions": {
+            "send": true,
+            "interrupt": true,
+            "approval": false,
+            "fork": true,
+            "rename": true,
+            "close": true
+          }
+        }
+      }
+    },
+    {
+      "id": "C04-deny",
+      "initial": {
+        "messages": [
+          {
+            "info": {
+              "id": "msg-active",
+              "sessionID": "s-u045",
+              "role": "user",
+              "time": {
+                "created": 1793923201000
+              }
+            },
+            "parts": [
+              {
+                "id": "u-active",
+                "sessionID": "s-u045",
+                "messageID": "msg-active",
+                "type": "text",
+                "text": "Initial prompt"
+              }
+            ]
+          }
+        ],
+        "status": "busy",
+        "updated": 1793923202000,
+        "permissions": [
+          {
+            "id": "per/u046",
+            "sessionID": "s-u045",
+            "permission": "bash",
+            "patterns": [
+              "pwd"
+            ],
+            "metadata": {},
+            "always": []
+          }
+        ]
+      },
+      "steps": [
+        {
+          "name": "deny-idle",
+          "action": "approval",
+          "decision": "deny",
+          "post": {
+            "snapshot": {
+              "messages": [
+                {
+                  "info": {
+                    "id": "msg-active",
+                    "sessionID": "s-u045",
+                    "role": "user",
+                    "time": {
+                      "created": 1793923201000
+                    }
+                  },
+                  "parts": [
+                    {
+                      "id": "u-active",
+                      "sessionID": "s-u045",
+                      "messageID": "msg-active",
+                      "type": "text",
+                      "text": "Initial prompt"
+                    }
+                  ]
+                }
+              ],
+              "status": "idle",
+              "updated": 1793923206000,
+              "permissions": []
+            }
+          }
+        }
+      ],
+      "expected": {
+        "results": [
+          {
+            "name": "deny-idle",
+            "provider": "opencode",
+            "action": "approval",
+            "turnId": null,
+            "providerTurnId": null,
+            "decision": "deny",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/permission/per%2Fu046/reply",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "reply": "reject"
+            }
+          }
+        ],
+        "transport": [
+          {
+            "path": "/global/event",
+            "authorized": true
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": true,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "deny-idle",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "reread",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "s-u045",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Initial prompt",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "msg-active",
+              "providerTurnId": "msg-active",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Initial prompt",
+              "summary": "bash: pwd",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 2,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "msg-active",
+                  "text": "Initial prompt",
+                  "attachments": []
+                }
+              ]
+            }
+          ],
+          "actions": {
+            "send": true,
+            "interrupt": false,
+            "approval": false,
+            "fork": true,
+            "rename": true,
+            "close": true
+          }
+        }
+      }
+    },
+    {
+      "id": "C05-unsupported-missing",
+      "initial": {
+        "messages": [
+          {
+            "info": {
+              "id": "msg-active",
+              "sessionID": "s-u045",
+              "role": "user",
+              "time": {
+                "created": 1793923201000
+              }
+            },
+            "parts": [
+              {
+                "id": "u-active",
+                "sessionID": "s-u045",
+                "messageID": "msg-active",
+                "type": "text",
+                "text": "Initial prompt"
+              }
+            ]
+          }
+        ],
+        "status": "busy",
+        "updated": 1793923202000,
+        "permissions": []
+      },
+      "steps": [
+        {
+          "name": "skip",
+          "action": "approval",
+          "decision": "skip",
+          "unchanged": true
+        },
+        {
+          "name": "missing",
+          "action": "approval",
+          "decision": "allow",
+          "unchanged": true
+        },
+        {
+          "name": "missing-after-authoritative-idle",
+          "action": "approval",
+          "decision": "allow",
+          "snapshot": {
+            "messages": [
+              {
+                "info": {
+                  "id": "msg-active",
+                  "sessionID": "s-u045",
+                  "role": "user",
+                  "time": {
+                    "created": 1793923201000
+                  }
+                },
+                "parts": [
+                  {
+                    "id": "u-active",
+                    "sessionID": "s-u045",
+                    "messageID": "msg-active",
+                    "type": "text",
+                    "text": "Initial prompt"
+                  }
+                ]
+              }
+            ],
+            "status": "idle",
+            "updated": 1793923206000,
+            "permissions": []
+          }
+        }
+      ],
+      "expected": {
+        "results": [
+          {
+            "name": "skip",
+            "error": {
+              "message": "OpenCode has no equivalent for skipping a permission request.",
+              "statusCode": 409,
+              "code": "AI_SESSION_APPROVAL_UNSUPPORTED"
+            }
+          },
+          {
+            "name": "missing",
+            "error": {
+              "message": "No pending OpenCode permission request was found.",
+              "statusCode": 404,
+              "code": "AI_SESSION_APPROVAL_NOT_FOUND"
+            }
+          },
+          {
+            "name": "missing-after-authoritative-idle",
+            "error": {
+              "message": "No pending OpenCode permission request was found.",
+              "statusCode": 404,
+              "code": "AI_SESSION_APPROVAL_NOT_FOUND"
+            }
+          }
+        ],
+        "requests": [],
+        "transport": [
+          {
+            "path": "/global/event",
+            "authorized": true
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 0,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "skip",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 0,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "missing",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 0,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "missing-after-authoritative-idle",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "reread",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Initial prompt",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "s-u045",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Initial prompt",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "msg-active",
+              "providerTurnId": "msg-active",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 1,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "msg-active",
+                  "text": "Initial prompt",
+                  "attachments": []
+                }
+              ]
+            }
+          ],
+          "actions": {
+            "send": true,
+            "interrupt": false,
+            "approval": false,
+            "fork": true,
+            "rename": true,
+            "close": true
+          }
+        }
+      }
+    },
+    {
+      "id": "C06-post-read-failed",
+      "initial": {
+        "messages": [
+          {
+            "info": {
+              "id": "msg-active",
+              "sessionID": "s-u045",
+              "role": "user",
+              "time": {
+                "created": 1793923201000
+              }
+            },
+            "parts": [
+              {
+                "id": "u-active",
+                "sessionID": "s-u045",
+                "messageID": "msg-active",
+                "type": "text",
+                "text": "Initial prompt"
+              }
+            ]
+          }
+        ],
+        "status": "busy",
+        "updated": 1793923202000,
+        "permissions": [
+          {
+            "id": "per/u046",
+            "sessionID": "s-u045",
+            "permission": "bash",
+            "patterns": [
+              "pwd"
+            ],
+            "metadata": {},
+            "always": []
+          }
+        ]
+      },
+      "steps": [
+        {
+          "name": "accepted-reply-read-rejected",
+          "action": "approval",
+          "decision": "allow",
+          "post": {
+            "failure": {
+              "path": "/session/s-u045/message",
+              "message": "fixture post-read rejected"
+            }
+          },
+          "unchanged": true
+        }
+      ],
+      "expected": {
+        "results": [
+          {
+            "name": "accepted-reply-read-rejected",
+            "error": {
+              "message": "fixture post-read rejected",
+              "statusCode": 503,
+              "code": "AI_SESSION_CONTROL_FAILED"
+            }
+          }
+        ],
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/permission/per%2Fu046/reply",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "reply": "once"
+            }
+          }
+        ],
+        "transport": [
+          {
+            "path": "/global/event",
+            "authorized": true
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": true,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "accepted-reply-read-rejected",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": true,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          },
+          {
+            "name": "reread",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "msg-active",
+              "userPrompt": "Initial prompt",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "msg-active",
+                  "providerTurnId": "msg-active",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Initial prompt",
+                  "summary": "bash: pwd",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "msg-active",
+                      "text": "Initial prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": true,
+                "fork": true,
+                "rename": true,
+                "close": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "s-u045",
+          "status": "waiting",
+          "phase": "approval",
+          "activeTurnId": "msg-active",
+          "userPrompt": "Initial prompt",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": false,
+          "error": null,
+          "turns": [
+            {
+              "id": "msg-active",
+              "providerTurnId": "msg-active",
+              "status": "waiting",
+              "phase": "approval",
+              "userPrompt": "Initial prompt",
+              "summary": "bash: pwd",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 1,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "msg-active",
+                  "text": "Initial prompt",
+                  "attachments": []
+                }
+              ]
+            }
+          ],
+          "actions": {
+            "send": true,
+            "interrupt": true,
+            "approval": true,
+            "fork": true,
+            "rename": true,
+            "close": true
+          }
+        }
+      }
+    }
+  ]
+}

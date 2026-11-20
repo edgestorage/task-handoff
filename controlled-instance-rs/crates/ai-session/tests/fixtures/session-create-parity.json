@@ -1,0 +1,346 @@
+{
+  "source": {
+    "head": "9b2d6e17cce4a6a65d00f2ed4504f45546256edf",
+    "baseline": "v0.0.47",
+    "owner": "packages/ai-session-runtime/src/ai-session-create.ts",
+    "dirtyProductionSource": false
+  },
+  "scenarios": [
+    {
+      "name": "U01.1-C01-success",
+      "expected": {
+        "result": {
+          "disposition": "created",
+          "aiSessionId": "$session1",
+          "providerSessionId": "thread-create-parity",
+          "creationSource": "ai-session"
+        },
+        "error": null,
+        "calls": [
+          {
+            "action": "create",
+            "reasoningEffort": null
+          },
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "messageId": "$message1",
+            "message": "Start"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Start",
+            "activeTurnId": "turn-create-parity",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              }
+            ]
+          }
+        ],
+        "restored": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Start",
+            "activeTurnId": "turn-create-parity",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              }
+            ]
+          }
+        ],
+        "completed": [
+          {
+            "clientRequestId": "request-create-parity",
+            "result": {
+              "disposition": "created",
+              "aiSessionId": "$session1",
+              "providerSessionId": "thread-create-parity",
+              "creationSource": "ai-session"
+            }
+          }
+        ],
+        "replay": {
+          "disposition": "already-created",
+          "aiSessionId": "$session1",
+          "providerSessionId": "thread-create-parity",
+          "creationSource": "ai-session"
+        },
+        "lastChange": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Start",
+            "activeTurnId": "turn-create-parity",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "U01.1-C02-provider-rejected",
+      "failure": "create",
+      "expected": {
+        "result": null,
+        "error": {
+          "code": "PROVIDER_REJECTED",
+          "message": "provider create rejected",
+          "statusCode": 409
+        },
+        "calls": [
+          {
+            "action": "create",
+            "reasoningEffort": null
+          }
+        ],
+        "sessions": [],
+        "restored": [],
+        "completed": [],
+        "replay": null,
+        "lastChange": null
+      }
+    },
+    {
+      "name": "U01.1-C03-first-turn-rejected",
+      "failure": "start",
+      "expected": {
+        "result": null,
+        "error": {
+          "code": "AI_SESSION_MATERIALIZATION_FAILED",
+          "message": "provider start rejected",
+          "statusCode": 502
+        },
+        "calls": [
+          {
+            "action": "create",
+            "reasoningEffort": null
+          },
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "messageId": "$message1",
+            "message": "Start"
+          },
+          {
+            "action": "delete",
+            "providerSessionId": "thread-create-parity"
+          },
+          {
+            "action": "unsubscribe",
+            "providerSessionId": "thread-create-parity"
+          }
+        ],
+        "sessions": [],
+        "restored": [],
+        "completed": [],
+        "replay": null,
+        "lastChange": []
+      }
+    },
+    {
+      "name": "U01.1-C04-first-turn-timeout",
+      "failure": "timeout",
+      "expected": {
+        "result": null,
+        "error": {
+          "code": "AI_SESSION_MATERIALIZATION_FAILED",
+          "message": "Provider materialization timed out after 10ms.",
+          "statusCode": 502
+        },
+        "calls": [
+          {
+            "action": "create",
+            "reasoningEffort": null
+          },
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "messageId": "$message1",
+            "message": "Start"
+          },
+          {
+            "action": "delete",
+            "providerSessionId": "thread-create-parity"
+          },
+          {
+            "action": "unsubscribe",
+            "providerSessionId": "thread-create-parity"
+          }
+        ],
+        "sessions": [],
+        "restored": [],
+        "completed": [],
+        "replay": null,
+        "lastChange": []
+      }
+    },
+    {
+      "name": "U01.1-C05-effort-capability-missing",
+      "reasoningEffort": "high",
+      "expected": {
+        "result": null,
+        "error": {
+          "code": "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+          "message": "codex does not support selecting reasoning effort at creation.",
+          "statusCode": 409
+        },
+        "calls": [],
+        "sessions": [],
+        "restored": [],
+        "completed": [],
+        "replay": null,
+        "lastChange": null
+      }
+    },
+    {
+      "name": "U01.1-C06-effort-capability-false",
+      "reasoningEffort": "high",
+      "selectAtCreate": false,
+      "expected": {
+        "result": null,
+        "error": {
+          "code": "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+          "message": "codex does not support selecting reasoning effort at creation.",
+          "statusCode": 409
+        },
+        "calls": [],
+        "sessions": [],
+        "restored": [],
+        "completed": [],
+        "replay": null,
+        "lastChange": null
+      }
+    },
+    {
+      "name": "U01.1-C07-effort-capability-true",
+      "reasoningEffort": "high",
+      "selectAtCreate": true,
+      "expected": {
+        "result": {
+          "disposition": "created",
+          "aiSessionId": "$session1",
+          "providerSessionId": "thread-create-parity",
+          "creationSource": "ai-session"
+        },
+        "error": null,
+        "calls": [
+          {
+            "action": "create",
+            "reasoningEffort": "high"
+          },
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "messageId": "$message1",
+            "message": "Start"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": "high",
+            "userPrompt": "Start",
+            "activeTurnId": "turn-create-parity",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              }
+            ]
+          }
+        ],
+        "restored": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": "high",
+            "userPrompt": "Start",
+            "activeTurnId": "turn-create-parity",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              }
+            ]
+          }
+        ],
+        "completed": [
+          {
+            "clientRequestId": "request-create-parity",
+            "result": {
+              "disposition": "created",
+              "aiSessionId": "$session1",
+              "providerSessionId": "thread-create-parity",
+              "creationSource": "ai-session"
+            }
+          }
+        ],
+        "replay": {
+          "disposition": "already-created",
+          "aiSessionId": "$session1",
+          "providerSessionId": "thread-create-parity",
+          "creationSource": "ai-session"
+        },
+        "lastChange": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-create-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": "high",
+            "userPrompt": "Start",
+            "activeTurnId": "turn-create-parity",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -223,9 +223,14 @@ impl RepositoryFileService {
                 "Binary files cannot be opened in the text editor.",
             ));
         }
-        let content = String::from_utf8(buffer.clone()).map_err(|_| {
-            RepositoryOperationError::new("REPOSITORY_FILE_BINARY", "File is not valid UTF-8 text.")
-        })?;
+        let content = decode_utf8_text(&buffer)
+            .map_err(|_| {
+                RepositoryOperationError::new(
+                    "REPOSITORY_FILE_BINARY",
+                    "File is not valid UTF-8 text.",
+                )
+            })?
+            .to_string();
         Ok(RepositoryFileContent {
             path: relative_path.to_string(),
             content,
@@ -438,6 +443,13 @@ impl RepositoryFileService {
     }
 }
 
+// Node's fatal UTF-8 TextDecoder consumes one initial BOM. Keep raw bytes for
+// byteLength/version; both the editor and untracked diffs decode through here.
+pub(crate) fn decode_utf8_text(bytes: &[u8]) -> Result<&str, std::str::Utf8Error> {
+    let text = std::str::from_utf8(bytes)?;
+    Ok(text.strip_prefix('\u{feff}').unwrap_or(text))
+}
+
 pub fn validate_repository_relative_path(
     relative_path: &str,
 ) -> Result<Vec<String>, RepositoryOperationError> {
@@ -627,6 +639,42 @@ mod tests {
             .any(|entry| entry.path == "README.md"));
         let search = service.search("read", 100).expect("search");
         assert_eq!(search.entries[0].path, "README.md");
+    }
+
+    #[test]
+    fn utf8_bom_is_decoded_like_node_without_changing_raw_byte_identity() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let service = RepositoryFileService::new(root.path(), None, None).expect("service");
+        for (bytes, expected) in [
+            (b"\xef\xbb\xbfhi".as_slice(), "hi"),
+            (b"\xef\xbb\xbf\xef\xbb\xbfhi".as_slice(), "\u{feff}hi"),
+            (b"hi\xef\xbb\xbf".as_slice(), "hi\u{feff}"),
+            (b"\xef\xbb\xbf".as_slice(), ""),
+            (b"hi".as_slice(), "hi"),
+        ] {
+            fs::write(root.path().join("bom.txt"), bytes).expect("write fixture");
+            let read = service.read("bom.txt").expect("read");
+            assert_eq!(read.content, expected);
+            assert_eq!(read.byte_length, bytes.len() as u64);
+        }
+        fs::write(root.path().join("bom.txt"), b"\xef\xbb\xbfhi").expect("fixture");
+        let bom = service.read("bom.txt").expect("read BOM");
+        let plain = service.create("plain.txt", "hi").expect("plain");
+        assert_ne!(bom.version, plain.version);
+        let saved = service
+            .write("bom.txt", "edited", &bom.version)
+            .expect("save");
+        assert_eq!(saved.content, "edited");
+        assert_eq!(
+            fs::read(root.path().join("bom.txt")).expect("bytes"),
+            b"edited"
+        );
+
+        fs::write(root.path().join("bom.txt"), b"\xef\xbb\xbf\xff").expect("invalid UTF-8");
+        assert_eq!(
+            service.read("bom.txt").expect_err("binary").code,
+            "REPOSITORY_FILE_BINARY"
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ export class CodexAppServerSessionControl {
       userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }, { persistence: "strict" }) || session;
-    return { session: updated, provider: "codex", action: result.started ? "send" : "steer", turnId: updated.activeTurnId, providerTurnId: result.turnId };
+    return { session: updated, provider: "codex", action: result.started ? "send" : "steer", turnId: this.acknowledgedTurnId(updated, result.turnId), providerTurnId: result.turnId };
   }
 
   async startMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
@@ -47,7 +47,7 @@ export class CodexAppServerSessionControl {
       userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }, { persistence: "strict" }) || session;
-    return { session: updated, provider: "codex", action: "send", turnId: updated.activeTurnId, providerTurnId: result.turnId };
+    return { session: updated, provider: "codex", action: "send", turnId: this.acknowledgedTurnId(updated, result.turnId), providerTurnId: result.turnId };
   }
 
   async steerMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
@@ -155,6 +155,12 @@ export class CodexAppServerSessionControl {
       throw aiSessionControlError("AI_SESSION_SEND_UNSUPPORTED", "Codex app-server client does not support starting turns.");
     }
     return { turnId: (await client.startTurn(threadId, message, codexInputs(message, references, attachmentInputs), codexPermissionOverrides(permissionMode))).turnId, started: true };
+  }
+
+  private acknowledgedTurnId(session: AiSessionStatus, providerTurnId?: string) {
+    return providerTurnId
+      ? session.turns?.find((turn) => turn.id === providerTurnId || turn.providerTurnId === providerTurnId)?.id || providerTurnId
+      : session.activeTurnId;
   }
 
   private validateReferences(session: AiSessionStatus, references: AiSessionReference[]) {

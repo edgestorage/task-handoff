@@ -1,0 +1,33 @@
+{
+  "sources": [
+    {
+      "source": "environment",
+      "catalog": {
+        "instanceId": "ins_0000000000000",
+        "entityIds": [
+          "model-primary"
+        ],
+        "hasKey": true
+      }
+    },
+    {
+      "source": "none",
+      "catalog": null
+    },
+    {
+      "source": "private-config-file",
+      "catalog": {
+        "instanceId": "ins_0000000000000",
+        "entityIds": [
+          "model-primary"
+        ],
+        "hasKey": true
+      }
+    }
+  ],
+  "identityMismatch": {
+    "code": "PRIVATE_MODEL_CATALOG_IDENTITY_MISMATCH",
+    "message": "Private model catalog instance identity does not match this runtime.",
+    "leaksKey": false
+  }
+}

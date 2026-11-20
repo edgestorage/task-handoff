@@ -33,7 +33,7 @@ const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/s
 const { NodeTunnelEventRouter } = require("../packages/control-plane/src/control-plane/nodes/tunnel-event-router.ts");
 const { InstanceLifecycleEventType } = require("../packages/protocol/src/control-plane.ts");
 
-test("AI session Turn structure and body revisions change independently", () => {
+test("AI session Turn index revisions track structure and body changes", () => {
   const startedAt = "2026-08-26T00:00:00.000Z";
   const base = {
     id: "session-revisions",
@@ -47,7 +47,7 @@ test("AI session Turn structure and body revisions change independently", () => 
     turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, startedAt, updatedAt: startedAt, lastMessage: "one" }],
   };
   const bodyChanged = { ...base, turns: [{ ...base.turns[0], revision: 2, lastMessage: "two" }] };
-  assert.equal(aiSessionTurnsRevision(base), aiSessionTurnsRevision(bodyChanged));
+  assert.notEqual(aiSessionTurnsRevision(base), aiSessionTurnsRevision(bodyChanged));
   assert.notEqual(aiSessionTurnBodyRevision(base.turns[0]), aiSessionTurnBodyRevision(bodyChanged.turns[0]));
   assert.notEqual(aiSessionTurnsRevision(base), aiSessionTurnsRevision({
     ...base,

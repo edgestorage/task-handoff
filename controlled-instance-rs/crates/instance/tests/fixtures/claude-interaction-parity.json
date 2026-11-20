@@ -1,0 +1,1776 @@
+{
+  "scenarios": [
+    {
+      "id": "C01-accepted-pending",
+      "seed": {
+        "id": "ses_0000000000001",
+        "agent": "claude",
+        "creationSource": "app-session",
+        "appSessionId": "aps_0000000000001",
+        "appId": "claude",
+        "providerSessionId": "provider-u047",
+        "providerMeta": {
+          "short": "a1b2c3d4",
+          "controlSock": "/control.sock",
+          "state": "idle"
+        },
+        "appBindingKeys": [
+          "app:aps_0000000000001",
+          "claude-short:a1b2c3d4"
+        ],
+        "actions": {
+          "send": true,
+          "interrupt": false,
+          "approval": false,
+          "rename": true
+        },
+        "title": "Claude",
+        "cwd": "/workspace",
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-06T00:00:00.000Z",
+        "updatedAt": "2026-11-06T00:00:00.000Z",
+        "counters": {
+          "toolCalls": 0,
+          "edits": 0,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 0,
+          "pendingCount": 0,
+          "items": []
+        },
+        "unread": false
+      },
+      "app": {
+        "id": "aps_0000000000001",
+        "appId": "claude",
+        "title": "Claude",
+        "kind": "tty",
+        "status": "running",
+        "createdAt": "2026-11-06T00:00:00.000Z",
+        "updatedAt": "2026-11-06T00:00:00.000Z",
+        "workspace": {
+          "cwd": "/workspace"
+        },
+        "paths": {
+          "sessionDir": "/app",
+          "logDir": "/logs"
+        }
+      },
+      "send": true,
+      "steps": [
+        {
+          "name": "hint",
+          "message": {
+            "type": "state",
+            "state": "waiting"
+          }
+        },
+        {
+          "name": "stream-diagnostic",
+          "message": {
+            "type": "stream",
+            "line": "assistant diagnostic 世界"
+          },
+          "unchanged": true
+        },
+        {
+          "name": "settled-without-body",
+          "message": {
+            "type": "settled",
+            "outcome": "done"
+          }
+        }
+      ],
+      "expected": {
+        "requests": [
+          {
+            "proto": 1,
+            "op": "list"
+          },
+          {
+            "proto": 1,
+            "op": "subscribe",
+            "short": "a1b2c3d4",
+            "tail": 4096
+          },
+          {
+            "proto": 1,
+            "op": "reply",
+            "short": "a1b2c3d4",
+            "text": "Hello 世界\n"
+          }
+        ],
+        "results": [
+          {
+            "name": "ack",
+            "provider": "claude",
+            "action": "send",
+            "turnId": "$turn1",
+            "providerTurnId": null,
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$turn1",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$turn1",
+                  "providerTurnId": null,
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "idle",
+                "tempo": "",
+                "cliVersion": "",
+                "source": ""
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "idle",
+                "tempo": "",
+                "cliVersion": "",
+                "source": ""
+              },
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$turn1",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$turn1",
+                  "providerTurnId": null,
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "idle",
+                "tempo": "",
+                "cliVersion": "",
+                "source": ""
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "hint",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$turn1",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$turn1",
+                  "providerTurnId": null,
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "waiting",
+                "tempo": "",
+                "cliVersion": "",
+                "source": "",
+                "stateSource": "message.state"
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "stream-diagnostic",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$turn1",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$turn1",
+                  "providerTurnId": null,
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "waiting",
+                "tempo": "",
+                "cliVersion": "",
+                "source": "",
+                "stateSource": "message.state"
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "settled-without-body",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$turn1",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$turn1",
+                  "providerTurnId": null,
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "done",
+                "tempo": "",
+                "cliVersion": "",
+                "source": "",
+                "stateSource": "settled.outcome"
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "provider-u047",
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "$turn1",
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": false,
+          "error": null,
+          "turns": [
+            {
+              "id": "$turn1",
+              "providerTurnId": null,
+              "status": "running",
+              "phase": "thinking",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 1,
+              "source": "control",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ],
+          "agent": "claude",
+          "creationSource": "app-session",
+          "appId": "claude",
+          "appSessionId": "aps_0000000000001",
+          "appBindingKeys": [
+            "app:aps_0000000000001",
+            "claude-short:a1b2c3d4"
+          ],
+          "providerMeta": {
+            "short": "a1b2c3d4",
+            "controlSock": "/control.sock",
+            "state": "done",
+            "tempo": "",
+            "cliVersion": "",
+            "source": "",
+            "stateSource": "settled.outcome"
+          },
+          "actions": {
+            "send": true,
+            "interrupt": true,
+            "approval": false,
+            "rename": true
+          }
+        }
+      }
+    },
+    {
+      "id": "C02-rejected-retry",
+      "seed": {
+        "id": "ses_0000000000001",
+        "agent": "claude",
+        "creationSource": "app-session",
+        "appSessionId": "aps_0000000000001",
+        "appId": "claude",
+        "providerSessionId": "provider-u047",
+        "providerMeta": {
+          "short": "a1b2c3d4",
+          "controlSock": "/control.sock",
+          "state": "idle"
+        },
+        "appBindingKeys": [
+          "app:aps_0000000000001",
+          "claude-short:a1b2c3d4"
+        ],
+        "actions": {
+          "send": true,
+          "interrupt": false,
+          "approval": false,
+          "rename": true
+        },
+        "title": "Claude",
+        "cwd": "/workspace",
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-06T00:00:00.000Z",
+        "updatedAt": "2026-11-06T00:00:00.000Z",
+        "counters": {
+          "toolCalls": 0,
+          "edits": 0,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 0,
+          "pendingCount": 0,
+          "items": []
+        },
+        "unread": false
+      },
+      "app": {
+        "id": "aps_0000000000001",
+        "appId": "claude",
+        "title": "Claude",
+        "kind": "tty",
+        "status": "running",
+        "createdAt": "2026-11-06T00:00:00.000Z",
+        "updatedAt": "2026-11-06T00:00:00.000Z",
+        "workspace": {
+          "cwd": "/workspace"
+        },
+        "paths": {
+          "sessionDir": "/app",
+          "logDir": "/logs"
+        }
+      },
+      "send": true,
+      "rejectFirst": true,
+      "steps": [
+        {
+          "name": "failed-without-body",
+          "message": {
+            "type": "settled",
+            "outcome": "failed"
+          }
+        }
+      ],
+      "expected": {
+        "requests": [
+          {
+            "proto": 1,
+            "op": "list"
+          },
+          {
+            "proto": 1,
+            "op": "subscribe",
+            "short": "a1b2c3d4",
+            "tail": 4096
+          },
+          {
+            "proto": 1,
+            "op": "reply",
+            "short": "a1b2c3d4",
+            "text": "Hello 世界\n"
+          },
+          {
+            "proto": 1,
+            "op": "reply",
+            "short": "a1b2c3d4",
+            "text": "Hello 世界\n"
+          }
+        ],
+        "results": [
+          {
+            "name": "rejected",
+            "error": {
+              "code": "AI_SESSION_SEND_FAILED",
+              "message": "fixture reply rejected",
+              "statusCode": 400
+            }
+          },
+          {
+            "name": "ack",
+            "provider": "claude",
+            "action": "send",
+            "turnId": "$turn1",
+            "providerTurnId": null,
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$turn1",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$turn1",
+                  "providerTurnId": null,
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "idle",
+                "tempo": "",
+                "cliVersion": "",
+                "source": ""
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "idle",
+                "tempo": "",
+                "cliVersion": "",
+                "source": ""
+              },
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "rejected",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "idle",
+                "tempo": "",
+                "cliVersion": "",
+                "source": ""
+              },
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$turn1",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$turn1",
+                  "providerTurnId": null,
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "idle",
+                "tempo": "",
+                "cliVersion": "",
+                "source": ""
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "failed-without-body",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$turn1",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$turn1",
+                  "providerTurnId": null,
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "failed",
+                "tempo": "",
+                "cliVersion": "",
+                "source": "",
+                "stateSource": "settled.outcome"
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "provider-u047",
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "$turn1",
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": false,
+          "error": null,
+          "turns": [
+            {
+              "id": "$turn1",
+              "providerTurnId": null,
+              "status": "running",
+              "phase": "thinking",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 1,
+              "source": "control",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ],
+          "agent": "claude",
+          "creationSource": "app-session",
+          "appId": "claude",
+          "appSessionId": "aps_0000000000001",
+          "appBindingKeys": [
+            "app:aps_0000000000001",
+            "claude-short:a1b2c3d4"
+          ],
+          "providerMeta": {
+            "short": "a1b2c3d4",
+            "controlSock": "/control.sock",
+            "state": "failed",
+            "tempo": "",
+            "cliVersion": "",
+            "source": "",
+            "stateSource": "settled.outcome"
+          },
+          "actions": {
+            "send": true,
+            "interrupt": true,
+            "approval": false,
+            "rename": true
+          }
+        }
+      }
+    },
+    {
+      "id": "C03-responded-terminal",
+      "seed": {
+        "id": "ses_0000000000001",
+        "agent": "claude",
+        "creationSource": "app-session",
+        "appSessionId": "aps_0000000000001",
+        "appId": "claude",
+        "providerSessionId": "provider-u047",
+        "providerMeta": {
+          "short": "a1b2c3d4",
+          "controlSock": "/control.sock",
+          "state": "running"
+        },
+        "appBindingKeys": [
+          "app:aps_0000000000001",
+          "claude-short:a1b2c3d4"
+        ],
+        "actions": {
+          "send": true,
+          "interrupt": true,
+          "approval": false,
+          "rename": true
+        },
+        "title": "Claude",
+        "cwd": "/workspace",
+        "status": "running",
+        "phase": "thinking",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-06T00:00:00.000Z",
+        "updatedAt": "2026-11-06T00:00:00.000Z",
+        "counters": {
+          "toolCalls": 0,
+          "edits": 0,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 0,
+          "pendingCount": 0,
+          "items": []
+        },
+        "unread": false,
+        "activeTurnId": "existing-turn",
+        "userPrompt": "Earlier prompt",
+        "summary": "Existing answer",
+        "lastMessage": "Existing answer",
+        "turns": [
+          {
+            "id": "existing-turn",
+            "providerTurnId": "existing-provider-turn",
+            "source": "adapter-snapshot",
+            "status": "running",
+            "phase": "thinking",
+            "revision": 4,
+            "userPrompt": "Earlier prompt",
+            "summary": "Existing answer",
+            "lastMessage": "Existing answer",
+            "startedAt": "2026-11-06T00:00:00.000Z",
+            "updatedAt": "2026-11-06T00:00:00.000Z",
+            "userMessages": [
+              {
+                "id": "existing-message",
+                "text": "Earlier prompt",
+                "attachments": []
+              }
+            ]
+          }
+        ]
+      },
+      "app": {
+        "id": "aps_0000000000001",
+        "appId": "claude",
+        "title": "Claude",
+        "kind": "tty",
+        "status": "running",
+        "createdAt": "2026-11-06T00:00:00.000Z",
+        "updatedAt": "2026-11-06T00:00:00.000Z",
+        "workspace": {
+          "cwd": "/workspace"
+        },
+        "paths": {
+          "sessionDir": "/app",
+          "logDir": "/logs"
+        }
+      },
+      "steps": [
+        {
+          "name": "patch-hint",
+          "message": {
+            "type": "state",
+            "patch": {
+              "state": "waiting"
+            }
+          }
+        },
+        {
+          "name": "failed",
+          "message": {
+            "type": "settled",
+            "outcome": "failed"
+          }
+        }
+      ],
+      "expected": {
+        "requests": [
+          {
+            "proto": 1,
+            "op": "list"
+          },
+          {
+            "proto": 1,
+            "op": "subscribe",
+            "short": "a1b2c3d4",
+            "tail": 4096
+          }
+        ],
+        "results": [],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "existing-turn",
+              "userPrompt": "Earlier prompt",
+              "summary": "Existing answer",
+              "lastMessage": "Existing answer",
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "existing-turn",
+                  "providerTurnId": "existing-provider-turn",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Earlier prompt",
+                  "summary": "Existing answer",
+                  "lastMessage": "Existing answer",
+                  "lastMessageItemId": null,
+                  "revision": 4,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "existing-message",
+                      "text": "Earlier prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "running",
+                "tempo": "",
+                "cliVersion": "",
+                "source": ""
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "patch-hint",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "existing-turn",
+              "userPrompt": "Earlier prompt",
+              "summary": "Existing answer",
+              "lastMessage": "Existing answer",
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "existing-turn",
+                  "providerTurnId": "existing-provider-turn",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Earlier prompt",
+                  "summary": "Existing answer",
+                  "lastMessage": "Existing answer",
+                  "lastMessageItemId": null,
+                  "revision": 4,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "existing-message",
+                      "text": "Earlier prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "waiting",
+                "tempo": "",
+                "cliVersion": "",
+                "source": "",
+                "stateSource": "patch.state"
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "failed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "failed",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Earlier prompt",
+              "summary": "Existing answer",
+              "lastMessage": "Existing answer",
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "existing-turn",
+                  "providerTurnId": "existing-provider-turn",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Earlier prompt",
+                  "summary": "Existing answer",
+                  "lastMessage": "Existing answer",
+                  "lastMessageItemId": null,
+                  "revision": 4,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "existing-message",
+                      "text": "Earlier prompt",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "failed",
+                "tempo": "",
+                "cliVersion": "",
+                "source": "",
+                "stateSource": "settled.outcome"
+              },
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "rename": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "provider-u047",
+          "status": "failed",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Earlier prompt",
+          "summary": "Existing answer",
+          "lastMessage": "Existing answer",
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "existing-turn",
+              "providerTurnId": "existing-provider-turn",
+              "status": "running",
+              "phase": "thinking",
+              "userPrompt": "Earlier prompt",
+              "summary": "Existing answer",
+              "lastMessage": "Existing answer",
+              "lastMessageItemId": null,
+              "revision": 4,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "existing-message",
+                  "text": "Earlier prompt",
+                  "attachments": []
+                }
+              ]
+            }
+          ],
+          "agent": "claude",
+          "creationSource": "app-session",
+          "appId": "claude",
+          "appSessionId": "aps_0000000000001",
+          "appBindingKeys": [
+            "app:aps_0000000000001",
+            "claude-short:a1b2c3d4"
+          ],
+          "providerMeta": {
+            "short": "a1b2c3d4",
+            "controlSock": "/control.sock",
+            "state": "failed",
+            "tempo": "",
+            "cliVersion": "",
+            "source": "",
+            "stateSource": "settled.outcome"
+          },
+          "actions": {
+            "send": true,
+            "interrupt": false,
+            "approval": false,
+            "rename": true
+          }
+        }
+      }
+    },
+    {
+      "id": "C04-lifecycle",
+      "seed": {
+        "id": "ses_0000000000001",
+        "agent": "claude",
+        "creationSource": "app-session",
+        "appSessionId": "aps_0000000000001",
+        "appId": "claude",
+        "providerSessionId": "provider-u047",
+        "providerMeta": {
+          "short": "a1b2c3d4",
+          "controlSock": "/control.sock",
+          "state": "idle"
+        },
+        "appBindingKeys": [
+          "app:aps_0000000000001",
+          "claude-short:a1b2c3d4"
+        ],
+        "actions": {
+          "send": true,
+          "interrupt": false,
+          "approval": false,
+          "rename": true
+        },
+        "title": "Claude",
+        "cwd": "/workspace",
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-06T00:00:00.000Z",
+        "updatedAt": "2026-11-06T00:00:00.000Z",
+        "counters": {
+          "toolCalls": 0,
+          "edits": 0,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 0,
+          "pendingCount": 0,
+          "items": []
+        },
+        "unread": false
+      },
+      "app": {
+        "id": "aps_0000000000001",
+        "appId": "claude",
+        "title": "Claude",
+        "kind": "tty",
+        "status": "running",
+        "createdAt": "2026-11-06T00:00:00.000Z",
+        "updatedAt": "2026-11-06T00:00:00.000Z",
+        "workspace": {
+          "cwd": "/workspace"
+        },
+        "paths": {
+          "sessionDir": "/app",
+          "logDir": "/logs"
+        }
+      },
+      "steps": [
+        {
+          "name": "waiting",
+          "message": {
+            "type": "settled",
+            "outcome": "waiting"
+          }
+        },
+        {
+          "name": "running-hint",
+          "message": {
+            "type": "state",
+            "state": "running"
+          }
+        },
+        {
+          "name": "done",
+          "message": {
+            "type": "settled",
+            "outcome": "done"
+          }
+        }
+      ],
+      "expected": {
+        "requests": [
+          {
+            "proto": 1,
+            "op": "list"
+          },
+          {
+            "proto": 1,
+            "op": "subscribe",
+            "short": "a1b2c3d4",
+            "tail": 4096
+          }
+        ],
+        "results": [],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "idle",
+                "tempo": "",
+                "cliVersion": "",
+                "source": ""
+              },
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "waiting",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "waiting",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "waiting",
+                "tempo": "",
+                "cliVersion": "",
+                "source": "",
+                "stateSource": "settled.outcome"
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "running-hint",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "waiting",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "running",
+                "tempo": "",
+                "cliVersion": "",
+                "source": "",
+                "stateSource": "message.state"
+              },
+              "actions": {
+                "send": true,
+                "interrupt": true,
+                "approval": false,
+                "rename": true
+              }
+            }
+          },
+          {
+            "name": "done",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "provider-u047",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [],
+              "agent": "claude",
+              "creationSource": "app-session",
+              "appId": "claude",
+              "appSessionId": "aps_0000000000001",
+              "appBindingKeys": [
+                "app:aps_0000000000001",
+                "claude-short:a1b2c3d4"
+              ],
+              "providerMeta": {
+                "short": "a1b2c3d4",
+                "controlSock": "/control.sock",
+                "state": "done",
+                "tempo": "",
+                "cliVersion": "",
+                "source": "",
+                "stateSource": "settled.outcome"
+              },
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "rename": true
+              }
+            }
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "provider-u047",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": null,
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [],
+          "agent": "claude",
+          "creationSource": "app-session",
+          "appId": "claude",
+          "appSessionId": "aps_0000000000001",
+          "appBindingKeys": [
+            "app:aps_0000000000001",
+            "claude-short:a1b2c3d4"
+          ],
+          "providerMeta": {
+            "short": "a1b2c3d4",
+            "controlSock": "/control.sock",
+            "state": "done",
+            "tempo": "",
+            "cliVersion": "",
+            "source": "",
+            "stateSource": "settled.outcome"
+          },
+          "actions": {
+            "send": true,
+            "interrupt": false,
+            "approval": false,
+            "rename": true
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,1224 @@
+{
+  "schemaVersion": 1,
+  "evidence": "static-route-registration",
+  "source": {
+    "ref": "v0.0.47",
+    "commit": "f968aecb5c8c0ec00f37f21e3a022c6aa3cfeb9a",
+    "root": "packages/controlled-instance/src",
+    "tree": "8abb6342140ec2c348bb8af26138c82144979e16"
+  },
+  "routes": [
+    {
+      "method": "DELETE",
+      "path": "/api/ai-session-attachments/draft-streams/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2208"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/ai-session-attachments/drafts/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2217"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/ai-sessions/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2434"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/ai-sessions/{}/queue/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2724"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/ai-sessions/{}/repository/files",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:304"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/apps/sessions/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3226"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/apps/sessions/{}/repository/files",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:304"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/apps/sessions/{}/web/*",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3415"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/apps/{}/profiles/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3157"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/internal/agent-tools/mcp",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/story-agent-tool-bridge.ts:128"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/triggers/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2083"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/triggers/{}/deployments/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2094"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2022"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/history",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2147"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/history/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2232"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/state",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2037"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2444"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/mentions",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2653"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/messages/{}/attachments/{}/content",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2463"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/queue",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2696"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/repository/branches",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:347"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/repository/changes",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:311"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/repository/context",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:231"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/repository/diff",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:319"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/repository/directories",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:259"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/repository/files",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:267"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/repository/files/search",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:275"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/repository/remotes",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:367"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/repository/worktrees",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:238"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/story-content",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2277"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/timeline",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2485"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/transcript",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2601"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/turns",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2533"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/turns/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2587"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ai-sessions/{}/turns/{}/timeline",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2509"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/catalog",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2832"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/catalog/custom",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3067"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/jobs/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2890"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/management",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2836"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3083"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/state",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3100"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3167"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/automation",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3268"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/logs",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3235"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/novnc/vnc.html",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3423"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/repository/branches",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:347"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/repository/changes",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:311"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/repository/context",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:231"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/repository/diff",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:319"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/repository/directories",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:259"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/repository/files",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:267"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/repository/files/search",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:275"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/repository/remotes",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:367"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/repository/worktrees",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:238"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/screenshot",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3246"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/snapshot",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3257"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/tty",
+      "websocket": true,
+      "origin": "packages/controlled-instance/src/web/server.ts:3278"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/vnc",
+      "websocket": true,
+      "origin": "packages/controlled-instance/src/web/server.ts:3282"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/sessions/{}/web/*",
+      "websocket": true,
+      "origin": "packages/controlled-instance/src/web/server.ts:3407"
+    },
+    {
+      "method": "GET",
+      "path": "/api/apps/{}/profiles",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3119"
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/status",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1932"
+    },
+    {
+      "method": "GET",
+      "path": "/api/browser-tunnel",
+      "websocket": true,
+      "origin": "packages/controlled-instance/src/web/server.ts:3303"
+    },
+    {
+      "method": "GET",
+      "path": "/api/config-sync/folders",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3001"
+    },
+    {
+      "method": "GET",
+      "path": "/api/config-sync/presets",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2993"
+    },
+    {
+      "method": "GET",
+      "path": "/api/config-sync/programs",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2997"
+    },
+    {
+      "method": "GET",
+      "path": "/api/diagnostics",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2806"
+    },
+    {
+      "method": "GET",
+      "path": "/api/events",
+      "websocket": true,
+      "origin": "packages/controlled-instance/src/web/server.ts:1940"
+    },
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1659"
+    },
+    {
+      "method": "GET",
+      "path": "/api/instance/capabilities",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2014"
+    },
+    {
+      "method": "GET",
+      "path": "/api/instance/status",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1994"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/agent-tools/mcp",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/story-agent-tool-bridge.ts:128"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/instance-shell",
+      "websocket": true,
+      "origin": "packages/controlled-instance/src/web/instance-shell.ts:416"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/model-catalog",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2955"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/node-agent/agent-runs/probe-state",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1814"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/node-agent/agent-runs/{}/members/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1823"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/node-agent/ai-sessions/idle-retention",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1686"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/node-agent/ai-sessions/instance-idle-retention",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1695"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/node-agent/process-identity",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1672"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/node-agent/story-ai-sessions/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1859"
+    },
+    {
+      "method": "GET",
+      "path": "/api/internal/node-agent/story-ai-sessions/{}/turns/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1893"
+    },
+    {
+      "method": "GET",
+      "path": "/api/novnc/*",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1641"
+    },
+    {
+      "method": "GET",
+      "path": "/api/status",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1983"
+    },
+    {
+      "method": "GET",
+      "path": "/api/triggers",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2046"
+    },
+    {
+      "method": "GET",
+      "path": "/api/triggers/runs",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2143"
+    },
+    {
+      "method": "GET",
+      "path": "/api/triggers/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2050"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/status",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2018"
+    },
+    {
+      "method": "OPTIONS",
+      "path": "/api/apps/sessions/{}/web/*",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3415"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/ai-sessions/{}/queue/reorder",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2762"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/ai-sessions/{}/queue/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2734"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/apps/catalog/custom",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3075"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/apps/sessions/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3175"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/apps/sessions/{}/web/*",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3415"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/apps/{}/profiles/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3138"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/triggers/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2068"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-session-attachments/draft-streams",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2175"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-session-attachments/draft-streams/{}/complete",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2197"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-session-attachments/drafts",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2159"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2307"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/approval",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2795"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/close",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2423"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/commands",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2674"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/fork",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2331"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/interrupt",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2785"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/mentions/files",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2663"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/messages",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2613"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/open-app",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2412"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/queue/pause",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2773"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/queue/{}/retry",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2714"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/queue/{}/steer",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2704"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/read",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2384"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/ai-sessions",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:392"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/branches/checkout",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:355"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/branches/create",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:351"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/branches/delete",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:363"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/branches/tracking",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:359"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/commits",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:342"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/delivery/fetch",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:374"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/delivery/publish",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:382"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/delivery/pull",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:378"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/delivery/push",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:386"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/discard/all-tracked",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:338"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/discard/worktree",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:334"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/files",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:283"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/files/rename",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:297"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/index/stage",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:326"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/index/unstage",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:330"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/worktrees",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:245"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/worktrees/ai-sessions",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:418"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/repository/worktrees/remove",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:252"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/resume",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2247"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/story-content/get",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2287"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/story-content/set",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2297"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/timeline/sync",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2499"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ai-sessions/{}/turns/{}/timeline/sync",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2523"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3109"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/display",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3214"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/branches/checkout",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:355"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/branches/create",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:351"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/branches/delete",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:363"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/branches/tracking",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:359"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/commits",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:342"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/delivery/fetch",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:374"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/delivery/publish",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:382"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/delivery/pull",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:378"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/delivery/push",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:386"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/discard/all-tracked",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:338"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/discard/worktree",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:334"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/files",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:283"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/files/rename",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:297"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/index/stage",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:326"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/index/unstage",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:330"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/worktrees",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:245"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/repository/worktrees/remove",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:252"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/restart",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3205"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/stop",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3190"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/sessions/{}/web/*",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3415"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/{}/install",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2850"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/{}/profiles",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3128"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/{}/profiles/{}/default",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3148"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/{}/uninstall",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2860"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/{}/update",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2870"
+    },
+    {
+      "method": "POST",
+      "path": "/api/apps/{}/update-check",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2880"
+    },
+    {
+      "method": "POST",
+      "path": "/api/config-sync",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3019"
+    },
+    {
+      "method": "POST",
+      "path": "/api/config-sync/{}/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3040"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/agent-tools/invoke",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/story-agent-tool-bridge.ts:105"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/agent-tools/mcp",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/story-agent-tool-bridge.ts:128"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/agent-runs/members",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1767"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/agent-runs/{}/members/{}/close",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1835"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/ai-sessions/{}/close",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1707"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/ai-sessions/{}/close-for-story-deletion",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1720"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/ai-sessions/{}/messages",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1738"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/drain",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1904"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/resume",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1920"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/shutdown",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1927"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/story-agent-tools/invalidate",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1703"
+    },
+    {
+      "method": "POST",
+      "path": "/api/internal/node-agent/story-automation/ai-sessions",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1749"
+    },
+    {
+      "method": "POST",
+      "path": "/api/repository/ai-session-workspace/checkout",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:140"
+    },
+    {
+      "method": "POST",
+      "path": "/api/repository/ai-session-workspace/create",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:221"
+    },
+    {
+      "method": "POST",
+      "path": "/api/repository/ai-session-workspace/inspect",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:132"
+    },
+    {
+      "method": "POST",
+      "path": "/api/repository/workspace/branches/list",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:213"
+    },
+    {
+      "method": "POST",
+      "path": "/api/repository/workspace/worktrees",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:181"
+    },
+    {
+      "method": "POST",
+      "path": "/api/repository/workspace/worktrees/list",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:173"
+    },
+    {
+      "method": "POST",
+      "path": "/api/repository/workspace/worktrees/move-to-main",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:205"
+    },
+    {
+      "method": "POST",
+      "path": "/api/repository/workspace/worktrees/move-to-main/preflight",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:197"
+    },
+    {
+      "method": "POST",
+      "path": "/api/repository/workspace/worktrees/remove",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:189"
+    },
+    {
+      "method": "POST",
+      "path": "/api/triggers",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2055"
+    },
+    {
+      "method": "POST",
+      "path": "/api/triggers/{}/disable",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2116"
+    },
+    {
+      "method": "POST",
+      "path": "/api/triggers/{}/enable",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2105"
+    },
+    {
+      "method": "POST",
+      "path": "/api/triggers/{}/run",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2127"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/ai-session-attachments/draft-streams/{}",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2187"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/ai-sessions/{}/model-selection",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2342"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/ai-sessions/{}/reasoning-effort",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2361"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/ai-sessions/{}/repository/files",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:290"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/ai-sessions/{}/story",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2395"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/ai-sessions/{}/title",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2374"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/apps/sessions/{}/repository/files",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/repository/routes.ts:290"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/apps/sessions/{}/web/*",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:3415"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/internal/ai-session-persistence-settings",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:1022"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/internal/codex-settings",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2966"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/internal/model-catalog",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2936"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/internal/model-environment",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2898"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/internal/node-agent-connection",
+      "websocket": false,
+      "origin": "packages/controlled-instance/src/web/server.ts:2918"
+    }
+  ]
+}

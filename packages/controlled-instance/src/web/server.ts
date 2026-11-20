@@ -807,8 +807,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     onWarning: (reason) => app.log.warn({ reason }, "AI session conversation attachment was sanitized"),
   });
   const attachmentDraftStreams = new AiSessionAttachmentDraftStreams((input) => aiSessionConversationAttachments.createDraft(input));
-  const aiSessionAttachmentGcTimer = setInterval(() => aiSessionConversationAttachments.gc(), 60 * 60 * 1000);
+  let aiSessionAttachmentGcStopped = false;
+  const aiSessionAttachmentGcTimer = setInterval(() => {
+    if (aiSessionAttachmentGcStopped) return;
+    try {
+      aiSessionConversationAttachments.gc();
+    } catch (error) {
+      app.log.warn({ err: error }, "AI session attachment garbage collection failed; will retry.");
+    }
+  }, 60 * 60 * 1000);
   aiSessionAttachmentGcTimer.unref?.();
+  app.addHook("preClose", async () => {
+    aiSessionAttachmentGcStopped = true;
+    clearInterval(aiSessionAttachmentGcTimer);
+  });
   const aiSessions = options.aiSessionRegistry || createAiSessionRegistry({
     conversationAttachments: aiSessionConversationAttachments,
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session diagnostic"),
@@ -889,7 +901,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   app.addHook("onClose", async () => {
     await instanceShellRuntime.shutdown(1001, "Controlled instance is shutting down.");
-    clearInterval(aiSessionAttachmentGcTimer);
     attachmentDraftStreams.dispose();
     nodeAgentClient.stop();
     triggerManager.stop();
@@ -1084,20 +1095,28 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.put<{ Body: unknown }>("/api/internal/ai-session-persistence-settings", nodeAgentApiRoute({
     code: "AI_SESSION_PERSISTENCE_SETTINGS_FORBIDDEN",
     message: "Instance registration token is required.",
-  }), async (request) => {
+  }), async (request, reply) => {
     const next = AiSessionPersistenceSettingsInputSchema.parse(request.body || {});
-    const settings = aiSessionPersistenceSettings.put(next);
-    aiSessionConversationAttachments.setRetentionDays(settings.attachmentRetentionDays);
-    aiSessionConversationAttachments.setMaxFileAttachmentBytes(settings.maxFileAttachmentBytes);
-    const history = aiSessionHistory.setRetentionLimit(next.historyLimit);
-    retainCodexTimelineHistory();
-    return { data: {
-      applied: true,
-      historyLimit: history.limit,
-      attachmentRetentionDays: settings.attachmentRetentionDays,
-      maxFileAttachmentBytes: settings.maxFileAttachmentBytes,
-      removedHistoryCount: history.removed.length,
-    } };
+    try {
+      const settings = aiSessionPersistenceSettings.put(next);
+      aiSessionConversationAttachments.setRetentionDays(settings.attachmentRetentionDays);
+      aiSessionConversationAttachments.setMaxFileAttachmentBytes(settings.maxFileAttachmentBytes);
+      const history = aiSessionHistory.setRetentionLimit(next.historyLimit);
+      retainCodexTimelineHistory();
+      return { data: {
+        applied: true,
+        historyLimit: history.limit,
+        attachmentRetentionDays: settings.attachmentRetentionDays,
+        maxFileAttachmentBytes: settings.maxFileAttachmentBytes,
+        removedHistoryCount: history.removed.length,
+      } };
+    } catch (error: unknown) {
+      request.log.error({ err: error }, "AI session persistence settings could not be applied");
+      return reply.code(500).send({ error: {
+        code: "AI_SESSION_PERSISTENCE_SETTINGS_APPLY_FAILED",
+        message: "AI session persistence settings could not be applied.",
+      } });
+    }
   });
   const claudeControlSock = new ClaudeControlSockSessionBridge(aiSessions);
   aiSessionProviders.register({
@@ -1614,6 +1633,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       publishAiSessionSnapshot();
     }, Number(process.env.TASK_HANDOFF_AI_SESSION_PUBLISH_DEBOUNCE_MS) || 50);
   };
+  const stopAttachmentContentListener = aiSessionConversationAttachments.onContentChange(scheduleAiSessionPublish);
   const stopAiSessionChangeListener = aiSessions.onChange((changeReason) => {
     if (changeReason === "delete") retainCodexTimelineHistory();
     scheduleAiSessionPublish();
@@ -1657,6 +1677,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.addHook("onClose", async () => {
     await gitCredentialBroker.close();
     stopAiSessionChangeListener();
+    stopAttachmentContentListener();
     if (startupAiSessionTask) {
       clearImmediate(startupAiSessionTask);
       startupAiSessionTask = undefined;
@@ -2301,7 +2322,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.get<{ Params: { id: string }; Querystring: { hierarchy?: string } }>("/api/ai-sessions/history/:id", async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { hierarchy?: string } }>("/api/ai-sessions/history/:id", { errorHandler: (error, _request, reply) => sendAiSessionControlError(reply, error) }, async (request, reply) => {
     const detail = aiSessionHistory.detail(request.params.id);
     if (!detail) {
       return reply.code(404).send({ error: AiSessionControlErrorSchema.parse({
@@ -2513,7 +2534,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.get<{ Params: { id: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id", async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id", { errorHandler: (error, _request, reply) => sendAiSessionControlError(reply, error) }, async (request, reply) => {
     const session = aiSessions.conversation(request.params.id);
     if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
     const revision = aiSessionDetailRevision(session);
@@ -2613,7 +2634,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.get<{ Params: { id: string }; Querystring: { afterTurnId?: string; afterRevision?: string; projection?: string; revision?: string } }>("/api/ai-sessions/:id/turns", async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { afterTurnId?: string; afterRevision?: string; projection?: string; revision?: string } }>("/api/ai-sessions/:id/turns", { errorHandler: (error, _request, reply) => sendAiSessionControlError(reply, error) }, async (request, reply) => {
     const session = aiSessions.conversation(request.params.id);
     if (!session) {
       return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
@@ -2667,7 +2688,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     };
   });
 
-  app.get<{ Params: { id: string; turnId: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id/turns/:turnId", async (request, reply) => {
+  app.get<{ Params: { id: string; turnId: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id/turns/:turnId", { errorHandler: (error, _request, reply) => sendAiSessionControlError(reply, error) }, async (request, reply) => {
     const session = aiSessions.conversation(request.params.id);
     if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
     const turn = (session.turns || [])

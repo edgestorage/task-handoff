@@ -1,6 +1,9 @@
 use super::{
     executor::{trigger_event_type_name, TriggerExecuteInput, TriggerExecutor},
-    matcher::{resolve_path, root_within_workspace, workspace_relative_path, FileTriggerMatcher},
+    matcher::{
+        default_ignored, resolve_path, root_within_workspace, workspace_relative_path,
+        FileTriggerMatcher,
+    },
     schedule::{delay_until, next_schedule_time},
     scheduler::{Scheduler, SchedulerSkipReason, SubmitDecision},
     store::{source_matches_ai_session, TriggerStore, TriggerStoreError},
@@ -46,17 +49,11 @@ enum ObservedFileEvent {
     Add,
     Change,
     Remove,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PendingWriteKind {
-    Add,
-    Change,
+    RenameAny,
 }
 
 #[derive(Debug, Clone)]
 struct PendingWrite {
-    kind: PendingWriteKind,
     last_change: Instant,
     previous_size: Option<u64>,
 }
@@ -67,6 +64,7 @@ struct FileChangeBatch {
     stability_threshold: Duration,
     changed: BTreeSet<String>,
     pending: BTreeMap<String, PendingWrite>,
+    materialized: BTreeSet<String>,
     deadline: Option<Instant>,
     poll_at: Option<Instant>,
 }
@@ -79,19 +77,19 @@ impl FileChangeBatch {
                 .min(AWAIT_WRITE_FINISH_MAX_STABILITY),
             changed: BTreeSet::new(),
             pending: BTreeMap::new(),
+            materialized: BTreeSet::new(),
             deadline: None,
             poll_at: None,
         }
     }
 
-    fn observe_write(&mut self, path: String, kind: PendingWriteKind, now: Instant) {
+    fn observe_write(&mut self, path: String, now: Instant) {
         match self.pending.get_mut(&path) {
             Some(pending) => pending.last_change = now,
             None => {
                 self.pending.insert(
                     path,
                     PendingWrite {
-                        kind,
                         last_change: now,
                         previous_size: None,
                     },
@@ -104,8 +102,9 @@ impl FileChangeBatch {
     }
 
     fn observe_remove(&mut self, path: String, now: Instant) {
-        let pending_kind = self.pending.remove(&path).map(|pending| pending.kind);
-        if pending_kind != Some(PendingWriteKind::Add) {
+        self.pending.remove(&path);
+        let was_materialized = self.materialized.remove(&path);
+        if was_materialized {
             self.changed.insert(path);
             self.deadline = Some(now + self.debounce);
         }
@@ -148,6 +147,7 @@ impl FileChangeBatch {
         if now.saturating_duration_since(pending.last_change) >= self.stability_threshold {
             self.pending.remove(path);
             self.changed.insert(path.to_string());
+            self.materialized.insert(path.to_string());
             self.deadline = Some(now + self.debounce);
             if self.pending.is_empty() {
                 self.poll_at = None;
@@ -168,6 +168,9 @@ impl FileChangeBatch {
         if self.deadline.is_none_or(|deadline| deadline > now) {
             return None;
         }
+        if !self.pending.is_empty() {
+            return None;
+        }
         self.deadline = None;
         if self.changed.is_empty() {
             return None;
@@ -177,6 +180,36 @@ impl FileChangeBatch {
             .collect::<Vec<_>>();
         changed.sort_by(|left, right| cmp_utf16(left, right));
         Some(changed)
+    }
+}
+
+fn seed_materialized_files(
+    batch: &mut FileChangeBatch,
+    roots: &[PathBuf],
+    workspace: &Path,
+    matcher: &FileTriggerMatcher,
+) {
+    let mut directories = roots.to_vec();
+    while let Some(directory) = directories.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let Some(relative) = workspace_relative_path(workspace, &path) else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if !default_ignored(&format!("{relative}/")) {
+                    directories.push(path);
+                }
+            } else if file_type.is_file() && matcher.matches(&relative).unwrap_or(false) {
+                batch.materialized.insert(relative);
+            }
+        }
     }
 }
 
@@ -474,8 +507,8 @@ impl TriggerManager {
                 return;
             }
         };
-        for root in roots {
-            if let Err(error) = watcher.watch(&root, RecursiveMode::Recursive) {
+        for root in &roots {
+            if let Err(error) = watcher.watch(root, RecursiveMode::Recursive) {
                 // Node's chokidar reports a per-root watch error and keeps the
                 // remaining roots active instead of failing the deployment.
                 self.publish_watch_failed(&config, &deployment, &error.to_string());
@@ -486,6 +519,7 @@ impl TriggerManager {
         let watch_key = deployment.key().to_string();
         let task = tokio::spawn(async move {
             let mut batch = FileChangeBatch::new(debounce_ms);
+            seed_materialized_files(&mut batch, &roots, &workspace, &matcher);
             loop {
                 let wait = batch.wait_duration(Instant::now());
                 match tokio::time::timeout(wait, receiver.recv()).await {
@@ -508,19 +542,25 @@ impl TriggerManager {
                                     continue;
                                 }
                             }
+                            let observed = match observed {
+                                ObservedFileEvent::RenameAny => {
+                                    if tokio::fs::metadata(&path).await.is_ok() {
+                                        ObservedFileEvent::Add
+                                    } else {
+                                        ObservedFileEvent::Remove
+                                    }
+                                }
+                                observed => observed,
+                            };
                             match observed {
-                                ObservedFileEvent::Add => batch.observe_write(
-                                    relative,
-                                    PendingWriteKind::Add,
-                                    Instant::now(),
-                                ),
-                                ObservedFileEvent::Change => batch.observe_write(
-                                    relative,
-                                    PendingWriteKind::Change,
-                                    Instant::now(),
-                                ),
+                                ObservedFileEvent::Add | ObservedFileEvent::Change => {
+                                    batch.observe_write(relative, Instant::now())
+                                }
                                 ObservedFileEvent::Remove => {
                                     batch.observe_remove(relative, Instant::now())
+                                }
+                                ObservedFileEvent::RenameAny => {
+                                    unreachable!("rename resolved above")
                                 }
                             }
                         }
@@ -717,6 +757,7 @@ fn observed_file_events(event: &Event) -> Vec<(PathBuf, ObservedFileEvent)> {
                 })
                 .collect();
         }
+        EventKind::Modify(ModifyKind::Name(_)) => ObservedFileEvent::RenameAny,
         EventKind::Modify(_) => ObservedFileEvent::Change,
         EventKind::Remove(RemoveKind::Folder) => return Vec::new(),
         EventKind::Remove(_) => ObservedFileEvent::Remove,
@@ -769,7 +810,14 @@ mod tests {
         TriggerDeploymentCreateInput, TriggerPolicyInput, TriggerRunStatus, TriggerRuntimeStatus,
         TriggerTarget,
     };
-    use std::{path::Path, sync::Mutex as StdMutex};
+    use std::{
+        path::Path,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Mutex as StdMutex,
+        },
+    };
+    use tokio::sync::Notify;
 
     #[tokio::test]
     async fn interval_schedules_delay_instead_of_bursting_missed_ticks() {
@@ -821,6 +869,58 @@ mod tests {
                 provider_turn_id: Some("provider-trigger-turn".to_string()),
                 decision: None,
                 queue_id: None,
+                completion_text: None,
+            })
+        }
+    }
+
+    #[derive(Clone)]
+    struct GatedRecordingProvider {
+        messages: Arc<StdMutex<Vec<String>>>,
+        gate: Arc<Notify>,
+        released: Arc<AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl AiSessionControlProvider for GatedRecordingProvider {
+        fn agent(&self) -> &str {
+            "codex"
+        }
+
+        fn capability(&self) -> AiSessionProviderCapability {
+            AiSessionProviderCapability {
+                agent: "codex".to_string(),
+                actions: AiSessionProviderActions {
+                    send: true,
+                    ..AiSessionProviderActions::default()
+                },
+                permission_modes: Vec::new(),
+                timeline: AiSessionProviderTimelineCapabilities::default(),
+                model_selection: None,
+                reasoning_effort: None,
+                hierarchy: None,
+            }
+        }
+
+        async fn start_message(
+            &self,
+            _session: &AiSession,
+            input: ProviderMessage,
+        ) -> Result<ProviderAction, ProviderError> {
+            self.messages
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(input.message);
+            if !self.released.swap(true, Ordering::SeqCst) {
+                self.gate.notified().await;
+            }
+            Ok(ProviderAction {
+                action: "send".to_string(),
+                turn_id: Some("trigger-turn".to_string()),
+                provider_turn_id: Some("provider-trigger-turn".to_string()),
+                decision: None,
+                queue_id: None,
+                completion_text: None,
             })
         }
     }
@@ -1002,6 +1102,779 @@ mod tests {
         fixture.manager.stop();
     }
 
+    fn null_if_absent(value: Option<&Value>) -> Value {
+        value.cloned().unwrap_or(Value::Null)
+    }
+
+    fn normalized_run_id(run: &Value, ids: &mut BTreeMap<String, String>) -> String {
+        let id = run["id"].as_str().expect("run id").to_string();
+        let next = ids.len() + 1;
+        ids.entry(id)
+            .or_insert_with(|| format!("run_{next}"))
+            .clone()
+    }
+
+    fn normalize_trigger_run(run: &Value, ids: &mut BTreeMap<String, String>) -> Value {
+        let started_at = run["startedAt"].as_str().unwrap_or_default();
+        let completed_at = run.get("completedAt").and_then(Value::as_str);
+        serde_json::json!({
+            "id": normalized_run_id(run, ids),
+            "configHash": run["configHash"],
+            "deploymentId": null_if_absent(run.get("deploymentId")),
+            "instanceId": run["instanceId"],
+            "eventType": run["eventType"],
+            "status": run["status"],
+            "target": {
+                "type": run["target"]["type"],
+                "aiSessionId": run["target"]["aiSessionId"],
+            },
+            "promptPreview": run["promptPreview"],
+            "eventSummary": null_if_absent(run.get("eventSummary")),
+            "error": null_if_absent(run.get("error")),
+            "hasStartedAt": !started_at.is_empty(),
+            "hasCompletedAt": completed_at.is_some(),
+            "completedNotBeforeStarted": completed_at.map(|completed| completed >= started_at),
+        })
+    }
+
+    fn normalize_trigger_runtime(runtime: &Value) -> Value {
+        serde_json::json!({
+            "configHash": runtime["configHash"],
+            "deploymentId": null_if_absent(runtime.get("deploymentId")),
+            "instanceId": runtime["instanceId"],
+            "status": runtime["status"],
+            "runCount": runtime["runCount"],
+            "skippedCount": runtime["skippedCount"],
+            "hasLastTriggeredAt": runtime.get("lastTriggeredAt").and_then(Value::as_str).is_some(),
+            "hasLastCompletedAt": runtime.get("lastCompletedAt").and_then(Value::as_str).is_some(),
+            "hasLastSkippedAt": runtime.get("lastSkippedAt").and_then(Value::as_str).is_some(),
+            "lastError": null_if_absent(runtime.get("lastError")),
+        })
+    }
+
+    fn normalize_trigger_index(index: &Value, ids: &mut BTreeMap<String, String>) -> Value {
+        let configs = index["configs"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .map(|config| {
+                serde_json::json!({
+                    "configHash": config["configHash"],
+                    "name": config["name"],
+                    "description": null_if_absent(config.get("description")),
+                    "source": config["source"],
+                    "action": config["action"],
+                    "policy": {
+                        "cooldownMs": null_if_absent(config["policy"].get("cooldownMs")),
+                        "maxConcurrentRuns": config["policy"]["maxConcurrentRuns"],
+                        "whenBusy": config["policy"]["whenBusy"],
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        let deployments = index["deployments"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .map(|deployment| {
+                serde_json::json!({
+                    "configHash": deployment["configHash"],
+                    "deploymentId": null_if_absent(deployment.get("deploymentId")),
+                    "instanceId": deployment["instanceId"],
+                    "origin": deployment["origin"],
+                    "enabled": deployment["enabled"],
+                    "target": {
+                        "type": deployment["target"]["type"],
+                        "aiSessionId": deployment["target"]["aiSessionId"],
+                    },
+                    "localName": null_if_absent(deployment.get("localName")),
+                })
+            })
+            .collect::<Vec<_>>();
+        let runtime = index["runtime"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .map(normalize_trigger_runtime)
+            .collect::<Vec<_>>();
+        let recent_runs = index["recentRuns"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .map(|run| normalize_trigger_run(run, ids))
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "configs": configs,
+            "deployments": deployments,
+            "runtime": runtime,
+            "recentRuns": recent_runs,
+        })
+    }
+
+    fn normalize_trigger_event(event: &Value, ids: &mut BTreeMap<String, String>) -> Value {
+        match event["type"].as_str().unwrap_or_default() {
+            "trigger.run.started" => serde_json::json!({
+                "type": event["type"],
+                "configHash": event["data"]["configHash"],
+                "deploymentId": null_if_absent(event["data"].get("deploymentId")),
+                "eventType": event["data"]["eventType"],
+            }),
+            "trigger.run.completed" => serde_json::json!({
+                "type": event["type"],
+                "run": normalize_trigger_run(&event["data"]["run"], ids),
+                "result": {
+                    "provider": event["data"]["result"]["provider"],
+                    "action": event["data"]["result"]["action"],
+                    "sessionId": event["data"]["result"]["session"]["id"],
+                    "turnId": null_if_absent(event["data"]["result"].get("turnId")),
+                    "providerTurnId": null_if_absent(event["data"]["result"].get("providerTurnId")),
+                    "hasQueueId": event["data"]["result"].get("queueId").and_then(Value::as_str).is_some(),
+                },
+            }),
+            "trigger.run.failed" => serde_json::json!({
+                "type": event["type"],
+                "configHash": event["data"]["configHash"],
+                "error": event["data"]["error"],
+            }),
+            "trigger.updated" => serde_json::json!({
+                "type": event["type"],
+                "index": normalize_trigger_index(&event["data"], ids),
+            }),
+            _ => serde_json::json!({
+                "type": event["type"],
+                "data": event["data"],
+            }),
+        }
+    }
+
+    async fn wait_for_trigger_event(events: &Arc<StdMutex<Vec<Value>>>, event_type: &str) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if events
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .iter()
+                    .any(|event| event["type"] == event_type)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("trigger event timeout");
+    }
+
+    async fn wait_for_message_count(messages: &Arc<StdMutex<Vec<String>>>, count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if messages
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .len()
+                    >= count
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("provider message timeout");
+    }
+
+    async fn wait_for_completed_count(events: &Arc<StdMutex<Vec<Value>>>, completed_count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if events
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .iter()
+                    .filter(|event| event["type"] == "trigger.run.completed")
+                    .count()
+                    >= completed_count
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("completed trigger run timeout");
+    }
+
+    async fn wait_for_skipped_count(events: &Arc<StdMutex<Vec<Value>>>, skipped_count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if events
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .iter()
+                    .filter(|event| event["type"] == "trigger.run.skipped")
+                    .count()
+                    >= skipped_count
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("skipped trigger run timeout");
+    }
+
+    fn manager_gated_snapshots(scenario: &Value) -> Vec<Value> {
+        let snapshots = scenario["snapshots"].as_array().expect("snapshots").clone();
+        let transitions = scenario["busyTransitions"].as_u64().unwrap_or_default() as usize;
+        if transitions == 0 {
+            return snapshots;
+        }
+        let initial = snapshots[0].clone();
+        let running = snapshots[1].clone();
+        let mut expanded = vec![initial, running.clone()];
+        for index in 0..transitions {
+            let mut snapshot = running.clone();
+            let seconds = 2 + index;
+            let updated_at = format!("2026-11-20T00:{:02}:{:02}.000Z", seconds / 60, seconds % 60);
+            let session = snapshot["sessions"]
+                .as_array_mut()
+                .and_then(|sessions| sessions.first_mut())
+                .expect("snapshot session");
+            session["phase"] = Value::String(if index % 2 == 0 {
+                "tool".to_string()
+            } else {
+                "thinking".to_string()
+            });
+            session["updatedAt"] = Value::String(updated_at.clone());
+            snapshot["updatedAt"] = Value::String(updated_at);
+            expanded.push(snapshot);
+        }
+        expanded
+    }
+
+    async fn wait_for_file_run(
+        store: &TriggerStore,
+        events: &Arc<StdMutex<Vec<Value>>>,
+        count: usize,
+    ) {
+        let result = tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                let runs = store
+                    .load()
+                    .map(|index| index.recent_runs.len())
+                    .unwrap_or_default();
+                let completed = events
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .iter()
+                    .filter(|event| event["type"] == "trigger.run.completed")
+                    .count();
+                if runs >= count && completed >= count {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        if result.is_err() {
+            let runs = store
+                .load()
+                .map(|index| index.recent_runs.len())
+                .unwrap_or_default();
+            let completed = events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .filter(|event| event["type"] == "trigger.run.completed")
+                .count();
+            panic!(
+                "file trigger run timeout: expected {count}, runs={runs}, completed={completed}"
+            );
+        }
+    }
+
+    async fn execute_file_watcher_steps(
+        scenario: &Value,
+        store: &TriggerStore,
+        events: &Arc<StdMutex<Vec<Value>>>,
+        workspace: &Path,
+    ) {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        for step in scenario["steps"].as_array().expect("steps") {
+            let operation = step["operation"].as_str().expect("file operation");
+            match operation {
+                "write" | "append" | "write-many" => {
+                    let single;
+                    let writes = if operation == "write-many" {
+                        step["writes"].as_array().expect("writes")
+                    } else {
+                        single = vec![step.clone()];
+                        &single
+                    };
+                    for write in writes {
+                        let file = workspace.join(write["path"].as_str().expect("write path"));
+                        std::fs::create_dir_all(file.parent().expect("write parent"))
+                            .expect("create write parent");
+                        let content = write["content"].as_str().unwrap_or_default();
+                        let append =
+                            operation == "append" || write["append"].as_bool().unwrap_or(false);
+                        if append {
+                            let mut current = std::fs::read_to_string(&file).unwrap_or_default();
+                            current.push_str(content);
+                            std::fs::write(&file, current).expect("append file");
+                        } else {
+                            std::fs::write(&file, content).expect("write file");
+                        }
+                    }
+                }
+                "unlink" => {
+                    std::fs::remove_file(
+                        workspace.join(step["path"].as_str().expect("unlink path")),
+                    )
+                    .expect("unlink file");
+                }
+                "rename" => {
+                    let from = workspace.join(step["path"].as_str().expect("rename source"));
+                    let to = workspace.join(step["to"].as_str().expect("rename destination"));
+                    std::fs::create_dir_all(to.parent().expect("rename parent"))
+                        .expect("create rename parent");
+                    std::fs::rename(from, to).expect("rename file");
+                }
+                "wait" => {
+                    tokio::time::sleep(Duration::from_millis(
+                        step["waitMs"].as_u64().expect("waitMs"),
+                    ))
+                    .await;
+                }
+                _ => panic!("unknown file watcher operation: {operation}"),
+            }
+            wait_for_file_run(
+                store,
+                events,
+                step["waitForRuns"].as_u64().expect("waitForRuns") as usize,
+            )
+            .await;
+            tokio::time::sleep(Duration::from_millis(80)).await;
+        }
+    }
+
+    fn stabilize_workspace_observation(
+        value: Value,
+        workspace: &Path,
+        config_hashes: &mut BTreeMap<String, String>,
+    ) -> Value {
+        match value {
+            Value::String(value) => {
+                Value::String(value.replace(&workspace.display().to_string(), "{{workspace}}"))
+            }
+            Value::Array(values) => Value::Array(
+                values
+                    .into_iter()
+                    .map(|value| stabilize_workspace_observation(value, workspace, config_hashes))
+                    .collect(),
+            ),
+            Value::Object(values) => Value::Object(
+                values
+                    .into_iter()
+                    .map(|(key, value)| {
+                        if key == "configHash" {
+                            let config_hash = value.as_str().unwrap_or_default().to_string();
+                            if !config_hashes.contains_key(&config_hash) {
+                                config_hashes.insert(
+                                    config_hash.clone(),
+                                    format!("config_{}", config_hashes.len() + 1),
+                                );
+                            }
+                            (
+                                key,
+                                Value::String(
+                                    config_hashes
+                                        .get(&config_hash)
+                                        .expect("stabilized config hash")
+                                        .clone(),
+                                ),
+                            )
+                        } else {
+                            (
+                                key,
+                                stabilize_workspace_observation(value, workspace, config_hashes),
+                            )
+                        }
+                    })
+                    .collect(),
+            ),
+            value => value,
+        }
+    }
+
+    async fn observe_trigger_execution_scenario(scenario: &Value) -> Value {
+        let root = tempfile::tempdir().expect("tempdir");
+        let data = root.path().join("data");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&data).expect("data");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        if let Some(files) = scenario["initialFiles"].as_object() {
+            for (relative, content) in files {
+                let file = workspace.join(relative);
+                std::fs::create_dir_all(file.parent().expect("initial file parent"))
+                    .expect("initial file parent");
+                std::fs::write(file, content.as_str().unwrap_or_default()).expect("initial file");
+            }
+        }
+        let runtime = Arc::new(AiSessionRuntime::new(
+            "instance",
+            Some(data.join("ai-sessions")),
+        ));
+        if scenario["providerSessionExists"].as_bool().unwrap_or(false) {
+            for seed in scenario["sessions"].as_array().expect("sessions") {
+                let session: AiSession = serde_json::from_value(seed.clone()).expect("session");
+                runtime.save(session).expect("save session");
+            }
+        }
+        let attachments = Arc::new(AiSessionConversationAttachmentStore::new(&data));
+        let streams = Arc::new(attachments.draft_streams());
+        let controller = AiSessionController::new(runtime, attachments, streams, None);
+        let messages = Arc::new(StdMutex::new(Vec::new()));
+        let gated = scenario["mode"] == "manager-gated";
+        let gate = Arc::new(Notify::new());
+        let released = Arc::new(AtomicBool::new(false));
+        if gated {
+            controller.register_provider(Arc::new(GatedRecordingProvider {
+                messages: messages.clone(),
+                gate: gate.clone(),
+                released: released.clone(),
+            }));
+        } else {
+            controller.register_provider(Arc::new(RecordingProvider {
+                messages: messages.clone(),
+            }));
+        }
+        let store = Arc::new(TriggerStore::new(data.join("triggers"), "instance"));
+        let mut trigger_value = scenario["trigger"].clone();
+        if scenario["mode"] == "file-watcher" {
+            if let Some(roots) = trigger_value["source"]["roots"].as_array_mut() {
+                for root in roots {
+                    if root.as_str() == Some("{{workspace}}") {
+                        *root = Value::String(workspace.display().to_string());
+                    }
+                }
+            }
+        }
+        let create_input: TriggerCreateInput =
+            serde_json::from_value(trigger_value).expect("trigger input");
+        let created = store.create(create_input).expect("create trigger");
+        let executor = Arc::new(TriggerExecutor::new(store.clone(), controller));
+        let published = Arc::new(StdMutex::new(Vec::<Value>::new()));
+        let mut ids = BTreeMap::new();
+
+        if scenario["mode"] == "executor-drain" {
+            executor.begin_drain();
+            let error = executor
+                .execute(TriggerExecuteInput {
+                    config: created.config,
+                    deployment: created.deployment,
+                    event_type: TriggerEventType::Manual,
+                    event_summary: Some("draining".to_string()),
+                    prompt_override: Some("blocked".to_string()),
+                })
+                .await
+                .expect_err("draining executor rejected work");
+            executor.end_drain();
+            return serde_json::json!({
+                "id": scenario["id"],
+                "errorCode": error.code(),
+                "errorMessage": error.to_string(),
+                "messages": messages
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+                "events": [],
+                "index": normalize_trigger_index(
+                    &serde_json::to_value(store.load().expect("reopen triggers")).expect("index"),
+                    &mut ids,
+                ),
+            });
+        }
+
+        let sink = published.clone();
+        let manager = TriggerManager::new(
+            store.clone(),
+            executor,
+            &workspace,
+            Arc::new(move |event_type: &str, payload: Value| {
+                sink.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(serde_json::json!({ "type": event_type, "data": payload }));
+            }),
+        );
+        manager.start().expect("start manager");
+        if scenario["mode"] == "schedule-accelerated" {
+            for _ in 0..4 {
+                tokio::task::yield_now().await;
+            }
+            tokio::time::advance(Duration::from_secs(8 * 24 * 60 * 60)).await;
+            wait_for_completed_count(&published, 1).await;
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            manager.stop();
+            let events = published
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .map(|event| normalize_trigger_event(event, &mut ids))
+                .collect::<Vec<_>>();
+            return serde_json::json!({
+                "id": scenario["id"],
+                "messages": messages
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+                "eventSummaries": events
+                    .iter()
+                    .filter(|event| event["type"] == "trigger.run.completed")
+                    .map(|event| event["run"]["eventSummary"].clone())
+                    .collect::<Vec<_>>(),
+                "events": events,
+                "index": normalize_trigger_index(
+                    &serde_json::to_value(store.load().expect("reopen triggers")).expect("index"),
+                    &mut ids,
+                ),
+            });
+        }
+        if scenario["mode"] == "file-watcher" {
+            execute_file_watcher_steps(scenario, &store, &published, &workspace).await;
+            manager.stop();
+            let raw_published = published
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            let events = raw_published
+                .iter()
+                .map(|event| normalize_trigger_event(event, &mut ids))
+                .collect::<Vec<_>>();
+            let index = normalize_trigger_index(
+                &serde_json::to_value(store.load().expect("reopen triggers")).expect("index"),
+                &mut ids,
+            );
+            let observation = serde_json::json!({
+                "id": scenario["id"],
+                "messages": messages
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+                "eventSummaries": events
+                    .iter()
+                    .filter(|event| event["type"] == "trigger.run.completed")
+                    .map(|event| event["run"]["eventSummary"].clone())
+                    .collect::<Vec<_>>(),
+                "events": events,
+                "index": index,
+            });
+            let mut config_hashes = BTreeMap::new();
+            return stabilize_workspace_observation(observation, &workspace, &mut config_hashes);
+        }
+        if gated {
+            let snapshots = manager_gated_snapshots(scenario);
+            let first: AiSessionsSnapshot =
+                serde_json::from_value(snapshots[0].clone()).expect("initial snapshot");
+            let running: AiSessionsSnapshot =
+                serde_json::from_value(snapshots[1].clone()).expect("running snapshot");
+            manager.handle_ai_sessions(&first);
+            manager.handle_ai_sessions(&running);
+            wait_for_message_count(&messages, 1).await;
+            for snapshot in snapshots.iter().skip(2) {
+                let snapshot: AiSessionsSnapshot =
+                    serde_json::from_value(snapshot.clone()).expect("busy snapshot");
+                manager.handle_ai_sessions(&snapshot);
+            }
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            let runs_while_first_in_flight = store.load().expect("triggers").recent_runs.len();
+            let messages_while_first_in_flight = messages
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len();
+            let index_while_first_in_flight = scenario["captureInFlightIndex"]
+                .as_bool()
+                .unwrap_or(false)
+                .then(|| serde_json::to_value(store.load().expect("triggers")).expect("index"));
+            let stop_before_release = scenario["stopBeforeRelease"].as_bool().unwrap_or(false);
+            if stop_before_release {
+                manager.stop();
+                wait_for_skipped_count(
+                    &published,
+                    scenario["busyTransitions"].as_u64().unwrap_or_default() as usize,
+                )
+                .await;
+            }
+            gate.notify_one();
+            let completed_runs = scenario["completedRuns"].as_u64().unwrap_or_default() as usize;
+            wait_for_completed_count(&published, completed_runs).await;
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            if !stop_before_release {
+                manager.stop();
+            }
+            let raw_published = published
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            let index_while_first_in_flight = index_while_first_in_flight
+                .as_ref()
+                .map(|index| normalize_trigger_index(index, &mut ids));
+            let events = raw_published
+                .iter()
+                .map(|event| normalize_trigger_event(event, &mut ids))
+                .collect::<Vec<_>>();
+            let index = normalize_trigger_index(
+                &serde_json::to_value(store.load().expect("reopen triggers")).expect("index"),
+                &mut ids,
+            );
+            let completed_runs = events
+                .iter()
+                .filter(|event| event["type"] == "trigger.run.completed")
+                .count();
+            let skipped_runs = events
+                .iter()
+                .filter(|event| event["type"] == "trigger.run.skipped")
+                .count();
+            if scenario["observation"] == "summary" {
+                return serde_json::json!({
+                    "id": scenario["id"],
+                    "messages": messages
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clone(),
+                    "completedRuns": completed_runs,
+                    "skippedRuns": skipped_runs,
+                    "runsWhileFirstInFlight": runs_while_first_in_flight,
+                    "messagesWhileFirstInFlight": messages_while_first_in_flight,
+                    "indexWhileFirstInFlight": index_while_first_in_flight.unwrap_or(Value::Null),
+                    "eventTypes": events
+                        .iter()
+                        .map(|event| event["type"].clone())
+                        .collect::<Vec<_>>(),
+                    "completedEventRunIds": events
+                        .iter()
+                        .filter(|event| event["type"] == "trigger.run.completed")
+                        .map(|event| event["run"]["id"].clone())
+                        .collect::<Vec<_>>(),
+                    "skippedReasons": raw_published
+                        .iter()
+                        .filter(|event| event["type"] == "trigger.run.skipped")
+                        .map(|event| event["data"]["reason"].clone())
+                        .collect::<Vec<_>>(),
+                    "updateEventCount": events
+                        .iter()
+                        .filter(|event| event["type"] == "trigger.updated")
+                        .count(),
+                    "index": index,
+                });
+            }
+            return serde_json::json!({
+                "id": scenario["id"],
+                "messages": messages
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+                "completedRuns": completed_runs,
+                "skippedRuns": skipped_runs,
+                "runsWhileFirstInFlight": runs_while_first_in_flight,
+                "messagesWhileFirstInFlight": messages_while_first_in_flight,
+                "events": events,
+                "index": index,
+            });
+        }
+        let snapshots = scenario["snapshots"].as_array().expect("snapshots");
+        let mut runs_after_non_final_snapshots = Vec::new();
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            let snapshot: AiSessionsSnapshot =
+                serde_json::from_value(snapshot.clone()).expect("snapshot");
+            if scenario["stopBeforeFinalTransition"]
+                .as_bool()
+                .unwrap_or(false)
+                && index == snapshots.len() - 1
+            {
+                manager.stop();
+            }
+            manager.handle_ai_sessions(&snapshot);
+            if index < snapshots.len() - 1 {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                runs_after_non_final_snapshots
+                    .push(store.load().expect("triggers").recent_runs.len());
+            }
+        }
+        wait_for_trigger_event(
+            &published,
+            scenario["waitForEventType"]
+                .as_str()
+                .unwrap_or("trigger.updated"),
+        )
+        .await;
+        manager.stop();
+        let published = published
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        serde_json::json!({
+            "id": scenario["id"],
+            "messages": messages
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+            "runsAfterNonFinalSnapshots": runs_after_non_final_snapshots,
+            "events": published
+                .iter()
+                .map(|event| normalize_trigger_event(event, &mut ids))
+                .collect::<Vec<_>>(),
+            "index": normalize_trigger_index(
+                &serde_json::to_value(store.load().expect("reopen triggers")).expect("index"),
+                &mut ids,
+            ),
+        })
+    }
+
+    #[tokio::test]
+    async fn trigger_execution_matches_shared_node_fixtures() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../../../instance/tests/fixtures/trigger-execution-parity.json"
+        ))
+        .expect("trigger fixtures");
+        for scenario in fixtures["scenarios"].as_array().expect("scenarios") {
+            if scenario["mode"] == "schedule-accelerated" {
+                continue;
+            }
+            let actual = observe_trigger_execution_scenario(scenario).await;
+            assert_eq!(
+                actual, scenario["expected"],
+                "trigger parity mismatch: {}",
+                scenario["id"]
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn trigger_schedule_fixtures_advance_real_timers() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../../../instance/tests/fixtures/trigger-execution-parity.json"
+        ))
+        .expect("trigger fixtures");
+        for scenario in fixtures["scenarios"]
+            .as_array()
+            .expect("scenarios")
+            .iter()
+            .filter(|scenario| scenario["mode"] == "schedule-accelerated")
+        {
+            let actual = observe_trigger_execution_scenario(scenario).await;
+            assert_eq!(
+                actual, scenario["expected"],
+                "trigger schedule mismatch: {}",
+                scenario["id"]
+            );
+        }
+    }
+
     fn snapshot(session: &AiSession) -> AiSessionsSnapshot {
         AiSessionsSnapshot {
             running_count: u64::from(session.status == "running"),
@@ -1017,7 +1890,7 @@ mod tests {
         let now = Instant::now();
         let mut batch = FileChangeBatch::new(1_500);
         assert_eq!(batch.stability_threshold, AWAIT_WRITE_FINISH_MAX_STABILITY);
-        batch.observe_write("src/main.rs".to_string(), PendingWriteKind::Add, now);
+        batch.observe_write("src/main.rs".to_string(), now);
         assert!(batch.take_due(now + Duration::from_secs(10)).is_none());
 
         assert!(batch
@@ -1046,7 +1919,7 @@ mod tests {
         let now = Instant::now();
         let mut batch = FileChangeBatch::new(100);
         assert_eq!(batch.stability_threshold, Duration::from_millis(100));
-        batch.observe_write("quick.txt".to_string(), PendingWriteKind::Change, now);
+        batch.observe_write("quick.txt".to_string(), now);
         batch.poll_path("quick.txt", Some(1), now + Duration::from_millis(50));
         batch.poll_path("quick.txt", Some(1), now + Duration::from_millis(100));
         assert_eq!(
@@ -1060,7 +1933,7 @@ mod tests {
         let now = Instant::now();
         let mut batch = FileChangeBatch::new(0);
         for path in ["😀.txt", "\u{e000}.txt", "z.txt", "a.txt"] {
-            batch.observe_write(path.to_string(), PendingWriteKind::Change, now);
+            batch.observe_write(path.to_string(), now);
         }
         for path in ["😀.txt", "\u{e000}.txt", "z.txt", "a.txt"] {
             batch.poll_path(path, Some(1), now);
@@ -1077,19 +1950,50 @@ mod tests {
     }
 
     #[test]
-    fn unlink_cancels_pending_add_but_emits_for_pending_change() {
+    fn unlink_emits_only_for_materialized_paths() {
         let now = Instant::now();
-        let mut added = FileChangeBatch::new(100);
-        added.observe_write("new.txt".to_string(), PendingWriteKind::Add, now);
-        added.observe_remove("new.txt".to_string(), now + Duration::from_millis(10));
-        assert!(added.take_due(now + Duration::from_secs(10)).is_none());
+        let mut transient = FileChangeBatch::new(100);
+        transient.observe_write("new.txt".to_string(), now);
+        transient.observe_remove("new.txt".to_string(), now + Duration::from_millis(10));
+        assert!(transient.take_due(now + Duration::from_secs(10)).is_none());
+
+        let mut materialized = FileChangeBatch::new(100);
+        materialized.observe_write("stable.txt".to_string(), now);
+        materialized.poll_path("stable.txt", Some(1), now + Duration::from_millis(110));
+        assert_eq!(
+            materialized.take_due(now + Duration::from_millis(220)),
+            Some(vec!["stable.txt".to_string()])
+        );
+        materialized.observe_write("stable.txt".to_string(), now + Duration::from_millis(300));
+        materialized.observe_remove("stable.txt".to_string(), now + Duration::from_millis(310));
+        assert_eq!(
+            materialized.take_due(now + Duration::from_millis(420)),
+            Some(vec!["stable.txt".to_string()])
+        );
 
         let mut changed = FileChangeBatch::new(100);
-        changed.observe_write("old.txt".to_string(), PendingWriteKind::Change, now);
+        changed.materialized.insert("old.txt".to_string());
+        changed.observe_write("old.txt".to_string(), now);
         changed.observe_remove("old.txt".to_string(), now + Duration::from_millis(10));
         assert_eq!(
             changed.take_due(now + Duration::from_millis(110)),
             Some(vec!["old.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn pending_writes_hold_the_batch_until_the_whole_change_is_stable() {
+        let now = Instant::now();
+        let mut batch = FileChangeBatch::new(100);
+        batch.materialized.insert("old.ts".to_string());
+        batch.observe_remove("old.ts".to_string(), now);
+        batch.observe_write("new.ts".to_string(), now);
+        assert!(batch.take_due(now + Duration::from_millis(100)).is_none());
+        batch.poll_path("new.ts", Some(1), now + Duration::from_millis(100));
+        assert!(batch.take_due(now + Duration::from_millis(150)).is_none());
+        assert_eq!(
+            batch.take_due(now + Duration::from_millis(210)),
+            Some(vec!["new.ts".to_string(), "old.ts".to_string()])
         );
     }
 
@@ -1118,12 +2022,18 @@ mod tests {
         assert_eq!(
             observed_file_events(&renamed),
             [
-                (path, ObservedFileEvent::Remove),
+                (path.clone(), ObservedFileEvent::Remove),
                 (
                     PathBuf::from("/workspace/src/renamed.rs"),
                     ObservedFileEvent::Add
                 )
             ]
+        );
+        let renamed_any =
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any))).add_path(path.clone());
+        assert_eq!(
+            observed_file_events(&renamed_any),
+            [(path, ObservedFileEvent::RenameAny)]
         );
     }
 

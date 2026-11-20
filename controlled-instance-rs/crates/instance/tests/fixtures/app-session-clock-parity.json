@@ -1,0 +1,652 @@
+{
+  "source": {
+    "head": "9b2d6e17cce4a6a65d00f2ed4504f45546256edf",
+    "compatibility": "v0.0.47",
+    "nodeSourceSha256": "3d0a08e93645e66e4ccedd3a411f152021f32d0277b9c876db00a0dba9598e55",
+    "normalization": "Only stream and per-revision trace IDs. Absolute ISO times, revisions, full payloads and order preserved."
+  },
+  "expected": {
+    "startup": {
+      "streamId": "<stream>",
+      "revision": 0,
+      "lastEventAt": "2026-11-05T00:00:00.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "problemCount": 0,
+        "sessions": [],
+        "updatedAt": "2026-11-05T00:00:00.000Z"
+      }
+    },
+    "first": {
+      "streamId": "<stream>",
+      "revision": 1,
+      "lastEventAt": "2026-11-05T00:00:01.000Z",
+      "snapshot": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Initial title",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:01.000Z"
+      }
+    },
+    "retained": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z",
+      "snapshot": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      }
+    },
+    "originalEvents": [
+      {
+        "type": "app-session.snapshot",
+        "payload": {
+          "meta": {
+            "streamId": "<stream>",
+            "instanceId": "standalone",
+            "revision": 1,
+            "previousRevision": 0,
+            "traceId": "<trace-1>",
+            "generatedAt": "2026-11-05T00:00:01.000Z",
+            "reason": "app-session-created"
+          },
+          "snapshot": {
+            "runningCount": 1,
+            "problemCount": 0,
+            "sessions": [
+              {
+                "id": "app_clock",
+                "appId": "terminal-tty",
+                "title": "Initial title",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/session",
+                  "logDir": "/tmp/logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_clock"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:01.000Z"
+          }
+        }
+      },
+      {
+        "type": "app-session.patch",
+        "payload": {
+          "meta": {
+            "streamId": "<stream>",
+            "instanceId": "standalone",
+            "revision": 2,
+            "previousRevision": 1,
+            "traceId": "<trace-2>",
+            "generatedAt": "2026-11-05T00:00:02.000Z",
+            "reason": "app-session-updated"
+          },
+          "session": {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        }
+      }
+    ],
+    "boundaryDelta": {
+      "streamId": "<stream>",
+      "instanceId": "standalone",
+      "sinceRevision": 1,
+      "latestRevision": 2,
+      "earliestRetainedRevision": 2,
+      "syncRequired": false,
+      "events": [
+        {
+          "type": "app-session.patch",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "instanceId": "standalone",
+              "revision": 2,
+              "previousRevision": 1,
+              "traceId": "<trace-2>",
+              "generatedAt": "2026-11-05T00:00:02.000Z",
+              "reason": "app-session-updated"
+            },
+            "session": {
+              "id": "app_clock",
+              "appId": "terminal-tty",
+              "title": "Renamed",
+              "kind": "tty",
+              "status": "running",
+              "createdAt": "2026-11-05T00:00:00.000Z",
+              "updatedAt": "2026-11-05T00:00:00.000Z",
+              "paths": {
+                "sessionDir": "/tmp/session",
+                "logDir": "/tmp/logs"
+              },
+              "bindings": [
+                {
+                  "type": "app-session",
+                  "id": "app_clock"
+                }
+              ],
+              "workspace": {
+                "cwd": "/workspace"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "boundary": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z",
+      "snapshot": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:02.000Z"
+      }
+    },
+    "idleBeforeDelta": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z",
+      "snapshot": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:02.001Z"
+      }
+    },
+    "expiredDelta": {
+      "streamId": "<stream>",
+      "instanceId": "standalone",
+      "sinceRevision": 1,
+      "latestRevision": 2,
+      "earliestRetainedRevision": 3,
+      "syncRequired": true,
+      "events": []
+    },
+    "expired": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:00.000Z",
+      "snapshot": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:02.001Z"
+      }
+    },
+    "expiredAlias": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:00.000Z",
+      "snapshot": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:02.001Z"
+      }
+    },
+    "noop": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:00.000Z",
+      "snapshot": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:02.001Z"
+      }
+    },
+    "resumed": {
+      "streamId": "<stream>",
+      "revision": 3,
+      "lastEventAt": "2026-11-05T01:00:03.000Z",
+      "snapshot": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "After expiry",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:03.000Z"
+      }
+    },
+    "resumedDelta": {
+      "streamId": "<stream>",
+      "instanceId": "standalone",
+      "sinceRevision": 2,
+      "latestRevision": 3,
+      "earliestRetainedRevision": 3,
+      "syncRequired": false,
+      "events": [
+        {
+          "type": "app-session.patch",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "instanceId": "standalone",
+              "revision": 3,
+              "previousRevision": 2,
+              "traceId": "<trace-3>",
+              "generatedAt": "2026-11-05T01:00:03.000Z",
+              "reason": "app-session-updated"
+            },
+            "session": {
+              "id": "app_clock",
+              "appId": "terminal-tty",
+              "title": "After expiry",
+              "kind": "tty",
+              "status": "running",
+              "createdAt": "2026-11-05T00:00:00.000Z",
+              "updatedAt": "2026-11-05T00:00:00.000Z",
+              "paths": {
+                "sessionDir": "/tmp/session",
+                "logDir": "/tmp/logs"
+              },
+              "bindings": [
+                {
+                  "type": "app-session",
+                  "id": "app_clock"
+                }
+              ],
+              "workspace": {
+                "cwd": "/workspace"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "consumer": {
+    "coldExpired": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "appSessions": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:02.001Z"
+      },
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:00.000Z"
+    },
+    "warmBefore": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "appSessions": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      },
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z"
+    },
+    "warmExpired": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "appSessions": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "Renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      },
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z"
+    },
+    "coldResumed": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "appSessions": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "After expiry",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:03.000Z"
+      },
+      "revision": 3,
+      "lastEventAt": "2026-11-05T01:00:03.000Z"
+    },
+    "warmResumed": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "appSessions": {
+        "runningCount": 1,
+        "problemCount": 0,
+        "sessions": [
+          {
+            "id": "app_clock",
+            "appId": "terminal-tty",
+            "title": "After expiry",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_clock"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:03.000Z"
+      },
+      "revision": 3,
+      "lastEventAt": "2026-11-05T01:00:03.000Z"
+    }
+  }
+}

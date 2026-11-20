@@ -1,0 +1,704 @@
+[
+  {
+    "name": "ping",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 200,
+      "events": [
+        {
+          "result": {},
+          "jsonrpc": "2.0",
+          "id": 1
+        }
+      ]
+    }
+  },
+  {
+    "name": "BOM ping",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "﻿{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 200,
+      "events": [
+        {
+          "result": {},
+          "jsonrpc": "2.0",
+          "id": 1
+        }
+      ]
+    }
+  },
+  {
+    "name": "BOM ping without authorization",
+    "method": "POST",
+    "type": "application/json",
+    "auth": false,
+    "unit": "﻿{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "AGENT_TOOL_FORBIDDEN",
+          "message": "Agent tool token is required."
+        }
+      }
+    }
+  },
+  {
+    "name": "BOM only",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "﻿",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "name": "double BOM",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "﻿﻿{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "name": "empty JSON",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_EMPTY_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body cannot be empty when content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "name": "invalid JSON before authorization",
+    "method": "POST",
+    "type": "application/json",
+    "auth": false,
+    "unit": "{",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "name": "null JSON",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "null",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32700,
+          "message": "Parse error: Invalid JSON-RPC message"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "false JSON",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "false",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32700,
+          "message": "Parse error: Invalid JSON-RPC message"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "empty string JSON",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "\"\"",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32700,
+          "message": "Parse error: Invalid JSON-RPC message"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "text before SDK",
+    "method": "POST",
+    "type": "text/plain",
+    "auth": true,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Unsupported Media Type: Content-Type must be application/json"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "BOM text before SDK",
+    "method": "POST",
+    "type": "text/plain",
+    "auth": true,
+    "unit": "﻿{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Unsupported Media Type: Content-Type must be application/json"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "text before authorization",
+    "method": "POST",
+    "type": "text/plain",
+    "auth": false,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "AGENT_TOOL_FORBIDDEN",
+          "message": "Agent tool token is required."
+        }
+      }
+    }
+  },
+  {
+    "name": "empty text",
+    "method": "POST",
+    "type": "text/plain",
+    "auth": true,
+    "unit": "",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Unsupported Media Type: Content-Type must be application/json"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "unsupported media",
+    "method": "POST",
+    "type": "application/yaml",
+    "auth": true,
+    "unit": "{}",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "name": "unsupported media before authorization",
+    "method": "POST",
+    "type": "application/yaml",
+    "auth": false,
+    "unit": "{}",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "name": "unsupported media above limit",
+    "method": "POST",
+    "type": "application/yaml",
+    "auth": true,
+    "unit": "x",
+    "repeat": 300000,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "name": "unsupported media above limit before authorization",
+    "method": "POST",
+    "type": "application/yaml",
+    "auth": false,
+    "unit": "x",
+    "repeat": 300000,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "name": "unsupported JSON suffix",
+    "method": "POST",
+    "type": "application/problem+json",
+    "auth": true,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "name": "missing media",
+    "method": "POST",
+    "type": null,
+    "auth": true,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "name": "empty missing media",
+    "method": "POST",
+    "type": null,
+    "auth": true,
+    "unit": "",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Unsupported Media Type: Content-Type must be application/json"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "JSON parameters",
+    "method": "POST",
+    "type": "application/json; charset=utf-8",
+    "auth": true,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 200,
+      "events": [
+        {
+          "result": {},
+          "jsonrpc": "2.0",
+          "id": 1
+        }
+      ]
+    }
+  },
+  {
+    "name": "JSON uppercase media",
+    "method": "POST",
+    "type": "APPLICATION/JSON",
+    "auth": true,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "expected": {
+      "status": 200,
+      "events": [
+        {
+          "result": {},
+          "jsonrpc": "2.0",
+          "id": 1
+        }
+      ]
+    }
+  },
+  {
+    "name": "invalid UTF8 JSON length",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "",
+    "repeat": 1,
+    "hex": "22ff22",
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+        "error": "Bad Request",
+        "message": "Request body size did not match Content-Length"
+      }
+    }
+  },
+  {
+    "name": "invalid UTF8 JSON before authorization",
+    "method": "POST",
+    "type": "application/json",
+    "auth": false,
+    "unit": "",
+    "repeat": 1,
+    "hex": "22ff22",
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+        "error": "Bad Request",
+        "message": "Request body size did not match Content-Length"
+      }
+    }
+  },
+  {
+    "name": "invalid UTF8 text length",
+    "method": "POST",
+    "type": "text/plain",
+    "auth": true,
+    "unit": "",
+    "repeat": 1,
+    "hex": "ff",
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+        "error": "Bad Request",
+        "message": "Request body size did not match Content-Length"
+      }
+    }
+  },
+  {
+    "name": "declared JSON length mismatch",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "declaredLength": 100,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+        "error": "Bad Request",
+        "message": "Request body size did not match Content-Length"
+      }
+    }
+  },
+  {
+    "name": "declared JSON oversize",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "declaredLength": 300000,
+    "expected": {
+      "status": 413,
+      "body": {
+        "statusCode": 413,
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "error": "Payload Too Large",
+        "message": "Request body is too large"
+      }
+    }
+  },
+  {
+    "name": "declared JSON oversize before authorization",
+    "method": "POST",
+    "type": "application/json",
+    "auth": false,
+    "unit": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "repeat": 1,
+    "declaredLength": 300000,
+    "expected": {
+      "status": 413,
+      "body": {
+        "statusCode": 413,
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "error": "Payload Too Large",
+        "message": "Request body is too large"
+      }
+    }
+  },
+  {
+    "name": "text expansion within wire limit",
+    "method": "POST",
+    "type": "text/plain",
+    "auth": true,
+    "unit": "\"",
+    "repeat": 200000,
+    "expected": {
+      "status": 415,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Unsupported Media Type: Content-Type must be application/json"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "text above wire limit",
+    "method": "POST",
+    "type": "text/plain",
+    "auth": true,
+    "unit": "x",
+    "repeat": 262145,
+    "expected": {
+      "status": 413,
+      "body": {
+        "statusCode": 413,
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "error": "Payload Too Large",
+        "message": "Request body is too large"
+      }
+    }
+  },
+  {
+    "name": "JSON above wire limit",
+    "method": "POST",
+    "type": "application/json",
+    "auth": true,
+    "unit": " ",
+    "repeat": 262144,
+    "prefix": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+    "expected": {
+      "status": 413,
+      "body": {
+        "statusCode": 413,
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "error": "Payload Too Large",
+        "message": "Request body is too large"
+      }
+    }
+  },
+  {
+    "name": "octet-stream SDK rejection",
+    "method": "POST",
+    "type": "application/octet-stream",
+    "auth": true,
+    "unit": "x",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Unsupported Media Type: Content-Type must be application/json"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "octet-stream before authorization",
+    "method": "POST",
+    "type": "application/octet-stream",
+    "auth": false,
+    "unit": "x",
+    "repeat": 1,
+    "expected": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "AGENT_TOOL_FORBIDDEN",
+          "message": "Agent tool token is required."
+        }
+      }
+    }
+  },
+  {
+    "name": "octet-stream above buffered limit",
+    "method": "POST",
+    "type": "application/octet-stream",
+    "auth": true,
+    "unit": "x",
+    "repeat": 300000,
+    "expected": {
+      "status": 415,
+      "body": {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32000,
+          "message": "Unsupported Media Type: Content-Type must be application/json"
+        },
+        "id": null
+      }
+    }
+  },
+  {
+    "name": "delete BOM",
+    "method": "DELETE",
+    "type": "application/json",
+    "auth": true,
+    "unit": "﻿{}",
+    "repeat": 1,
+    "expected": {
+      "status": 200,
+      "body": null
+    }
+  },
+  {
+    "name": "delete invalid JSON",
+    "method": "DELETE",
+    "type": "application/json",
+    "auth": true,
+    "unit": "{",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "name": "delete unsupported media",
+    "method": "DELETE",
+    "type": "application/yaml",
+    "auth": true,
+    "unit": "x",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "name": "delete length mismatch",
+    "method": "DELETE",
+    "type": "application/json",
+    "auth": true,
+    "unit": "{}",
+    "repeat": 1,
+    "declaredLength": 5,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+        "error": "Bad Request",
+        "message": "Request body size did not match Content-Length"
+      }
+    }
+  },
+  {
+    "name": "delete text",
+    "method": "DELETE",
+    "type": "text/plain",
+    "auth": true,
+    "unit": "abc",
+    "repeat": 1,
+    "expected": {
+      "status": 200,
+      "body": null
+    }
+  }
+]

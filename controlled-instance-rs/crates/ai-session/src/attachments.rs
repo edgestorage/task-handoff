@@ -191,6 +191,9 @@ struct AttachmentState {
     drafts: BTreeMap<String, DraftManifest>,
 }
 
+#[cfg(test)]
+type TestManifestWriter = Box<dyn Fn(&Path, &[u8]) -> std::io::Result<()> + Send + Sync>;
+
 pub struct AiSessionConversationAttachmentStore {
     root: PathBuf,
     blob_dir: PathBuf,
@@ -201,6 +204,18 @@ pub struct AiSessionConversationAttachmentStore {
     max_bytes: u64,
     max_file_attachment_bytes: AtomicU64,
     state: Mutex<AttachmentState>,
+    content_changes: tokio::sync::watch::Sender<()>,
+    #[cfg(test)]
+    test_manifest_writer: Option<TestManifestWriter>,
+}
+
+impl std::fmt::Debug for AiSessionConversationAttachmentStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AiSessionConversationAttachmentStore")
+            .field("root", &self.root)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AiSessionConversationAttachmentStore {
@@ -219,13 +234,40 @@ impl AiSessionConversationAttachmentStore {
         max_bytes: u64,
         max_file_attachment_bytes: u64,
     ) -> Self {
+        Self::with_clock_and_limits(
+            data_dir,
+            retention_days,
+            max_bytes,
+            max_file_attachment_bytes,
+            now_millis,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_clock(data_dir: &Path, now: fn() -> i64) -> Self {
+        Self::with_clock_and_limits(
+            data_dir,
+            AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS,
+            DEFAULT_MAX_STORAGE_BYTES,
+            AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
+            now,
+        )
+    }
+
+    fn with_clock_and_limits(
+        data_dir: &Path,
+        retention_days: u32,
+        max_bytes: u64,
+        max_file_attachment_bytes: u64,
+        now: fn() -> i64,
+    ) -> Self {
         let root = data_dir.join("ai-session-attachments");
         let mut store = Self {
             blob_dir: root.join("blobs"),
             manifest_dir: root.join("manifests"),
             draft_dir: root.join("drafts"),
             root,
-            now: now_millis,
+            now,
             retention_days: AtomicU32::new(retention_days.min(365)),
             max_bytes,
             max_file_attachment_bytes: AtomicU64::new(
@@ -233,6 +275,9 @@ impl AiSessionConversationAttachmentStore {
                     .clamp(1, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES),
             ),
             state: Mutex::new(AttachmentState::default()),
+            content_changes: tokio::sync::watch::channel(()).0,
+            #[cfg(test)]
+            test_manifest_writer: None,
         };
         for directory in [&store.blob_dir, &store.manifest_dir, &store.draft_dir] {
             let _ = std::fs::create_dir_all(directory);
@@ -242,11 +287,18 @@ impl AiSessionConversationAttachmentStore {
         store
     }
 
+    pub fn subscribe_content_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.content_changes.subscribe()
+    }
+
     pub fn draft_streams(self: &Arc<Self>) -> AiSessionAttachmentDraftStreams {
         AiSessionAttachmentDraftStreams::new(Arc::clone(self))
     }
 
-    pub fn set_retention_days(&self, days: u32) -> (usize, usize) {
+    pub fn set_retention_days(
+        &self,
+        days: u32,
+    ) -> Result<(usize, usize), AiSessionAttachmentError> {
         self.retention_days.store(
             days.min(controlled_instance_protocol::AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS),
             Ordering::SeqCst,
@@ -285,13 +337,17 @@ impl AiSessionConversationAttachmentStore {
         &self,
         input: AiSessionAttachmentDraftInput,
     ) -> Result<AiSessionAttachmentDraft, AiSessionAttachmentError> {
-        self.gc();
+        self.gc()?;
         self.validate_draft_size(input.kind, input.size)?;
         self.assert_uploaded_file_size(input.kind, input.size)?;
         if input.content.len() as u64 != input.size {
             return Err(AiSessionAttachmentError::new(
                 "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
-                "Attachment content did not match its declared size.",
+                if input.content.len() as u64 > input.size {
+                    "Attachment content exceeded its declared size."
+                } else {
+                    "Attachment content did not match its declared size."
+                },
                 400,
             ));
         }
@@ -330,11 +386,10 @@ impl AiSessionConversationAttachmentStore {
             }
         }
         let blob_hash = hex::encode(Sha256::digest(&input.content));
-        self.write_blob(&blob_hash, &input.content)?;
         let created_at = iso_from_millis((self.now)());
         let draft = DraftManifest {
             schema_version: 1,
-            id: id.clone(),
+            id,
             scope_type: input.scope_type,
             scope_id: input.scope_id.trim().to_string(),
             kind: input.kind,
@@ -343,10 +398,11 @@ impl AiSessionConversationAttachmentStore {
             size: input.size,
             blob_hash,
             created_at,
-            expires_at: iso_from_millis((self.now)() + AI_SESSION_ATTACHMENT_DRAFT_STREAM_TTL_MS),
+            expires_at: iso_from_millis((self.now)() + DAY_MS),
         };
-        self.save_draft(&draft)?;
-        self.lock().drafts.insert(id, draft.clone());
+        self.write_blob(&draft.blob_hash, &input.content)
+            .and_then(|_| self.save_draft(&draft))
+            .inspect_err(|_| self.remove_blob_if_unreferenced(&draft.blob_hash))?;
         Ok(public_draft(&draft))
     }
 
@@ -403,7 +459,7 @@ impl AiSessionConversationAttachmentStore {
                 return Ok(staged_from_manifests(&input.message_id, &existing, self));
             }
         }
-        self.gc();
+        self.gc()?;
         let retained = input
             .retained_attachment_ids
             .iter()
@@ -585,19 +641,29 @@ impl AiSessionConversationAttachmentStore {
         ))
     }
 
-    pub fn commit_message(&self, session_id: &str, message_id: &str, turn_id: Option<&str>) {
+    pub fn commit_message(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        turn_id: Option<&str>,
+    ) -> Result<usize, AiSessionAttachmentError> {
         let committed_at = iso_from_millis((self.now)());
-        for mut manifest in self.message_manifests(session_id, message_id) {
+        let manifests = self.message_manifests(session_id, message_id);
+        let count = manifests.len();
+        for mut manifest in manifests {
             manifest.state = StoredAttachmentState::Committed;
             manifest.turn_id = turn_id.map(ToString::to_string).or(manifest.turn_id);
             manifest.committed_at = Some(manifest.committed_at.unwrap_or(committed_at.clone()));
-            if manifest.draft_scope.take().is_some() {
-                self.lock().drafts.remove(&manifest.id);
-                let _ = std::fs::remove_file(self.draft_path(&manifest.id));
+            let had_draft_scope = manifest.draft_scope.take().is_some();
+            // The durable committed owner must exist before releasing a draft
+            // or returning provider acceptance as fully applied locally.
+            self.save_manifest(&manifest)?;
+            if had_draft_scope {
+                self.remove_draft_owner(&manifest.id);
             }
-            let _ = self.save_manifest(&manifest);
         }
-        self.gc();
+        self.gc()?;
+        Ok(count)
     }
 
     pub fn message_attachment_metas(
@@ -618,7 +684,11 @@ impl AiSessionConversationAttachmentStore {
             .collect()
     }
 
-    pub fn rollback_message(&self, session_id: &str, message_id: &str) -> usize {
+    pub fn rollback_message(
+        &self,
+        session_id: &str,
+        message_id: &str,
+    ) -> Result<usize, AiSessionAttachmentError> {
         let mut rolled_back = 0;
         for mut manifest in self.message_manifests(session_id, message_id) {
             if manifest.state != StoredAttachmentState::Staged {
@@ -637,20 +707,20 @@ impl AiSessionConversationAttachmentStore {
                     blob_hash: manifest.blob_hash.clone(),
                     created_at: manifest.created_at.clone(),
                     expires_at: iso_from_millis(
-                        parse_iso(&manifest.created_at).unwrap_or_else(|| (self.now)())
-                            + AI_SESSION_ATTACHMENT_DRAFT_STREAM_TTL_MS,
+                        parse_iso(&manifest.created_at).unwrap_or_else(|| (self.now)()) + DAY_MS,
                     ),
                 };
-                let _ = self.save_draft(&draft);
-                self.lock().drafts.insert(draft.id.clone(), draft);
+                // Compatibility for v0.0.47: publish the recovered draft only
+                // after it is durable, before removing the message owner.
+                self.save_draft(&draft)?;
                 self.remove_manifest(&manifest.id);
             } else {
                 manifest.state = StoredAttachmentState::Draft;
-                let _ = self.save_manifest(&manifest);
+                self.save_manifest(&manifest)?;
             }
             rolled_back += 1;
         }
-        rolled_back
+        Ok(rolled_back)
     }
 
     pub fn attachments_for_message(
@@ -658,7 +728,7 @@ impl AiSessionConversationAttachmentStore {
         session_id: &str,
         message_id: &str,
     ) -> Vec<AiSessionConversationAttachment> {
-        self.gc();
+        self.gc_best_effort();
         self.message_manifests(session_id, message_id)
             .iter()
             .map(|manifest| self.public_attachment(manifest))
@@ -696,8 +766,17 @@ impl AiSessionConversationAttachmentStore {
         session_id: &str,
         message_id: &str,
         attachments: &[AiSessionConversationAttachment],
+    ) -> Result<Vec<AiSessionConversationAttachment>, AiSessionAttachmentError> {
+        self.gc()?;
+        Ok(self.project_message_attachments(session_id, message_id, attachments))
+    }
+
+    pub fn project_message_attachments(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        attachments: &[AiSessionConversationAttachment],
     ) -> Vec<AiSessionConversationAttachment> {
-        self.gc();
         let manifests = self.message_manifests(session_id, message_id);
         if manifests.is_empty() {
             return attachments
@@ -747,13 +826,80 @@ impl AiSessionConversationAttachmentStore {
             .collect()
     }
 
+    // Summary projection consumes the same manifest authority as HTTP reads,
+    // without GC, writes, callbacks, or changing the raw provider/session store.
+    pub fn project_session(&self, mut session: crate::AiSession) -> crate::AiSession {
+        for turn in session.turns.iter_mut().flatten() {
+            let Some(messages) = turn.get_mut("userMessages").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            for message in messages {
+                let Some(id) = message.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(raw) = message.get("attachments") else {
+                    continue;
+                };
+                let Ok(attachments) =
+                    serde_json::from_value::<Vec<AiSessionConversationAttachment>>(raw.clone())
+                else {
+                    continue;
+                };
+                let projected = self.project_message_attachments(&session.id, id, &attachments);
+                message["attachments"] =
+                    serde_json::to_value(projected).expect("attachment projection serializes");
+            }
+        }
+        session
+    }
+
+    pub(crate) fn claim_message_attachments(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        attachment_ids: &[String],
+    ) -> Result<bool, AiSessionAttachmentError> {
+        if attachment_ids.is_empty() {
+            return Ok(false);
+        }
+        let manifests = {
+            let state = self.lock();
+            attachment_ids
+                .iter()
+                .map(|id| state.manifests.get(id).cloned())
+                .collect::<Option<Vec<_>>>()
+        };
+        let Some(manifests) = manifests.filter(|manifests| {
+            manifests.iter().all(|manifest| {
+                manifest.session_id == session_id && manifest.message_id == message_id
+            })
+        }) else {
+            return Ok(false);
+        };
+        for manifest in &manifests {
+            if manifest.state == StoredAttachmentState::Draft {
+                let mut staged = manifest.clone();
+                staged.state = StoredAttachmentState::Staged;
+                self.save_manifest(&staged)?;
+            }
+        }
+        // Persist the queue's ownership before removing any retryable upload
+        // owner, matching the v0.0.47 queue recovery transition.
+        for manifest in &manifests {
+            if manifest.draft_scope.is_some() {
+                self.remove_draft_owner(&manifest.id);
+            }
+        }
+        Ok(true)
+    }
+
     pub fn content(
         &self,
         session_id: &str,
         message_id: &str,
         attachment_id: &str,
     ) -> Result<AiSessionAttachmentContent, AiSessionAttachmentError> {
-        self.gc();
+        self.gc()?;
         let state = self.lock();
         let manifest = state.manifests.get(attachment_id).cloned();
         drop(state);
@@ -823,13 +969,10 @@ impl AiSessionConversationAttachmentStore {
             .filter(|manifest| manifest.session_id == session_id)
             .map(|manifest| manifest.id.clone())
             .collect::<Vec<_>>();
-        for id in &ids {
-            self.remove_manifest(id);
-        }
-        ids.len()
+        ids.iter().filter(|id| self.remove_manifest(id)).count()
     }
 
-    pub fn gc(&self) -> (usize, usize) {
+    pub fn gc(&self) -> Result<(usize, usize), AiSessionAttachmentError> {
         let now = (self.now)();
         let drafts = self
             .lock()
@@ -845,6 +988,22 @@ impl AiSessionConversationAttachmentStore {
                 drop(state);
                 let _ = std::fs::remove_file(self.draft_path(&id));
                 self.remove_blob_if_unreferenced(&draft.blob_hash);
+                removed_drafts += 1;
+            }
+        }
+        let uncommitted = self
+            .lock()
+            .manifests
+            .values()
+            .filter(|manifest| {
+                manifest.state != StoredAttachmentState::Committed
+                    && parse_iso(&manifest.created_at)
+                        .is_some_and(|created| now - created >= DAY_MS)
+            })
+            .map(|manifest| manifest.id.clone())
+            .collect::<Vec<_>>();
+        for id in uncommitted {
+            if self.remove_manifest(&id) {
                 removed_drafts += 1;
             }
         }
@@ -869,11 +1028,25 @@ impl AiSessionConversationAttachmentStore {
         for mut manifest in expired {
             manifest.content_deleted_at = Some(iso_from_millis(now));
             manifest.content_deletion_reason = Some(ContentDeletionReason::Expired);
-            let _ = self.save_manifest(&manifest);
+            // Publish the durable expiry marker before releasing bytes or counting
+            // success. Failure keeps the original owner available for retry.
+            self.save_manifest(&manifest)?;
             self.remove_blob_if_unreferenced(&manifest.blob_hash);
             expired_count += 1;
+            // No owner lock is held here. Notify each durable success even if
+            // another manifest later fails; watch coalesces to the latest owner.
+            self.content_changes.send_replace(());
         }
-        (removed_drafts, expired_count)
+        Ok((removed_drafts, expired_count))
+    }
+
+    // These existing projection/restore APIs cannot return errors yet.
+    // They retain ownership on failure and log it; fallible operations and
+    // settings application must call gc directly and propagate its Result.
+    fn gc_best_effort(&self) {
+        if let Err(error) = self.gc() {
+            tracing::warn!(%error, "attachment garbage collection deferred");
+        }
     }
 
     fn snapshot(
@@ -1088,11 +1261,29 @@ impl AiSessionConversationAttachmentStore {
         Ok(())
     }
 
+    pub fn validate_upload(
+        &self,
+        kind: AiSessionAttachmentKind,
+        size: u64,
+    ) -> Result<(), AiSessionAttachmentError> {
+        self.gc()?;
+        self.validate_draft_size(kind, size)?;
+        self.assert_uploaded_file_size(kind, size)?;
+        if self.used_bytes(&self.lock()) + size > self.max_bytes {
+            return Err(AiSessionAttachmentError::new(
+                "AI_SESSION_ATTACHMENT_STORAGE_FULL",
+                "AI session attachment storage is full.",
+                507,
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_stream_begin(
         &self,
         input: &AiSessionAttachmentDraftStreamBegin,
     ) -> Result<(), AiSessionAttachmentError> {
-        self.gc();
+        self.gc()?;
         self.validate_draft_size(input.kind, input.size)?;
         self.assert_uploaded_file_size(input.kind, input.size)?;
         let state = self.lock();
@@ -1140,10 +1331,19 @@ impl AiSessionConversationAttachmentStore {
                 let Ok(bytes) = std::fs::read(entry.path()) else {
                     continue;
                 };
-                let Ok(draft) = serde_json::from_slice::<DraftManifest>(&bytes) else {
+                let Ok(mut draft) = serde_json::from_slice::<DraftManifest>(&bytes) else {
                     tracing::warn!(path = %entry.path().display(), "ignoring invalid AI Session attachment draft");
                     continue;
                 };
+                // Compatibility for v0.0.47: completed drafts expire one day
+                // after createdAt. Older Rust builds used the upload-stream TTL.
+                if let Some(created_at) = parse_iso(&draft.created_at) {
+                    let expires_at = iso_from_millis(created_at + DAY_MS);
+                    if draft.expires_at != expires_at {
+                        draft.expires_at = expires_at;
+                        drafts_to_save.push(draft.clone());
+                    }
+                }
                 state.drafts.insert(draft.id.clone(), draft);
             }
             for entry in std::fs::read_dir(&self.manifest_dir)
@@ -1177,7 +1377,7 @@ impl AiSessionConversationAttachmentStore {
                             created_at: manifest.created_at.clone(),
                             expires_at: iso_from_millis(
                                 parse_iso(&manifest.created_at).unwrap_or_else(|| (self.now)())
-                                    + AI_SESSION_ATTACHMENT_DRAFT_STREAM_TTL_MS,
+                                    + DAY_MS,
                             ),
                         };
                         state.drafts.insert(draft.id.clone(), draft.clone());
@@ -1195,7 +1395,7 @@ impl AiSessionConversationAttachmentStore {
             let _ = self.save_manifest(&manifest);
         }
         self.cleanup_unreferenced_blobs();
-        self.gc();
+        self.gc_best_effort();
     }
 
     fn message_manifests(&self, session_id: &str, message_id: &str) -> Vec<AttachmentManifest> {
@@ -1255,7 +1455,9 @@ impl AiSessionConversationAttachmentStore {
                 name: manifest.name.clone(),
                 mime: manifest.mime.clone(),
                 size: manifest.size,
-                source_type: manifest.source_type,
+                // Provider payloads read the retained blob path. The original
+                // input provenance remains on the manifest and `source`.
+                source_type: AiSessionMessageAttachmentSourceType::RuntimePath,
             },
             retained_path: self.blob_path(&manifest.blob_hash),
             source,
@@ -1273,19 +1475,44 @@ impl AiSessionConversationAttachmentStore {
 
     fn save_manifest(&self, manifest: &AttachmentManifest) -> Result<(), AiSessionAttachmentError> {
         let bytes = attachment_json(manifest)?;
-        write_atomic(&self.manifest_path(&manifest.id), &bytes, Some(0o600)).map_err(io_error)?;
+        self.write_manifest_file(&self.manifest_path(&manifest.id), &bytes)
+            .map_err(|error| {
+                tracing::warn!(attachment_id = %manifest.id, %error, "attachment manifest write failed");
+                AiSessionAttachmentError::new(
+                    "AI_SESSION_ATTACHMENT_IO_FAILED",
+                    "AI session attachment manifest could not be persisted.",
+                    500,
+                )
+            })?;
         self.lock()
             .manifests
             .insert(manifest.id.clone(), manifest.clone());
         Ok(())
     }
 
+    fn write_manifest_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(writer) = &self.test_manifest_writer {
+            return writer(path, bytes);
+        }
+        write_atomic(path, bytes, Some(0o600))
+    }
+
     fn remove_manifest(&self, id: &str) -> bool {
-        let manifest = self.lock().manifests.remove(id);
-        let Some(manifest) = manifest else {
+        let mut state = self.lock();
+        if !state.manifests.contains_key(id) {
             return false;
-        };
-        let _ = std::fs::remove_file(self.manifest_path(id));
+        }
+        // Disk ownership survives a failed unlink. Keep the same owner under
+        // the lock until commit so another caller cannot replace it mid-delete.
+        if let Err(error) = std::fs::remove_file(self.manifest_path(id)) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(id, error = %error, "attachment manifest cleanup failed");
+                return false;
+            }
+        }
+        let manifest = state.manifests.remove(id).expect("locked manifest owner");
+        drop(state);
         self.remove_blob_if_unreferenced(&manifest.blob_hash);
         true
     }
@@ -1293,6 +1520,7 @@ impl AiSessionConversationAttachmentStore {
     fn save_draft(&self, draft: &DraftManifest) -> Result<(), AiSessionAttachmentError> {
         let bytes = attachment_json(draft)?;
         write_atomic(&self.draft_path(&draft.id), &bytes, Some(0o600)).map_err(io_error)?;
+        self.lock().drafts.insert(draft.id.clone(), draft.clone());
         Ok(())
     }
 
@@ -1437,9 +1665,117 @@ pub struct AiSessionAttachmentDraftStreamBegin {
 struct DraftStream {
     input: AiSessionAttachmentDraftStreamBegin,
     written: u64,
+    appending: bool,
+    generation: Arc<()>,
     failure: Option<AiSessionAttachmentError>,
-    path: PathBuf,
+    // A generation owns its physical file independently of the reusable wire
+    // ID. TempPath also releases it on completion read errors and early return.
+    path: tempfile::TempPath,
     expires_at: i64,
+}
+
+// Owns one request's offset transition without holding a mutex across I/O.
+// The generation prevents a canceled request from writing to a new upload
+// created under the same wire ID.
+pub struct AiSessionAttachmentDraftAppend<'a> {
+    owner: &'a AiSessionAttachmentDraftStreams,
+    attachment_id: String,
+    generation: Arc<()>,
+    declared_size: u64,
+}
+
+fn upload_not_found() -> AiSessionAttachmentError {
+    AiSessionAttachmentError::new(
+        "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND",
+        "AI session attachment upload not found.",
+        404,
+    )
+}
+
+fn upload_busy() -> AiSessionAttachmentError {
+    AiSessionAttachmentError::new(
+        "AI_SESSION_ATTACHMENT_UPLOAD_BUSY",
+        "AI session attachment upload already has an operation in progress.",
+        409,
+    )
+}
+
+impl AiSessionAttachmentDraftAppend<'_> {
+    pub fn declared_size(&self) -> u64 {
+        self.declared_size
+    }
+
+    pub fn write(&self, chunk: &[u8]) -> Result<(), AiSessionAttachmentError> {
+        let mut streams = self
+            .owner
+            .streams
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.owner.cleanup_expired(&mut streams);
+        let stream = streams
+            .get_mut(&self.attachment_id)
+            .filter(|stream| Arc::ptr_eq(&stream.generation, &self.generation))
+            .ok_or_else(upload_not_found)?;
+        if let Some(failure) = &stream.failure {
+            return Err(failure.clone());
+        }
+        let next = stream.written.saturating_add(chunk.len() as u64);
+        if next > stream.input.size {
+            let error = AiSessionAttachmentError::new(
+                "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+                "Attachment content exceeded its declared size.",
+                400,
+            );
+            stream.failure = Some(error.clone());
+            let _ = std::fs::remove_file(&stream.path);
+            return Err(error);
+        }
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&stream.path)
+            .map_err(io_error)?;
+        if let Err(error) = file.write_all(chunk) {
+            let error = io_error(error);
+            stream.failure = Some(error.clone());
+            let _ = std::fs::remove_file(&stream.path);
+            return Err(error);
+        }
+        stream.written = next;
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<Value, AiSessionAttachmentError> {
+        let streams = self
+            .owner
+            .streams
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let stream = streams
+            .get(&self.attachment_id)
+            .filter(|stream| Arc::ptr_eq(&stream.generation, &self.generation))
+            .ok_or_else(upload_not_found)?;
+        if let Some(failure) = &stream.failure {
+            return Err(failure.clone());
+        }
+        Ok(serde_json::json!({"attachmentId": self.attachment_id, "offset": stream.written}))
+    }
+}
+
+impl Drop for AiSessionAttachmentDraftAppend<'_> {
+    fn drop(&mut self) {
+        let mut streams = self
+            .owner
+            .streams
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(stream) = streams
+            .get_mut(&self.attachment_id)
+            .filter(|stream| Arc::ptr_eq(&stream.generation, &self.generation))
+        {
+            stream.appending = false;
+        }
+    }
 }
 
 pub struct AiSessionAttachmentDraftStreams {
@@ -1477,17 +1813,19 @@ impl AiSessionAttachmentDraftStreams {
             ));
         }
         self.store().validate_stream_begin(&input)?;
-        let path = self
-            .upload_dir
-            .join(format!("{}.upload", input.attachment_id));
-        let _ = std::fs::remove_file(&path);
-        std::fs::File::create(&path).map_err(io_error)?;
+        let path = tempfile::Builder::new()
+            .suffix(".upload")
+            .tempfile_in(&self.upload_dir)
+            .map_err(io_error)?
+            .into_temp_path();
         let attachment_id = input.attachment_id.clone();
         streams.insert(
             attachment_id.clone(),
             DraftStream {
                 input,
                 written: 0,
+                appending: false,
+                generation: Arc::new(()),
                 failure: None,
                 path,
                 expires_at: (now_millis)() + AI_SESSION_ATTACHMENT_DRAFT_STREAM_TTL_MS,
@@ -1496,26 +1834,24 @@ impl AiSessionAttachmentDraftStreams {
         Ok(serde_json::json!({ "attachmentId": attachment_id, "offset": 0 }))
     }
 
-    pub fn append(
+    pub fn begin_append(
         &self,
         attachment_id: &str,
         offset: u64,
-        chunk: &[u8],
-    ) -> Result<Value, AiSessionAttachmentError> {
+    ) -> Result<AiSessionAttachmentDraftAppend<'_>, AiSessionAttachmentError> {
         let mut streams = self
             .streams
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.cleanup_expired(&mut streams);
-        let stream = streams.get_mut(attachment_id).ok_or_else(|| {
-            AiSessionAttachmentError::new(
-                "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND",
-                "AI session attachment upload not found.",
-                404,
-            )
-        })?;
+        let stream = streams
+            .get_mut(attachment_id)
+            .ok_or_else(upload_not_found)?;
         if let Some(failure) = stream.failure.as_ref() {
             return Err(failure.clone());
+        }
+        if stream.appending {
+            return Err(upload_busy());
         }
         if offset != stream.written {
             return Err(AiSessionAttachmentError::new(
@@ -1524,30 +1860,24 @@ impl AiSessionAttachmentDraftStreams {
                 409,
             ));
         }
-        let next = stream.written.saturating_add(chunk.len() as u64);
-        if next > stream.input.size || chunk.len() > 512 * 1024 {
-            let error = AiSessionAttachmentError::new(
-                "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
-                "Attachment content exceeded its declared size.",
-                400,
-            );
-            stream.failure = Some(error.clone());
-            let _ = std::fs::remove_file(&stream.path);
-            return Err(error);
-        }
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&stream.path)
-            .map_err(io_error)?;
-        if let Err(error) = file.write_all(chunk) {
-            let error = io_error(error);
-            stream.failure = Some(error.clone());
-            let _ = std::fs::remove_file(&stream.path);
-            return Err(error);
-        }
-        stream.written = next;
-        Ok(serde_json::json!({ "attachmentId": attachment_id, "offset": next }))
+        stream.appending = true;
+        Ok(AiSessionAttachmentDraftAppend {
+            owner: self,
+            attachment_id: attachment_id.to_string(),
+            generation: stream.generation.clone(),
+            declared_size: stream.input.size,
+        })
+    }
+
+    pub fn append(
+        &self,
+        attachment_id: &str,
+        offset: u64,
+        chunk: &[u8],
+    ) -> Result<Value, AiSessionAttachmentError> {
+        let append = self.begin_append(attachment_id, offset)?;
+        append.write(chunk)?;
+        append.finish()
     }
 
     pub fn complete(
@@ -1560,10 +1890,11 @@ impl AiSessionAttachmentDraftStreams {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.cleanup_expired(&mut streams);
         if let Some(stream) = streams.get(attachment_id) {
+            if stream.appending {
+                return Err(upload_busy());
+            }
             if let Some(failure) = stream.failure.clone() {
-                let path = stream.path.clone();
                 streams.remove(attachment_id);
-                let _ = std::fs::remove_file(path);
                 return Err(failure);
             }
         }
@@ -1575,8 +1906,16 @@ impl AiSessionAttachmentDraftStreams {
             )
         })?;
         drop(streams);
+        self.complete_owned_stream(stream)
+    }
+
+    // Completion owns the removed generation while later requests may already
+    // have registered a replacement under the same public attachment ID.
+    fn complete_owned_stream(
+        &self,
+        stream: DraftStream,
+    ) -> Result<AiSessionAttachmentDraft, AiSessionAttachmentError> {
         if stream.written != stream.input.size {
-            let _ = std::fs::remove_file(&stream.path);
             return Err(AiSessionAttachmentError::new(
                 "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
                 "Attachment content did not match its declared size.",
@@ -1584,7 +1923,6 @@ impl AiSessionAttachmentDraftStreams {
             ));
         }
         let content = std::fs::read(&stream.path).map_err(io_error)?;
-        let _ = std::fs::remove_file(&stream.path);
         self.store().create_draft(AiSessionAttachmentDraftInput {
             id: Some(stream.input.attachment_id),
             scope_type: stream.input.scope_type,
@@ -1611,7 +1949,7 @@ impl AiSessionAttachmentDraftStreams {
             )
         })?;
         drop(streams);
-        let _ = std::fs::remove_file(stream.path);
+        drop(stream);
         Ok(serde_json::json!({ "removed": true }))
     }
 
@@ -1623,9 +1961,7 @@ impl AiSessionAttachmentDraftStreams {
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         for id in expired {
-            if let Some(stream) = streams.remove(&id) {
-                let _ = std::fs::remove_file(stream.path);
-            }
+            streams.remove(&id);
         }
     }
 
@@ -1756,8 +2092,23 @@ fn parse_iso(value: &str) -> Option<i64> {
 }
 
 #[cfg(test)]
-mod tests {
+#[path = "attachment_ownership_tests.rs"]
+mod ownership_tests;
+
+#[cfg(test)]
+pub(crate) mod tests {
     use super::*;
+    #[cfg(unix)]
+    mod gc_parity {
+        include!("attachment_gc_parity.rs");
+    }
+    #[cfg(unix)]
+    pub(crate) mod commit_parity {
+        include!("attachment_commit_parity.rs");
+    }
+    mod cleanup_parity {
+        include!("attachment_cleanup_parity.rs");
+    }
 
     fn test_store() -> (AiSessionConversationAttachmentStore, tempfile::TempDir) {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1775,6 +2126,342 @@ mod tests {
             size: content.len() as u64,
             content: content.to_vec(),
         }
+    }
+
+    fn stage_inline(
+        store: &AiSessionConversationAttachmentStore,
+        message_id: &str,
+        content: &[u8],
+    ) -> StagedAiSessionMessageAttachments {
+        store
+            .stage_message(StageMessageAttachmentsInput {
+                session_id: "ses_1".to_string(),
+                message_id: message_id.to_string(),
+                attachments: vec![AiSessionMessageAttachmentInput::Inline {
+                    id: "input_1".to_string(),
+                    kind: AiSessionAttachmentKind::Image,
+                    name: "image.png".to_string(),
+                    mime: "image/png".to_string(),
+                    size: content.len() as u64,
+                    data: content.to_vec(),
+                }],
+                retained_attachment_ids: Vec::new(),
+                runtime_path_root: None,
+                draft_scope_type: None,
+                draft_scope_id: None,
+                draft_attachment_ids: Vec::new(),
+            })
+            .expect("stage inline attachment")
+    }
+
+    #[test]
+    fn failed_draft_persistence_does_not_leak_content_or_delete_shared_content() {
+        let (store, _root) = test_store();
+        let committed = stage_inline(&store, "committed", b"shared");
+        store.commit_message("ses_1", "committed", None).unwrap();
+        std::fs::remove_dir(&store.draft_dir).expect("remove empty draft directory");
+        std::fs::write(&store.draft_dir, b"blocked").expect("block draft writes");
+        for content in [b"unique".as_slice(), b"shared".as_slice()] {
+            assert!(store
+                .create_draft(draft_input(
+                    "att_0123456789abcdef01234567",
+                    "ses_1",
+                    content
+                ))
+                .is_err());
+            assert_eq!(
+                std::fs::read_dir(&store.blob_dir).expect("blobs").count(),
+                1
+            );
+            assert_eq!(
+                std::fs::read(&committed.provider_attachments[0].retained_path)
+                    .expect("shared content"),
+                b"shared"
+            );
+        }
+        std::fs::remove_file(&store.draft_dir).expect("unblock drafts");
+        std::fs::create_dir(&store.draft_dir).expect("restore directory");
+        assert!(store
+            .create_draft(draft_input(
+                "att_0123456789abcdef01234567",
+                "ses_1",
+                b"unique"
+            ))
+            .is_ok());
+    }
+
+    #[test]
+    fn failed_rollback_preserves_the_durable_owner_until_draft_recovery_succeeds() {
+        let (store, root) = test_store();
+        let draft = store
+            .create_draft(draft_input(
+                "att_0123456789abcdef01234567",
+                "ses_1",
+                b"retry",
+            ))
+            .expect("draft");
+        store
+            .stage_message(StageMessageAttachmentsInput {
+                session_id: "ses_1".to_string(),
+                message_id: "msg_retry".to_string(),
+                attachments: Vec::new(),
+                retained_attachment_ids: Vec::new(),
+                runtime_path_root: None,
+                draft_scope_type: Some(AiSessionAttachmentScopeType::Session),
+                draft_scope_id: Some("ses_1".to_string()),
+                draft_attachment_ids: vec![draft.id.clone()],
+            })
+            .expect("stage draft");
+        let manifest_path = store.manifest_path(&draft.id);
+        std::fs::remove_dir(&store.draft_dir).expect("remove empty draft directory");
+        std::fs::write(&store.draft_dir, b"blocked").expect("block draft writes");
+        assert!(store.rollback_message("ses_1", "msg_retry").is_err());
+        assert!(
+            manifest_path.exists(),
+            "failed draft persistence must retain the message owner"
+        );
+        assert!(store.content("ses_1", "msg_retry", &draft.id).is_ok());
+        std::fs::remove_file(&store.draft_dir).expect("unblock drafts");
+        std::fs::create_dir(&store.draft_dir).expect("restore directory");
+        drop(store);
+        let restored = AiSessionConversationAttachmentStore::new(root.path());
+        assert!(restored
+            .cancel_draft(AiSessionAttachmentScopeType::Session, "ses_1", &draft.id)
+            .expect("recovered draft"));
+    }
+
+    #[test]
+    fn uncommitted_manifests_expire_without_deleting_shared_committed_content() {
+        for mode in ["staged", "rollback", "restart"] {
+            let (mut store, root) = test_store();
+            store.now = || 1_800_000_000_000;
+            let committed = stage_inline(&store, "committed", b"shared");
+            store
+                .commit_message("ses_1", "committed", Some("turn_1"))
+                .unwrap();
+            let shared = stage_inline(&store, "shared", b"shared");
+            let unique = stage_inline(&store, "unique", b"unique");
+            if mode == "rollback" {
+                assert_eq!(
+                    store.rollback_message("ses_1", "shared").expect("rollback"),
+                    1
+                );
+                assert_eq!(
+                    store.rollback_message("ses_1", "unique").expect("rollback"),
+                    1
+                );
+            } else if mode == "restart" {
+                drop(store);
+                store = AiSessionConversationAttachmentStore::new(root.path());
+            }
+            store.now = || 1_800_000_000_000 + DAY_MS - 1;
+            assert_eq!(store.gc().unwrap(), (0, 0), "{mode}: before expiry");
+            assert_eq!(store.attachments_for_message("ses_1", "unique").len(), 1);
+            store.now = || 1_800_000_000_000 + DAY_MS;
+            assert_eq!(store.gc().unwrap(), (2, 0), "{mode}: exact expiry");
+            for (message, attachment) in [("shared", &shared), ("unique", &unique)] {
+                assert!(store.attachments_for_message("ses_1", message).is_empty());
+                assert!(!store.manifest_path(&attachment.attachments[0].id).exists());
+            }
+            assert!(!unique.provider_attachments[0].retained_path.exists());
+            assert_eq!(
+                std::fs::read(
+                    store
+                        .content("ses_1", "committed", &committed.attachments[0].id)
+                        .expect("shared committed content")
+                        .path
+                )
+                .expect("read shared blob"),
+                b"shared"
+            );
+            assert_eq!(store.gc().unwrap(), (0, 0), "{mode}: idempotent collection");
+        }
+    }
+
+    #[test]
+    fn startup_removes_already_expired_uncommitted_manifests() {
+        let (mut store, root) = test_store();
+        store.now = || 1_600_000_000_000;
+        let staged = stage_inline(&store, "stale", b"stale");
+        let manifest_path = store.manifest_path(&staged.attachments[0].id);
+        drop(store);
+        let restored = AiSessionConversationAttachmentStore::new(root.path());
+        assert!(restored
+            .attachments_for_message("ses_1", "stale")
+            .is_empty());
+        assert!(!manifest_path.exists());
+        assert!(!staged.provider_attachments[0].retained_path.exists());
+    }
+
+    #[test]
+    fn claiming_requires_every_attachment_to_belong_to_the_same_session_and_message() {
+        let (store, _root) = test_store();
+        let first = stage_inline(&store, "first", b"first");
+        let second = stage_inline(&store, "second", b"second");
+        let first_id = first.attachments[0].id.clone();
+        let second_id = second.attachments[0].id.clone();
+        store.rollback_message("ses_1", "first").expect("rollback");
+        store.rollback_message("ses_1", "second").expect("rollback");
+        for (session, message, ids) in [
+            ("ses_1", "first", Vec::new()),
+            ("other_session", "first", vec![first_id.clone()]),
+            ("ses_1", "other_message", vec![first_id.clone()]),
+            (
+                "ses_1",
+                "first",
+                vec![first_id.clone(), "missing".to_string()],
+            ),
+            ("ses_1", "first", vec![first_id.clone(), second_id]),
+        ] {
+            assert!(!store
+                .claim_message_attachments(session, message, &ids)
+                .expect("claim"));
+            assert_eq!(
+                store
+                    .content("ses_1", "first", &first_id)
+                    .expect_err("still draft")
+                    .status_code,
+                404
+            );
+        }
+        assert!(store
+            .claim_message_attachments("ses_1", "first", std::slice::from_ref(&first_id))
+            .expect("claim first"));
+        assert!(store.content("ses_1", "first", &first_id).is_ok());
+        assert_eq!(
+            store.rollback_message("ses_1", "first").expect("rollback"),
+            1
+        );
+        assert_eq!(
+            store
+                .content("ses_1", "first", &first_id)
+                .expect_err("rolled back")
+                .status_code,
+            404
+        );
+    }
+
+    #[test]
+    fn completed_drafts_keep_the_node_one_day_retention() {
+        let (mut store, _root) = test_store();
+        store.now = || 1_800_000_000_000;
+        let draft = store
+            .create_draft(draft_input(
+                "att_0123456789abcdef01234567",
+                "ses_1",
+                b"hello",
+            ))
+            .expect("draft");
+        assert_eq!(
+            parse_iso(&draft.expires_at),
+            Some(1_800_000_000_000 + DAY_MS)
+        );
+        store.now = || 1_800_000_000_000 + 60 * 60 * 1000;
+        assert_eq!(store.gc().unwrap().0, 0);
+        store.now = || 1_800_000_000_000 + DAY_MS;
+        assert_eq!(store.gc().unwrap().0, 1);
+    }
+
+    #[test]
+    fn completed_draft_retention_survives_rollback_recovery_and_old_rust_files() {
+        let (mut store, root) = test_store();
+        store.now = || 1_800_000_000_000;
+        let draft = store
+            .create_draft(draft_input(
+                "att_0123456789abcdef01234567",
+                "ses_1",
+                b"hello",
+            ))
+            .expect("draft");
+        let stage = || StageMessageAttachmentsInput {
+            session_id: "ses_1".to_string(),
+            message_id: "msg_1".to_string(),
+            attachments: Vec::new(),
+            retained_attachment_ids: Vec::new(),
+            runtime_path_root: None,
+            draft_scope_type: Some(AiSessionAttachmentScopeType::Session),
+            draft_scope_id: Some("ses_1".to_string()),
+            draft_attachment_ids: vec![draft.id.clone()],
+        };
+        store.stage_message(stage()).expect("stage");
+        assert_eq!(
+            store.rollback_message("ses_1", "msg_1").expect("rollback"),
+            1
+        );
+        assert_eq!(store.lock().drafts[&draft.id].expires_at, draft.expires_at);
+        store.stage_message(stage()).expect("stage again");
+        drop(store);
+        let restored = AiSessionConversationAttachmentStore::new(root.path());
+        assert_eq!(
+            restored.lock().drafts[&draft.id].expires_at,
+            draft.expires_at
+        );
+        let path = restored.draft_path(&draft.id);
+        let mut old: Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("draft file")).expect("JSON");
+        // Compatibility for v0.0.47: repair the previous Rust 10-minute value
+        // using the existing authoritative creation time, then persist it.
+        old["expiresAt"] = Value::String(iso_from_millis(
+            1_800_000_000_000 + AI_SESSION_ATTACHMENT_DRAFT_STREAM_TTL_MS,
+        ));
+        std::fs::write(&path, serde_json::to_vec(&old).expect("JSON")).expect("old draft");
+        drop(restored);
+        let repaired = AiSessionConversationAttachmentStore::new(root.path());
+        assert_eq!(
+            repaired.lock().drafts[&draft.id].expires_at,
+            draft.expires_at
+        );
+        let persisted: Value =
+            serde_json::from_slice(&std::fs::read(path).expect("draft file")).expect("JSON");
+        assert_eq!(persisted["expiresAt"], draft.expires_at);
+    }
+
+    #[test]
+    fn append_owner_serializes_requests_and_cannot_touch_a_replacement_upload() {
+        let (store, _root) = test_store();
+        let streams = Arc::new(store).draft_streams();
+        let id = "cia_0123456789abcdef01234567";
+        let begin = || AiSessionAttachmentDraftStreamBegin {
+            attachment_id: id.to_string(),
+            scope_type: AiSessionAttachmentScopeType::Session,
+            scope_id: "ses_1".to_string(),
+            kind: AiSessionAttachmentKind::File,
+            name: "notes.txt".to_string(),
+            mime: "text/plain".to_string(),
+            size: 10,
+        };
+        streams.begin(begin()).expect("begin");
+        let first = streams.begin_append(id, 0).expect("first append");
+        assert_eq!(
+            streams.begin_append(id, 0).err().expect("busy").code,
+            "AI_SESSION_ATTACHMENT_UPLOAD_BUSY"
+        );
+        assert_eq!(
+            streams.complete(id).expect_err("busy").code,
+            "AI_SESSION_ATTACHMENT_UPLOAD_BUSY"
+        );
+        first.write(b"hello").expect("write");
+        drop(first); // A disconnected request retains the acknowledged bytes.
+        assert_eq!(
+            streams.append(id, 5, b"world").expect("resume")["offset"],
+            10
+        );
+        let old = streams.begin_append(id, 10).expect("old append");
+        streams.cancel(id).expect("cancel");
+        streams.begin(begin()).expect("replacement");
+        let replacement = streams.begin_append(id, 0).expect("replacement append");
+        assert_eq!(
+            old.write(b"corrupt").expect_err("old generation").code,
+            "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND"
+        );
+        drop(old);
+        assert_eq!(
+            streams.begin_append(id, 0).err().expect("still busy").code,
+            "AI_SESSION_ATTACHMENT_UPLOAD_BUSY"
+        );
+        replacement.write(b"new bytes!").expect("replacement write");
+        assert_eq!(replacement.finish().expect("finish")["offset"], 10);
+        assert_eq!(streams.complete(id).expect("complete").size, 10);
     }
 
     #[test]
@@ -1802,7 +2489,9 @@ mod tests {
             .expect("stage");
         assert_eq!(staged.attachments.len(), 1);
         assert!(store.lock().drafts.is_empty());
-        store.commit_message("ses_1", "msg_1", Some("turn-1"));
+        store
+            .commit_message("ses_1", "msg_1", Some("turn-1"))
+            .unwrap();
         let content = store.content("ses_1", "msg_1", &draft.id).expect("content");
         assert_eq!(content.attachment.id, draft.id);
         assert_eq!(

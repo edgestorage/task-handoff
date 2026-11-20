@@ -21,14 +21,16 @@ pub enum AiSessionPersistenceSettingsError {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+// Disk readers ignore newer fields while validating required known fields;
+// the public request model keeps its own strict input boundary.
+#[serde(rename_all = "camelCase")]
 struct SettingsV1 {
     schema_version: u32,
     history_limit: usize,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 struct SettingsV2 {
     schema_version: u32,
     history_limit: usize,
@@ -36,7 +38,7 @@ struct SettingsV2 {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 struct SettingsV3 {
     schema_version: u32,
     history_limit: usize,

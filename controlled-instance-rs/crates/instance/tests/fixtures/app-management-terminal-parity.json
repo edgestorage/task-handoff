@@ -1,0 +1,260 @@
+{
+  "source": {
+    "head": "368abbbc",
+    "main": "9294e287",
+    "compatibilityBaseline": "v0.0.58",
+    "nodeOwner": "packages/controlled-instance/src/web/app-management.ts",
+    "nodeHarness": "test/fixtures/app-management-terminal-parity.js",
+    "normalization": "Only fixed scenario names and stable business projections are stored. No job IDs, request times, stream IDs, event sequences, error text from OS failures, or filesystem paths are normalized away.",
+    "note": "Expected values were generated from the current Node manager. Rust must consume this file unchanged."
+  },
+  "scenarios": [
+    {
+      "name": "success",
+      "expected": {
+        "name": "success",
+        "job": {
+          "operation": "install",
+          "state": "succeeded",
+          "phase": "verify",
+          "hasStartedAt": true,
+          "hasFinishedAt": true,
+          "error": null
+        },
+        "app": {
+          "state": "installed",
+          "managementSource": "recipe",
+          "canInstall": false,
+          "canUninstall": true,
+          "canUpdate": true,
+          "installReason": "ALREADY_INSTALLED",
+          "uninstallReason": null,
+          "updateReason": null
+        },
+        "order": [
+          "event:queued",
+          "event:running",
+          "drain",
+          "execute",
+          "cleanup:true",
+          "event:succeeded",
+          "notify:succeeded"
+        ],
+        "eventStates": ["succeeded"],
+        "executions": 1,
+        "warnings": [],
+        "reopened": {
+          "job": {
+            "operation": "install",
+            "state": "succeeded",
+            "phase": "verify",
+            "hasStartedAt": true,
+            "hasFinishedAt": true,
+            "error": null
+          },
+          "app": {
+            "state": "installed",
+            "managementSource": "recipe",
+            "canInstall": false,
+            "canUninstall": true,
+            "canUpdate": true,
+            "installReason": "ALREADY_INSTALLED",
+            "uninstallReason": null,
+            "updateReason": null
+          }
+        }
+      }
+    },
+    {
+      "name": "drain-failure",
+      "expected": {
+        "name": "drain-failure",
+        "job": {
+          "operation": "install",
+          "state": "failed",
+          "phase": "starting",
+          "hasStartedAt": true,
+          "hasFinishedAt": true,
+          "error": {
+            "code": "drain_failed",
+            "message": "simulated drain failure",
+            "retryable": true
+          }
+        },
+        "app": {
+          "state": "not-installed",
+          "managementSource": "none",
+          "canInstall": true,
+          "canUninstall": false,
+          "canUpdate": false,
+          "installReason": null,
+          "uninstallReason": "NOT_INSTALLED",
+          "updateReason": "NOT_INSTALLED"
+        },
+        "order": [
+          "event:queued",
+          "event:running",
+          "drain",
+          "cleanup:false",
+          "event:failed",
+          "notify:failed"
+        ],
+        "eventStates": ["failed"],
+        "executions": 0,
+        "warnings": [],
+        "reopened": {
+          "job": {
+            "operation": "install",
+            "state": "failed",
+            "phase": "starting",
+            "hasStartedAt": true,
+            "hasFinishedAt": true,
+            "error": {
+              "code": "drain_failed",
+              "message": "simulated drain failure",
+              "retryable": true
+            }
+          },
+          "app": {
+            "state": "not-installed",
+            "managementSource": "none",
+            "canInstall": true,
+            "canUninstall": false,
+            "canUpdate": false,
+            "installReason": null,
+            "uninstallReason": "NOT_INSTALLED",
+            "updateReason": "NOT_INSTALLED"
+          }
+        }
+      }
+    },
+    {
+      "name": "cleanup-failure",
+      "expected": {
+        "name": "cleanup-failure",
+        "job": {
+          "operation": "install",
+          "state": "failed",
+          "phase": "starting",
+          "hasStartedAt": true,
+          "hasFinishedAt": true,
+          "error": {
+            "code": "cleanup_failed",
+            "message": "simulated cleanup failure",
+            "retryable": false
+          }
+        },
+        "app": {
+          "state": "installed",
+          "managementSource": "recipe",
+          "canInstall": false,
+          "canUninstall": true,
+          "canUpdate": true,
+          "installReason": "ALREADY_INSTALLED",
+          "uninstallReason": null,
+          "updateReason": null
+        },
+        "order": [
+          "event:queued",
+          "event:running",
+          "drain",
+          "execute",
+          "cleanup:true",
+          "cleanup:false",
+          "event:failed",
+          "notify:failed"
+        ],
+        "eventStates": ["failed"],
+        "executions": 1,
+        "warnings": ["App failure cleanup did not complete."],
+        "reopened": {
+          "job": {
+            "operation": "install",
+            "state": "failed",
+            "phase": "starting",
+            "hasStartedAt": true,
+            "hasFinishedAt": true,
+            "error": {
+              "code": "cleanup_failed",
+              "message": "simulated cleanup failure",
+              "retryable": false
+            }
+          },
+          "app": {
+            "state": "installed",
+            "managementSource": "recipe",
+            "canInstall": false,
+            "canUninstall": true,
+            "canUpdate": true,
+            "installReason": "ALREADY_INSTALLED",
+            "uninstallReason": null,
+            "updateReason": null
+          }
+        }
+      }
+    },
+    {
+      "name": "rollback-failure",
+      "expected": {
+        "name": "rollback-failure",
+        "job": {
+          "operation": "install",
+          "state": "failed",
+          "phase": "starting",
+          "hasStartedAt": true,
+          "hasFinishedAt": true,
+          "error": {
+            "code": "drain_failed",
+            "message": "simulated drain failure",
+            "retryable": true
+          }
+        },
+        "app": {
+          "state": "not-installed",
+          "managementSource": "none",
+          "canInstall": true,
+          "canUninstall": false,
+          "canUpdate": false,
+          "installReason": null,
+          "uninstallReason": "NOT_INSTALLED",
+          "updateReason": "NOT_INSTALLED"
+        },
+        "order": [
+          "event:queued",
+          "event:running",
+          "drain",
+          "cleanup:false",
+          "event:failed",
+          "notify:failed"
+        ],
+        "eventStates": ["failed"],
+        "executions": 0,
+        "warnings": ["App failure cleanup did not complete."],
+        "reopened": {
+          "job": {
+            "operation": "install",
+            "state": "failed",
+            "phase": "starting",
+            "hasStartedAt": true,
+            "hasFinishedAt": true,
+            "error": {
+              "code": "drain_failed",
+              "message": "simulated drain failure",
+              "retryable": true
+            }
+          },
+          "app": {
+            "state": "not-installed",
+            "managementSource": "none",
+            "canInstall": true,
+            "canUninstall": false,
+            "canUpdate": false,
+            "installReason": null,
+            "uninstallReason": "NOT_INSTALLED",
+            "updateReason": "NOT_INSTALLED"
+          }
+        }
+      }
+    }
+  ]
+}

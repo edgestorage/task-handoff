@@ -1,0 +1,345 @@
+{
+  "items": [
+    {
+      "name": "command",
+      "item": {
+        "id": "command",
+        "type": "commandExecution",
+        "command": "  printf hello  ",
+        "status": "inProgress"
+      },
+      "expectedTimeline": {
+        "id": "command",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "commandExecution",
+        "title": "Command",
+        "status": "running",
+        "input": "  printf hello  "
+      },
+      "expectedTool": {
+        "id": "command",
+        "kind": "commandExecution",
+        "name": "Command",
+        "inputPreview": "printf hello"
+      }
+    },
+    {
+      "name": "mcp-arguments",
+      "item": {
+        "id": "mcp-arguments",
+        "type": "mcpToolCall",
+        "server": "files",
+        "tool": "read",
+        "arguments": {
+          "path": "src/main.rs",
+          "line": 2
+        }
+      },
+      "expectedTimeline": {
+        "id": "mcp-arguments",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "mcpToolCall",
+        "title": "files · read",
+        "input": "{\n  \"path\": \"src/main.rs\",\n  \"line\": 2\n}"
+      },
+      "expectedTool": {
+        "id": "mcp-arguments",
+        "kind": "mcpToolCall",
+        "name": "files · read",
+        "inputPreview": "{\"path\":\"src/main.rs\",\"line\":2}"
+      }
+    },
+    {
+      "name": "dynamic-null-arguments",
+      "item": {
+        "id": "dynamic-null-arguments",
+        "type": "dynamicToolCall",
+        "tool": "lookup",
+        "arguments": null
+      },
+      "expectedTimeline": {
+        "id": "dynamic-null-arguments",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "dynamicToolCall",
+        "title": "lookup"
+      },
+      "expectedTool": {
+        "id": "dynamic-null-arguments",
+        "kind": "dynamicToolCall",
+        "name": "lookup",
+        "inputPreview": "null"
+      }
+    },
+    {
+      "name": "dynamic-blank-labels",
+      "item": {
+        "id": "dynamic-blank-labels",
+        "type": "dynamicToolCall",
+        "namespace": "  ",
+        "tool": ""
+      },
+      "expectedTimeline": {
+        "id": "dynamic-blank-labels",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "dynamicToolCall",
+        "title": "Tool"
+      },
+      "expectedTool": {
+        "id": "dynamic-blank-labels",
+        "kind": "dynamicToolCall",
+        "name": "Tool"
+      }
+    },
+    {
+      "name": "mcp-empty-tool",
+      "item": {
+        "id": "mcp-empty-tool",
+        "type": "mcpToolCall",
+        "server": "",
+        "tool": ""
+      },
+      "expectedTimeline": {
+        "id": "mcp-empty-tool",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "mcpToolCall",
+        "title": "Tool"
+      },
+      "expectedTool": {
+        "id": "mcp-empty-tool",
+        "kind": "mcpToolCall",
+        "name": "Tool"
+      }
+    },
+    {
+      "name": "collab-empty-tool",
+      "item": {
+        "id": "collab-empty-tool",
+        "type": "collabAgentToolCall",
+        "tool": "",
+        "prompt": "help"
+      },
+      "expectedTimeline": {
+        "id": "collab-empty-tool",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "collabAgentToolCall",
+        "title": "collabAgentToolCall",
+        "input": "help"
+      },
+      "expectedTool": {
+        "id": "collab-empty-tool",
+        "kind": "collabAgentToolCall",
+        "name": "collabAgentToolCall",
+        "inputPreview": "help"
+      }
+    },
+    {
+      "name": "opaque-tool-id",
+      "item": {
+        "id": " tool-with-spaces ",
+        "type": "commandExecution",
+        "command": "ls"
+      },
+      "expectedTimeline": {
+        "id": " tool-with-spaces ",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "commandExecution",
+        "title": "Command",
+        "input": "ls"
+      },
+      "expectedTool": {
+        "id": " tool-with-spaces ",
+        "kind": "commandExecution",
+        "name": "Command",
+        "inputPreview": "ls"
+      }
+    },
+    {
+      "name": "blank-tool-id",
+      "item": {
+        "id": "  ",
+        "type": "commandExecution",
+        "command": "ls"
+      },
+      "expectedTimeline": {
+        "id": "  ",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "commandExecution",
+        "title": "commandExecution",
+        "input": "ls"
+      },
+      "expectedTool": null
+    },
+    {
+      "name": "file-change-empty",
+      "item": {
+        "id": "file-change-empty",
+        "type": "fileChange",
+        "changes": []
+      },
+      "expectedTimeline": {
+        "id": "file-change-empty",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "fileChange",
+        "title": "File change",
+        "paths": [],
+        "output": "[]"
+      },
+      "expectedTool": {
+        "id": "file-change-empty",
+        "kind": "fileChange",
+        "name": "File change"
+      }
+    },
+    {
+      "name": "file-change-sanitize",
+      "item": {
+        "id": "file-change-sanitize",
+        "type": "fileChange",
+        "changes": [
+          null,
+          7,
+          [],
+          {
+            "path": "   "
+          },
+          {
+            "path": "a.rs"
+          },
+          {
+            "path": "b.rs"
+          },
+          {
+            "path": "a.rs"
+          }
+        ]
+      },
+      "expectedTimeline": {
+        "id": "file-change-sanitize",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "fileChange",
+        "title": "File change",
+        "summary": "a.rs, b.rs",
+        "paths": [
+          "a.rs",
+          "b.rs"
+        ],
+        "output": "[\n  {},\n  {},\n  {},\n  {\n    \"path\": \"   \"\n  },\n  {\n    \"path\": \"a.rs\"\n  },\n  {\n    \"path\": \"b.rs\"\n  },\n  {\n    \"path\": \"a.rs\"\n  }\n]"
+      },
+      "expectedTool": {
+        "id": "file-change-sanitize",
+        "kind": "fileChange",
+        "name": "File change",
+        "inputPreview": "a.rs, b.rs"
+      }
+    },
+    {
+      "name": "hook-fragment-spacing",
+      "item": {
+        "id": "hook-fragment-spacing",
+        "type": "hookPrompt",
+        "fragments": [
+          {
+            "text": " first  "
+          },
+          {
+            "text": "  second "
+          },
+          {
+            "text": "   "
+          },
+          null
+        ]
+      },
+      "expectedTimeline": {
+        "id": "hook-fragment-spacing",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "hookPrompt",
+        "title": "Hook prompt",
+        "summary": "first  \n  second"
+      },
+      "expectedTool": null
+    },
+    {
+      "name": "image-generation",
+      "item": {
+        "id": "image-generation",
+        "type": "imageGeneration",
+        "revisedPrompt": "draw a cat",
+        "result": {
+          "url": "/tmp/image.png"
+        }
+      },
+      "expectedTimeline": {
+        "id": "image-generation",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "imageGeneration",
+        "title": "Image generation",
+        "input": "draw a cat",
+        "output": "{\n  \"url\": \"/tmp/image.png\"\n}"
+      },
+      "expectedTool": {
+        "id": "image-generation",
+        "kind": "imageGeneration",
+        "name": "Image generation",
+        "inputPreview": "draw a cat"
+      }
+    },
+    {
+      "name": "context-compaction",
+      "item": {
+        "id": "context-compaction",
+        "type": "contextCompaction"
+      },
+      "expectedTimeline": {
+        "id": "context-compaction",
+        "turnId": "t1",
+        "type": "activity",
+        "activityKind": "contextCompaction",
+        "title": "Context compaction",
+        "status": "completed"
+      },
+      "expectedTool": null
+    }
+  ],
+  "threadCases": [
+    {
+      "name": "blank-provider-identifiers",
+      "thread": {
+        "turns": [
+          {
+            "id": "  ",
+            "items": [
+              {
+                "id": " ",
+                "type": "commandExecution",
+                "command": "ls"
+              }
+            ]
+          }
+        ]
+      },
+      "expected": [
+        {
+          "id": "turn_0:item_0",
+          "turnId": "turn_0",
+          "type": "activity",
+          "activityKind": "commandExecution",
+          "title": "commandExecution",
+          "input": "ls"
+        }
+      ]
+    }
+  ]
+}

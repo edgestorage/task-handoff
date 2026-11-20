@@ -2,13 +2,18 @@
 
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+const { observeEventForwarder, observeUnownedForwarder } = require("../test/fixtures/event-forwarder-rust-parity.js");
+const { createTestControlPlaneService } = require("../test/fixtures/control-plane-service.js");
 const ignoredKeys = new Set([
   "at",
   "checkedAt",
@@ -225,12 +230,20 @@ async function request(base, roots, specification) {
     : spec.body === undefined
       ? undefined
       : JSON.stringify(spec.body);
-  const response = await fetch(`${base}${spec.path}`, {
-    method: spec.method || "GET",
-    headers,
-    body: requestBody,
-    signal: AbortSignal.timeout(15_000),
-  });
+  const method = spec.method || "GET";
+  if (spec.nodeHttp === true) return nodeHttpRequest(base, roots, spec, method, headers, requestBody);
+  let response;
+  try {
+    response = await fetch(`${base}${spec.path}`, {
+      method,
+      headers,
+      body: requestBody,
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) {
+    const cause = error?.cause instanceof Error ? error.cause.message : error?.cause;
+    throw new Error(`Request ${method} ${base}${spec.path} failed${cause ? `: ${cause}` : ""}`, { cause: error });
+  }
   const text = await response.text();
   let body = text;
   if (mediaTypeIsJson(response)) {
@@ -241,6 +254,44 @@ async function request(base, roots, specification) {
     }
   }
   return { response, body, canonical: canonicalResponse(response, body, roots) };
+}
+
+function nodeHttpRequest(base, roots, spec, method, headers, requestBody) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(spec.path, base);
+    if (spec.omitBody === true && requestBody !== undefined) headers["content-length"] = String(Buffer.byteLength(requestBody));
+    let responseSeen = false;
+    const request = http.request(url, { method, headers }, (incoming) => {
+      responseSeen = true;
+      const chunks = [];
+      incoming.on("data", (chunk) => chunks.push(chunk));
+      incoming.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(incoming.headers)) {
+          if (Array.isArray(value)) for (const entry of value) responseHeaders.append(name, entry);
+          else if (value !== undefined) responseHeaders.set(name, value);
+        }
+        const response = { status: incoming.statusCode || 0, headers: responseHeaders };
+        let body = text;
+        if (mediaTypeIsJson(response)) {
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = text;
+          }
+        }
+        resolve({ response, body, canonical: canonicalResponse(response, body, roots) });
+      });
+    });
+    request.on("error", (error) => {
+      if (responseSeen) return;
+      const cause = error?.cause instanceof Error ? error.cause.message : error?.cause;
+      const detail = cause || error?.code || error?.message;
+      reject(new Error(`Request ${method} ${base}${spec.path} failed${detail ? `: ${detail}` : ""}`, { cause: error }));
+    });
+    request.end(spec.omitBody === true ? undefined : requestBody);
+  });
 }
 
 function mediaTypeIsJson(response) {
@@ -312,6 +363,7 @@ async function main() {
   const nodeRoots = { workspace: nodeWorkspace, data: nodeData, root: nodeRoot };
   const rustRoots = { workspace: rustWorkspace, data: rustData, root: rustRoot };
   const steps = [];
+  let ownership;
   const state = {
     node: { workspace: nodeWorkspace },
     rust: { workspace: rustWorkspace },
@@ -365,6 +417,90 @@ async function main() {
       ["spa-unknown-route", "/unknown-ui-route"],
     ];
     for (const [name, route] of readRoutes) await compare(name, { path: route });
+
+    // The relay owns no projection when it attaches. Start from the initial
+    // App Session authority revision so both producers exercise the same first
+    // snapshot and second-output replay path instead of an already-running stream.
+    // Real Control Plane ownership: the node record and nodeOwnsInstance path
+    // are the production ones. The fleet snapshot seam is populated in memory
+    // because this harness has no live node-agent tunnel behind the claims.
+    ownership = await createTestControlPlaneService(path.join(temporaryRoot, "control-plane-ownership"));
+    const ownershipTimestamp = new Date().toISOString();
+    const ownershipNode = (id) => ({
+      id,
+      name: id,
+      connectionMode: "direct-http",
+      auth: { mode: "paired-hmac", keyId: `key_${id}`, secret: `secret_${id}` },
+      endpoint: `http://${id}.example.test:8091`,
+      status: "online",
+      health: "ok",
+      capabilities: {},
+      labels: {},
+      createdAt: ownershipTimestamp,
+      updatedAt: ownershipTimestamp,
+    });
+    for (const id of ["node_event_forwarder_node", "node_event_forwarder_rust", "node_event_forwarder_unowned"]) {
+      await ownership.service.nodes.put(ownershipNode(id));
+    }
+    ownership.service.nodeAgentGateway.readFleetInstances = (nodes) => ({
+      items: nodes
+        .filter(node => node.id !== "node_event_forwarder_unowned")
+        .map(node => ({ id: "inst_differential", nodeId: node.id, name: "differential-instance" })),
+      nodeStates: nodes.map(node => ({ nodeId: node.id, resource: "instances", phase: "ready" })),
+      nodeErrors: [],
+    });
+    const validateInstanceScope = (nodeId, instanceId) => ownership.service.nodeOwnsInstance(nodeId, instanceId);
+    const observeEventForwarding = (base, workspace, nodeId) => observeEventForwarder({
+      base,
+      workspace,
+      nodeId,
+      instanceId: "inst_differential",
+      validateInstanceScope,
+      appId: "terminal-tty",
+    });
+    const normalizeEventForwarding = ({ appSessionId: _appSessionId, ...observation }) => observation;
+    const [nodeEventForwarding, rustEventForwarding] = [
+      await observeEventForwarding(nodeBase, nodeWorkspace, "node_event_forwarder_node"),
+      await observeEventForwarding(rustBase, rustWorkspace, "node_event_forwarder_rust"),
+    ];
+    const eventForwardingDifference = findDifference(
+      normalizeEventForwarding(nodeEventForwarding),
+      normalizeEventForwarding(rustEventForwarding),
+      "$.eventForwarding",
+    );
+    steps.push({
+      name: "event-forwarder-control-plane",
+      status: eventForwardingDifference ? "mismatch" : "match",
+      ...(eventForwardingDifference ? { difference: eventForwardingDifference, node: nodeEventForwarding, rust: rustEventForwarding } : {}),
+      ...(!eventForwardingDifference ? { node: nodeEventForwarding, rust: rustEventForwarding } : {}),
+    });
+    console.log(`${eventForwardingDifference ? "MISMATCH" : "MATCH"} event-forwarder-control-plane`);
+
+    const [nodeUnowned, rustUnowned] = [
+      await observeUnownedForwarder({
+        base: nodeBase,
+        workspace: nodeWorkspace,
+        nodeId: "node_event_forwarder_unowned",
+        instanceId: "inst_differential",
+        validateInstanceScope,
+      }),
+      await observeUnownedForwarder({
+        base: rustBase,
+        workspace: rustWorkspace,
+        nodeId: "node_event_forwarder_unowned",
+        instanceId: "inst_differential",
+        validateInstanceScope,
+      }),
+    ];
+    const unownedDifference = findDifference(nodeUnowned, rustUnowned, "$.unownedForwarding");
+    steps.push({
+      name: "event-forwarder-unowned-instance-dropped",
+      status: unownedDifference ? "mismatch" : "match",
+      node: nodeUnowned,
+      rust: rustUnowned,
+      ...(unownedDifference ? { difference: unownedDifference } : {}),
+    });
+    console.log(`${unownedDifference ? "MISMATCH" : "MATCH"} event-forwarder-unowned-instance-dropped`);
 
     // Capability probing is intentionally asynchronous in both runtimes. The
     // first document may lose the version race; after warm-up both must expose
@@ -485,6 +621,8 @@ async function main() {
       method: "POST",
       path: "/api/triggers",
       body: { padding: "x".repeat(1024 * 1024) },
+      nodeHttp: true,
+      omitBody: true,
     });
     await compare("invalid-trigger-body", {
       method: "POST",
@@ -1736,8 +1874,30 @@ async function main() {
       console.error(JSON.stringify(mismatches, null, 2));
       process.exitCode = 1;
     }
+  } catch (error) {
+    const failure = {
+      ok: false,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      nodeBundle,
+      rustBinary,
+      uiDir,
+      nodePort,
+      rustPort,
+      temporaryRoot,
+      error: error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) },
+      steps,
+      nodeLogs: node.logs(),
+      rustLogs: rust.logs(),
+    };
+    if (options.out) {
+      await fs.mkdir(path.dirname(options.out), { recursive: true });
+      await fs.writeFile(options.out, `${JSON.stringify(failure, null, 2)}\n`);
+    }
+    throw error;
   } finally {
     await Promise.all([stopRuntime(node), stopRuntime(rust)]);
+    await ownership?.close();
     if (!options.keep) await fs.rm(temporaryRoot, { recursive: true, force: true });
   }
 }

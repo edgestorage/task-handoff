@@ -1,0 +1,331 @@
+{
+  "source": {
+    "head": "9b2d6e17cce4a6a65d00f2ed4504f45546256edf",
+    "compatibilityTag": "v0.0.47",
+    "files": [
+      {
+        "file": "packages/controlled-instance/src/web/server.ts",
+        "sha256": "3d0a08e93645e66e4ccedd3a411f152021f32d0277b9c876db00a0dba9598e55"
+      },
+      {
+        "file": "packages/controlled-instance/src/web/events.ts",
+        "sha256": "3a8938e73018d35a830c0fc798f027b7eef780275a22ebe28fe276a8259e077f"
+      }
+    ],
+    "boundary": "Real Node HTTP/WS, controlled runtime records and synchronous created/updated events. App snapshots are HTTP only; optional WS bootstrap snapshot belongs to AI Session."
+  },
+  "expected": {
+    "normal": {
+      "initial": {
+        "streamId": "<stream>",
+        "revision": 1,
+        "lastEventAt": "<wall-clock>",
+        "snapshot": {
+          "runningCount": 1,
+          "problemCount": 0,
+          "sessions": [
+            {
+              "id": "app_bootstrap",
+              "appId": "terminal-tty",
+              "title": "Initial title",
+              "kind": "tty",
+              "status": "running",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z",
+              "paths": {
+                "sessionDir": "/tmp/session",
+                "logDir": "/tmp/logs"
+              },
+              "bindings": [
+                {
+                  "type": "app-session",
+                  "id": "app_bootstrap"
+                }
+              ],
+              "workspace": {
+                "cwd": "/workspace"
+              }
+            }
+          ],
+          "updatedAt": "<wall-clock>"
+        }
+      },
+      "before": {
+        "streamId": "<stream>",
+        "revision": 1,
+        "lastEventAt": "<wall-clock>",
+        "snapshot": {
+          "runningCount": 1,
+          "problemCount": 0,
+          "sessions": [
+            {
+              "id": "app_bootstrap",
+              "appId": "terminal-tty",
+              "title": "Initial title",
+              "kind": "tty",
+              "status": "running",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z",
+              "paths": {
+                "sessionDir": "/tmp/session",
+                "logDir": "/tmp/logs"
+              },
+              "bindings": [
+                {
+                  "type": "app-session",
+                  "id": "app_bootstrap"
+                }
+              ],
+              "workspace": {
+                "cwd": "/workspace"
+              }
+            }
+          ],
+          "updatedAt": "<wall-clock>"
+        }
+      },
+      "hello": {
+        "protocolVersion": 1,
+        "appStream": {
+          "topic": "app.sessions",
+          "instanceId": "<instance>",
+          "streamId": "<stream>",
+          "latestRevision": 1,
+          "earliestRetainedRevision": 1
+        }
+      },
+      "bootstrapTypes": [
+        "streams.hello",
+        "ai-session.snapshot",
+        "app.management"
+      ],
+      "patch": {
+        "type": "app-session.patch",
+        "topic": "app.sessions",
+        "payload": {
+          "meta": {
+            "streamId": "<stream>",
+            "instanceId": "<instance>",
+            "revision": 2,
+            "previousRevision": 1,
+            "traceId": "<trace>",
+            "generatedAt": "<wall-clock>",
+            "reason": "app-session-updated"
+          },
+          "session": {
+            "id": "app_bootstrap",
+            "appId": "terminal-tty",
+            "title": "After connect",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-02T00:00:00.000Z",
+            "updatedAt": "2026-11-02T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_bootstrap"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        }
+      },
+      "after": {
+        "streamId": "<stream>",
+        "revision": 2,
+        "lastEventAt": "<wall-clock>",
+        "snapshot": {
+          "runningCount": 1,
+          "problemCount": 0,
+          "sessions": [
+            {
+              "id": "app_bootstrap",
+              "appId": "terminal-tty",
+              "title": "After connect",
+              "kind": "tty",
+              "status": "running",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z",
+              "paths": {
+                "sessionDir": "/tmp/session",
+                "logDir": "/tmp/logs"
+              },
+              "bindings": [
+                {
+                  "type": "app-session",
+                  "id": "app_bootstrap"
+                }
+              ],
+              "workspace": {
+                "cwd": "/workspace"
+              }
+            }
+          ],
+          "updatedAt": "<wall-clock>"
+        }
+      }
+    },
+    "changedBeforeConnect": {
+      "initial": {
+        "streamId": "<stream>",
+        "revision": 1,
+        "lastEventAt": "<wall-clock>",
+        "snapshot": {
+          "runningCount": 1,
+          "problemCount": 0,
+          "sessions": [
+            {
+              "id": "app_bootstrap",
+              "appId": "terminal-tty",
+              "title": "Initial title",
+              "kind": "tty",
+              "status": "running",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z",
+              "paths": {
+                "sessionDir": "/tmp/session",
+                "logDir": "/tmp/logs"
+              },
+              "bindings": [
+                {
+                  "type": "app-session",
+                  "id": "app_bootstrap"
+                }
+              ],
+              "workspace": {
+                "cwd": "/workspace"
+              }
+            }
+          ],
+          "updatedAt": "<wall-clock>"
+        }
+      },
+      "before": {
+        "streamId": "<stream>",
+        "revision": 2,
+        "lastEventAt": "<wall-clock>",
+        "snapshot": {
+          "runningCount": 1,
+          "problemCount": 0,
+          "sessions": [
+            {
+              "id": "app_bootstrap",
+              "appId": "terminal-tty",
+              "title": "Before connect",
+              "kind": "tty",
+              "status": "running",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z",
+              "paths": {
+                "sessionDir": "/tmp/session",
+                "logDir": "/tmp/logs"
+              },
+              "bindings": [
+                {
+                  "type": "app-session",
+                  "id": "app_bootstrap"
+                }
+              ],
+              "workspace": {
+                "cwd": "/workspace"
+              }
+            }
+          ],
+          "updatedAt": "<wall-clock>"
+        }
+      },
+      "hello": {
+        "protocolVersion": 1,
+        "appStream": {
+          "topic": "app.sessions",
+          "instanceId": "<instance>",
+          "streamId": "<stream>",
+          "latestRevision": 2,
+          "earliestRetainedRevision": 1
+        }
+      },
+      "bootstrapTypes": [
+        "streams.hello",
+        "ai-session.snapshot",
+        "app.management"
+      ],
+      "patch": {
+        "type": "app-session.patch",
+        "topic": "app.sessions",
+        "payload": {
+          "meta": {
+            "streamId": "<stream>",
+            "instanceId": "<instance>",
+            "revision": 3,
+            "previousRevision": 2,
+            "traceId": "<trace>",
+            "generatedAt": "<wall-clock>",
+            "reason": "app-session-updated"
+          },
+          "session": {
+            "id": "app_bootstrap",
+            "appId": "terminal-tty",
+            "title": "After connect",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "2026-11-02T00:00:00.000Z",
+            "updatedAt": "2026-11-02T00:00:00.000Z",
+            "paths": {
+              "sessionDir": "/tmp/session",
+              "logDir": "/tmp/logs"
+            },
+            "bindings": [
+              {
+                "type": "app-session",
+                "id": "app_bootstrap"
+              }
+            ],
+            "workspace": {
+              "cwd": "/workspace"
+            }
+          }
+        }
+      },
+      "after": {
+        "streamId": "<stream>",
+        "revision": 3,
+        "lastEventAt": "<wall-clock>",
+        "snapshot": {
+          "runningCount": 1,
+          "problemCount": 0,
+          "sessions": [
+            {
+              "id": "app_bootstrap",
+              "appId": "terminal-tty",
+              "title": "After connect",
+              "kind": "tty",
+              "status": "running",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z",
+              "paths": {
+                "sessionDir": "/tmp/session",
+                "logDir": "/tmp/logs"
+              },
+              "bindings": [
+                {
+                  "type": "app-session",
+                  "id": "app_bootstrap"
+                }
+              ],
+              "workspace": {
+                "cwd": "/workspace"
+              }
+            }
+          ],
+          "updatedAt": "<wall-clock>"
+        }
+      }
+    }
+  }
+}

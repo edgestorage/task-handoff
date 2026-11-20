@@ -28,21 +28,6 @@ pub struct AgentToolInvocationInput {
 }
 
 impl AgentToolInvocationInput {
-    pub fn validate(&self) -> Result<(), StoryToolError> {
-        if self.provider != "opencode" {
-            return Err(invalid_request("provider must be opencode."));
-        }
-        validate_provider_session_id(&self.provider_session_id)?;
-        if let Some(call_id) = self.call_id.as_deref() {
-            if call_id.trim().is_empty() || call_id.trim().chars().count() > 240 {
-                return Err(invalid_request(
-                    "callId must contain between 1 and 240 characters.",
-                ));
-            }
-        }
-        Ok(())
-    }
-
     pub fn call_id(&self) -> Option<&str> {
         self.call_id.as_deref().map(str::trim)
     }

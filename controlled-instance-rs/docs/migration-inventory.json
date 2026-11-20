@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
-  "compatibilityBaseline": "v0.0.46",
+  "compatibilityBaseline": "v0.0.47",
   "statusSemantics": {
     "implemented": "A Rust owner exists and every referenced test path exists. This is an ownership/implementation gate, not a claim of full Node behavioral parity, platform runtime verification, or 109 acceptance.",
     "verificationLevels": {
       "unit-and-contract-tested": "Focused Rust unit or contract tests exist for the mapped behavior; differential and platform runtime evidence may still be pending.",
       "unit-and-contract-tested-differential-partial": "Focused Rust tests plus selected scripted HTTP differential coverage exist; the full route/WS/CLI/persistence corpus is not complete.",
+      "unit-tested-behavior-gap": "A Rust owner exists and surrounding behavior has focused tests, but a named Node behavior is not yet ported.",
       "unit-tested-platform-runtime-unverified": "Platform-specific code exists and has focused tests or compile checks, but the target platform runtime has not been verified.",
       "compatibility-surface-only": "The source is included by the Node protocol package barrel or compatibility surface, but there is no direct per-export Rust parity fixture."
     }
@@ -228,7 +229,8 @@
         "controlled-instance-rs/crates/ai-session/src/history.rs",
         "controlled-instance-rs/crates/ai-session/src/timeline.rs",
         "controlled-instance-rs/crates/ai-session/src/attachments.rs",
-        "controlled-instance-rs/crates/ai-session/src/provider.rs"
+        "controlled-instance-rs/crates/ai-session/src/provider.rs",
+        "controlled-instance-rs/crates/ai-session/src/provider_snapshot.rs"
       ],
       "tests": [
         "controlled-instance-rs/crates/ai-session/src/lib.rs",
@@ -246,7 +248,8 @@
     {
       "source": "packages/ai-session-runtime/src/ai-session/*.ts",
       "rust": [
-        "controlled-instance-rs/crates/ai-session/src/lib.rs"
+        "controlled-instance-rs/crates/ai-session/src/lib.rs",
+        "controlled-instance-rs/crates/ai-session/src/provider_snapshot.rs"
       ],
       "tests": [
         "controlled-instance-rs/crates/ai-session/src/lib.rs"
@@ -279,12 +282,13 @@
         "controlled-instance-rs/crates/ai-session/src/opencode.rs"
       ],
       "tests": [
-        "controlled-instance-rs/crates/ai-session/src/opencode.rs"
+        "controlled-instance-rs/crates/ai-session/src/opencode.rs",
+        "controlled-instance-rs/crates/ai-session/src/opencode_interaction_parity.rs"
       ],
       "status": "implemented",
       "verification": "unit-and-contract-tested",
       "limitations": [
-        "Mock HTTP/SSE tests exist; live OpenCode differential and recorded error streams remain pending."
+        "U04.5 records three Node/Rust real HTTP/SSE scenarios against isolated test-owned upstreams (send/deltas/tools/final, prompt rejection and retry, terminal error), including empty transcript protection and durable reopen. Provider controls, reconnect/discovery races and a live installed OpenCode remain unverified."
       ]
     },
     {
@@ -449,15 +453,16 @@
     {
       "source": "packages/core/src/storage/log-sink.ts",
       "rust": [
+        "controlled-instance-rs/crates/cli/src/main.rs",
         "controlled-instance-rs/crates/instance/src/diagnostics.rs"
       ],
       "tests": [
         "controlled-instance-rs/crates/instance/src/diagnostics.rs"
       ],
       "status": "implemented",
-      "verification": "unit-and-contract-tested",
+      "verification": "unit-tested-behavior-gap",
       "limitations": [
-        "Rust tracing owns the production sink; Node stream backpressure differential coverage remains partial."
+        "Known P0 behavior gap: Rust uses tracing_subscriber::fmt directly; the Node 64 KiB log ring buffer, failed-stream quarantine, write timeout, and safe stdout/stderr error isolation are not ported."
       ]
     },
     {

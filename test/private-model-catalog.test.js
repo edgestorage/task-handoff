@@ -215,3 +215,130 @@ test("private catalog rejects a mismatched runtime identity without exposing its
     return true;
   });
 });
+
+test("model selection projection matches the shared Node/Rust fixture", () => {
+  const parityCatalog = {
+    protocolVersion: "2026-08-27",
+    instanceId: "ins_0000000000000",
+    entities: [{
+      id: "model-primary",
+      endpoint: "https://models.example/v1",
+      key: "secret",
+      protocols: ["openai-responses"],
+      modelNames: [
+        { name: "Primary Label", upstreamName: "upstream-primary", order: 0 },
+        { name: "Secondary Label", upstreamName: "upstream-secondary", order: 1 },
+      ],
+    }],
+    updatedAt: "2026-11-20T00:00:00.000Z",
+  };
+  const renamed = {
+    ...parityCatalog,
+    entities: [{
+      ...parityCatalog.entities[0],
+      modelNames: [
+        { name: "Renamed Primary", upstreamName: "upstream-primary", order: 0 },
+        parityCatalog.entities[0].modelNames[1],
+      ],
+    }],
+  };
+  const colliding = {
+    ...parityCatalog,
+    entities: [{
+      ...parityCatalog.entities[0],
+      modelNames: [
+        { name: "shared", upstreamName: "upstream-a", order: 0 },
+        { name: "upstream-a", upstreamName: "shared", order: 1 },
+      ],
+    }],
+  };
+  const scenario = (name, requested, intent, current = parityCatalog) => {
+    try {
+      return {
+        name,
+        result: resolveControlledPrivateModelSelection(current, "codex", requested, intent ? { intent } : {}) ?? null,
+      };
+    } catch (error) {
+      return { name, error: { code: error.code, statusCode: error.statusCode, message: error.message } };
+    }
+  };
+  const summary = summarizeInstancePrivateModelCatalog(parityCatalog);
+  const actual = {
+    scenarios: [
+      scenario("default"),
+      { name: "unsupported-agent", result: resolveControlledPrivateModelSelection(parityCatalog, "unknown") ?? null },
+      scenario("renamed-session", { modelEntityId: "model-primary", modelName: "Primary Label", modelUpstreamName: "upstream-primary" }, undefined, renamed),
+      scenario("upstream-client-name", { modelEntityId: "model-primary", modelName: "upstream-primary" }, undefined, renamed),
+      scenario("colliding-identity-wins", { modelEntityId: "model-primary", modelName: "shared" }, undefined, colliding),
+      scenario("stale-entity-target", { modelEntityId: "removed", modelName: "Primary Label" }, "target"),
+      scenario("stale-entity-session", { modelEntityId: "removed", modelName: "Primary Label" }, "session"),
+      scenario("stale-name-target", { modelEntityId: "model-primary", modelName: "removed-model" }, "target"),
+      scenario("stale-name-session", { modelEntityId: "model-primary", modelName: "removed-model" }, "session"),
+    ],
+    summary,
+    summaryLeaksKey: JSON.stringify(summary).includes("secret"),
+  };
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "controlled-instance-rs", "crates", "instance", "tests", "fixtures", "private-model-selection-parity.json"), "utf8"));
+  assert.deepEqual(actual, fixture);
+});
+
+test("private model catalog source and identity errors match the shared fixture", () => {
+  const parityCatalog = {
+    protocolVersion: "2026-08-27",
+    instanceId: "ins_0000000000000",
+    entities: [{
+      id: "model-primary",
+      endpoint: "https://models.example/v1",
+      key: "secret",
+      protocols: ["openai-responses"],
+      modelNames: [{ name: "Primary Label", upstreamName: "upstream-primary", order: 0 }],
+    }],
+    updatedAt: "2026-11-20T00:00:00.000Z",
+  };
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-model-source-parity-"));
+  const filePath = path.join(directory, "private-config.json");
+  fs.writeFileSync(filePath, JSON.stringify({ modelCatalog: parityCatalog }), { mode: 0o600 });
+  try {
+    const normalize = ({ catalog: loaded, source }) => ({
+      source,
+      catalog: loaded ? {
+        instanceId: loaded.instanceId,
+        entityIds: loaded.entities.map((entity) => entity.id),
+        hasKey: JSON.stringify(loaded).includes("secret"),
+      } : null,
+    });
+    const actual = {
+      sources: [
+        normalize(readControlledPrivateModelCatalogSource({
+          TASK_HANDOFF_INSTANCE_ID: "ins_0000000000000",
+          TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON: JSON.stringify(parityCatalog),
+        })),
+        normalize(readControlledPrivateModelCatalogSource({
+          TASK_HANDOFF_INSTANCE_ID: "ins_0000000000000",
+          TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1",
+        })),
+        normalize(readControlledPrivateModelCatalogSource({
+          TASK_HANDOFF_INSTANCE_ID: "ins_0000000000000",
+          TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: filePath,
+        })),
+      ],
+    };
+    try {
+      readControlledPrivateModelCatalogSource({
+        TASK_HANDOFF_INSTANCE_ID: "ins_other",
+        TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON: JSON.stringify(parityCatalog),
+      });
+      assert.fail("identity mismatch must fail");
+    } catch (error) {
+      actual.identityMismatch = {
+        code: error.code,
+        message: error.message,
+        leaksKey: String(error.message).includes("secret"),
+      };
+    }
+    const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "controlled-instance-rs", "crates", "instance", "tests", "fixtures", "private-model-source-parity.json"), "utf8"));
+    assert.deepEqual(actual, fixture);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -1,0 +1,896 @@
+{
+  "source": {
+    "head": "9b2d6e17cce4a6a65d00f2ed4504f45546256edf",
+    "compatibility": "v0.0.47",
+    "serverSha256": "3d0a08e93645e66e4ccedd3a411f152021f32d0277b9c876db00a0dba9598e55",
+    "registrySha256": "b52404c797890dfbe0e0149e4eb79a4fd6bd4d6b288363eed43abb2f47ac282a",
+    "consumerSha256": "bd7a9f48f72d9bbac575becf2a16ce4d1dce549dbfcdcbfbce5eb6b40e2e7326",
+    "normalization": "Only random session/stream/trace IDs, verified bijectively. No timestamp, revision, metadata or record fields removed."
+  },
+  "expected": {
+    "startup": {
+      "streamId": "<stream>",
+      "revision": 0,
+      "lastEventAt": "2026-11-05T00:00:00.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "unread": false,
+            "turnCount": 0,
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgentCount": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:00.000Z"
+      }
+    },
+    "first": {
+      "streamId": "<stream>",
+      "revision": 1,
+      "lastEventAt": "2026-11-05T00:00:01.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "unread": false,
+            "turnCount": 0,
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgentCount": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:01.000Z"
+      }
+    },
+    "retained": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "unread": false,
+            "turnCount": 0,
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgentCount": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      }
+    },
+    "originalEvents": [
+      {
+        "type": "ai-session.snapshot",
+        "payload": {
+          "meta": {
+            "streamId": "<stream>",
+            "instanceId": "standalone",
+            "revision": 1,
+            "previousRevision": 0,
+            "traceId": "<trace-1>",
+            "generatedAt": "2026-11-05T00:00:01.000Z",
+            "reason": "startup"
+          },
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-clock",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "Clock session",
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "unread": false,
+                "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                "turnCount": 0,
+                "subAgentCount": 0
+              }
+            ],
+            "updatedAt": "2026-11-05T00:00:01.000Z"
+          }
+        }
+      },
+      {
+        "type": "ai-session.patch",
+        "payload": {
+          "meta": {
+            "streamId": "<stream>",
+            "instanceId": "standalone",
+            "revision": 2,
+            "previousRevision": 1,
+            "traceId": "<trace-2>",
+            "generatedAt": "2026-11-05T00:00:02.000Z",
+            "reason": "control-action"
+          },
+          "upserted": [
+            {
+              "id": "<session>",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-clock",
+              "storyId": "story-clock",
+              "actions": {
+                "send": true,
+                "interrupt": false,
+                "approval": false,
+                "fork": false,
+                "rename": false,
+                "openApp": true,
+                "close": true
+              },
+              "title": "Clock session",
+              "status": "idle",
+              "phase": "unknown",
+              "toolCallsSinceLastMessage": 0,
+              "subAgents": [],
+              "queue": {
+                "revision": 0,
+                "pendingCount": 0,
+                "items": []
+              },
+              "startedAt": "2026-11-05T00:00:00.000Z",
+              "updatedAt": "2026-11-05T00:00:02.000Z",
+              "unread": false,
+              "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+              "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+              "turnCount": 0,
+              "subAgentCount": 0
+            }
+          ],
+          "removed": []
+        }
+      }
+    ],
+    "boundaryDelta": {
+      "streamId": "<stream>",
+      "instanceId": "standalone",
+      "sinceRevision": 1,
+      "latestRevision": 2,
+      "earliestRetainedRevision": 2,
+      "syncRequired": false,
+      "events": [
+        {
+          "type": "ai-session.patch",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "instanceId": "standalone",
+              "revision": 2,
+              "previousRevision": 1,
+              "traceId": "<trace-2>",
+              "generatedAt": "2026-11-05T00:00:02.000Z",
+              "reason": "control-action"
+            },
+            "upserted": [
+              {
+                "id": "<session>",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-clock",
+                "storyId": "story-clock",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "Clock session",
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:02.000Z",
+                "unread": false,
+                "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                "turnCount": 0,
+                "subAgentCount": 0
+              }
+            ],
+            "removed": []
+          }
+        }
+      ]
+    },
+    "boundary": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "unread": false,
+            "turnCount": 0,
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgentCount": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      }
+    },
+    "idleBeforeDelta": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "unread": false,
+            "turnCount": 0,
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgentCount": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      }
+    },
+    "expiredDelta": {
+      "streamId": "<stream>",
+      "instanceId": "standalone",
+      "sinceRevision": 1,
+      "latestRevision": 2,
+      "earliestRetainedRevision": 3,
+      "syncRequired": true,
+      "events": []
+    },
+    "expired": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:00.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "unread": false,
+            "turnCount": 0,
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgentCount": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      }
+    },
+    "expiredAlias": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:00.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "unread": false,
+            "turnCount": 0,
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgentCount": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      }
+    },
+    "noop": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:00.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "unread": false,
+            "turnCount": 0,
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgentCount": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:02.000Z"
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      }
+    },
+    "resumed": {
+      "streamId": "<stream>",
+      "revision": 3,
+      "lastEventAt": "2026-11-05T01:00:03.000Z",
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-after-expiry",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "unread": false,
+            "turnCount": 0,
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgentCount": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T01:00:03.000Z"
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:03.000Z"
+      }
+    },
+    "resumedDelta": {
+      "streamId": "<stream>",
+      "instanceId": "standalone",
+      "sinceRevision": 2,
+      "latestRevision": 3,
+      "earliestRetainedRevision": 3,
+      "syncRequired": false,
+      "events": [
+        {
+          "type": "ai-session.patch",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "instanceId": "standalone",
+              "revision": 3,
+              "previousRevision": 2,
+              "traceId": "<trace-3>",
+              "generatedAt": "2026-11-05T01:00:03.000Z",
+              "reason": "control-action"
+            },
+            "upserted": [
+              {
+                "id": "<session>",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-clock",
+                "storyId": "story-after-expiry",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "Clock session",
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T01:00:03.000Z",
+                "unread": false,
+                "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                "turnCount": 0,
+                "subAgentCount": 0
+              }
+            ],
+            "removed": []
+          }
+        }
+      ]
+    }
+  },
+  "consumer": {
+    "coldExpired": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "aiSessions": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:02.000Z",
+            "unread": false,
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "turnCount": 0,
+            "subAgentCount": 0
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      },
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:00.000Z"
+    },
+    "warmBefore": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "aiSessions": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:02.000Z",
+            "unread": false,
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "turnCount": 0,
+            "subAgentCount": 0
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      },
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z"
+    },
+    "warmExpired": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "aiSessions": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-clock",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:02.000Z",
+            "unread": false,
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "turnCount": 0,
+            "subAgentCount": 0
+          }
+        ],
+        "updatedAt": "2026-11-05T00:00:02.000Z"
+      },
+      "revision": 2,
+      "lastEventAt": "2026-11-05T00:00:02.000Z"
+    },
+    "coldResumed": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "aiSessions": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-after-expiry",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T01:00:03.000Z",
+            "unread": false,
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "turnCount": 0,
+            "subAgentCount": 0
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:03.000Z"
+      },
+      "revision": 3,
+      "lastEventAt": "2026-11-05T01:00:03.000Z"
+    },
+    "warmResumed": {
+      "instanceId": "standalone",
+      "streamId": "<stream>",
+      "aiSessions": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-clock",
+            "storyId": "story-after-expiry",
+            "actions": {
+              "send": true,
+              "interrupt": false,
+              "approval": false,
+              "fork": false,
+              "rename": false,
+              "openApp": true,
+              "close": true
+            },
+            "title": "Clock session",
+            "status": "idle",
+            "phase": "unknown",
+            "toolCallsSinceLastMessage": 0,
+            "subAgents": [],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            },
+            "startedAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T01:00:03.000Z",
+            "unread": false,
+            "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+            "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+            "turnCount": 0,
+            "subAgentCount": 0
+          }
+        ],
+        "updatedAt": "2026-11-05T01:00:03.000Z"
+      },
+      "revision": 3,
+      "lastEventAt": "2026-11-05T01:00:03.000Z"
+    }
+  }
+}

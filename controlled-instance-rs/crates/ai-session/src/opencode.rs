@@ -9,6 +9,7 @@ use crate::{
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
+use controlled_instance_core::text::{truncate_utf16, utf16_len};
 use controlled_instance_protocol::{
     AiSessionAttachmentKind, AiSessionConversationAttachment, AiSessionHierarchyCapabilities,
     AiSessionModelSelectionCapabilities, AiSessionProviderActions, AiSessionProviderCapability,
@@ -37,7 +38,7 @@ const OPENCODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const OPENCODE_RECONCILE_DELAY: Duration = Duration::from_millis(25);
 const OPENCODE_RECONNECT_BASE: Duration = Duration::from_millis(250);
 const OPENCODE_RECONNECT_MAX: Duration = Duration::from_secs(10);
-const OPENCODE_MAX_PART_DELTA_BYTES: usize = 1_000_000;
+const OPENCODE_MAX_PENDING_PART_DELTA_UNITS: usize = 1_000_000;
 const OPENCODE_MAX_PENDING_PART_DELTAS: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,7 +292,7 @@ impl OpenCodeClient {
             &format!("/session/{}/abort", encode_path(session_id)),
             Some(directory),
             &[],
-            Some(json!({})),
+            None,
         )
         .await
     }
@@ -461,7 +462,6 @@ struct OpenCodeProjection {
     lifecycle: String,
     phase: String,
     active_turn_id: Option<String>,
-    last_turn_id: Option<String>,
     last_message: Option<String>,
     last_message_item_id: Option<String>,
     error: Option<String>,
@@ -473,10 +473,10 @@ struct OpenCodeProjection {
     timeline: Vec<AiSessionTimelineItem>,
     turns: Vec<Value>,
     current_tool: Option<Value>,
+    active_tool_count: u64,
     part_turns: HashMap<String, (String, String, String)>,
     message_turns: HashMap<String, String>,
     assistant_message_ids: HashSet<String>,
-    tool_activity_ids: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -504,24 +504,12 @@ struct OpenCodeAuxState {
     title_generations: HashMap<String, u64>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ReconcileState {
-    lifecycle: String,
-    active_turn_id: Option<String>,
-    user_turn_id: Option<String>,
-    permission_id: Option<String>,
-    last_message_item_id: Option<String>,
-    last_message: Option<String>,
-    activities: HashMap<String, String>,
-}
-
 pub struct OpenCodeSessionProvider {
     client: OpenCodeClient,
     events: broadcast::Sender<ProviderEvent>,
     directories: RwLock<HashMap<String, String>>,
     projections: RwLock<HashMap<String, OpenCodeProjection>>,
     pending_settings: RwLock<HashMap<String, PendingSettings>>,
-    reconcile_states: RwLock<HashMap<String, ReconcileState>>,
     aux: RwLock<OpenCodeAuxState>,
     model_selection_projector: RwLock<Option<Arc<dyn OpenCodeModelSelectionProjector>>>,
     model_selection_resolver: RwLock<Option<Arc<dyn AiSessionModelSelectionResolver>>>,
@@ -548,7 +536,6 @@ impl OpenCodeSessionProvider {
             directories: RwLock::new(HashMap::new()),
             projections: RwLock::new(HashMap::new()),
             pending_settings: RwLock::new(HashMap::new()),
-            reconcile_states: RwLock::new(HashMap::new()),
             aux: RwLock::new(OpenCodeAuxState::default()),
             model_selection_projector: RwLock::new(None),
             model_selection_resolver: RwLock::new(None),
@@ -573,6 +560,19 @@ impl OpenCodeSessionProvider {
             runtime.spawn(async move { worker.reconcile_loop(reconcile_rx).await });
         }
         provider
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn owner_barrier(&self) {
+        let committed = Arc::new(tokio::sync::Notify::new());
+        self.events
+            .send(ProviderEvent::OwnerBarrier {
+                committed: committed.clone(),
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), committed.notified())
+            .await
+            .expect("registered owner consumed all prior events");
     }
 
     pub fn set_conversation_attachment_resolver<F>(&self, resolver: F)
@@ -712,13 +712,19 @@ impl OpenCodeSessionProvider {
             .events
             .send(ProviderEvent::ConnectionChanged { connected: true });
         let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
+        let mut buffer = Vec::new();
+        let mut first_frame = true;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|error| {
                 ProviderError::new("OPENCODE_EVENT_STREAM_CLOSED", error.to_string(), 503)
             })?;
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.extend_from_slice(&chunk);
             while let Some(frame) = next_sse_frame(&mut buffer) {
+                let frame = if std::mem::take(&mut first_frame) {
+                    frame.strip_prefix('\u{feff}').unwrap_or(&frame)
+                } else {
+                    &frame
+                };
                 let data = frame
                     .lines()
                     .filter_map(|line| line.strip_prefix("data:"))
@@ -920,12 +926,7 @@ impl OpenCodeSessionProvider {
             .filter(|value| {
                 !value.is_empty() && properties.get("field").and_then(Value::as_str) == Some("text")
             })
-            .map(|value| {
-                value
-                    .chars()
-                    .take(OPENCODE_MAX_PART_DELTA_BYTES)
-                    .collect::<String>()
-            })
+            .map(ToString::to_string)
         else {
             return false;
         };
@@ -1014,21 +1015,18 @@ impl OpenCodeSessionProvider {
             if previous.message_id != message_id {
                 return;
             }
-            let remaining = OPENCODE_MAX_PART_DELTA_BYTES.saturating_sub(previous.size);
-            let chunk = delta.chars().take(remaining).collect::<String>();
-            previous.size = previous.size.saturating_add(chunk.len());
+            let remaining = OPENCODE_MAX_PENDING_PART_DELTA_UNITS.saturating_sub(previous.size);
+            let chunk = truncate_utf16(delta, remaining);
+            previous.size = previous.size.saturating_add(utf16_len(&chunk));
             if !chunk.is_empty() {
                 previous.chunks.push(chunk);
             }
         } else {
-            let chunk = delta
-                .chars()
-                .take(OPENCODE_MAX_PART_DELTA_BYTES)
-                .collect::<String>();
+            let chunk = truncate_utf16(delta, OPENCODE_MAX_PENDING_PART_DELTA_UNITS);
             pending.push(PendingPartDelta {
                 part_id,
                 message_id,
-                size: chunk.len(),
+                size: utf16_len(&chunk),
                 chunks: (!chunk.is_empty()).then_some(chunk).into_iter().collect(),
             });
         }
@@ -1172,31 +1170,6 @@ impl OpenCodeSessionProvider {
             }
         }
         let value = Value::Object(part.clone());
-        if part_type == "text" {
-            if let Some(text) = part
-                .get("text")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                let _ = self.events.send(ProviderEvent::AgentMessageCompleted {
-                    provider_session_id: provider_session_id.to_string(),
-                    turn_id: turn_id.clone(),
-                    item_id: part_id.clone(),
-                    text: text.to_string(),
-                    observed_at: Some(now_iso()),
-                });
-                if let Some(state) = self
-                    .reconcile_states
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .get_mut(provider_session_id)
-                {
-                    state.last_message_item_id = Some(part_id.clone());
-                    state.last_message = Some(text.to_string());
-                }
-            }
-        }
         let item = project_part(&value, &turn_id);
         if let Some(item) = item.as_ref() {
             let _ = self.events.send(ProviderEvent::TimelineItem {
@@ -1218,52 +1191,6 @@ impl OpenCodeSessionProvider {
                     }
                 }
             }
-        }
-        let Some(item) = item.as_ref() else {
-            return;
-        };
-        if part_type != "tool" {
-            return;
-        }
-        let AiSessionTimelineItem::Activity {
-            id,
-            title,
-            status,
-            input,
-            summary,
-            paths,
-            ..
-        } = item
-        else {
-            return;
-        };
-        let running = status.is_none_or(|status| {
-            matches!(
-                status,
-                AiSessionTimelineActivityStatus::Running | AiSessionTimelineActivityStatus::Waiting
-            )
-        });
-        let _ = self.events.send(ProviderEvent::ToolActivity {
-            provider_session_id: provider_session_id.to_string(),
-            turn_id: Some(turn_id),
-            item: json!({
-                "id": id,
-                "kind": activity_kind(item),
-                "name": title,
-                "inputPreview": input.as_deref().or(summary.as_deref()),
-                "paths": paths,
-            }),
-            running,
-            observed_at: Some(now_iso()),
-        });
-        let status = if running { "running" } else { "completed" };
-        if let Some(state) = self
-            .reconcile_states
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get_mut(provider_session_id)
-        {
-            state.activities.insert(id.clone(), status.to_string());
         }
     }
 
@@ -1476,31 +1403,6 @@ impl OpenCodeSessionProvider {
         let projection = self
             .refresh_projection(provider_session_id, directory)
             .await?;
-        let previous = self
-            .reconcile_states
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(provider_session_id)
-            .cloned()
-            .unwrap_or_default();
-        let mut current = ReconcileState {
-            lifecycle: projection.lifecycle.clone(),
-            active_turn_id: if projection.lifecycle == "running"
-                || projection.lifecycle == "waiting"
-            {
-                previous
-                    .active_turn_id
-                    .clone()
-                    .or_else(|| projection.active_turn_id.clone())
-            } else {
-                None
-            },
-            user_turn_id: projection.last_turn_id.clone(),
-            permission_id: projection.pending_permission_id.clone(),
-            last_message_item_id: projection.last_message_item_id.clone(),
-            last_message: projection.last_message.clone(),
-            activities: HashMap::new(),
-        };
         if announce_discovery {
             let _ = self.events.send(ProviderEvent::ThreadDiscovered {
                 provider_session_id: provider_session_id.to_string(),
@@ -1514,23 +1416,6 @@ impl OpenCodeSessionProvider {
                 parent_provider_session_id: projection.parent_provider_session_id.clone(),
             });
         }
-        let _ = self.events.send(ProviderEvent::ThreadSnapshot {
-            provider_session_id: provider_session_id.to_string(),
-            cwd: Some(projection.cwd.clone()),
-            name: (!projection.title.trim().is_empty()).then(|| projection.title.clone()),
-            model: projection
-                .model_selection
-                .as_ref()
-                .map(|selection| selection.upstream_name().to_string()),
-            model_provider: projection
-                .model_selection
-                .as_ref()
-                .map(opencode_provider_id),
-            model_selection: projection.model_selection.clone(),
-            reasoning_effort: projection.reasoning_effort.clone(),
-            status: projection.lifecycle.clone(),
-            phase: Some(projection.phase.clone()),
-        });
         self.emit_history_snapshot(provider_session_id, &projection);
         if projection.parent_provider_session_id.is_none() {
             if let Some(prompt) = projection.timeline.iter().find_map(|item| match item {
@@ -1547,147 +1432,6 @@ impl OpenCodeSessionProvider {
                 );
             }
         }
-        if previous.user_turn_id != current.user_turn_id {
-            if let Some(turn_id) = current.user_turn_id.as_deref() {
-                if let Some((item_id, text)) =
-                    projection.timeline.iter().find_map(|item| match item {
-                        AiSessionTimelineItem::UserMessage {
-                            id,
-                            turn_id: item_turn_id,
-                            text,
-                            ..
-                        } if item_turn_id == turn_id => Some((id.clone(), text.clone())),
-                        _ => None,
-                    })
-                {
-                    let _ = self.events.send(ProviderEvent::UserMessage {
-                        provider_session_id: provider_session_id.to_string(),
-                        turn_id: turn_id.to_string(),
-                        item_id,
-                        text,
-                        observed_at: Some(now_iso()),
-                        completed: true,
-                    });
-                }
-            }
-        }
-        let active = projection.lifecycle == "running" || projection.lifecycle == "waiting";
-        let was_active = previous.lifecycle == "running" || previous.lifecycle == "waiting";
-        if active && !was_active {
-            if let Some(turn_id) = current.active_turn_id.as_deref() {
-                let _ = self.events.send(ProviderEvent::TurnStarted {
-                    provider_session_id: provider_session_id.to_string(),
-                    turn_id: turn_id.to_string(),
-                    started_at: Some(now_iso()),
-                });
-            }
-        }
-        if active {
-            if let Some(permission_id) = projection.pending_permission_id.as_deref() {
-                if previous.permission_id.as_deref() != Some(permission_id) {
-                    let summary = projection
-                        .summary
-                        .clone()
-                        .unwrap_or_else(|| "OpenCode is requesting permission.".to_string());
-                    let _ = self.events.send(ProviderEvent::ApprovalRequested {
-                        provider_session_id: provider_session_id.to_string(),
-                        turn_id: current.active_turn_id.clone(),
-                        summary,
-                        kind: "permission".to_string(),
-                        item_id: Some(permission_id.to_string()),
-                    });
-                }
-            }
-        } else if was_active {
-            let _ = self.events.send(ProviderEvent::TurnCompleted {
-                provider_session_id: provider_session_id.to_string(),
-                turn_id: previous
-                    .active_turn_id
-                    .clone()
-                    .or_else(|| projection.last_turn_id.clone()),
-                status: Some(if projection.lifecycle == "failed" {
-                    "failed".to_string()
-                } else {
-                    "completed".to_string()
-                }),
-                error: projection.error.clone(),
-                completed_at: Some(now_iso()),
-            });
-        }
-        if projection.last_message_item_id != previous.last_message_item_id
-            && projection.last_message != previous.last_message
-        {
-            if let (Some(item_id), Some(text), Some(turn_id)) = (
-                projection.last_message_item_id.as_deref(),
-                projection.last_message.as_deref(),
-                projection.last_turn_id.as_deref(),
-            ) {
-                let _ = self.events.send(ProviderEvent::AgentMessageCompleted {
-                    provider_session_id: provider_session_id.to_string(),
-                    turn_id: turn_id.to_string(),
-                    item_id: item_id.to_string(),
-                    text: text.to_string(),
-                    observed_at: Some(now_iso()),
-                });
-            }
-        }
-        for item in &projection.timeline {
-            let AiSessionTimelineItem::Activity {
-                id,
-                turn_id,
-                title,
-                status,
-                input,
-                summary,
-                paths,
-                ..
-            } = item
-            else {
-                continue;
-            };
-            if !projection.tool_activity_ids.contains(id) {
-                continue;
-            }
-            let status = status
-                .map(|status| match status {
-                    AiSessionTimelineActivityStatus::Running => "running",
-                    AiSessionTimelineActivityStatus::Completed => "completed",
-                    AiSessionTimelineActivityStatus::Failed => "failed",
-                    AiSessionTimelineActivityStatus::Waiting => "waiting",
-                })
-                .unwrap_or("running");
-            current.activities.insert(id.clone(), status.to_string());
-            let previous_status = previous.activities.get(id).map(String::as_str);
-            if matches!(status, "running" | "waiting") && previous_status != Some(status) {
-                let _ = self.events.send(ProviderEvent::ToolActivity {
-                    provider_session_id: provider_session_id.to_string(),
-                    turn_id: Some(turn_id.clone()),
-                    item: json!({
-                        "id": id,
-                        "kind": activity_kind(item),
-                        "name": title,
-                        "inputPreview": input.as_deref().or(summary.as_deref()),
-                        "paths": paths,
-                    }),
-                    running: true,
-                    observed_at: Some(now_iso()),
-                });
-            } else if previous_status.is_some_and(|status| matches!(status, "running" | "waiting"))
-                && matches!(status, "completed" | "failed")
-            {
-                let _ = self.events.send(ProviderEvent::ToolActivity {
-                    provider_session_id: provider_session_id.to_string(),
-                    turn_id: Some(turn_id.clone()),
-                    item: json!({ "id": id, "kind": activity_kind(item), "name": title }),
-                    running: false,
-                    observed_at: Some(now_iso()),
-                });
-            }
-        }
-        self.reconcile_states
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(provider_session_id.to_string(), current);
         Ok(())
     }
 
@@ -1799,6 +1543,15 @@ impl OpenCodeSessionProvider {
     }
 
     fn emit_history_snapshot(&self, provider_session_id: &str, projection: &OpenCodeProjection) {
+        let _ = self.events.send(ProviderEvent::AdapterSnapshot {
+            provider_session_id: provider_session_id.to_string(),
+            snapshot: Box::new(Self::projection_snapshot(projection)),
+        });
+    }
+
+    fn projection_snapshot(
+        projection: &OpenCodeProjection,
+    ) -> crate::provider_snapshot::ProviderSessionSnapshot {
         let turns = projection
             .turns
             .iter()
@@ -1813,8 +1566,13 @@ impl OpenCodeSessionProvider {
             .and_then(|turn| turn.get("userPrompt"))
             .and_then(Value::as_str)
             .map(ToString::to_string);
-        let _ = self.events.send(ProviderEvent::ThreadHistorySnapshot {
-            provider_session_id: provider_session_id.to_string(),
+        crate::provider_snapshot::ProviderSessionSnapshot {
+            cwd: projection.cwd.clone(),
+            title: projection.title.clone(),
+            model_selection: projection.model_selection.clone(),
+            reasoning_effort: projection.reasoning_effort.clone(),
+            status: projection.lifecycle.clone(),
+            phase: projection.phase.clone(),
             turns,
             active_turn_id: projection.active_turn_id.clone(),
             user_prompt,
@@ -1823,31 +1581,17 @@ impl OpenCodeSessionProvider {
             summary: projection.summary.clone(),
             error: projection.error.clone(),
             current_tool: projection.current_tool.clone(),
-        });
+            tool_calls_since_last_message: projection.active_tool_count,
+        }
     }
 
     fn publish_projection_snapshot(&self, provider_session_id: &str, status: &str, phase: &str) {
-        let Some(projection) = self.projection_for_provider(provider_session_id) else {
+        let Some(mut projection) = self.projection_for_provider(provider_session_id) else {
             return;
         };
+        projection.lifecycle = status.to_string();
+        projection.phase = phase.to_string();
         self.emit_history_snapshot(provider_session_id, &projection);
-        let _ = self.events.send(ProviderEvent::ThreadSnapshot {
-            provider_session_id: provider_session_id.to_string(),
-            cwd: Some(projection.cwd),
-            name: (!projection.title.trim().is_empty()).then_some(projection.title),
-            model: projection
-                .model_selection
-                .as_ref()
-                .map(|selection| selection.upstream_name().to_string()),
-            model_provider: projection
-                .model_selection
-                .as_ref()
-                .map(opencode_provider_id),
-            model_selection: projection.model_selection,
-            reasoning_effort: projection.reasoning_effort,
-            status: status.to_string(),
-            phase: Some(phase.to_string()),
-        });
     }
 
     fn arm_title_generation(&self, provider_session_id: &str) {
@@ -2365,25 +2109,16 @@ impl OpenCodeSessionProvider {
             .send((provider_session_id.to_string(), directory.to_string()));
         Ok(message_id)
     }
-
-    fn mark_submitted_turn(&self, provider_session_id: &str, message_id: &str, start: bool) {
-        let mut states = self
-            .reconcile_states
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let state = states.entry(provider_session_id.to_string()).or_default();
-        state.lifecycle = "running".to_string();
-        state.user_turn_id = Some(message_id.to_string());
-        if start {
-            state.active_turn_id = Some(message_id.to_string());
-        }
-    }
 }
 
 #[async_trait]
 impl AiSessionControlProvider for OpenCodeSessionProvider {
     fn agent(&self) -> &str {
         "opencode"
+    }
+
+    fn acknowledgement_source(&self) -> &'static str {
+        "realtime"
     }
 
     fn capability(&self) -> AiSessionProviderCapability {
@@ -2502,15 +2237,13 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
         input: ProviderMessage,
     ) -> Result<ProviderAction, ProviderError> {
         let message_id = self.submit_message(session, input).await?;
-        if let Some(provider_session_id) = session.provider_session_id.as_deref() {
-            self.mark_submitted_turn(provider_session_id, &message_id, true);
-        }
         Ok(ProviderAction {
             action: "send".to_string(),
             turn_id: Some(message_id.clone()),
             provider_turn_id: Some(message_id),
             decision: None,
             queue_id: None,
+            completion_text: None,
         })
     }
 
@@ -2519,16 +2252,14 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
         session: &AiSession,
         input: ProviderMessage,
     ) -> Result<ProviderAction, ProviderError> {
-        let message_id = self.submit_message(session, input).await?;
-        if let Some(provider_session_id) = session.provider_session_id.as_deref() {
-            self.mark_submitted_turn(provider_session_id, &message_id, false);
-        }
+        self.submit_message(session, input).await?;
         Ok(ProviderAction {
             action: "steer".to_string(),
             turn_id: session.active_turn_id.clone(),
             provider_turn_id: session.active_turn_id.clone(),
             decision: None,
             queue_id: None,
+            completion_text: None,
         })
     }
 
@@ -2545,13 +2276,18 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
         let _ = self
             .reconcile_tx
             .send((provider_session_id.to_string(), directory));
-        Ok(ProviderAction::simple("interrupt"))
+        Ok(ProviderAction {
+            turn_id: session.active_turn_id.clone(),
+            provider_turn_id: session.active_turn_id.clone(),
+            ..ProviderAction::simple("interrupt")
+        })
     }
 
     async fn resolve_approval(
         &self,
         session: &AiSession,
         decision: &str,
+        observe: &crate::provider::ProviderApprovalObserver<'_>,
     ) -> Result<ProviderAction, ProviderError> {
         if decision == "skip" {
             return Err(ProviderError::new(
@@ -2571,6 +2307,10 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
         let projection = self
             .refresh_projection(provider_session_id, &directory)
             .await?;
+        observe(crate::provider::ProviderApprovalUpdate::Snapshot(Box::new(
+            Self::projection_snapshot(&projection),
+        )))
+        .await?;
         let permission_id = projection.pending_permission_id.ok_or_else(|| {
             ProviderError::new(
                 "AI_SESSION_APPROVAL_NOT_FOUND",
@@ -2589,28 +2329,20 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                 },
             )
             .await?;
-        let _ = self.events.send(ProviderEvent::ApprovalResolved {
-            provider_session_id: provider_session_id.to_string(),
-            decision: decision.to_string(),
-        });
-        if let Some(state) = self
-            .reconcile_states
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get_mut(provider_session_id)
-        {
-            state.lifecycle = "running".to_string();
-            state.permission_id = Some(permission_id);
-        }
-        let _ = self
-            .reconcile_and_emit(provider_session_id, &directory)
-            .await;
+        let projection = self
+            .refresh_projection(provider_session_id, &directory)
+            .await?;
+        observe(crate::provider::ProviderApprovalUpdate::Snapshot(Box::new(
+            Self::projection_snapshot(&projection),
+        )))
+        .await?;
         Ok(ProviderAction {
             action: "approval".to_string(),
-            turn_id: projection.active_turn_id,
+            turn_id: None,
             provider_turn_id: None,
             decision: Some(decision.to_string()),
             queue_id: None,
+            completion_text: None,
         })
     }
 
@@ -2994,10 +2726,6 @@ impl OpenCodeSessionProvider {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(provider_session_id);
-        self.reconcile_states
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(provider_session_id);
         let mut aux = self
             .aux
             .write()
@@ -3067,7 +2795,6 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
     let mut part_turns = HashMap::new();
     let mut message_turns = HashMap::new();
     let mut assistant_message_ids = HashSet::new();
-    let mut tool_activity_ids = HashSet::new();
     let mut last_turn_id = None;
     let mut last_message = None;
     let mut last_message_item_id = None;
@@ -3148,33 +2875,15 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
                             part_type(part).unwrap_or_default().to_string(),
                         ),
                     );
-                    if part_type(part) == Some("tool") {
-                        tool_activity_ids.insert(part_id.to_string());
-                    }
                 }
                 if let Some(item) = project_part(part, turn_id) {
                     timeline.push(item);
                 }
             }
-            if let Some(part) = message_parts(assistant)
-                .iter()
-                .rev()
-                .find(|part| is_visible_text_part(part))
-            {
-                let value = part
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .trim();
-                last_message = (!value.is_empty()).then(|| value.to_string());
-                last_message_item_id = part
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string);
-            }
         }
         let assistant_text_part = assistants
             .iter()
+            .rev()
             .flat_map(|assistant| message_parts(assistant).iter().rev())
             .find(|part| is_visible_text_part(part));
         let assistant_text = assistant_text_part
@@ -3185,6 +2894,8 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         let assistant_text_id = assistant_text_part
             .and_then(|part| part.get("id").and_then(Value::as_str))
             .map(ToString::to_string);
+        last_message = assistant_text.clone();
+        last_message_item_id = assistant_text_id.clone();
         let turn_error = assistants.iter().find_map(|assistant| {
             assistant
                 .pointer("/info/error")
@@ -3221,7 +2932,7 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
             "unknown"
         };
         let updated_ms = completed_ms.or(session_updated_ms).unwrap_or(created_ms);
-        turns.push(json!({
+        let mut turn = json!({
             "id": turn_id,
             "providerTurnId": turn_id,
             "source": "adapter-snapshot",
@@ -3236,7 +2947,13 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
             "startedAt": Some(iso_from_millis(created_ms)),
             "updatedAt": Some(iso_from_millis(updated_ms)),
             "completedAt": (!is_active && completed_ms.is_some()).then(|| iso_from_millis(completed_ms.unwrap_or(updated_ms))),
-        }));
+        });
+        // The owner validates optional timestamps when present. An unfinished
+        // OpenCode turn has no completedAt; JSON null would discard the turn.
+        turn.as_object_mut()
+            .expect("projected turn")
+            .retain(|_, value| !value.is_null());
+        turns.push(turn);
         last_turn_id = Some(turn_id.to_string());
     }
     let mut projected_retries = retry_activities.to_vec();
@@ -3307,24 +3024,11 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         .filter(|value| is_reasoning_effort(value))
         .map(ToString::to_string);
     let permission_summary = pending_permission.as_ref().map(permission_summary);
-    let current_tool = timeline.iter().rev().find_map(|item| match item {
-        AiSessionTimelineItem::Activity {
-            id,
-            activity_kind,
-            title,
-            status: Some(AiSessionTimelineActivityStatus::Running),
-            input,
-            ..
-        } if !matches!(activity_kind.as_str(), "reasoning" | "contextCompaction" | "retry") => {
-            Some(json!({
-                "id": id,
-                "kind": activity_kind,
-                "name": title,
-                "inputPreview": input.as_deref().map(|value| value.chars().take(500).collect::<String>()),
-            }))
-        }
-        _ => None,
-    });
+    let current_tool = messages
+        .iter()
+        .rev()
+        .flat_map(|message| message_parts(message).iter().rev())
+        .find_map(project_current_tool);
     OpenCodeProjection {
         title: session
             .get("title")
@@ -3341,7 +3045,6 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         active_turn_id: (lifecycle == "running" || lifecycle == "waiting")
             .then(|| last_turn_id.clone())
             .flatten(),
-        last_turn_id,
         last_message,
         last_message_item_id,
         error,
@@ -3360,17 +3063,14 @@ fn project_session(input: OpenCodeProjectionInput<'_>) -> OpenCodeProjection {
         timeline,
         turns,
         current_tool,
+        active_tool_count: messages
+            .iter()
+            .flat_map(message_parts)
+            .filter(|part| project_current_tool(part).is_some())
+            .count() as u64,
         part_turns,
         message_turns,
         assistant_message_ids,
-        tool_activity_ids,
-    }
-}
-
-fn activity_kind(item: &AiSessionTimelineItem) -> &str {
-    match item {
-        AiSessionTimelineItem::Activity { activity_kind, .. } => activity_kind,
-        _ => "dynamicToolCall",
     }
 }
 
@@ -3391,7 +3091,7 @@ fn project_part(part: &Value, turn_id: &str) -> Option<AiSessionTimelineItem> {
             "reasoning",
             "Reasoning",
             Some(
-                if part.get("time").and_then(|time| time.get("end")).is_some() {
+                if part.pointer("/time/end").and_then(Value::as_f64).is_some() {
                     AiSessionTimelineActivityStatus::Completed
                 } else {
                     AiSessionTimelineActivityStatus::Running
@@ -3400,6 +3100,7 @@ fn project_part(part: &Value, turn_id: &str) -> Option<AiSessionTimelineItem> {
             None,
             part.get("text")
                 .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
                 .map(ToString::to_string),
             None,
             None,
@@ -3419,11 +3120,13 @@ fn project_part(part: &Value, turn_id: &str) -> Option<AiSessionTimelineItem> {
                 turn_id,
                 if image { "imageView" } else { "fileRead" },
                 if image { "View image" } else { "Read file" },
-                Some(AiSessionTimelineActivityStatus::Completed),
-                filename.clone(),
                 None,
                 filename.clone(),
-                filename.map(|path| vec![path]),
+                None,
+                None,
+                filename
+                    .filter(|path| !path.is_empty())
+                    .map(|path| vec![path]),
                 None,
             ))
         }
@@ -3461,12 +3164,17 @@ fn project_part(part: &Value, turn_id: &str) -> Option<AiSessionTimelineItem> {
     }
 }
 
-fn project_tool(
-    id: &str,
-    turn_id: &str,
-    tool: &str,
-    state: Option<&Map<String, Value>>,
-) -> AiSessionTimelineItem {
+struct OpenCodeToolDescriptor {
+    activity_kind: String,
+    title: String,
+    summary: Option<String>,
+    input: Option<String>,
+    input_preview: Option<String>,
+    paths: Option<Vec<String>>,
+    exit_code: Option<i64>,
+}
+
+fn tool_descriptor(tool: &str, state: Option<&Map<String, Value>>) -> OpenCodeToolDescriptor {
     let state = state.cloned().unwrap_or_default();
     let input = state
         .get("input")
@@ -3480,7 +3188,7 @@ fn project_tool(
         .unwrap_or_default();
     let tool_name = tool.to_ascii_lowercase();
     let fallback_title = string_field(&state, "title").unwrap_or_else(|| tool.to_string());
-    let (kind, title, summary, input, _input_preview, paths, exit_code) = match tool_name.as_str() {
+    let (kind, title, summary, input, input_preview, paths, exit_code) = match tool_name.as_str() {
         "bash" | "shell" => (
             "commandExecution",
             "Command",
@@ -3502,8 +3210,7 @@ fn project_tool(
                     "Edit file"
                 },
                 path.clone(),
-                string_field(&metadata, "diff")
-                    .or_else(|| safe_json(&Value::Object(input.clone()))),
+                string_field(&metadata, "diff").or_else(|| state.get("input").and_then(safe_json)),
                 path.clone(),
                 path.map(|path| vec![path]),
                 None,
@@ -3516,7 +3223,7 @@ fn project_tool(
                 .map(|files| {
                     files
                         .iter()
-                        .filter_map(Value::as_object)
+                        .map(|file| file.as_object().cloned().unwrap_or_default())
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
@@ -3528,7 +3235,8 @@ fn project_tool(
                         .or_else(|| string_field(file, "relativePath"))
                 })
                 .collect::<Vec<_>>();
-            paths.dedup();
+            let mut seen = HashSet::new();
+            paths.retain(|path| seen.insert(path.clone()));
             let summary = if paths.is_empty() {
                 fallback_title.clone()
             } else {
@@ -3540,12 +3248,12 @@ fn project_tool(
                 Some(summary.clone()),
                 if files.is_empty() {
                     string_field(&input, "patchText")
-                        .or_else(|| safe_json(&Value::Object(input.clone())))
+                        .or_else(|| state.get("input").and_then(safe_json))
                 } else {
                     safe_json(&Value::Array(
                         files
                             .iter()
-                            .map(|file| Value::Object((*file).clone()))
+                            .map(|file| Value::Object(file.clone()))
                             .collect(),
                     ))
                 },
@@ -3569,7 +3277,7 @@ fn project_tool(
                 "collabAgentToolCall",
                 "Sub-agent task",
                 Some(summary),
-                string_field(&input, "prompt").or_else(|| safe_json(&Value::Object(input.clone()))),
+                string_field(&input, "prompt").or_else(|| state.get("input").and_then(safe_json)),
                 Some(description),
                 None,
                 None,
@@ -3583,7 +3291,7 @@ fn project_tool(
                 query.clone().or(Some(fallback_title)),
                 query
                     .clone()
-                    .or_else(|| safe_json(&Value::Object(input.clone()))),
+                    .or_else(|| state.get("input").and_then(safe_json)),
                 query,
                 None,
                 None,
@@ -3617,7 +3325,7 @@ fn project_tool(
                 if image { "imageView" } else { "fileRead" },
                 if image { "View image" } else { "Read file" },
                 path.clone().or(Some(fallback_title)),
-                safe_json(&Value::Object(input.clone())),
+                state.get("input").and_then(safe_json),
                 path.clone(),
                 path.map(|path| vec![path]),
                 None,
@@ -3641,7 +3349,7 @@ fn project_tool(
                 (!summary.is_empty())
                     .then_some(summary)
                     .or(Some(fallback_title)),
-                safe_json(&Value::Object(input.clone())),
+                state.get("input").and_then(safe_json),
                 pattern.clone().or(path.clone()),
                 path.map(|path| vec![path]),
                 None,
@@ -3674,7 +3382,7 @@ fn project_tool(
                 "todoUpdate",
                 "Update tasks",
                 Some(summary.clone()),
-                safe_json(&Value::Object(input.clone())),
+                state.get("input").and_then(safe_json),
                 Some(summary),
                 None,
                 None,
@@ -3695,7 +3403,7 @@ fn project_tool(
                 "userQuestion",
                 "Ask user",
                 Some(summary.clone()),
-                safe_json(&Value::Object(input.clone())),
+                state.get("input").and_then(safe_json),
                 Some(summary),
                 None,
                 None,
@@ -3707,7 +3415,7 @@ fn project_tool(
                 "skillLoad",
                 "Load skill",
                 name.clone().or(Some(fallback_title)),
-                safe_json(&Value::Object(input.clone())),
+                state.get("input").and_then(safe_json),
                 name,
                 None,
                 None,
@@ -3717,7 +3425,7 @@ fn project_tool(
             "exitedPlanMode",
             "Exit plan mode",
             (fallback_title != tool).then_some(fallback_title),
-            safe_json(&Value::Object(input.clone())),
+            state.get("input").and_then(safe_json),
             None,
             None,
             None,
@@ -3726,13 +3434,77 @@ fn project_tool(
             "dynamicToolCall",
             tool,
             (fallback_title != tool).then_some(fallback_title),
-            safe_json(&Value::Object(input.clone())),
-            safe_json(&Value::Object(input)),
+            state.get("input").and_then(safe_json),
+            state.get("input").and_then(safe_json),
             None,
             None,
         ),
     };
-    let failed_exit = kind == "commandExecution" && exit_code.is_some_and(|exit| exit != 0);
+    OpenCodeToolDescriptor {
+        activity_kind: kind.to_string(),
+        title: title.to_string(),
+        summary,
+        input,
+        input_preview,
+        paths,
+        exit_code,
+    }
+}
+
+fn project_current_tool(part: &Value) -> Option<Value> {
+    if part_type(part) != Some("tool") {
+        return None;
+    }
+    let state = part.get("state")?.as_object()?;
+    if !matches!(
+        state.get("status").and_then(Value::as_str),
+        Some("pending" | "running")
+    ) {
+        return None;
+    }
+    project_tool_summary(part)
+}
+
+fn project_tool_summary(part: &Value) -> Option<Value> {
+    if part_type(part) != Some("tool") {
+        return None;
+    }
+    let state = part.get("state").and_then(Value::as_object);
+    let descriptor = tool_descriptor(
+        part.get("tool").and_then(Value::as_str).unwrap_or("Tool"),
+        state,
+    );
+    let mut projected = json!({
+        "id": part.get("id")?, "kind": descriptor.activity_kind, "name": descriptor.title,
+    });
+    if let Some(preview) = descriptor.input_preview {
+        projected["inputPreview"] = json!(truncate_utf16(&preview, 500));
+    }
+    if let Some(start) = state
+        .and_then(|state| state.get("time"))
+        .and_then(|time| time.get("start"))
+        .and_then(Value::as_f64)
+    {
+        projected["startedAt"] = json!(iso_from_millis(start));
+    }
+    Some(projected)
+}
+
+fn project_tool(
+    id: &str,
+    turn_id: &str,
+    tool: &str,
+    state: Option<&Map<String, Value>>,
+) -> AiSessionTimelineItem {
+    let descriptor = tool_descriptor(tool, state);
+    let state = state.cloned().unwrap_or_default();
+    let metadata = state
+        .get("metadata")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let failed_exit = descriptor.activity_kind == "commandExecution"
+        && descriptor.exit_code.is_some_and(|exit| exit != 0);
     let status = match (state.get("status").and_then(Value::as_str), failed_exit) {
         (Some("completed"), true) | (Some("error"), _) => AiSessionTimelineActivityStatus::Failed,
         (Some("completed"), false) => AiSessionTimelineActivityStatus::Completed,
@@ -3750,11 +3522,11 @@ fn project_tool(
     AiSessionTimelineItem::Activity {
         id: id.to_string(),
         turn_id: turn_id.to_string(),
-        activity_kind: kind.to_string(),
-        title: title.to_string(),
+        activity_kind: descriptor.activity_kind,
+        title: descriptor.title,
         status: Some(status),
-        summary,
-        input,
+        summary: descriptor.summary,
+        input: descriptor.input,
         output: state
             .get("output")
             .and_then(Value::as_str)
@@ -3769,10 +3541,11 @@ fn project_tool(
                 metadata
                     .get("output")
                     .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
                     .map(ToString::to_string)
             }),
-        paths,
-        exit_code,
+        paths: descriptor.paths,
+        exit_code: descriptor.exit_code,
         duration_ms,
     }
 }
@@ -3963,8 +3736,9 @@ fn permission_summary(permission: &Value) -> String {
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
+        .filter(|resource| !resource.is_empty())
         .collect::<Vec<_>>()
-        .join(", ");
+        .join(": ");
     let summary = if resources.is_empty() {
         action.to_string()
     } else {
@@ -4064,17 +3838,21 @@ fn string_field(value: &Map<String, Value>, key: &str) -> Option<String> {
     value
         .get(key)
         .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .map(ToString::to_string)
 }
 
 fn safe_json(value: &Value) -> Option<String> {
-    (!value.is_null()).then(|| value.to_string())
+    Some(value.to_string())
 }
 
 fn compact_field(value: &Map<String, Value>, key: &str) -> Option<String> {
-    string_field(value, key)
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 fn within_roots(directory: &str, roots: &[PathBuf]) -> bool {
@@ -4171,16 +3949,18 @@ fn parse_global_event(data: &str) -> Result<Value, ProviderError> {
     Ok(event)
 }
 
-fn next_sse_frame(buffer: &mut String) -> Option<String> {
-    let lf = buffer.find("\n\n");
-    let crlf = buffer.find("\r\n\r\n");
+fn next_sse_frame(buffer: &mut Vec<u8>) -> Option<String> {
+    let lf = buffer.windows(2).position(|bytes| bytes == b"\n\n");
+    let crlf = buffer.windows(4).position(|bytes| bytes == b"\r\n\r\n");
     let (index, length) = match (lf, crlf) {
         (Some(lf), Some(crlf)) if crlf < lf => (crlf, 4),
         (Some(lf), _) => (lf, 2),
         (None, Some(crlf)) => (crlf, 4),
         (None, None) => return None,
     };
-    let frame = buffer[..index].to_string();
+    // Network chunks can split a UTF-8 code point. ASCII frame delimiters
+    // cannot, so decode only complete frames using the standard UTF-8 decoder.
+    let frame = String::from_utf8_lossy(&buffer[..index]).into_owned();
     buffer.drain(..index + length);
     Some(frame)
 }
@@ -4252,6 +4032,61 @@ mod tests {
         convert::Infallible,
         sync::{atomic::AtomicUsize, Mutex as StdMutex},
     };
+
+    #[test]
+    fn part_projections_match_the_shared_node_fixtures() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/opencode-projection-parity.json"
+        ))
+        .expect("fixtures");
+        let mut mismatches = Vec::new();
+        for fixture in fixtures["parts"].as_array().expect("part fixtures") {
+            let projected =
+                serde_json::to_value(project_part(&fixture["part"], "u1")).expect("projection");
+            if projected != fixture["expected"] {
+                mismatches.push(format!(
+                    "{}: actual={projected}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn session_projections_match_the_shared_node_fixtures() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/opencode-projection-parity.json"
+        ))
+        .expect("fixtures");
+        let mut mismatches = Vec::new();
+        for fixture in fixtures["sessions"].as_array().expect("session fixtures") {
+            let input = &fixture["input"];
+            let projection = project_session(OpenCodeProjectionInput {
+                session: &input["session"],
+                status: &input["status"],
+                messages: input["messages"].as_array().expect("messages"),
+                permissions: input["permissions"].as_array().expect("permissions"),
+                retry_activities: &[],
+                terminal_error: None,
+                model_selection_projector: None,
+                conversation_attachment_resolver: None,
+            });
+            let projected = json!({
+                "lastMessage": projection.last_message,
+                "lastMessageItemId": projection.last_message_item_id,
+                "currentTool": projection.current_tool, "summary": projection.summary,
+                "turnLastMessages": projection.turns.iter().map(|turn| turn.get("lastMessage").cloned().unwrap_or(Value::Null)).collect::<Vec<_>>(),
+            });
+            if projected != fixture["expected"] {
+                mismatches.push(format!(
+                    "{}: actual={projected}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
 
     #[derive(Clone)]
     struct FakeOpenCode {
@@ -4486,10 +4321,7 @@ mod tests {
                 ..
             } if id == "tool-1" && activity_kind == "commandExecution"
         )));
-        assert_eq!(
-            projection.tool_activity_ids,
-            HashSet::from(["tool-1".into()])
-        );
+        assert_eq!(projection.active_tool_count, 1);
     }
 
     #[test]
@@ -4549,7 +4381,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_reconcile_does_not_repeat_lifecycle_events() {
+    async fn repeated_reconcile_publishes_atomic_snapshots_without_synthetic_lifecycle() {
         let fixture = fixture();
         let endpoint = start_fake(fixture.clone()).await;
         let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
@@ -4565,20 +4397,35 @@ mod tests {
             .reconcile_and_emit("s1", "/tmp/workspace")
             .await
             .expect("second reconcile");
-        let mut approvals = 0;
-        let mut user_messages = 0;
-        let mut turn_started = 0;
+        let mut snapshots = Vec::new();
         while let Ok(event) = events.try_recv() {
             match event {
-                ProviderEvent::ApprovalRequested { .. } => approvals += 1,
-                ProviderEvent::UserMessage { .. } => user_messages += 1,
-                ProviderEvent::TurnStarted { .. } => turn_started += 1,
-                _ => {}
+                ProviderEvent::AdapterSnapshot { snapshot, .. } => snapshots.push(*snapshot),
+                ProviderEvent::ThreadDiscovered { .. } => {}
+                other => panic!("snapshot must not synthesize realtime lifecycle: {other:?}"),
             }
         }
-        assert_eq!(approvals, 1);
-        assert_eq!(user_messages, 1);
-        assert_eq!(turn_started, 1);
+        assert_eq!(snapshots.len(), 2);
+        let mut session: AiSession = serde_json::from_value(json!({
+            "id":"session", "agent":"opencode", "status":"idle", "phase":"unknown"
+        }))
+        .unwrap();
+        assert!(crate::provider_snapshot::apply_snapshot(
+            &mut session,
+            snapshots[0].clone()
+        ));
+        let first = session.clone();
+        assert!(!crate::provider_snapshot::apply_snapshot(
+            &mut session,
+            snapshots[1].clone()
+        ));
+        assert_eq!(
+            session, first,
+            "repeated snapshot preserves all owner clocks/revisions/counters"
+        );
+        assert_eq!(session.status, "waiting");
+        assert_eq!(session.phase, "approval");
+        assert_eq!(session.turns.as_ref().unwrap().len(), 1);
         provider.close();
     }
 
@@ -4655,10 +4502,10 @@ mod tests {
 
     #[test]
     fn sse_parser_handles_lf_and_crlf_frames() {
-        let mut buffer = "data: one\n\ndata: two\r\n\r\npartial".to_string();
+        let mut buffer = b"data: one\n\ndata: two\r\n\r\npartial".to_vec();
         assert_eq!(next_sse_frame(&mut buffer).as_deref(), Some("data: one"));
         assert_eq!(next_sse_frame(&mut buffer).as_deref(), Some("data: two"));
-        assert_eq!(buffer, "partial");
+        assert_eq!(buffer, b"partial");
     }
 
     #[test]
@@ -4689,7 +4536,6 @@ mod tests {
             directories: RwLock::new(HashMap::from([("s1".to_string(), "/tmp".to_string())])),
             projections: RwLock::new(HashMap::from([("s1".to_string(), projection)])),
             pending_settings: RwLock::new(HashMap::new()),
-            reconcile_states: RwLock::new(HashMap::new()),
             aux: RwLock::new(OpenCodeAuxState::default()),
             model_selection_projector: RwLock::new(None),
             model_selection_resolver: RwLock::new(None),
@@ -4720,7 +4566,6 @@ mod tests {
             lifecycle: "running".to_string(),
             phase: "responding".to_string(),
             active_turn_id: Some("u1".to_string()),
-            last_turn_id: Some("u1".to_string()),
             message_turns: HashMap::from([
                 ("u1".to_string(), "u1".to_string()),
                 ("a1".to_string(), "u1".to_string()),
@@ -4773,8 +4618,8 @@ mod tests {
         )));
         assert!(retry.iter().any(|event| matches!(
             event,
-            ProviderEvent::ThreadSnapshot { status, phase: Some(phase), .. }
-                if status == "running" && phase == "thinking"
+            ProviderEvent::AdapterSnapshot { snapshot, .. }
+                if snapshot.status == "running" && snapshot.phase == "thinking"
         )));
 
         provider
@@ -4920,6 +4765,86 @@ mod tests {
             ProviderEvent::AgentMessageDelta { turn_id, item_id, delta, .. }
                 if turn_id == "u1" && item_id == "p1" && delta == "first chunk"
         )));
+    }
+
+    #[tokio::test]
+    async fn tool_sse_publishes_timeline_without_reapplying_snapshot_activity() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/opencode-projection-parity.json"
+        ))
+        .expect("fixtures");
+        for fixture in fixtures["sessions"].as_array().expect("sessions") {
+            if fixture["expected"]["currentTool"].is_null() {
+                continue;
+            }
+            let part = &fixture["input"]["messages"][1]["parts"][0];
+            let (provider, mut events) = live_provider(running_projection());
+            provider
+                .handle_global_event(live_event(
+                    "message.part.updated",
+                    json!({ "sessionID": "s1", "part": part }),
+                ))
+                .await;
+            let emitted = drain_events(&mut events);
+            assert_eq!(emitted.len(), 1);
+            match &emitted[0] {
+                ProviderEvent::TimelineItem { item, .. } => assert_eq!(
+                    item,
+                    &project_part(part, "u1").unwrap(),
+                    "{}",
+                    fixture["name"]
+                ),
+                other => panic!("tool SSE must publish Timeline only: {other:?}"),
+            }
+            assert_eq!(
+                project_current_tool(part).as_ref(),
+                Some(&fixture["expected"]["currentTool"])
+            );
+        }
+    }
+
+    #[test]
+    fn pending_part_deltas_share_the_node_utf16_budget_across_chunks() {
+        let (provider, _events) = live_provider(running_projection());
+        let first = "中".repeat(400_000);
+        let second = "😀".repeat(300_001);
+        for delta in [&first, &second] {
+            provider.buffer_pending_part_delta(
+                "s1",
+                json!({
+                    "messageID": "a1", "partID": "p1", "field": "text", "delta": delta
+                })
+                .as_object()
+                .expect("delta"),
+            );
+        }
+        let aux = provider.aux.read().expect("aux");
+        let pending = &aux.pending_part_deltas["s1"][0];
+        assert_eq!(pending.size, 1_000_000);
+        assert_eq!(pending.chunks, vec![first, "😀".repeat(300_000)]);
+    }
+
+    #[test]
+    fn live_part_deltas_are_not_subject_to_the_pending_replay_budget() {
+        let mut projection = running_projection();
+        projection.part_turns.insert(
+            "p1".to_string(),
+            ("u1".to_string(), "a1".to_string(), "text".to_string()),
+        );
+        let (provider, mut events) = live_provider(projection);
+        let expected = "x".repeat(1_000_001);
+        assert!(provider.publish_part_delta(
+            "s1",
+            json!({
+                "messageID": "a1", "partID": "p1", "field": "text", "delta": expected
+            })
+            .as_object()
+            .expect("delta")
+        ));
+        let emitted = drain_events(&mut events);
+        assert!(
+            matches!(&emitted[0], ProviderEvent::AgentMessageDelta { delta, .. } if delta == &expected)
+        );
     }
 
     #[tokio::test]
@@ -5474,6 +5399,7 @@ mod tests {
     enum ScriptedEventBody {
         Complete(String),
         Hanging(String),
+        Chunks(Vec<Vec<u8>>),
     }
 
     #[derive(Clone)]
@@ -5509,6 +5435,13 @@ mod tests {
             let headers = [(axum::http::header::CONTENT_TYPE, "text/event-stream")];
             return match body {
                 ScriptedEventBody::Complete(frame) => (headers, frame).into_response(),
+                ScriptedEventBody::Chunks(chunks) => {
+                    let stream = futures_util::stream::iter(chunks).then(|chunk| async move {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        Ok::<_, Infallible>(chunk)
+                    });
+                    (headers, Body::from_stream(stream)).into_response()
+                }
                 ScriptedEventBody::Hanging(frame) => {
                     let stream = futures_util::stream::once(async move {
                         Ok::<_, Infallible>(frame.into_bytes())
@@ -5688,6 +5621,57 @@ mod tests {
             .consume_events()
             .await
             .expect("normal EOF is not a stream failure");
+    }
+
+    #[tokio::test]
+    async fn sse_network_chunks_preserve_unicode_and_the_initial_bom() {
+        for prefix in ["", "\u{feff}"] {
+            let expected = "你好😀 e\u{301}";
+            let frame = format!(
+                "{prefix}data: {}\r\n\r\n",
+                live_event(
+                    "message.part.delta",
+                    json!({
+                        "sessionID": "s1", "messageID": "a1", "partID": "p1", "field": "text", "delta": expected
+                    })
+                )
+            );
+            let (state, _connections, _discovery, _slow) = scripted_open_code();
+            state
+                .event_bodies
+                .lock()
+                .expect("bodies")
+                .push_back(ScriptedEventBody::Chunks(
+                    frame.bytes().map(|byte| vec![byte]).collect(),
+                ));
+            let endpoint = start_scripted(state).await;
+            let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+                endpoint,
+                roots: vec![PathBuf::from("/tmp")],
+            }));
+            let mut projection = running_projection();
+            projection.part_turns.insert(
+                "p1".to_string(),
+                ("u1".to_string(), "a1".to_string(), "text".to_string()),
+            );
+            provider
+                .projections
+                .write()
+                .expect("projections")
+                .insert("s1".to_string(), projection);
+            let mut events = provider.subscribe_events().expect("events");
+            tokio::time::timeout(Duration::from_secs(5), provider.consume_events())
+                .await
+                .expect("SSE timeout")
+                .expect("SSE EOF");
+            assert!(
+                drain_events(&mut events).iter().any(|event| matches!(event,
+                    ProviderEvent::AgentMessageDelta { delta, .. } if delta == expected
+                )),
+                "SSE corrupted or lost a Unicode delta with prefix {prefix:?}"
+            );
+            provider.close();
+        }
     }
 
     #[tokio::test]

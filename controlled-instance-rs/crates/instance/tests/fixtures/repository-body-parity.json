@@ -1,0 +1,416 @@
+[
+  {
+    "name": "create path 1:/file.txt",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": "1:/file.txt",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create path 1:\\file.txt",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": "1:\\file.txt",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create path :/file.txt",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": ":/file.txt",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create path C:/file.txt",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": "C:/file.txt",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Path must be a safe repository-relative path.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create path C:\\file.txt",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": "C:\\file.txt",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Path must be a safe repository-relative path.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create path dir/.git/file",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": "dir/.git/file",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Path must be a safe repository-relative path.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create path dir/.GIT/file",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": "dir/.GIT/file",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create path ",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": "",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected string to have >=1 characters; Path must be a safe repository-relative path.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create path ../file",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": "../file",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Path must be a safe repository-relative path.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create body null",
+    "method": "POST",
+    "suffix": "files",
+    "body": null,
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected true; Invalid input: expected string, received undefined",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create body false",
+    "method": "POST",
+    "suffix": "files",
+    "body": false,
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected true; Invalid input: expected string, received undefined",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create body 0",
+    "method": "POST",
+    "suffix": "files",
+    "body": 0,
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected true; Invalid input: expected string, received undefined",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create body \"\"",
+    "method": "POST",
+    "suffix": "files",
+    "body": "",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected true; Invalid input: expected string, received undefined",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create body true",
+    "method": "POST",
+    "suffix": "files",
+    "body": true,
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected object, received boolean",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create body []",
+    "method": "POST",
+    "suffix": "files",
+    "body": [],
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected object, received array",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create body {}",
+    "method": "POST",
+    "suffix": "files",
+    "body": {},
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected true; Invalid input: expected string, received undefined",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create body {\"path\":4,\"content\":null,\"expectedAbsent\":false,\"expectedSnapshotId\":[]}",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": 4,
+      "content": null,
+      "expectedAbsent": false,
+      "expectedSnapshotId": []
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received number; Invalid input: expected string, received null; Invalid input: expected true; Invalid input: expected string, received array; Too small: expected array to have >=1 items",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "create body {\"1\":4,\"2\":3,\"path\":\"normal.txt\",\"content\":\"content\",\"expectedAbsent\":true,\"expectedSnapshotId\":\"snapshot:test\",\"z\":1,\"a\":2}",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "1": 4,
+      "2": 3,
+      "path": "normal.txt",
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test",
+      "z": 1,
+      "a": 2
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"1\", \"2\", \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "stage nested strict fields",
+    "method": "POST",
+    "suffix": "index/stage",
+    "body": {
+      "expectedSnapshotId": "snapshot:test",
+      "paths": [
+        {
+          "path": "a",
+          "expectedVersion": "version:1234567890",
+          "z": 1,
+          "a": 2
+        }
+      ]
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "rename non drive prefix",
+    "method": "POST",
+    "suffix": "files/rename",
+    "body": {
+      "path": "normal.txt",
+      "destination": "1:/file.txt",
+      "expectedVersion": "version:1234567890",
+      "expectedDestinationAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "empty array path",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": [],
+      "content": "content",
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received array; Too small: expected array to have >=1 items",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "array content",
+    "method": "POST",
+    "suffix": "files",
+    "body": {
+      "path": "a",
+      "content": [],
+      "expectedAbsent": true,
+      "expectedSnapshotId": "snapshot:test"
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received array",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "short array file version",
+    "method": "PUT",
+    "suffix": "files",
+    "body": {
+      "path": "a",
+      "content": "content",
+      "expectedSnapshotId": "snapshot:test",
+      "expectedVersion": [
+        1
+      ]
+    },
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received array; Too small: expected array to have >=16 items",
+        "retryable": false
+      }
+    }
+  }
+]

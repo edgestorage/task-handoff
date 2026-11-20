@@ -1,0 +1,141 @@
+[
+  {
+    "name": "a+b",
+    "suffix": "files?path=a+b",
+    "fileName": "a b",
+    "expected": {
+      "status": 200,
+      "data": {
+        "path": "a b",
+        "content": "file query fixture\n",
+        "byteLength": 19,
+        "version": "version:833f40502fc61762ea03054eecb18f857729d996496cb5b5b2d019c03177d37f",
+        "mode": {
+          "executable": false,
+          "gitMode": "100644"
+        }
+      }
+    }
+  },
+  {
+    "name": "%E4%B8%AD%E6%96%87%F0%9F%98%80",
+    "suffix": "files?path=%E4%B8%AD%E6%96%87%F0%9F%98%80",
+    "fileName": "中文😀",
+    "expected": {
+      "status": 200,
+      "data": {
+        "path": "中文😀",
+        "content": "file query fixture\n",
+        "byteLength": 19,
+        "version": "version:833f40502fc61762ea03054eecb18f857729d996496cb5b5b2d019c03177d37f",
+        "mode": {
+          "executable": false,
+          "gitMode": "100644"
+        }
+      }
+    }
+  },
+  {
+    "name": "%FF",
+    "suffix": "files?path=%FF",
+    "fileName": "%FF",
+    "expected": {
+      "status": 200,
+      "data": {
+        "path": "%FF",
+        "content": "file query fixture\n",
+        "byteLength": 19,
+        "version": "version:833f40502fc61762ea03054eecb18f857729d996496cb5b5b2d019c03177d37f",
+        "mode": {
+          "executable": false,
+          "gitMode": "100644"
+        }
+      }
+    }
+  },
+  {
+    "name": "%E0%A4%A",
+    "suffix": "files?path=%E0%A4%A",
+    "fileName": "%E0%A4%A",
+    "expected": {
+      "status": 200,
+      "data": {
+        "path": "%E0%A4%A",
+        "content": "file query fixture\n",
+        "byteLength": 19,
+        "version": "version:833f40502fc61762ea03054eecb18f857729d996496cb5b5b2d019c03177d37f",
+        "mode": {
+          "executable": false,
+          "gitMode": "100644"
+        }
+      }
+    }
+  },
+  {
+    "name": "%",
+    "suffix": "files?path=%",
+    "fileName": "%",
+    "expected": {
+      "status": 200,
+      "data": {
+        "path": "%",
+        "content": "file query fixture\n",
+        "byteLength": 19,
+        "version": "version:833f40502fc61762ea03054eecb18f857729d996496cb5b5b2d019c03177d37f",
+        "mode": {
+          "executable": false,
+          "gitMode": "100644"
+        }
+      }
+    }
+  },
+  {
+    "name": "%61%ZZ",
+    "suffix": "files?path=%61%ZZ",
+    "fileName": "%61%ZZ",
+    "expected": {
+      "status": 200,
+      "data": {
+        "path": "%61%ZZ",
+        "content": "file query fixture\n",
+        "byteLength": 19,
+        "version": "version:833f40502fc61762ea03054eecb18f857729d996496cb5b5b2d019c03177d37f",
+        "mode": {
+          "executable": false,
+          "gitMode": "100644"
+        }
+      }
+    }
+  },
+  {
+    "name": "%00bad",
+    "suffix": "files?path=%00bad",
+    "fileName": null,
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_PATH_INVALID",
+        "message": "Path must be repository-relative.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "normal%2Etxt",
+    "suffix": "files?path=normal%2Etxt",
+    "fileName": "normal.txt",
+    "expected": {
+      "status": 200,
+      "data": {
+        "path": "normal.txt",
+        "content": "file query fixture\n",
+        "byteLength": 19,
+        "version": "version:833f40502fc61762ea03054eecb18f857729d996496cb5b5b2d019c03177d37f",
+        "mode": {
+          "executable": false,
+          "gitMode": "100644"
+        }
+      }
+    }
+  }
+]

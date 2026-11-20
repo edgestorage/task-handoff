@@ -102,7 +102,7 @@ function buildAiSessionPatch(
   const updatedAt = options.preserveUpdatedAt ? current.updatedAt : options.updatedAt ?? current.updatedAt;
   const turnPatch = options.suppressPromptTurn ? { ...patch, userPrompt: undefined } : patch;
   const turns = options.suppressTurnUpdate
-    ? options.replaceTurns ? normalizeTurns(undefined) : current.turns
+    ? options.replaceTurns ? normalizeTurns(patch.turns) : current.turns
     : updateTurns(options.replaceTurns ? undefined : current.turns, turnPatch, updatedAt, options.meta);
   const prompt = patch.userPrompt ? messageText(patch.userPrompt) : "";
   const latestTurn = turns?.at(-1);
@@ -317,6 +317,24 @@ export function reduceAiSessionRealtime(
   }
   if (event.kind === "send-ack") {
     const userPrompt = messageText(event.userPrompt);
+    const acknowledged = event.activeTurnId && normalizeTurns(current.turns).find(
+      (turn) => turn.id === event.activeTurnId || turn.providerTurnId === event.activeTurnId,
+    );
+    if (acknowledged && acknowledged.status !== "queued") {
+      // The response confirms acceptance, not a new lifecycle observation.
+      // Enrich the identified turn while preserving newer realtime state,
+      // including a completion or approval received before the RPC response.
+      const turns = updateTurns(current.turns, {
+        activeTurnId: acknowledged.id,
+        status: acknowledged.status === "completed" ? "idle" : acknowledged.status,
+        phase: acknowledged.phase,
+        userPrompt,
+        userMessage: event.userMessage,
+      }, updatedAt, meta);
+      return applyAiSessionPatch(current, { turns }, {
+        updatedAt, meta, replaceTurns: true, suppressTurnUpdate: true,
+      });
+    }
     return applyAiSessionPatch(current, {
       activeTurnId: event.activeTurnId || stableGeneratedTurnId(userPrompt, updatedAt),
       status: event.status || "running",

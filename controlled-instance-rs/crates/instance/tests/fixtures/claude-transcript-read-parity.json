@@ -1,0 +1,29 @@
+[
+  {
+    "name": "assistant and tool records remain raw",
+    "content": "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Working\"},{\"type\":\"tool_use\",\"id\":\"call-1\"}]}}\r\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call-1\"}]}}\r\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Done\"}]}}\n",
+    "tail": 3,
+    "expected": {
+      "lineCount": 4,
+      "tail": "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call-1\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Done\"}]}}\n"
+    }
+  },
+  {
+    "name": "unterminated trailing CR is not a CRLF separator",
+    "content": "first\r\npartial\r",
+    "tail": 2,
+    "expected": { "lineCount": 2, "tail": "first\npartial\r" }
+  },
+  {
+    "name": "invalid UTF-8 is replaced in the readable tail",
+    "bytes": [102, 105, 114, 115, 116, 13, 10, 97, 226, 130, 10],
+    "tail": 2,
+    "expected": { "lineCount": 3, "tail": "a\ufffd\n" }
+  },
+  {
+    "name": "empty file has one empty line",
+    "content": "",
+    "tail": 2,
+    "expected": { "lineCount": 1, "tail": "" }
+  }
+]

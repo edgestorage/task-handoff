@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -16,6 +17,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { AppManagementManager, AppManagementRequestError } = require("../packages/controlled-instance/src/web/app-management.ts");
+const { AppRecipeExecutionError, createAppRecipeExecutor } = require("../packages/controlled-instance/src/web/app-recipe-executor.ts");
 const { AppInstallEnvironmentManager } = require("../packages/controlled-instance/src/web/app-install-environment.ts");
 const { createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
 
@@ -202,6 +204,358 @@ test("postcondition failure keeps detection authoritative", async () => {
   assert.equal(manager.getJob(job.id).state, "failed");
   assert.equal(manager.getJob(job.id).error.code, "postcondition_failed");
   assert.equal(manager.snapshot().apps[0].state, "not-installed");
+});
+
+test("postcondition failure then retry matches the shared app-management fixture", async () => {
+  const dirs = stateDirs("task-handoff-app-retry-parity-");
+  const launcher = path.join(dirs.installBaseDir, "tool", "bin", "tool");
+  const manifestFile = path.join(dirs.stateDir, "manifests", "tool.json");
+  const archiveApp = {
+    launcher: { id: "tool", name: "tool", kind: "tty", command: "bin/tool" },
+    detection: [{ type: "launcher-executable" }],
+    distribution: {
+      recipes: [{
+        type: "archive",
+        platforms: ["linux"],
+        arches: ["x64"],
+        privilege: "root",
+        url: "https://example.invalid/tool.tar.gz",
+        sha256: "0".repeat(64),
+        format: "tar.gz",
+        installRoot: "tool",
+      }],
+    },
+  };
+  let executions = 0;
+  let installed = false;
+  const events = [];
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [archiveApp],
+    capabilities: () => capabilities,
+    detection: () => ({
+      state: installed ? "installed" : "not-installed",
+      executablePaths: installed ? [launcher] : [],
+    }),
+    managementSource: () => "recipe",
+    execute: async (_operation, _recipe, context) => {
+      executions += 1;
+      context.onPhase("install-package");
+      if (executions === 2) {
+        fs.mkdirSync(path.dirname(launcher), { recursive: true });
+        fs.mkdirSync(path.dirname(manifestFile), { recursive: true });
+        fs.writeFileSync(launcher, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        fs.writeFileSync(manifestFile, JSON.stringify({
+          schemaVersion: 1,
+          appId: "tool",
+          installRoot: path.join(dirs.installBaseDir, "tool"),
+          files: ["bin/tool"],
+        }));
+        installed = true;
+      }
+    },
+    publish: (event) => events.push(event),
+  });
+  const jobProjection = (job) => ({
+    operation: job.operation,
+    state: job.state,
+    phase: job.phase ?? null,
+    hasStartedAt: Boolean(job.startedAt),
+    hasFinishedAt: Boolean(job.finishedAt),
+    error: job.error ?? null,
+  });
+  const appProjection = () => {
+    const managed = manager.snapshot().apps[0];
+    return {
+      state: managed.state,
+      managementSource: managed.managementSource,
+      canInstall: managed.canInstall,
+      canUninstall: managed.canUninstall,
+      canUpdate: managed.canUpdate,
+      installReason: managed.installReason?.code ?? null,
+      updateReason: managed.updateReason?.code ?? null,
+    };
+  };
+
+  const first = manager.request("tool", "install");
+  await manager.waitForIdle();
+  const firstStep = {
+    name: "first-install",
+    job: jobProjection(manager.getJob(first.id)),
+    app: appProjection(),
+    executions,
+    launcherExists: fs.existsSync(launcher),
+    manifestExists: fs.existsSync(manifestFile),
+  };
+  const second = manager.request("tool", "install");
+  await manager.waitForIdle();
+  const actual = {
+    scenario: "postcondition-failure-then-retry",
+    steps: [firstStep, {
+      name: "retry-install",
+      job: jobProjection(manager.getJob(second.id)),
+      app: appProjection(),
+      executions,
+      launcherExists: fs.existsSync(launcher),
+      manifestExists: fs.existsSync(manifestFile),
+    }],
+    jobIdsDiffer: first.id !== second.id,
+    eventStates: events.filter((event) => event.job?.appId === "tool").map((event) => event.job.state),
+  };
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "controlled-instance-rs", "crates", "instance", "tests", "fixtures", "app-management-retry-parity.json"), "utf8"));
+  assert.deepEqual(actual, fixture);
+});
+
+test("update failure then retry matches the shared app-management fixture", async () => {
+  const dirs = stateDirs("task-handoff-app-update-retry-parity-");
+  const launcher = path.join(dirs.installBaseDir, "tool", "bin", "tool");
+  const manifestFile = path.join(dirs.stateDir, "manifests", "tool.json");
+  fs.mkdirSync(path.dirname(launcher), { recursive: true });
+  fs.mkdirSync(path.dirname(manifestFile), { recursive: true });
+  fs.writeFileSync(launcher, "#!/bin/sh\necho 1.0.0\n", { mode: 0o755 });
+  fs.writeFileSync(manifestFile, JSON.stringify({
+    schemaVersion: 1,
+    appId: "tool",
+    installRoot: path.join(dirs.installBaseDir, "tool"),
+    files: ["bin/tool"],
+  }));
+  const archiveApp = {
+    launcher: { id: "tool", name: "tool", kind: "tty", command: "bin/tool" },
+    detection: [{ type: "launcher-executable" }],
+    distribution: {
+      recipes: [{
+        type: "archive",
+        platforms: ["linux"],
+        arches: ["x64"],
+        privilege: "root",
+        url: "https://example.invalid/tool.tar.gz",
+        sha256: "0".repeat(64),
+        format: "tar.gz",
+        installRoot: "tool",
+      }],
+    },
+  };
+  let executions = 0;
+  const events = [];
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [archiveApp],
+    capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: [launcher] }),
+    managementSource: () => "recipe",
+    execute: async (_operation, _recipe, context) => {
+      executions += 1;
+      context.onPhase("update-package");
+      if (executions === 1) throw new AppRecipeExecutionError("update_failed", "simulated update failure", true);
+      fs.writeFileSync(launcher, "#!/bin/sh\necho 2.0.0\n", { mode: 0o755 });
+    },
+    publish: (event) => events.push(event),
+  });
+  const jobProjection = (job) => ({
+    operation: job.operation,
+    state: job.state,
+    phase: job.phase ?? null,
+    hasStartedAt: Boolean(job.startedAt),
+    hasFinishedAt: Boolean(job.finishedAt),
+    error: job.error ?? null,
+  });
+  const appProjection = () => {
+    const managed = manager.snapshot().apps[0];
+    return {
+      state: managed.state,
+      managementSource: managed.managementSource,
+      canInstall: managed.canInstall,
+      canUninstall: managed.canUninstall,
+      canUpdate: managed.canUpdate,
+      installReason: managed.installReason?.code ?? null,
+      updateReason: managed.updateReason?.code ?? null,
+    };
+  };
+
+  await manager.refreshSnapshot();
+  const initial = { app: appProjection(), launcherContents: fs.readFileSync(launcher, "utf8") };
+  const first = manager.request("tool", "update");
+  await manager.waitForIdle();
+  const firstStep = {
+    name: "first-update",
+    job: jobProjection(manager.getJob(first.id)),
+    app: appProjection(),
+    executions,
+    launcherContents: fs.readFileSync(launcher, "utf8"),
+    manifestExists: fs.existsSync(manifestFile),
+  };
+  const second = manager.request("tool", "update");
+  await manager.waitForIdle();
+  const actual = {
+    scenario: "update-failure-then-retry",
+    initial,
+    steps: [firstStep, {
+      name: "retry-update",
+      job: jobProjection(manager.getJob(second.id)),
+      app: appProjection(),
+      executions,
+      launcherContents: fs.readFileSync(launcher, "utf8"),
+      manifestExists: fs.existsSync(manifestFile),
+    }],
+    jobIdsDiffer: first.id !== second.id,
+    eventStates: events.filter((event) => event.job?.appId === "tool").map((event) => event.job.state),
+  };
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "controlled-instance-rs", "crates", "instance", "tests", "fixtures", "app-management-update-retry-parity.json"), "utf8"));
+  assert.deepEqual(actual, fixture);
+});
+
+test("archive install, update failure, uninstall, and reinstall match the shared lifecycle fixture", { skip: process.platform === "win32" }, async (context) => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "controlled-instance-rs", "crates", "instance", "tests", "fixtures", "archive-lifecycle-parity.json"), "utf8"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-app-archive-lifecycle-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installBaseDir = path.join(root, "apps");
+  const stateDir = path.join(root, "state");
+  const installRoot = path.join(installBaseDir, "tool");
+  const manifestFile = path.join(stateDir, "manifests", "tool.json");
+  const v1 = Buffer.from(fixture.artifacts.v1, "base64");
+  const v2 = Buffer.from(fixture.artifacts.v2, "base64");
+  let selected = v1;
+  let device = v1;
+  let recipeVersion = 1;
+  const events = [];
+  const jobIds = [];
+  const recipe = () => ({
+    type: "archive",
+    platforms: ["linux"],
+    arches: ["x64"],
+    privilege: "user",
+    url: `https://fixtures.invalid/tool-v${recipeVersion}.tar.gz`,
+    sha256: crypto.createHash("sha256").update(selected).digest("hex"),
+    format: "tar.gz",
+    installRoot: "tool",
+  });
+  const definition = () => ({
+    launcher: { id: "tool", name: "tool", kind: "tty", command: "bin/tool" },
+    detection: [{ type: "launcher-executable" }],
+    distribution: { recipes: [recipe()] },
+  });
+  const execute = createAppRecipeExecutor({
+    installBaseDir,
+    stateDir,
+    fetcher: async () => new Response(device, { status: 200, headers: { "content-length": String(device.length) } }),
+    commandRunner: async () => assert.fail("archive recipes must not invoke a command"),
+  });
+  const manager = new AppManagementManager({
+    stateDir,
+    installBaseDir,
+    definitions: () => [definition()],
+    capabilities: () => capabilities,
+    execute,
+    publish: (event) => {
+      if (event.job?.appId === "tool") events.push(event.job.state);
+    },
+  });
+  const tree = () => {
+    if (!fs.existsSync(installRoot)) return [];
+    const files = [];
+    const visit = (directory) => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+        const absolute = path.join(directory, entry.name);
+        const relative = path.relative(installRoot, absolute).split(path.sep).join("/");
+        if (entry.isDirectory()) visit(absolute);
+        else if (entry.isFile()) files.push({
+          path: relative,
+          contents: fs.readFileSync(absolute, "utf8"),
+          executable: (fs.statSync(absolute).mode & 0o111) !== 0,
+        });
+        else files.push({ path: relative, kind: entry.isSymbolicLink() ? "other:symlink" : "other:unknown", executable: false });
+      }
+    };
+    visit(installRoot);
+    return files.sort((left, right) => left.path.localeCompare(right.path));
+  };
+  const manifest = () => {
+    if (!fs.existsSync(manifestFile)) return null;
+    const value = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+    assert.equal(value.installRoot, installRoot);
+    return { schemaVersion: value.schemaVersion, appId: value.appId, files: value.files };
+  };
+  const appProjection = () => {
+    const app = manager.snapshot().apps[0];
+    return {
+      state: app.state,
+      managementSource: app.managementSource,
+      canInstall: app.canInstall,
+      canUninstall: app.canUninstall,
+      canUpdate: app.canUpdate,
+      installReason: app.installReason?.code ?? null,
+      uninstallReason: app.uninstallReason?.code ?? null,
+      updateReason: app.updateReason?.code ?? null,
+    };
+  };
+  const jobProjection = (job) => ({
+    operation: job.operation,
+    state: job.state,
+    phase: job.phase ?? null,
+    hasStartedAt: Boolean(job.startedAt),
+    hasFinishedAt: Boolean(job.finishedAt),
+    error: job.error ?? null,
+  });
+  const step = async (name, operation) => {
+    const queued = manager.request("tool", operation);
+    await manager.waitForIdle();
+    jobIds.push(queued.id);
+    const terminal = manager.getJob(queued.id);
+    return { name, job: jobProjection(terminal), app: appProjection(), tree: tree(), manifest: manifest() };
+  };
+
+  await manager.refreshSnapshot();
+  const steps = [await step("install-v1", "install")];
+  fs.writeFileSync(path.join(installRoot, "user-config.json"), "{}\n");
+  device = v2;
+  steps.push(await step("failed-update-to-v2", "update"));
+  device = v1;
+  steps.push(await step("uninstall-v1", "uninstall"));
+  selected = v2;
+  device = v2;
+  recipeVersion = 2;
+  steps.push(await step("reinstall-v2", "install"));
+
+  const restarted = new AppManagementManager({
+    stateDir,
+    installBaseDir,
+    definitions: () => [definition()],
+    capabilities: () => capabilities,
+    execute,
+  });
+  await restarted.refreshSnapshot();
+  const recentJobs = restarted.snapshot().recentJobs.map((job) => ({
+    operation: job.operation,
+    state: job.state,
+    phase: job.phase ?? null,
+    error: job.error?.code ?? null,
+  })).sort((left, right) => `${left.operation}:${left.state}:${left.phase ?? ""}:${left.error ?? ""}`.localeCompare(`${right.operation}:${right.state}:${right.phase ?? ""}:${right.error ?? ""}`));
+  const actual = {
+    scenario: "archive-install-update-failure-uninstall-reinstall",
+    artifacts: fixture.artifacts,
+    steps,
+    jobIdsDistinct: new Set(jobIds).size === jobIds.length,
+    eventStates: events,
+    restart: {
+      app: (() => {
+        const app = restarted.snapshot().apps[0];
+        return {
+          state: app.state,
+          managementSource: app.managementSource,
+          canInstall: app.canInstall,
+          canUninstall: app.canUninstall,
+          canUpdate: app.canUpdate,
+          installReason: app.installReason?.code ?? null,
+          uninstallReason: app.uninstallReason?.code ?? null,
+          updateReason: app.updateReason?.code ?? null,
+        };
+      })(),
+      tree: tree(),
+      manifest: manifest(),
+      recentJobs,
+    },
+  };
+  assert.deepEqual(actual, fixture);
 });
 
 test("terminal app jobs refresh inventory without changing the authoritative job result", async () => {

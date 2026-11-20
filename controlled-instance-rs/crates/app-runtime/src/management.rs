@@ -27,9 +27,9 @@ use crate::{
     detect_managed_app_recipe_target, detect_managed_app_with_managed_root_for_target,
     install_environment::{AppInstallEnvironmentManager, AppInstallExecutionPolicy},
     managed_app_projection, resolve_registry_native_package, select_install_recipe,
-    AppRecipeExecutionContext, AppRecipeExecutionError, AppRecipeExecutor, AppUpdateCheckResult,
-    AppUpdateChecker, InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult,
-    ManagedAppOwnershipContext,
+    AppRecipeExecutionContext, AppRecipeExecutionError, AppRecipeExecutor, AppRecipeRunner,
+    AppUpdateCheckResult, AppUpdateChecker, InstallRecipe, ManagedAppDefinition,
+    ManagedAppDetectionResult, ManagedAppOwnershipContext,
 };
 
 const ACTIVE_STATES: [AppManagementJobState; 2] = [
@@ -61,7 +61,7 @@ pub struct AppManagementRequestError {
     pub code: String,
     pub message: String,
     pub status_code: u16,
-    pub details: Option<Value>,
+    pub details: Option<Box<Value>>,
 }
 
 impl AppManagementRequestError {
@@ -75,7 +75,7 @@ impl AppManagementRequestError {
     }
 
     fn details(mut self, details: Value) -> Self {
-        self.details = Some(details);
+        self.details = Some(Box::new(details));
         self
     }
 }
@@ -152,7 +152,7 @@ pub struct AppManagementManager {
     publish: Publisher,
     warn: Warning,
     runtime_hook: RuntimeHook,
-    executor: AppRecipeExecutor,
+    executor: Arc<dyn AppRecipeRunner>,
     update_checker: Arc<AppUpdateChecker>,
     install_environment: Option<AppInstallEnvironmentManager>,
     queue: Arc<tokio::sync::Mutex<()>>,
@@ -257,6 +257,12 @@ impl AppManagementManager {
             stream_id: format!("appstream_{}", uuid::Uuid::new_v4().simple()),
             sequence: 0,
         };
+        let executor = if let Some(environment) = install_environment.as_ref() {
+            AppRecipeExecutor::new(install_base_dir.clone(), state_dir.clone())
+                .with_install_environment(environment.clone())
+        } else {
+            AppRecipeExecutor::new(install_base_dir.clone(), state_dir.clone())
+        };
         let manager = Self {
             inner: Arc::new(Mutex::new(state)),
             state_dir: state_dir.clone(),
@@ -267,13 +273,7 @@ impl AppManagementManager {
             warn,
             runtime_hook,
             package_lifecycles: Arc::new(|_| None),
-            executor: install_environment
-                .as_ref()
-                .map(|environment| {
-                    AppRecipeExecutor::new(install_base_dir.clone(), state_dir.clone())
-                        .with_install_environment(environment.clone())
-                })
-                .unwrap_or_else(|| AppRecipeExecutor::new(install_base_dir, state_dir.clone())),
+            executor: Arc::new(executor),
             update_checker: Arc::new(
                 install_environment
                     .as_ref()
@@ -882,7 +882,10 @@ impl AppManagementManager {
                 if !satisfied {
                     Err(AppRecipeExecutionError::new(
                         "postcondition_failed",
-                        "App operation completed but detection did not confirm the required state.",
+                        format!(
+                            "App {} completed but detection did not confirm the required state.",
+                            operation_name(operation)
+                        ),
                         true,
                     ))
                 } else {
@@ -917,8 +920,16 @@ impl AppManagementManager {
             Err(error) => Err(error),
         };
         if let Some(hook) = &lifecycle {
-            if let Err(error) = hook.changed(operation, terminal.is_ok()).await {
-                terminal = Err(error);
+            let succeeded = terminal.is_ok();
+            if let Err(error) = hook.changed(operation, succeeded).await {
+                if succeeded {
+                    if hook.changed(operation, false).await.is_err() {
+                        (self.warn)("App failure cleanup did not complete.");
+                    }
+                    terminal = Err(error);
+                } else {
+                    (self.warn)("App failure cleanup did not complete.");
+                }
             }
         }
         let finished_at = now();
@@ -1355,6 +1366,7 @@ fn update_state(outcome: AppUpdateCheckResult) -> ManagedAppUpdateState {
 mod tests {
     use super::*;
     use controlled_instance_protocol::{AppKind, FinalComputerArch, FinalComputerPlatform};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn definition(id: &str) -> ManagedAppDefinition {
         ManagedAppDefinition {
@@ -1383,6 +1395,941 @@ mod tests {
                 privilege: None,
             }],
         }
+    }
+
+    struct RetryRecipeRunner {
+        executions: Arc<AtomicUsize>,
+        install_root: PathBuf,
+        state_dir: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl AppRecipeRunner for RetryRecipeRunner {
+        async fn execute_with_policy(
+            &self,
+            _operation: AppManagementOperation,
+            _recipe: &InstallRecipe,
+            context: &AppRecipeExecutionContext,
+            _frozen_policy: Option<&AppInstallExecutionPolicy>,
+        ) -> Result<String, AppRecipeExecutionError> {
+            let execution = self.executions.fetch_add(1, Ordering::SeqCst) + 1;
+            if let Some(on_phase) = &context.on_phase {
+                on_phase("install-package", None);
+            }
+            if execution == 2 {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let launcher = self.install_root.join("bin/tool");
+                    std::fs::create_dir_all(launcher.parent().expect("launcher directory"))
+                        .expect("launcher directory");
+                    std::fs::write(&launcher, "#!/bin/sh\nexit 0\n").expect("launcher");
+                    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700))
+                        .expect("launcher permissions");
+                    let manifest = self.state_dir.join("manifests/tool.json");
+                    std::fs::create_dir_all(manifest.parent().expect("manifest directory"))
+                        .expect("manifest directory");
+                    std::fs::write(
+                        manifest,
+                        serde_json::json!({
+                            "schemaVersion": 1,
+                            "appId": "tool",
+                            "installRoot": self.install_root,
+                            "files": ["bin/tool"]
+                        })
+                        .to_string(),
+                    )
+                    .expect("ownership manifest");
+                }
+            }
+            Ok(String::new())
+        }
+    }
+
+    struct UpdateRetryRecipeRunner {
+        executions: Arc<AtomicUsize>,
+        launcher: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl AppRecipeRunner for UpdateRetryRecipeRunner {
+        async fn execute_with_policy(
+            &self,
+            _operation: AppManagementOperation,
+            _recipe: &InstallRecipe,
+            context: &AppRecipeExecutionContext,
+            _frozen_policy: Option<&AppInstallExecutionPolicy>,
+        ) -> Result<String, AppRecipeExecutionError> {
+            let execution = self.executions.fetch_add(1, Ordering::SeqCst) + 1;
+            if let Some(on_phase) = &context.on_phase {
+                on_phase("update-package", None);
+            }
+            if execution == 1 {
+                return Err(AppRecipeExecutionError::new(
+                    "update_failed",
+                    "simulated update failure",
+                    true,
+                ));
+            }
+            std::fs::write(&self.launcher, "#!/bin/sh\necho 2.0.0\n").expect("updated launcher");
+            Ok(String::new())
+        }
+    }
+
+    struct TerminalLifecycle {
+        name: String,
+        order: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AppPackageLifecycle for TerminalLifecycle {
+        async fn before_change(
+            &self,
+            _: AppManagementOperation,
+        ) -> Result<(), AppRecipeExecutionError> {
+            self.order.lock().unwrap().push("drain".to_string());
+            if matches!(self.name.as_str(), "drain-failure" | "rollback-failure") {
+                return Err(AppRecipeExecutionError::new(
+                    "drain_failed",
+                    "simulated drain failure",
+                    true,
+                ));
+            }
+            Ok(())
+        }
+
+        async fn changed(
+            &self,
+            _: AppManagementOperation,
+            succeeded: bool,
+        ) -> Result<(), AppRecipeExecutionError> {
+            self.order
+                .lock()
+                .unwrap()
+                .push(format!("cleanup:{succeeded}"));
+            if matches!(self.name.as_str(), "cleanup-failure" | "rollback-failure") {
+                return Err(AppRecipeExecutionError::new(
+                    "cleanup_failed",
+                    "simulated cleanup failure",
+                    false,
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    struct TerminalRecipeRunner {
+        state_dir: PathBuf,
+        install_base_dir: PathBuf,
+        order: Arc<Mutex<Vec<String>>>,
+        executions: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl AppRecipeRunner for TerminalRecipeRunner {
+        async fn execute_with_policy(
+            &self,
+            _: AppManagementOperation,
+            _: &InstallRecipe,
+            _: &AppRecipeExecutionContext,
+            _: Option<&AppInstallExecutionPolicy>,
+        ) -> Result<String, AppRecipeExecutionError> {
+            self.order.lock().unwrap().push("execute".to_string());
+            self.executions.fetch_add(1, Ordering::SeqCst);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                let launcher = self.install_base_dir.join("tool/bin/tool");
+                std::fs::create_dir_all(launcher.parent().expect("launcher directory"))
+                    .expect("launcher directory");
+                std::fs::write(&launcher, "#!/bin/sh\nexit 0\n").expect("launcher");
+                std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700))
+                    .expect("launcher permissions");
+                let manifest = self.state_dir.join("manifests/tool.json");
+                std::fs::create_dir_all(manifest.parent().expect("manifest directory"))
+                    .expect("manifest directory");
+                std::fs::write(
+                    manifest,
+                    serde_json::json!({
+                        "schemaVersion": 1,
+                        "appId": "tool",
+                        "installRoot": self.install_base_dir.join("tool"),
+                        "files": ["bin/tool"]
+                    })
+                    .to_string(),
+                )
+                .expect("ownership manifest");
+            }
+            Ok(String::new())
+        }
+    }
+
+    fn terminal_lifecycle_definition() -> ManagedAppDefinition {
+        let mut app = definition("tool");
+        app.launcher.command = Some("bin/tool".to_string());
+        app.recipes = vec![InstallRecipe::Archive {
+            platforms: vec![
+                FinalComputerPlatform::Linux,
+                FinalComputerPlatform::Darwin,
+                FinalComputerPlatform::Win32,
+                FinalComputerPlatform::Freebsd,
+                FinalComputerPlatform::Openbsd,
+                FinalComputerPlatform::Aix,
+                FinalComputerPlatform::Sunos,
+            ],
+            arches: None,
+            privilege: Some(controlled_instance_protocol::AppInstallPrivilege::User),
+            url: "https://example.invalid/tool.tar.gz".to_string(),
+            sha256: "0".repeat(64),
+            format: "tar.gz".to_string(),
+            install_root: "tool".to_string(),
+        }];
+        app
+    }
+
+    fn terminal_lifecycle_fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../instance/tests/fixtures/app-management-terminal-parity.json"
+        ))
+        .expect("Node terminal fixture")
+    }
+
+    async fn observe_terminal_lifecycle(name: &'static str) -> Value {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let state_dir = temporary.path().join("state");
+        let install_base_dir = temporary.path().join("apps");
+        let app = terminal_lifecycle_definition();
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let publish_order = order.clone();
+        let executions = Arc::new(AtomicUsize::new(0));
+        let event_states = Arc::new(Mutex::new(Vec::new()));
+        let published_states = event_states.clone();
+        let warnings = Arc::new(Mutex::new(Vec::new()));
+        let published_warnings = warnings.clone();
+        let manager = AppManagementManager::with_parts(
+            state_dir.clone(),
+            install_base_dir.clone(),
+            Arc::new(move || vec![app.clone()]),
+            Arc::new(Vec::new),
+            Arc::new(move |event| {
+                let Some(job) = event.job else {
+                    return;
+                };
+                let state = serde_json::to_value(job.state).expect("job state");
+                let state = state.as_str().expect("state string").to_string();
+                publish_order.lock().unwrap().push(format!("event:{state}"));
+                if !job.state.is_active() {
+                    published_states.lock().unwrap().push(state.clone());
+                    publish_order
+                        .lock()
+                        .unwrap()
+                        .push(format!("notify:{state}"));
+                }
+            }),
+            Arc::new(move |message| {
+                published_warnings.lock().unwrap().push(message.to_string());
+            }),
+            Arc::new(|_| {}),
+            None,
+        )
+        .with_package_lifecycles({
+            let order = order.clone();
+            move |_| {
+                Some(Arc::new(TerminalLifecycle {
+                    name: name.to_string(),
+                    order: order.clone(),
+                }) as Arc<dyn AppPackageLifecycle>)
+            }
+        });
+        let mut manager = manager;
+        manager.executor = Arc::new(TerminalRecipeRunner {
+            state_dir: state_dir.clone(),
+            install_base_dir: install_base_dir.clone(),
+            order: order.clone(),
+            executions: executions.clone(),
+        });
+        let queued = manager
+            .request(
+                "tool",
+                AppManagementOperation::Install,
+                AppManagementOperationRequest { request_id: None },
+            )
+            .await
+            .expect("terminal lifecycle request");
+        let terminal = wait_for_terminal(&manager, &queued.id).await;
+        let reopen_app = terminal_lifecycle_definition();
+        let reopened = AppManagementManager::with_parts(
+            state_dir,
+            install_base_dir,
+            Arc::new(move || vec![reopen_app.clone()]),
+            Arc::new(Vec::new),
+            Arc::new(|_| {}),
+            Arc::new(|_| {}),
+            Arc::new(|_| {}),
+            None,
+        );
+        reopened.refresh_snapshot(false).await;
+        let reopened_job = job_projection(&reopened.get_job(&queued.id).expect("reopened job"));
+        let reopened_app = app_projection_complete(&reopened);
+        let job_value = job_projection(&terminal);
+        let app_value = app_projection_complete(&manager);
+        let order_value = order.lock().unwrap().clone();
+        let event_states_value = event_states.lock().unwrap().clone();
+        let executions_value = executions.load(Ordering::SeqCst);
+        let warnings_value = warnings.lock().unwrap().clone();
+        let reopened_value = json!({
+            "job": reopened_job,
+            "app": reopened_app,
+        });
+        json!({
+            "name": name,
+            "job": job_value,
+            "app": app_value,
+            "order": order_value,
+            "eventStates": event_states_value,
+            "executions": executions_value,
+            "warnings": warnings_value,
+            "reopened": reopened_value,
+        })
+    }
+
+    #[tokio::test]
+    async fn terminal_lifecycle_matches_node_fixture() {
+        let fixture = terminal_lifecycle_fixture();
+        for scenario in fixture["scenarios"].as_array().expect("scenarios") {
+            let name = scenario["name"].as_str().expect("scenario name");
+            let actual = observe_terminal_lifecycle(match name {
+                "success" => "success",
+                "drain-failure" => "drain-failure",
+                "cleanup-failure" => "cleanup-failure",
+                "rollback-failure" => "rollback-failure",
+                other => panic!("unknown scenario {other}"),
+            })
+            .await;
+            assert_eq!(actual, scenario["expected"], "{name}");
+        }
+    }
+
+    async fn wait_for_terminal(manager: &AppManagementManager, job_id: &str) -> AppManagementJob {
+        for _ in 0..500 {
+            let job = manager.get_job(job_id).expect("job");
+            if !job.state.is_active() {
+                return job;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("job {job_id} did not reach a terminal state");
+    }
+
+    fn job_projection(job: &AppManagementJob) -> Value {
+        serde_json::json!({
+            "operation": job.operation,
+            "state": job.state,
+            "phase": job.phase,
+            "hasStartedAt": job.started_at.is_some(),
+            "hasFinishedAt": job.finished_at.is_some(),
+            "error": job.error,
+        })
+    }
+
+    fn app_projection(manager: &AppManagementManager) -> Value {
+        let app = manager.snapshot().apps.into_iter().next().expect("app");
+        serde_json::json!({
+            "state": app.state,
+            "managementSource": app.management_source,
+            "canInstall": app.can_install,
+            "canUninstall": app.can_uninstall,
+            "canUpdate": app.can_update.unwrap_or(false),
+            "installReason": app.install_reason.map(|reason| reason.code),
+            "updateReason": app.update_reason.map(|reason| reason.code),
+        })
+    }
+
+    fn app_projection_complete(manager: &AppManagementManager) -> Value {
+        let app = manager.snapshot().apps.into_iter().next().expect("app");
+        serde_json::json!({
+            "state": app.state,
+            "managementSource": app.management_source,
+            "canInstall": app.can_install,
+            "canUninstall": app.can_uninstall,
+            "canUpdate": app.can_update.unwrap_or(false),
+            "installReason": app.install_reason.map(|reason| reason.code),
+            "uninstallReason": app.uninstall_reason.map(|reason| reason.code),
+            "updateReason": app.update_reason.map(|reason| reason.code),
+        })
+    }
+
+    fn archive_manifest_projection(state_dir: &Path) -> Value {
+        let path = state_dir.join("manifests/tool.json");
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return Value::Null;
+        };
+        let manifest: Value = serde_json::from_str(&raw).expect("archive manifest");
+        serde_json::json!({
+            "schemaVersion": manifest["schemaVersion"],
+            "appId": manifest["appId"],
+            "files": manifest["files"],
+        })
+    }
+
+    #[cfg(unix)]
+    fn archive_tree(root: &Path) -> Value {
+        use std::os::unix::fs::PermissionsExt;
+
+        fn visit(root: &Path, current: &Path, files: &mut Vec<Value>) {
+            let mut entries = std::fs::read_dir(current)
+                .expect("archive directory")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("archive entries");
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let absolute = entry.path();
+                let relative = absolute
+                    .strip_prefix(root)
+                    .expect("relative archive path")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let metadata = std::fs::symlink_metadata(&absolute).expect("archive metadata");
+                if metadata.is_dir() {
+                    visit(root, &absolute, files);
+                } else if metadata.is_file() {
+                    files.push(serde_json::json!({
+                        "path": relative,
+                        "contents": std::fs::read_to_string(&absolute).expect("archive contents"),
+                        "executable": metadata.permissions().mode() & 0o111 != 0,
+                    }));
+                } else {
+                    files.push(serde_json::json!({
+                        "path": relative,
+                        "kind": if metadata.file_type().is_symlink() { "other:symlink" } else { "other:unknown" },
+                        "executable": false,
+                    }));
+                }
+            }
+        }
+
+        if !root.exists() {
+            return serde_json::json!([]);
+        }
+        let mut files = Vec::new();
+        visit(root, root, &mut files);
+        files.sort_by(|left, right| {
+            left["path"]
+                .as_str()
+                .unwrap_or_default()
+                .cmp(right["path"].as_str().unwrap_or_default())
+        });
+        Value::Array(files)
+    }
+
+    fn archive_lifecycle_definition(
+        artifact: &[u8],
+        capabilities: &FinalComputerCapabilities,
+    ) -> ManagedAppDefinition {
+        use sha2::{Digest, Sha256};
+
+        let mut app = definition("tool");
+        app.launcher.command = Some("bin/tool".to_string());
+        app.recipes = vec![InstallRecipe::Archive {
+            platforms: vec![capabilities.platform],
+            arches: Some(vec![capabilities.arch]),
+            privilege: Some(controlled_instance_protocol::AppInstallPrivilege::User),
+            url: "https://fixtures.invalid/tool.tar.gz".to_string(),
+            sha256: hex::encode(Sha256::digest(artifact)),
+            format: "tar.gz".to_string(),
+            install_root: "tool".to_string(),
+        }];
+        app
+    }
+
+    struct ArchiveFixtureRunner {
+        install_base_dir: PathBuf,
+        state_dir: PathBuf,
+        artifact: Arc<Mutex<Vec<u8>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AppRecipeRunner for ArchiveFixtureRunner {
+        async fn execute_with_policy(
+            &self,
+            operation: AppManagementOperation,
+            recipe: &InstallRecipe,
+            context: &AppRecipeExecutionContext,
+            frozen_policy: Option<&AppInstallExecutionPolicy>,
+        ) -> Result<String, AppRecipeExecutionError> {
+            let executor = AppRecipeExecutor::new(&self.install_base_dir, &self.state_dir)
+                .with_archive_fixture(self.artifact.lock().expect("archive fixture").clone());
+            executor
+                .execute_with_policy(operation, recipe, context, frozen_policy)
+                .await
+        }
+    }
+
+    fn archive_lifecycle_manager(
+        state_dir: &Path,
+        install_base_dir: &Path,
+        capabilities: FinalComputerCapabilities,
+        selected: Arc<Mutex<Vec<u8>>>,
+        device: Arc<Mutex<Vec<u8>>>,
+        event_states: Option<Arc<Mutex<Vec<String>>>>,
+    ) -> AppManagementManager {
+        let definitions = {
+            let selected = selected.clone();
+            let capabilities = capabilities.clone();
+            Arc::new(move || {
+                vec![archive_lifecycle_definition(
+                    &selected.lock().expect("selected archive"),
+                    &capabilities,
+                )]
+            })
+        };
+        let published = event_states;
+        let mut manager = AppManagementManager::with_parts(
+            state_dir.to_path_buf(),
+            install_base_dir.to_path_buf(),
+            definitions,
+            Arc::new(Vec::new),
+            Arc::new(move |event| {
+                if let (Some(states), Some(job)) = (&published, event.job) {
+                    let state = serde_json::to_value(job.state).expect("job state");
+                    states
+                        .lock()
+                        .expect("event states")
+                        .push(state.as_str().expect("state string").to_string());
+                }
+            }),
+            Arc::new(|_| {}),
+            Arc::new(|_| {}),
+            None,
+        );
+        manager.executor = Arc::new(ArchiveFixtureRunner {
+            install_base_dir: install_base_dir.to_path_buf(),
+            state_dir: state_dir.to_path_buf(),
+            artifact: device,
+        });
+        manager
+    }
+
+    #[cfg(unix)]
+    async fn archive_lifecycle_step(
+        manager: &AppManagementManager,
+        state_dir: &Path,
+        install_root: &Path,
+        name: &str,
+        operation: AppManagementOperation,
+        job_ids: &mut Vec<String>,
+    ) -> Value {
+        let queued = manager
+            .request(
+                "tool",
+                operation,
+                AppManagementOperationRequest { request_id: None },
+            )
+            .await
+            .expect("archive lifecycle request");
+        let terminal = wait_for_terminal(manager, &queued.id).await;
+        job_ids.push(terminal.id.clone());
+        serde_json::json!({
+            "name": name,
+            "job": job_projection(&terminal),
+            "app": app_projection_complete(manager),
+            "tree": archive_tree(install_root),
+            "manifest": archive_manifest_projection(state_dir),
+        })
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn postcondition_failure_then_retry_matches_node_fixture() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let state_dir = temporary.path().join("state");
+        let install_base_dir = temporary.path().join("apps");
+        let install_root = install_base_dir.join("tool");
+        let launcher = install_root.join("bin/tool");
+        let manifest = state_dir.join("manifests/tool.json");
+        let mut app = definition("tool");
+        app.launcher.command = Some("bin/tool".to_string());
+        app.recipes = vec![InstallRecipe::Archive {
+            platforms: vec![
+                FinalComputerPlatform::Linux,
+                FinalComputerPlatform::Darwin,
+                FinalComputerPlatform::Win32,
+                FinalComputerPlatform::Freebsd,
+                FinalComputerPlatform::Openbsd,
+                FinalComputerPlatform::Aix,
+                FinalComputerPlatform::Sunos,
+            ],
+            arches: None,
+            privilege: Some(controlled_instance_protocol::AppInstallPrivilege::User),
+            url: "https://example.invalid/tool.tar.gz".to_string(),
+            sha256: "0".repeat(64),
+            format: "tar.gz".to_string(),
+            install_root: "tool".to_string(),
+        }];
+        let executions = Arc::new(AtomicUsize::new(0));
+        let event_states = Arc::new(Mutex::new(Vec::new()));
+        let published = event_states.clone();
+        let mut manager = AppManagementManager::with_parts(
+            state_dir.clone(),
+            install_base_dir,
+            Arc::new(move || vec![app.clone()]),
+            Arc::new(Vec::new),
+            Arc::new(move |event| {
+                if let Some(job) = event.job {
+                    let state = serde_json::to_value(job.state).expect("job state");
+                    published
+                        .lock()
+                        .expect("event states")
+                        .push(state.as_str().expect("state string").to_string());
+                }
+            }),
+            Arc::new(|_| {}),
+            Arc::new(|_| {}),
+            None,
+        );
+        manager.executor = Arc::new(RetryRecipeRunner {
+            executions: executions.clone(),
+            install_root: install_root.clone(),
+            state_dir,
+        });
+
+        let first = manager
+            .request(
+                "tool",
+                AppManagementOperation::Install,
+                AppManagementOperationRequest { request_id: None },
+            )
+            .await
+            .expect("first request");
+        let first = wait_for_terminal(&manager, &first.id).await;
+        let first_step = serde_json::json!({
+            "name": "first-install",
+            "job": job_projection(&first),
+            "app": app_projection(&manager),
+            "executions": executions.load(Ordering::SeqCst),
+            "launcherExists": launcher.exists(),
+            "manifestExists": manifest.exists(),
+        });
+
+        let second = manager
+            .request(
+                "tool",
+                AppManagementOperation::Install,
+                AppManagementOperationRequest { request_id: None },
+            )
+            .await
+            .expect("retry request");
+        let second = wait_for_terminal(&manager, &second.id).await;
+        assert_ne!(first.id, second.id);
+        let actual = serde_json::json!({
+            "scenario": "postcondition-failure-then-retry",
+            "steps": [
+                first_step,
+                {
+                    "name": "retry-install",
+                    "job": job_projection(&second),
+                    "app": app_projection(&manager),
+                    "executions": executions.load(Ordering::SeqCst),
+                    "launcherExists": launcher.exists(),
+                    "manifestExists": manifest.exists(),
+                }
+            ],
+            "jobIdsDiffer": true,
+            "eventStates": *event_states.lock().expect("event states"),
+        });
+        let expected: Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../instance/tests/fixtures/app-management-retry-parity.json"
+            ))
+            .expect("fixture"),
+        )
+        .expect("fixture json");
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn update_failure_then_retry_matches_node_fixture() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let state_dir = temporary.path().join("state");
+        let install_base_dir = temporary.path().join("apps");
+        let install_root = install_base_dir.join("tool");
+        let launcher = install_root.join("bin/tool");
+        let manifest = state_dir.join("manifests/tool.json");
+        std::fs::create_dir_all(launcher.parent().expect("launcher directory"))
+            .expect("launcher directory");
+        std::fs::create_dir_all(manifest.parent().expect("manifest directory"))
+            .expect("manifest directory");
+        std::fs::write(&launcher, "#!/bin/sh\necho 1.0.0\n").expect("launcher");
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700))
+            .expect("launcher permissions");
+        std::fs::write(
+            &manifest,
+            serde_json::json!({
+                "schemaVersion": 1,
+                "appId": "tool",
+                "installRoot": install_root,
+                "files": ["bin/tool"]
+            })
+            .to_string(),
+        )
+        .expect("ownership manifest");
+        let mut app = definition("tool");
+        app.launcher.command = Some("bin/tool".to_string());
+        app.recipes = vec![InstallRecipe::Archive {
+            platforms: vec![
+                FinalComputerPlatform::Linux,
+                FinalComputerPlatform::Darwin,
+                FinalComputerPlatform::Win32,
+                FinalComputerPlatform::Freebsd,
+                FinalComputerPlatform::Openbsd,
+                FinalComputerPlatform::Aix,
+                FinalComputerPlatform::Sunos,
+            ],
+            arches: None,
+            privilege: Some(controlled_instance_protocol::AppInstallPrivilege::User),
+            url: "https://example.invalid/tool.tar.gz".to_string(),
+            sha256: "0".repeat(64),
+            format: "tar.gz".to_string(),
+            install_root: "tool".to_string(),
+        }];
+        let executions = Arc::new(AtomicUsize::new(0));
+        let event_states = Arc::new(Mutex::new(Vec::new()));
+        let published = event_states.clone();
+        let mut manager = AppManagementManager::with_parts(
+            state_dir,
+            install_base_dir,
+            Arc::new(move || vec![app.clone()]),
+            Arc::new(Vec::new),
+            Arc::new(move |event| {
+                if let Some(job) = event.job {
+                    let state = serde_json::to_value(job.state).expect("job state");
+                    published
+                        .lock()
+                        .expect("event states")
+                        .push(state.as_str().expect("state string").to_string());
+                }
+            }),
+            Arc::new(|_| {}),
+            Arc::new(|_| {}),
+            None,
+        );
+        manager.executor = Arc::new(UpdateRetryRecipeRunner {
+            executions: executions.clone(),
+            launcher: launcher.clone(),
+        });
+
+        manager.refresh_snapshot(false).await;
+        let initial = serde_json::json!({
+            "app": app_projection(&manager),
+            "launcherContents": std::fs::read_to_string(&launcher).expect("initial launcher"),
+        });
+        let first = manager
+            .request(
+                "tool",
+                AppManagementOperation::Update,
+                AppManagementOperationRequest { request_id: None },
+            )
+            .await
+            .expect("first update");
+        let first = wait_for_terminal(&manager, &first.id).await;
+        let first_step = serde_json::json!({
+            "name": "first-update",
+            "job": job_projection(&first),
+            "app": app_projection(&manager),
+            "executions": executions.load(Ordering::SeqCst),
+            "launcherContents": std::fs::read_to_string(&launcher).expect("failed launcher"),
+            "manifestExists": manifest.exists(),
+        });
+        let second = manager
+            .request(
+                "tool",
+                AppManagementOperation::Update,
+                AppManagementOperationRequest { request_id: None },
+            )
+            .await
+            .expect("retry update");
+        let second = wait_for_terminal(&manager, &second.id).await;
+        assert_ne!(first.id, second.id);
+        let actual = serde_json::json!({
+            "scenario": "update-failure-then-retry",
+            "initial": initial,
+            "steps": [
+                first_step,
+                {
+                    "name": "retry-update",
+                    "job": job_projection(&second),
+                    "app": app_projection(&manager),
+                    "executions": executions.load(Ordering::SeqCst),
+                    "launcherContents": std::fs::read_to_string(&launcher).expect("updated launcher"),
+                    "manifestExists": manifest.exists(),
+                }
+            ],
+            "jobIdsDiffer": true,
+            "eventStates": *event_states.lock().expect("event states"),
+        });
+        let expected: Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../instance/tests/fixtures/app-management-update-retry-parity.json"
+            ))
+            .expect("fixture"),
+        )
+        .expect("fixture json");
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn archive_install_update_failure_uninstall_reinstall_matches_node_fixture() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../instance/tests/fixtures/archive-lifecycle-parity.json"
+        ))
+        .expect("archive lifecycle fixture");
+        let first = STANDARD
+            .decode(fixture["artifacts"]["v1"].as_str().expect("v1 artifact"))
+            .expect("v1 archive");
+        let next = STANDARD
+            .decode(fixture["artifacts"]["v2"].as_str().expect("v2 artifact"))
+            .expect("v2 archive");
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let state_dir = temporary.path().join("state");
+        let install_base_dir = temporary.path().join("apps");
+        let install_root = install_base_dir.join("tool");
+        let selected = Arc::new(Mutex::new(first.clone()));
+        let device = Arc::new(Mutex::new(first.clone()));
+        let event_states = Arc::new(Mutex::new(Vec::new()));
+        let capabilities = crate::detect_final_computer_capabilities_sync();
+        let manager = archive_lifecycle_manager(
+            &state_dir,
+            &install_base_dir,
+            capabilities,
+            selected.clone(),
+            device.clone(),
+            Some(event_states.clone()),
+        );
+        manager.refresh_snapshot(false).await;
+        let mut job_ids = Vec::new();
+        let mut steps = vec![
+            archive_lifecycle_step(
+                &manager,
+                &state_dir,
+                &install_root,
+                "install-v1",
+                AppManagementOperation::Install,
+                &mut job_ids,
+            )
+            .await,
+        ];
+
+        std::fs::write(install_root.join("user-config.json"), "{}\n").expect("user config");
+        *device.lock().expect("device archive") = next.clone();
+        steps.push(
+            archive_lifecycle_step(
+                &manager,
+                &state_dir,
+                &install_root,
+                "failed-update-to-v2",
+                AppManagementOperation::Update,
+                &mut job_ids,
+            )
+            .await,
+        );
+        *device.lock().expect("device archive") = first.clone();
+        steps.push(
+            archive_lifecycle_step(
+                &manager,
+                &state_dir,
+                &install_root,
+                "uninstall-v1",
+                AppManagementOperation::Uninstall,
+                &mut job_ids,
+            )
+            .await,
+        );
+        *selected.lock().expect("selected archive") = next.clone();
+        *device.lock().expect("device archive") = next.clone();
+        steps.push(
+            archive_lifecycle_step(
+                &manager,
+                &state_dir,
+                &install_root,
+                "reinstall-v2",
+                AppManagementOperation::Install,
+                &mut job_ids,
+            )
+            .await,
+        );
+
+        let restarted = archive_lifecycle_manager(
+            &state_dir,
+            &install_base_dir,
+            crate::detect_final_computer_capabilities_sync(),
+            selected,
+            device,
+            None,
+        );
+        restarted.refresh_snapshot(false).await;
+        let mut recent_jobs = restarted
+            .snapshot()
+            .recent_jobs
+            .into_iter()
+            .map(|job| {
+                serde_json::json!({
+                    "operation": job.operation,
+                    "state": job.state,
+                    "phase": job.phase,
+                    "error": job.error.map(|error| error.code),
+                })
+            })
+            .collect::<Vec<_>>();
+        recent_jobs.sort_by_key(|job| {
+            format!(
+                "{}:{}:{}:{}",
+                job["operation"].as_str().unwrap_or_default(),
+                job["state"].as_str().unwrap_or_default(),
+                job["phase"].as_str().unwrap_or_default(),
+                job["error"].as_str().unwrap_or_default(),
+            )
+        });
+        let job_ids_distinct = job_ids
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == job_ids.len();
+        let event_states = event_states.lock().expect("event states").clone();
+        let actual = serde_json::json!({
+            "scenario": "archive-install-update-failure-uninstall-reinstall",
+            "artifacts": {
+                "v1": STANDARD.encode(&first),
+                "v2": STANDARD.encode(&next),
+            },
+            "steps": steps,
+            "jobIdsDistinct": job_ids_distinct,
+            "eventStates": event_states,
+            "restart": {
+                "app": app_projection_complete(&restarted),
+                "tree": archive_tree(&install_root),
+                "manifest": archive_manifest_projection(&state_dir),
+                "recentJobs": recent_jobs,
+            },
+        });
+        let persisted: Value = serde_json::from_str(
+            &std::fs::read_to_string(state_dir.join("manifests/tool.json"))
+                .expect("restarted ownership manifest"),
+        )
+        .expect("restarted manifest JSON");
+        assert_eq!(
+            persisted["installRoot"],
+            serde_json::json!(install_root.to_string_lossy())
+        );
+        assert_eq!(actual, fixture);
     }
 
     #[cfg(unix)]

@@ -10,7 +10,7 @@ The exceptions approved by the migration are the JavaScript launcher adapter, th
 - **Platform runtime unverified** means platform-specific code exists and may compile for the target, but has not passed runtime smoke or differential acceptance on that platform.
 - **Frozen/adapter exception** means code is deliberately retained outside the Rust business migration and is covered by boundary checks.
 
-The route surface has 201 explicit `v0.0.46` registrations, including five WebSocket upgrades. Target-current Node has 202 registrations; the only post-baseline extension is `GET /api/internal/instance-shell`. Route registration parity is not a behavioral differential proof.
+The route surface has 202 explicit `v0.0.47` registrations, including six WebSocket upgrades. The fixed release snapshot includes `GET /api/internal/instance-shell`; target-current Node has no additional registrations. Route registration parity is not a behavioral differential proof.
 
 | Node module | Rust owner | Current state |
 | --- | --- | --- |
@@ -54,7 +54,7 @@ The route surface has 201 explicit `v0.0.46` registrations, including five WebSo
 | `packages/ai-session-runtime/src/ai-session-turns.ts` | `crates/ai-session` | turn index/body revisions and reducer projection implemented; remaining differential fixtures are tracked in OpenSpec |
 | `packages/ai-session-runtime/src/codex-app-server*` | `crates/ai-session` | stdio JSON-RPC, thread/turn/approval control, resume/fork, durable/live Timeline and managed model provider selection implemented; fake app-server integration tests pass, live-provider differential remains pending |
 | `packages/ai-session-runtime/src/claude-control-sock.ts` | `crates/ai-session` | Claude control socket provider implemented with focused tests; live-provider differential remains pending |
-| `packages/ai-session-runtime/src/opencode*` | `crates/ai-session` | OpenCode HTTP/SSE provider, message/timeline deltas and lifecycle handling implemented with mock-provider tests; live-provider differential remains pending |
+| `packages/ai-session-runtime/src/opencode*` | `crates/ai-session` | OpenCode HTTP/SSE provider, message/timeline deltas and atomic owner snapshots implemented; U04.5 compares three real HTTP/SSE scenarios against test-owned upstreams with fixed Node output and durable reopen; controls/reconnect and live installed-provider differential remain pending |
 | `packages/app-runtime/src/runtime.ts`, `types.ts` | `crates/app-runtime` | session lifecycle, shared resources, TTY, display, VNC and process ownership implemented; unit/contract and fake app-server integration tested, macOS/Windows runtime smoke pending |
 | `packages/app-runtime/src/catalog.ts`, `managed-apps.ts` | `crates/app-runtime` | catalog, inventory and managed app definitions implemented through a registry |
 | `packages/app-runtime/src/managed-app-definitions/**` | `crates/app-runtime` | provider/registry app definitions implemented without app-id branches in the executor |
@@ -77,7 +77,7 @@ The route surface has 201 explicit `v0.0.46` registrations, including five WebSo
 | Area | Implementation status | Current verification | Remaining evidence |
 | --- | --- | --- | --- |
 | CLI and launcher ABI | Rust CLI plus approved JS launcher adapter implemented | Rust contract tests and launcher boundary checks | macOS/Windows launcher, signal forwarding, and artifact runtime smoke |
-| HTTP route surface | 201 `v0.0.46` + one target-current registration implemented | Node AST, matrix, and Rust router parity test | Per-route request/response/status/error fixtures; current differential script covers selected HTTP steps only |
+| HTTP route surface | 202 `v0.0.47` registrations implemented; no target-current additions | Node AST, matrix, and Rust router parity test | Per-route request/response/status/error fixtures; current differential script covers selected HTTP steps only |
 | WebSocket/event bus | Subscription, replay, compact envelope, slow-consumer close, delta coalescer implemented | Focused Rust tests; Local/Docker `.21` event acceptance rerun completed on 109 | Unified WS fixture corpus and repeatable Node/Rust differential comparison |
 | AI Session, attachments, providers | Session/state, attachments, Codex, Claude, OpenCode implemented | Focused Rust tests and fake/mock provider integration | Representative recorded provider/error streams and live differential fixtures |
 | App runtime and PTY | Catalog, sessions, display/VNC, logs, proxies, Unix PTY, Windows ConPTY code implemented | Focused unit/contract and fake Codex app-server integration tests | Windows ConPTY/Job Object runtime, resize/exit/signal semantics, macOS runtime, app lifecycle differential |
@@ -87,4 +87,4 @@ The route surface has 201 explicit `v0.0.46` registrations, including five WebSo
 
 ## Contract references
 
-- `docs/http-route-matrix.md` freezes the `v0.0.46` route/path/auth/transport surface (201 registrations total, five of them WebSocket upgrades) and the target-current Node surface (202 registrations, with only `GET /api/internal/instance-shell` added). `test/controlled-instance-route-contract.test.js` extracts routes from the Node TypeScript AST and fails if the matrix or Rust router drifts; response-body and error fixtures remain separate work.
+- `docs/http-route-matrix.md` freezes the `v0.0.47` route/path/auth/transport surface (202 registrations total, six WebSocket upgrades), backed by `docs/fixtures/node-routes-v0.0.47.json`; target-current Node has the same registration set. `test/controlled-instance-route-contract.test.js` extracts routes from the Node TypeScript AST and fails if the matrix or Rust router drifts; response-body and error fixtures remain separate work.

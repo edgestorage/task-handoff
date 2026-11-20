@@ -4,7 +4,7 @@ use crate::{
         scope_wire,
     },
     error::RepositoryOperationError,
-    files::validate_repository_relative_path,
+    files::{decode_utf8_text, validate_repository_relative_path},
     git::{GitError, GitProcess, GitProcessOptions},
     ResolvedRepository,
 };
@@ -93,12 +93,14 @@ pub async fn repository_diff(
             )
             .await
             .map_err(|error| repository_git_error(error, &state))?;
-        (
-            result.stdout.clone(),
-            result.stdout.contains("Binary files ")
-                || result.stdout.contains("GIT binary patch")
-                || result.stdout.contains("Binary files differ"),
-        )
+        static BINARY_DIFF: OnceLock<Regex> = OnceLock::new();
+        let binary = BINARY_DIFF
+            .get_or_init(|| {
+                Regex::new(r"(?:Binary files .* differ|GIT binary patch)")
+                    .expect("binary diff pattern")
+            })
+            .is_match(&result.stdout);
+        (result.stdout, binary)
     };
     let truncated = truncate_utf8(&raw, byte_limit);
     let lines = if binary {
@@ -798,7 +800,7 @@ fn untracked_unified_diff(
     if buffer.contains(&0) {
         return Ok((String::new(), true));
     }
-    let Ok(text) = String::from_utf8(buffer) else {
+    let Ok(text) = decode_utf8_text(&buffer) else {
         return Ok((String::new(), true));
     };
     let lines = text.split('\n').collect::<Vec<_>>();
@@ -982,6 +984,78 @@ mod tests {
             exit_code: Some(1),
             stderr: stderr.to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn diff_responses_match_shared_node_byte_and_binary_fixtures() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/repository-diff-parity.json"
+        ))
+        .expect("fixtures");
+        let mut failures = Vec::new();
+        for fixture in fixtures.as_array().expect("cases") {
+            let root = tempfile::tempdir().expect("repository");
+            let git = |args: &[&str]| {
+                let output = std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(root.path())
+                    .output()
+                    .expect("git");
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            };
+            git(&["init", "-q"]);
+            let scope: RepositoryChangeScope =
+                serde_json::from_value(fixture["scope"].clone()).expect("scope");
+            if scope != RepositoryChangeScope::Untracked {
+                fs::write(root.path().join("example.txt"), "initial\n").expect("initial file");
+                git(&["add", "example.txt"]);
+                git(&[
+                    "-c",
+                    "user.name=Parity",
+                    "-c",
+                    "user.email=parity@example.test",
+                    "commit",
+                    "--no-gpg-sign",
+                    "-qm",
+                    "initial",
+                ]);
+            }
+            fs::write(
+                root.path().join("example.txt"),
+                hex::decode(fixture["hex"].as_str().expect("hex")).expect("bytes"),
+            )
+            .expect("fixture file");
+            let service = crate::RepositoryService::new_with_managed_root(
+                Vec::new(),
+                root.path().join("managed"),
+            );
+            let state = service.resolve_workspace(root.path()).await;
+            let diff = repository_diff(
+                &state,
+                scope,
+                "example.txt",
+                fixture["byteLimit"].as_u64().expect("limit"),
+                false,
+                20,
+            )
+            .await
+            .expect("diff");
+            let mut actual = serde_json::to_value(diff).expect("response");
+            for key in ["version", "snapshotId", "path", "scope", "oldPath"] {
+                actual.as_object_mut().expect("object").remove(key);
+            }
+            if actual != fixture["expected"] {
+                failures.push(format!(
+                    "{}: actual={actual}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]

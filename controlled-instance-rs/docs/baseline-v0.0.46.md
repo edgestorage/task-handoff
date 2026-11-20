@@ -1,5 +1,7 @@
 # Controlled Instance v0.0.46 Compatibility Baseline
 
+Historical release/artifact evidence. The current selected source compatibility baseline is documented in [baseline-v0.0.47.md](baseline-v0.0.47.md). The artifact hashes below still refer only to v0.0.46 and must not be relabeled as v0.0.47 evidence.
+
 ## Release artifact
 
 | Field | Value |
@@ -27,7 +29,7 @@ Evidence source: GitHub Release `v0.0.46`, asset metadata returned by `gh releas
 | Boundary | Version |
 | --- | --- |
 | Node Agent / Control Plane | `2026-10-02` |
-| Instance shell | `2026-10-31` |
+| Instance shell | Not present in the v0.0.46 source; introduced in v0.0.47 |
 | Browser tunnel | `2026-08-29` |
 | Story | `2026-09-28` |
 | TTY stream | `2026-08-11` |

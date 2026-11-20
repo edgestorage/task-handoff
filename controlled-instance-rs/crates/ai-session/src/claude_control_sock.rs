@@ -6,7 +6,7 @@ use controlled_instance_protocol::{
     AiSessionProviderActions, AiSessionProviderCapability, AiSessionProviderTimelineCapabilities,
     AiSessionReasoningEffortCapabilities,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::{
     env,
@@ -41,36 +41,52 @@ pub enum ClaudeControlError {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeDaemonJob {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub short: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub nonce: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub session_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub pid: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub attempt: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub started_at: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub cwd: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub backend: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub tempo: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub state: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub detail: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub intent: Option<String>,
     #[serde(default)]
     pub needs: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub cli_version: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_job_field")]
     pub source: Option<String>,
+}
+
+// Compatibility for v0.0.47: Node reads optional daemon metadata field by field
+// and coerces numeric metadata with Number(). Retain the worker if a diagnostic
+// field has an older shape, and accept numeric strings before typed decoding.
+fn optional_job_field<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value.clone()).ok().or_else(|| {
+        value
+            .as_str()
+            .and_then(|value| serde_json::from_str(value.trim()).ok())
+    }))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -184,6 +200,7 @@ impl ClaudeControlClient {
         short: &str,
         socket_path: &Path,
     ) -> Result<bool, ClaudeControlError> {
+        validate_short(short)?;
         let response = self
             .call_at(json!({ "op": "has", "short": short }), socket_path)
             .await?;
@@ -199,6 +216,7 @@ impl ClaudeControlClient {
         text: &str,
         socket_path: &Path,
     ) -> Result<Value, ClaudeControlError> {
+        validate_short(short)?;
         self.call_at(
             json!({ "op": "reply", "short": short, "text": text }),
             socket_path,
@@ -212,6 +230,7 @@ impl ClaudeControlClient {
         signal: &str,
         socket_path: &Path,
     ) -> Result<Value, ClaudeControlError> {
+        validate_short(short)?;
         self.call_at(
             json!({ "op": "kill", "short": short, "signal": signal }),
             socket_path,
@@ -225,6 +244,7 @@ impl ClaudeControlClient {
         socket_path: &Path,
         tail: Option<u64>,
     ) -> Result<ClaudeSubscription, ClaudeControlError> {
+        validate_short(short)?;
         let endpoint = LocalIpcEndpoint::explicit(socket_path)
             .map_err(|error| ClaudeControlError::Connection(error.to_string()))?;
         let mut stream = connect_local_ipc(&endpoint)
@@ -329,6 +349,15 @@ impl AiSessionControlProvider for ClaudeControlSockProvider {
         true
     }
 
+    fn session_actions_for(&self, session: &AiSession, status: Option<&str>) -> Value {
+        json!({
+            "send": true,
+            "interrupt": matches!(status, Some("running" | "waiting")),
+            "approval": false,
+            "rename": session.app_session_id.is_some(),
+        })
+    }
+
     fn capability(&self) -> AiSessionProviderCapability {
         AiSessionProviderCapability {
             agent: "claude".to_string(),
@@ -369,7 +398,15 @@ impl AiSessionControlProvider for ClaudeControlSockProvider {
             .await
             .map_err(send_error)?;
         ensure_control_success(&response, "AI_SESSION_SEND_FAILED", "Claude reply failed")?;
-        Ok(ProviderAction::simple("send"))
+        // The daemon acknowledges bytes, without an upstream turn identity.
+        // Its accepted prompt still owns a local conversation turn immediately.
+        Ok(ProviderAction {
+            turn_id: Some(format!(
+                "turn_{}",
+                &uuid::Uuid::new_v4().simple().to_string()[..20]
+            )),
+            ..ProviderAction::simple("send")
+        })
     }
 
     async fn steer_message(
@@ -377,20 +414,9 @@ impl AiSessionControlProvider for ClaudeControlSockProvider {
         session: &AiSession,
         input: ProviderMessage,
     ) -> Result<ProviderAction, ProviderError> {
-        let short = claude_short(session)?;
-        let socket_path = claude_socket_for_session(session);
-        let message = claude_message_text(&input)?;
-        let response = self
-            .client
-            .reply(short, &message, &socket_path)
-            .await
-            .map_err(send_error)?;
-        ensure_control_success(
-            &response,
-            "AI_SESSION_SEND_FAILED",
-            "Claude steering reply failed",
-        )?;
-        Ok(ProviderAction::simple("steer"))
+        let mut result = self.start_message(session, input).await?;
+        result.action = "steer".to_string();
+        Ok(result)
     }
 
     async fn interrupt(&self, session: &AiSession) -> Result<ProviderAction, ProviderError> {
@@ -415,6 +441,7 @@ impl AiSessionControlProvider for ClaudeControlSockProvider {
         &self,
         _session: &AiSession,
         _decision: &str,
+        _observe: &crate::provider::ProviderApprovalObserver<'_>,
     ) -> Result<ProviderAction, ProviderError> {
         Err(ProviderError::new(
             "AI_SESSION_APPROVAL_UNSUPPORTED",
@@ -442,6 +469,18 @@ pub fn claude_control_socket_path(
     controlled_instance_core::claude::control_socket_path(environment)
 }
 
+fn validate_short(short: &str) -> Result<(), ClaudeControlError> {
+    if short.len() == 8
+        && short
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(ClaudeControlError::InvalidShort(short.to_string()))
+    }
+}
+
 fn claude_short(session: &AiSession) -> Result<&str, ProviderError> {
     let short = session
         .provider_meta
@@ -449,7 +488,6 @@ fn claude_short(session: &AiSession) -> Result<&str, ProviderError> {
         .and_then(Value::as_object)
         .and_then(|meta| meta.get("short"))
         .and_then(Value::as_str)
-        .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             ProviderError::new(
@@ -532,6 +570,7 @@ fn claude_message_text(input: &ProviderMessage) -> Result<String, ProviderError>
     }
     let mut message = input.message.clone();
     if !paths.is_empty() {
+        message = message.trim().to_string();
         if !message.is_empty() {
             message.push_str("\n\n");
         }
@@ -562,10 +601,12 @@ fn ensure_control_success(response: &Value, code: &str, prefix: &str) -> Result<
     let response_code = response
         .get("code")
         .and_then(Value::as_str)
+        .filter(|code| !code.is_empty())
         .unwrap_or("unknown");
     let message = response
         .get("error")
         .and_then(Value::as_str)
+        .filter(|message| !message.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| format!("{prefix}: {response_code}"));
     Err(ProviderError::new(code, message, 400))
@@ -693,7 +734,7 @@ mod tests {
             &root,
             vec![json!({
                 "ok": true,
-                "jobs": [{ "short": "a1b2c3d4", "sessionId": "provider-session", "state": "working" }]
+                "jobs": [{ "short": "a1b2c3d4", "sessionId": "provider-session", "state": "working", "pid": "123", "futureMetadata": { "version": 2 } }]
             })],
         )
         .await;
@@ -703,9 +744,171 @@ mod tests {
             .expect("list");
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].session_id.as_deref(), Some("provider-session"));
+        assert_eq!(jobs[0].pid, Some(123));
         let requests = server.await.expect("server");
         assert_eq!(requests[0]["proto"], 1);
         assert_eq!(requests[0]["op"], "list");
+    }
+
+    #[test]
+    fn attachment_messages_match_shared_node_fixtures() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/claude-projection-parity.json"
+        ))
+        .expect("fixtures");
+        let root = TempDir::new().expect("tempdir");
+        let path = root.path().join("attachment.txt");
+        std::fs::write(&path, b"content").expect("file");
+        for fixture in fixtures["messages"].as_array().expect("messages") {
+            let input = ProviderMessage {
+                message: fixture["message"].as_str().expect("message").to_string(),
+                attachments: fixture["files"]
+                    .as_array()
+                    .expect("files")
+                    .iter()
+                    .map(|file| crate::ProviderAttachment {
+                        meta: AiSessionMessageAttachmentMeta {
+                            id: "att_parity".to_string(),
+                            kind: serde_json::from_value(file["kind"].clone()).expect("kind"),
+                            name: "attachment.txt".to_string(),
+                            mime: "text/plain".to_string(),
+                            size: 7,
+                            source_type: AiSessionMessageAttachmentSourceType::RuntimePath,
+                        },
+                        path: path.clone(),
+                        source: crate::ProviderAttachmentSource::RuntimePath,
+                        runtime_path: Some(path.clone()),
+                    })
+                    .collect(),
+                references: Vec::new(),
+                permission_mode: None,
+                message_id: None,
+                user_message_attachments: Vec::new(),
+                story_agent_tools: None,
+            };
+            let expected = fixture["expected"]
+                .as_str()
+                .expect("expected")
+                .replace("/attachment.txt", &path.display().to_string());
+            assert_eq!(
+                claude_message_text(&input).expect("message"),
+                expected,
+                "{}",
+                fixture["name"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn control_operations_reject_invalid_shorts_before_connecting() {
+        let root = TempDir::new().expect("tempdir");
+        let socket = root.path().join("missing.sock");
+        let client = ClaudeControlClient::with_timeout(Duration::from_secs(1));
+        for short in [
+            "",
+            "A1B2C3D4",
+            "a1b2c3d",
+            "a1b2c3d45",
+            "a1b2c3dg",
+            " a1b2c3d4 ",
+        ] {
+            assert!(
+                matches!(
+                    client.has_job(short, &socket).await,
+                    Err(ClaudeControlError::InvalidShort(_))
+                ),
+                "has {short:?}"
+            );
+            assert!(
+                matches!(
+                    client.reply(short, "hello", &socket).await,
+                    Err(ClaudeControlError::InvalidShort(_))
+                ),
+                "reply {short:?}"
+            );
+            assert!(
+                matches!(
+                    client.kill(short, "SIGTERM", &socket).await,
+                    Err(ClaudeControlError::InvalidShort(_))
+                ),
+                "kill {short:?}"
+            );
+            assert!(
+                matches!(
+                    client.subscribe(short, &socket, None).await,
+                    Err(ClaudeControlError::InvalidShort(_))
+                ),
+                "subscribe {short:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn control_errors_match_shared_node_fixtures() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/claude-projection-parity.json"
+        ))
+        .expect("fixtures");
+        for fixture in fixtures["errors"].as_array().expect("errors") {
+            let root = TempDir::new().expect("tempdir");
+            let (socket, server) = fake_socket(&root, vec![fixture["response"].clone()]).await;
+            let session = session("a1b2c3d4", &socket);
+            let provider = ClaudeControlSockProvider::new(ClaudeControlClient::with_timeout(
+                Duration::from_secs(1),
+            ));
+            let input = ProviderMessage {
+                message: "hello".to_string(),
+                attachments: Vec::new(),
+                references: Vec::new(),
+                permission_mode: None,
+                message_id: None,
+                user_message_attachments: Vec::new(),
+                story_agent_tools: None,
+            };
+            let result = match fixture["action"].as_str().expect("action") {
+                "send" => provider.start_message(&session, input).await,
+                "steer" => provider.steer_message(&session, input).await,
+                "interrupt" => provider.interrupt(&session).await,
+                _ => unreachable!(),
+            };
+            let error = result.expect_err("failure");
+            assert_eq!(
+                json!({"code":error.code,"message":error.message}),
+                fixture["expected"],
+                "{}",
+                fixture["action"]
+            );
+            server.await.expect("server");
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_job_metadata_does_not_discard_the_worker() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/claude-projection-parity.json"
+        ))
+        .expect("fixtures");
+        let root = TempDir::new().expect("tempdir");
+        let job = &fixtures["discovery"]
+            .as_array()
+            .expect("discovery")
+            .iter()
+            .find(|fixture| fixture["name"] == "optional-job-metadata-invalid")
+            .expect("case")["job"];
+        let (socket, server) = fake_socket(&root, vec![json!({"ok":true,"jobs":[job]})]).await;
+        let jobs = ClaudeControlClient::with_timeout(Duration::from_secs(1))
+            .list_jobs_at(&socket)
+            .await
+            .expect("jobs");
+        assert_eq!(
+            jobs.len(),
+            1,
+            "malformed optional diagnostics must not remove a known worker"
+        );
+        assert_eq!(jobs[0].short.as_deref(), Some("a1b2c3d4"));
+        assert_eq!(jobs[0].state.as_deref(), Some("waiting"));
+        assert_eq!(jobs[0].pid, None);
+        server.await.expect("server");
     }
 
     #[tokio::test]
@@ -748,7 +951,7 @@ mod tests {
         assert_eq!(requests[0]["short"], "a1b2c3d4");
         assert_eq!(
             requests[0]["text"],
-            format!("  describe this  \n\n图片路径：{}\n", attachment.display())
+            format!("describe this\n\n图片路径：{}\n", attachment.display())
         );
     }
 

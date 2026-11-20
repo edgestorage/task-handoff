@@ -80,6 +80,12 @@ fn send_request_conflict() -> ProviderError {
     )
 }
 
+impl From<crate::AiSessionAttachmentError> for ProviderError {
+    fn from(error: crate::AiSessionAttachmentError) -> Self {
+        Self::new(error.code, error.message, error.status_code)
+    }
+}
+
 impl From<AiSessionStoreError> for ProviderError {
     fn from(error: AiSessionStoreError) -> Self {
         match error {
@@ -333,6 +339,10 @@ pub struct ProviderAction {
     pub provider_turn_id: Option<String>,
     pub decision: Option<String>,
     pub queue_id: Option<String>,
+    /// Control-only response text (for example an already-ended turn). It is
+    /// owned by the provider result until the controller commits completion;
+    /// it is neither a wire field nor persisted provider metadata.
+    pub completion_text: Option<String>,
 }
 
 impl ProviderAction {
@@ -343,8 +353,15 @@ impl ProviderAction {
             provider_turn_id: None,
             decision: None,
             queue_id: None,
+            completion_text: None,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum AttachmentFailurePolicy {
+    Rollback,
+    Preserve,
 }
 
 #[derive(Debug, Clone)]
@@ -426,16 +443,16 @@ pub enum ProviderEvent {
         status: String,
         phase: Option<String>,
     },
-    ThreadHistorySnapshot {
+    // Test-owned observation barrier on the production consumer queue. It
+    // acknowledges preceding events; no timing or golden-dependent settling.
+    #[cfg(test)]
+    OwnerBarrier {
+        committed: Arc<tokio::sync::Notify>,
+    },
+    // Internal provider boundary: one atomic authority snapshot, never a wire response.
+    AdapterSnapshot {
         provider_session_id: String,
-        turns: Vec<Value>,
-        active_turn_id: Option<String>,
-        user_prompt: Option<String>,
-        last_message: Option<String>,
-        last_message_item_id: Option<String>,
-        summary: Option<String>,
-        error: Option<String>,
-        current_tool: Option<Value>,
+        snapshot: Box<crate::provider_snapshot::ProviderSessionSnapshot>,
     },
     TurnStarted {
         provider_session_id: String,
@@ -534,14 +551,38 @@ pub enum ProviderEvent {
     },
 }
 
+/// Internal control observations commit to the same owner as realtime events.
+/// Providers choose whether an accepted reply itself resolves approval or only
+/// authoritative before/after snapshots can do so. No public/persisted fields.
+pub enum ProviderApprovalUpdate {
+    Resolved,
+    Snapshot(Box<crate::provider_snapshot::ProviderSessionSnapshot>),
+}
+pub type ProviderApprovalObserver<'a> = dyn Fn(ProviderApprovalUpdate) -> futures_util::future::BoxFuture<'a, Result<(), ProviderError>>
+    + Send
+    + Sync
+    + 'a;
+
 #[async_trait]
 pub trait AiSessionControlProvider: Send + Sync {
     fn agent(&self) -> &str;
 
     fn capability(&self) -> AiSessionProviderCapability;
 
+    /// The adapter owns the provenance of its accepted message. OpenCode
+    /// acknowledgements share its realtime stream; Codex uses control priority.
+    fn acknowledgement_source(&self) -> &'static str {
+        "control"
+    }
+
     fn session_actions(&self, status: Option<&str>) -> Value {
         default_provider_actions(status)
+    }
+
+    /// Action projection may depend on the existing App owner, not just the
+    /// agent. Providers must derive it from the authoritative session binding.
+    fn session_actions_for(&self, _session: &AiSession, status: Option<&str>) -> Value {
+        self.session_actions(status)
     }
 
     fn timeline_capabilities(&self) -> AiSessionProviderTimelineCapabilities {
@@ -605,10 +646,13 @@ pub trait AiSessionControlProvider: Send + Sync {
         )))
     }
 
+    /// Commit each authoritative control observation before returning. A
+    /// successful reply is not necessarily an approval-state transition.
     async fn resolve_approval(
         &self,
         _session: &AiSession,
         _decision: &str,
+        _observe: &ProviderApprovalObserver<'_>,
     ) -> Result<ProviderAction, ProviderError> {
         Err(ProviderError::unsupported(format!(
             "{} sessions do not expose structured approval control.",
@@ -812,8 +856,6 @@ struct ToolActivityTracker {
 struct ToolActivityState {
     current_tool: Option<Value>,
     tool_calls_since_last_message: u64,
-    new_tool_ids: u64,
-    new_edits: u64,
 }
 
 impl ToolActivityTracker {
@@ -826,20 +868,15 @@ impl ToolActivityTracker {
             .filter(|id| !id.is_empty())
             .map(ToString::to_string)
         else {
-            return self.snapshot(0, 0);
+            return self.snapshot();
         };
         if self.seen_tool_ids.contains(&id) {
-            return self.snapshot(0, 0);
+            return self.snapshot();
         }
         self.seen_tool_ids.insert(id.clone());
         self.active_tools.retain(|(known, _)| known != &id);
         self.active_tools.push((id, tool.clone()));
-        let edits = u64::from(
-            tool.get("kind")
-                .and_then(Value::as_str)
-                .is_some_and(|kind| kind == "fileChange"),
-        );
-        self.snapshot(1, edits)
+        self.snapshot()
     }
 
     fn completed(&mut self, tool: Value) -> ToolActivityState {
@@ -850,11 +887,11 @@ impl ToolActivityTracker {
             .filter(|id| !id.is_empty())
             .map(ToString::to_string)
         else {
-            return self.snapshot(0, 0);
+            return self.snapshot();
         };
-        let new_tool = self.seen_tool_ids.insert(id.clone());
+        self.seen_tool_ids.insert(id.clone());
         self.active_tools.retain(|(known, _)| known != &id);
-        self.snapshot(u64::from(new_tool), 0)
+        self.snapshot()
     }
 
     fn compacting(
@@ -883,31 +920,29 @@ impl ToolActivityTracker {
             }
         }
         self.context_compaction = Some(Value::Object(tool));
-        self.snapshot(0, 0)
+        self.snapshot()
     }
 
     fn reset_for_agent_message(&mut self) -> ToolActivityState {
         self.seen_tool_ids.clear();
         self.active_tools.clear();
         self.context_compaction = None;
-        self.snapshot(0, 0)
+        self.snapshot()
     }
 
     fn clear_active_tools(&mut self) -> ToolActivityState {
         self.active_tools.clear();
         self.context_compaction = None;
-        self.snapshot(0, 0)
+        self.snapshot()
     }
 
-    fn snapshot(&self, new_tool_ids: u64, new_edits: u64) -> ToolActivityState {
+    fn snapshot(&self) -> ToolActivityState {
         ToolActivityState {
             current_tool: self
                 .context_compaction
                 .clone()
                 .or_else(|| self.active_tools.last().map(|(_, tool)| tool.clone())),
             tool_calls_since_last_message: self.seen_tool_ids.len() as u64,
-            new_tool_ids,
-            new_edits,
         }
     }
 }
@@ -941,8 +976,49 @@ impl AiSessionController {
             sub_agents: Mutex::new(HashMap::new()),
             sub_agent_lifecycles: Mutex::new(HashMap::new()),
         });
+        controller.restore_queued_attachment_owners();
         controller.restore_completed_creates();
         controller
+    }
+
+    fn restore_queued_attachment_owners(&self) {
+        for session in self.runtime.list() {
+            for item in &session.queue.items {
+                let attachment_ids = item
+                    .get("attachments")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|attachment| attachment.get("id").and_then(Value::as_str))
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                if attachment_ids.is_empty() {
+                    continue;
+                }
+                let message_id = item
+                    .get("messageId")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        self.attachments
+                            .message_id_for_attachments(&session.id, &attachment_ids)
+                    });
+                if let Some(message_id) = message_id {
+                    if let Err(error) = self.attachments.claim_message_attachments(
+                        &session.id,
+                        &message_id,
+                        &attachment_ids,
+                    ) {
+                        tracing::warn!(
+                            session_id = %session.id,
+                            %message_id,
+                            %error,
+                            "could not restore queued attachment ownership"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     pub fn runtime(&self) -> &Arc<AiSessionRuntime> {
@@ -1025,6 +1101,12 @@ impl AiSessionController {
         let _ = self.changes.send(());
     }
 
+    fn notify_if_runtime_changed(&self, previous_revision: u64) {
+        if self.runtime.revision() != previous_revision {
+            self.notify_change();
+        }
+    }
+
     pub fn register_provider(self: &Arc<Self>, provider: Arc<dyn AiSessionControlProvider>) {
         let agent = provider.agent().to_string();
         self.providers
@@ -1052,6 +1134,10 @@ impl AiSessionController {
                             provider_session_id,
                             ..
                         } => Some(provider_session_id.clone()),
+                        ProviderEvent::AdapterSnapshot {
+                            provider_session_id,
+                            snapshot,
+                        } if snapshot.status == "idle" => Some(provider_session_id.clone()),
                         _ => None,
                     };
                     if controller.apply_provider_event(event).await {
@@ -1108,7 +1194,9 @@ impl AiSessionController {
     }
 
     fn session_actions_for(&self, session: &AiSession, status: Option<&str>) -> Value {
-        self.actions_for_agent(&session.agent, status)
+        self.provider(&session.agent)
+            .map(|provider| provider.session_actions_for(session, status))
+            .unwrap_or_else(|_| default_provider_actions(status))
     }
 
     fn actions_for_agent(&self, agent: &str, status: Option<&str>) -> Value {
@@ -1270,6 +1358,10 @@ impl AiSessionController {
         .shared();
         pending_creates.insert(client_request_id, (fingerprint, operation.clone()));
         drop(pending_creates);
+        // The coordinator owns creation, including materialization timeout and
+        // compensation. A disconnected request must not stop polling the shared
+        // operation, leave the create lock held, or postpone durable completion.
+        tokio::spawn(operation.clone());
         operation.await
     }
 
@@ -1282,6 +1374,23 @@ impl AiSessionController {
     ) -> Result<AiSessionCreateResult, ProviderError> {
         let _guard = self.create_lock.lock().await;
         let provider = self.provider(&input.agent)?;
+        if input
+            .reasoning_effort
+            .as_deref()
+            .is_some_and(|effort| !effort.is_empty())
+            && !provider
+                .capability()
+                .reasoning_effort
+                .is_some_and(|capability| capability.select_at_create)
+        {
+            return Err(ProviderError::conflict(
+                "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+                format!(
+                    "{} does not support selecting reasoning effort at creation.",
+                    input.agent
+                ),
+            ));
+        }
         let model_selection = self.resolve_model_selection(
             &input.agent,
             input.model_selection.as_ref(),
@@ -1470,7 +1579,11 @@ impl AiSessionController {
         session_id: Option<&str>,
     ) {
         if let Some(session_id) = session_id {
-            let _ = self.runtime.remove(session_id);
+            if self.runtime.remove(session_id).ok().flatten().is_some() {
+                // Provider events may already have published this projection while
+                // the first turn was pending. Invalidate it after compensation too.
+                self.notify_change();
+            }
         }
         if provider.delete_session(provider_session_id).await.is_err() {
             let _ = provider.archive_session(provider_session_id).await;
@@ -1485,11 +1598,22 @@ impl AiSessionController {
     ) -> Result<AiSessionActionResult, ProviderError> {
         let session = self.require_session(session_id)?;
         let Some(client_request_id) = input.message.client_request_id.clone() else {
-            let session_lock = self.lock_for_session(session_id).await;
-            let _guard = session_lock.lock().await;
-            let result = self.send_prepared(&session, input, true).await?;
-            self.notify_change();
-            return Ok(result);
+            let controller = self.clone();
+            let operation_session_id = session_id.to_string();
+            let operation = async move {
+                let session_lock = controller.lock_for_session(&operation_session_id).await;
+                let _guard = session_lock.lock().await;
+                let previous_revision = controller.runtime.revision();
+                let result = controller.send_prepared(&session, input, true).await;
+                controller.notify_if_runtime_changed(previous_revision);
+                result
+            }
+            .boxed()
+            .shared();
+            // The public send API also permits requests without an idempotency
+            // key. Their provider acknowledgement still belongs to this owner.
+            tokio::spawn(operation.clone());
+            return operation.await;
         };
         let fingerprint = send_fingerprint(session_id, &input.message);
         let mut pending_sends = self.pending_sends.lock().await;
@@ -1522,6 +1646,7 @@ impl AiSessionController {
         let operation = async move {
             let session_lock = controller.lock_for_session(&operation_session_id).await;
             let _guard = session_lock.lock().await;
+            let previous_revision = controller.runtime.revision();
             let result = controller
                 .send_prepared(&current_session, owned_input, true)
                 .await;
@@ -1536,13 +1661,16 @@ impl AiSessionController {
                 .lock()
                 .await
                 .remove(&operation_client_request_id);
-            controller.notify_change();
+            controller.notify_if_runtime_changed(previous_revision);
             result
         }
         .boxed()
         .shared();
         pending_sends.insert(client_request_id, (fingerprint, operation.clone()));
         drop(pending_sends);
+        // Keep processing provider success/failure and releasing the session
+        // lock even if every HTTP waiter disconnects, as for owned creation.
+        tokio::spawn(operation.clone());
         operation.await
     }
 
@@ -2059,7 +2187,9 @@ impl AiSessionController {
                 return self.enqueue(session, &input, &staged);
             }
             if mode == AiSessionSendMode::Steer {
-                return self.steer(session, &input, &staged).await;
+                return self
+                    .steer(session, &input, &staged, AttachmentFailurePolicy::Rollback)
+                    .await;
             }
             if is_session_busy(session) {
                 return Err(ProviderError::conflict(
@@ -2068,7 +2198,8 @@ impl AiSessionController {
                 ));
             }
         }
-        self.start(session, &input, &staged).await
+        self.start(session, &input, &staged, AttachmentFailurePolicy::Rollback)
+            .await
     }
 
     fn stage_message(
@@ -2150,11 +2281,10 @@ impl AiSessionController {
         input: &ProviderMessageInput,
         staged: &StagedAiSessionMessageAttachments,
     ) -> Result<AiSessionActionResult, ProviderError> {
-        let attachments = self
-            .attachments
-            .message_attachment_metas(&session.id, &staged.message_id)
-            .into_iter()
-            .map(serde_json::to_value)
+        let attachments = staged
+            .provider_attachments
+            .iter()
+            .map(|attachment| serde_json::to_value(&attachment.meta))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 ProviderError::new("AI_SESSION_PERSISTENCE_FAILED", error.to_string(), 500)
@@ -2203,48 +2333,57 @@ impl AiSessionController {
         session: &AiSession,
         input: &ProviderMessageInput,
         staged: &StagedAiSessionMessageAttachments,
+        failure_policy: AttachmentFailurePolicy,
     ) -> Result<AiSessionActionResult, ProviderError> {
-        let references = self
-            .validate_references(session, &input.message.references)
-            .await?;
+        // Provider lookup/admission is outside the attempted operation, as
+        // in the source controller. Only an attempted send owns compensation.
         let provider = self.provider(&session.agent)?;
-        let requested_selection = session
-            .model_selection
-            .clone()
-            .and_then(|value| serde_json::from_value::<AiSessionModelSelection>(value).ok());
-        let resolved_selection = match requested_selection.as_ref() {
-            Some(selection) => self.resolve_model_selection(
-                &session.agent,
-                Some(selection),
-                AiSessionModelSelectionIntent::Session,
-            )?,
-            None => None,
-        };
-        let mut normalized_session = session.clone();
-        if let Some(selection) = resolved_selection {
-            normalized_session.model_selection = serde_json::to_value(selection).ok();
+        let result = async {
+            let references = self
+                .validate_references(session, &input.message.references)
+                .await?;
+            let requested_selection = session
+                .model_selection
+                .clone()
+                .and_then(|value| serde_json::from_value::<AiSessionModelSelection>(value).ok());
+            let resolved_selection = match requested_selection.as_ref() {
+                Some(selection) => self.resolve_model_selection(
+                    &session.agent,
+                    Some(selection),
+                    AiSessionModelSelectionIntent::Session,
+                )?,
+                None => None,
+            };
+            let mut normalized_session = session.clone();
+            if let Some(selection) = resolved_selection {
+                normalized_session.model_selection = serde_json::to_value(selection).ok();
+            }
+            let session = &normalized_session;
+            let mut message = provider_message(input, staged);
+            message.references = references;
+            let action = provider.start_message(session, message).await?;
+            let updated = self.apply_action_ack(
+                session,
+                &action,
+                &input.message.message,
+                &staged.message_id,
+                &staged.attachments,
+            )?;
+            // The provider has accepted this message. Preserve its authoritative
+            // acknowledgement if publishing the local attachment owner fails.
+            self.attachments.commit_message(
+                &session.id,
+                &staged.message_id,
+                action.provider_turn_id.as_deref(),
+            )?;
+            Ok(AiSessionActionResult {
+                session: updated,
+                provider: session.agent.clone(),
+                action,
+            })
         }
-        let session = &normalized_session;
-        let mut message = provider_message(input, staged);
-        message.references = references;
-        let action = provider.start_message(session, message).await?;
-        self.attachments.commit_message(
-            &session.id,
-            &staged.message_id,
-            action.provider_turn_id.as_deref(),
-        );
-        let updated = self.apply_action_ack(
-            session,
-            &action,
-            &input.message.message,
-            &staged.message_id,
-            &staged.attachments,
-        )?;
-        Ok(AiSessionActionResult {
-            session: updated,
-            provider: session.agent.clone(),
-            action,
-        })
+        .await;
+        self.finish_message_attempt(session, staged, failure_policy, result)
     }
 
     async fn steer(
@@ -2252,40 +2391,66 @@ impl AiSessionController {
         session: &AiSession,
         input: &ProviderMessageInput,
         staged: &StagedAiSessionMessageAttachments,
+        failure_policy: AttachmentFailurePolicy,
     ) -> Result<AiSessionActionResult, ProviderError> {
-        if !is_session_busy(session) {
-            return Err(ProviderError::conflict(
-                "AI_SESSION_NOT_ACTIVE",
-                "AI session is not active.",
-            ));
-        }
-        let references = self
-            .validate_references(session, &input.message.references)
-            .await?;
+        // Provider lookup/admission is outside the attempted operation, as
+        // in the source controller. Only an attempted send owns compensation.
         let provider = self.provider(&session.agent)?;
-        let mut message = provider_message(input, staged);
-        message.references = references;
-        let action = provider.steer_message(session, message).await?;
-        self.attachments.commit_message(
-            &session.id,
-            &staged.message_id,
-            action
-                .provider_turn_id
-                .as_deref()
-                .or(session.active_turn_id.as_deref()),
-        );
-        let updated = self.apply_action_ack(
-            session,
-            &action,
-            &input.message.message,
-            &staged.message_id,
-            &staged.attachments,
-        )?;
-        Ok(AiSessionActionResult {
-            session: updated,
-            provider: session.agent.clone(),
-            action,
-        })
+        let result = async {
+            let references = self
+                .validate_references(session, &input.message.references)
+                .await?;
+            let mut message = provider_message(input, staged);
+            message.references = references;
+            let action = provider.steer_message(session, message).await?;
+            let updated = self.apply_action_ack(
+                session,
+                &action,
+                &input.message.message,
+                &staged.message_id,
+                &staged.attachments,
+            )?;
+            // The provider has accepted this message. Preserve its authoritative
+            // acknowledgement if publishing the local attachment owner fails.
+            self.attachments.commit_message(
+                &session.id,
+                &staged.message_id,
+                action
+                    .provider_turn_id
+                    .as_deref()
+                    .or(session.active_turn_id.as_deref()),
+            )?;
+            Ok(AiSessionActionResult {
+                session: updated,
+                provider: session.agent.clone(),
+                action,
+            })
+        }
+        .await;
+        self.finish_message_attempt(session, staged, failure_policy, result)
+    }
+
+    fn finish_message_attempt(
+        &self,
+        session: &AiSession,
+        staged: &StagedAiSessionMessageAttachments,
+        policy: AttachmentFailurePolicy,
+        result: Result<AiSessionActionResult, ProviderError>,
+    ) -> Result<AiSessionActionResult, ProviderError> {
+        if result.is_err() && matches!(policy, AttachmentFailurePolicy::Rollback) {
+            // Queue dispatch retains ownership for its own retry; direct sends
+            // restore staged attachments to drafts. Preserve the accepted ack.
+            if let Err(rollback_error) = self
+                .attachments
+                .rollback_message(&session.id, &staged.message_id)
+            {
+                if let Err(error) = &result {
+                    tracing::warn!(%error, %rollback_error, "AI session attachment rollback failed");
+                }
+                return Err(rollback_error.into());
+            }
+        }
+        result
     }
 
     async fn validate_references(
@@ -2332,11 +2497,24 @@ impl AiSessionController {
         session_id: &str,
         queue_id: &str,
     ) -> Result<AiSessionActionResult, ProviderError> {
+        let previous_revision = self.runtime.revision();
+        let result = self.steer_queued_message_inner(session_id, queue_id).await;
+        self.notify_if_runtime_changed(previous_revision);
+        result
+    }
+
+    async fn steer_queued_message_inner(
+        self: &Arc<Self>,
+        session_id: &str,
+        queue_id: &str,
+    ) -> Result<AiSessionActionResult, ProviderError> {
         let session = self.require_session(session_id)?;
         let item = queued_item(&session, queue_id)?;
         let input = ProviderMessageInput::from_queue_item(&item)?;
         let staged = self.stage_queued_message(&session, &input)?;
-        let result = self.steer(&session, &input, &staged).await?;
+        let result = self
+            .steer(&session, &input, &staged, AttachmentFailurePolicy::Preserve)
+            .await?;
         let updated = self.runtime.remove_queue_item(&session.id, queue_id)?;
         Ok(AiSessionActionResult {
             session: updated,
@@ -2350,6 +2528,16 @@ impl AiSessionController {
     }
 
     pub async fn send_next_queued_message(
+        self: &Arc<Self>,
+        session_id: &str,
+    ) -> Result<Option<AiSessionActionResult>, ProviderError> {
+        let previous_revision = self.runtime.revision();
+        let result = self.send_next_queued_message_inner(session_id).await;
+        self.notify_if_runtime_changed(previous_revision);
+        result
+    }
+
+    async fn send_next_queued_message_inner(
         self: &Arc<Self>,
         session_id: &str,
     ) -> Result<Option<AiSessionActionResult>, ProviderError> {
@@ -2393,7 +2581,10 @@ impl AiSessionController {
                 return Err(error);
             }
         };
-        match self.start(&session, &input, &staged).await {
+        match self
+            .start(&session, &input, &staged, AttachmentFailurePolicy::Preserve)
+            .await
+        {
             Ok(result) => {
                 let updated = self.runtime.remove_queue_item(session_id, queue_id)?;
                 Ok(Some(AiSessionActionResult {
@@ -2477,18 +2668,16 @@ impl AiSessionController {
                 session.actions = Some(self.session_actions_for(session, Some("running")));
                 return Ok(true);
             }
-            session.status = "idle".to_string();
-            session.phase = "unknown".to_string();
-            session.active_turn_id = None;
-            if let (Some(turn_id), Some(turns)) = (turn_id, session.turns.as_mut()) {
-                if let Some(turn) = find_turn_mut(turns, &turn_id) {
-                    let object = turn.as_object_mut().expect("turn object");
-                    object.insert("status".to_string(), json!("completed"));
-                    object.insert("phase".to_string(), json!("unknown"));
-                    object.insert("completedAt".to_string(), json!(now_iso()));
-                    bump_turn_revision(object);
-                }
-            }
+            complete_session_turn(
+                session,
+                turn_id.as_deref(),
+                action.provider_turn_id.as_deref(),
+                "completed",
+                &now_iso(),
+                action.completion_text.as_deref(),
+                provider.acknowledgement_source(),
+            );
+            session.error = None;
             session.actions = Some(self.session_actions_for(session, None));
             Ok(true)
         })?;
@@ -2514,21 +2703,37 @@ impl AiSessionController {
         }
         let session = self.require_session(session_id)?;
         let provider = self.provider(&session.agent)?;
-        let action = provider.resolve_approval(&session, decision).await?;
-        let updated = self.runtime.update(&session.id, |session| {
-            session.status = if decision == "skip" {
-                "idle".to_string()
-            } else {
-                "running".to_string()
-            };
-            session.phase = if decision == "skip" {
-                "unknown".to_string()
-            } else {
-                "thinking".to_string()
-            };
-            Ok(true)
-        })?;
-        self.notify_change();
+        let observed_session = &session;
+        let observe = |update| -> futures_util::future::BoxFuture<'_, Result<(), ProviderError>> {
+            Box::pin(async move {
+                let session = observed_session;
+                match update {
+                    ProviderApprovalUpdate::Resolved => {
+                        self.runtime.update(&session.id, |session| {
+                            let changed = apply_approval_resolution(session, decision);
+                            session.actions =
+                                Some(self.session_actions_for(session, Some(&session.status)));
+                            Ok(changed)
+                        })?;
+                        self.notify_change();
+                    }
+                    ProviderApprovalUpdate::Snapshot(snapshot) => {
+                        let provider_session_id =
+                            session.provider_session_id.as_deref().ok_or_else(|| {
+                                ProviderError::not_found("Provider session identity is missing.")
+                            })?;
+                        self.apply_adapter_snapshot(provider_session_id, *snapshot)
+                            .await?;
+                        self.notify_change();
+                    }
+                }
+                Ok(())
+            })
+        };
+        let action = provider
+            .resolve_approval(&session, decision, &observe)
+            .await?;
+        let updated = self.require_session(session_id)?;
         Ok(AiSessionActionResult {
             session: updated,
             provider: session.agent,
@@ -2706,6 +2911,7 @@ impl AiSessionController {
         message_id: &str,
         user_attachments: &[AiSessionConversationAttachment],
     ) -> Result<AiSession, ProviderError> {
+        let source = self.provider(&session.agent)?.acknowledgement_source();
         let now = now_iso();
         let turn_id = action
             .provider_turn_id
@@ -2714,21 +2920,58 @@ impl AiSessionController {
             .or_else(|| session.active_turn_id.clone());
         self.runtime
             .update(&session.id, |session| {
-                session.status = "running".to_string();
-                session.phase = "thinking".to_string();
-                session.completed_at = None;
-                session.error = None;
+                // A send response confirms acceptance. Realtime observations of
+                // that same turn may already contain approval or completion.
+                let observed_turn = action.action == "send"
+                    && turn_id.as_deref().is_some_and(|id| {
+                        session.turns.as_deref().is_some_and(|turns| {
+                            turns.iter().any(|turn| {
+                                (turn["id"] == id || turn["providerTurnId"] == id)
+                                    && turn["status"] != "queued"
+                            })
+                        })
+                    });
+                if !observed_turn {
+                    session.status = "running".to_string();
+                    session.phase = "thinking".to_string();
+                    // Match the source reducer: entering an active lifecycle
+                    // clears the prior terminal turn's unread marker.
+                    session.unread = false;
+                    session.completed_at = None;
+                    session.error = None;
+                }
                 session.user_prompt = Some(message.to_string());
-                session.actions = Some(self.session_actions_for(session, Some("running")));
+                session.actions = Some(self.session_actions_for(session, Some(&session.status)));
                 if let Some(turn_id) = turn_id.as_deref() {
-                    session.active_turn_id = Some(turn_id.to_string());
+                    if !observed_turn {
+                        session.active_turn_id = Some(turn_id.to_string());
+                    }
                     let turns = session.turns.get_or_insert_with(Vec::new);
+                    let existing = turns
+                        .iter()
+                        .any(|turn| turn["id"] == turn_id || turn["providerTurnId"] == turn_id);
                     let turn = ensure_turn(turns, turn_id, &now);
                     let object = turn.as_object_mut().expect("turn object");
+                    // A local turn identity does not assert an upstream turn.
+                    // Keep providerTurnId absent until the provider supplies it.
+                    if !existing && action.provider_turn_id.is_none() {
+                        object.remove("providerTurnId");
+                    }
+                    let prompt_changed = existing
+                        && (object.get("userPrompt") != Some(&json!(message))
+                            || (!observed_turn
+                                && (object.get("status") != Some(&json!("running"))
+                                    || object.get("phase") != Some(&json!("thinking")))));
+                    if prompt_changed {
+                        bump_turn_revision(object);
+                    }
+                    object.insert("source".to_string(), json!(source));
                     object.insert("userPrompt".to_string(), json!(message));
-                    object.insert("status".to_string(), json!("running"));
-                    object.insert("phase".to_string(), json!("thinking"));
-                    object.insert("startedAt".to_string(), json!(now));
+                    if !observed_turn {
+                        object.insert("status".to_string(), json!("running"));
+                        object.insert("phase".to_string(), json!("thinking"));
+                        object.insert("startedAt".to_string(), json!(now));
+                    }
                     object.insert("updatedAt".to_string(), json!(now));
                     let user_messages = object
                         .entry("userMessages")
@@ -2752,6 +2995,11 @@ impl AiSessionController {
 
     async fn apply_provider_event(&self, event: ProviderEvent) -> bool {
         let changed = match event {
+            #[cfg(test)]
+            ProviderEvent::OwnerBarrier { committed } => {
+                committed.notify_one();
+                false
+            }
             ProviderEvent::ThreadDiscovered {
                 provider_session_id,
                 cwd,
@@ -2889,30 +3137,13 @@ impl AiSessionController {
                 });
                 lifecycle_changed || session_changed
             }
-            ProviderEvent::ThreadHistorySnapshot {
+            ProviderEvent::AdapterSnapshot {
                 provider_session_id,
-                turns,
-                active_turn_id,
-                user_prompt,
-                last_message,
-                last_message_item_id,
-                summary,
-                error,
-                current_tool,
-            } => {
-                let turns = turns.into_iter().take(50).collect::<Vec<_>>();
-                self.update_by_provider_id(&provider_session_id, |session| {
-                    session.turns = Some(turns);
-                    session.active_turn_id = active_turn_id;
-                    session.user_prompt = user_prompt;
-                    session.last_message = last_message;
-                    session.last_message_item_id = last_message_item_id;
-                    session.summary = summary;
-                    session.error = error;
-                    session.current_tool = current_tool;
-                    true
-                })
-            }
+                snapshot,
+            } => self
+                .apply_adapter_snapshot(&provider_session_id, *snapshot)
+                .await
+                .unwrap_or(false),
             ProviderEvent::TurnStarted {
                 provider_session_id,
                 turn_id,
@@ -2922,7 +3153,24 @@ impl AiSessionController {
                     .record_sub_agent_lifecycle(&provider_session_id, "running", None)
                     .await;
                 let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
+                    // A start notification repeating the control acknowledgement carries
+                    // no new body content. Preserve its source, clock and revision.
+                    if session.active_turn_id.as_deref() == Some(turn_id.as_str())
+                        && session.status == "running"
+                        && session.phase == "thinking"
+                        && session.error.is_none()
+                        && session.turns.as_deref().is_some_and(|turns| {
+                            turns.iter().any(|turn| {
+                                turn["id"] == turn_id
+                                    && turn["status"] == "running"
+                                    && turn["phase"] == "thinking"
+                            })
+                        })
+                    {
+                        return false;
+                    }
                     let timestamp = started_at.unwrap_or_else(now_iso);
+                    session.error = None;
                     session.active_turn_id = Some(turn_id.clone());
                     session.status = "running".to_string();
                     session.phase = "thinking".to_string();
@@ -2930,6 +3178,7 @@ impl AiSessionController {
                     let turns = session.turns.get_or_insert_with(Vec::new);
                     let turn = ensure_turn(turns, &turn_id, &timestamp);
                     let object = turn.as_object_mut().expect("turn object");
+                    object.insert("source".to_string(), json!("realtime"));
                     object.insert("status".to_string(), json!("running"));
                     object.insert("phase".to_string(), json!("thinking"));
                     object.insert("startedAt".to_string(), json!(timestamp));
@@ -2965,55 +3214,26 @@ impl AiSessionController {
                     .get_mut(&provider_session_id)
                     .map(ToolActivityTracker::clear_active_tools);
                 let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
-                    let completed_at = completed_at.unwrap_or_else(now_iso);
                     let turn_id = turn_id.or_else(|| session.active_turn_id.clone());
-                    let had_completed_turn = turn_id.as_deref().is_some_and(|turn_id| {
-                        session
-                            .turns
-                            .as_mut()
-                            .and_then(|turns| find_turn_mut(turns, turn_id))
-                            .and_then(|turn| turn.get("completedAt"))
-                            .is_some_and(|value| !value.is_null())
-                    });
-                    session.active_turn_id = None;
-                    session.status = if status.as_deref() == Some("failed") {
-                        "failed".to_string()
+                    let status = if status.as_deref() == Some("failed") {
+                        "failed"
                     } else {
-                        "idle".to_string()
+                        "completed"
                     };
-                    session.phase = "unknown".to_string();
-                    session.completed_at = Some(completed_at.clone());
-                    session.error = error.clone();
-                    session.current_tool = None;
+                    let changed = complete_session_turn(
+                        session,
+                        turn_id.as_deref(),
+                        turn_id.as_deref(),
+                        status,
+                        &completed_at.unwrap_or_else(now_iso),
+                        None,
+                        "realtime",
+                    );
+                    let error = if status == "failed" { error } else { None };
+                    let error_changed = session.error != error;
+                    session.error = error;
                     session.actions = Some(self.session_actions_for(session, None));
-                    if !had_completed_turn {
-                        session.summary = None;
-                        session.last_message = None;
-                    }
-                    if session.status == "idle" {
-                        session.unread = true;
-                    }
-                    if let (Some(turn_id), Some(turns)) = (turn_id, session.turns.as_mut()) {
-                        if let Some(turn) = find_turn_mut(turns, &turn_id) {
-                            let object = turn.as_object_mut().expect("turn object");
-                            object.insert(
-                                "status".to_string(),
-                                json!(match status.as_deref() {
-                                    Some("failed") => "failed",
-                                    Some("interrupted") => "completed",
-                                    _ => "completed",
-                                }),
-                            );
-                            object.insert("phase".to_string(), json!("unknown"));
-                            object.insert("completedAt".to_string(), json!(completed_at));
-                            object.insert("updatedAt".to_string(), json!(now_iso()));
-                            if let Some(error) = error {
-                                object.insert("summary".to_string(), json!(error));
-                            }
-                            bump_turn_revision(object);
-                        }
-                    }
-                    true
+                    changed || error_changed
                 });
                 lifecycle_changed || session_changed
             }
@@ -3153,6 +3373,7 @@ impl AiSessionController {
                     .reset_for_agent_message();
                 self.update_by_provider_id(&provider_session_id, |session| {
                     let timestamp = observed_at.unwrap_or_else(now_iso);
+                    session.summary = Some(text.clone());
                     session.last_message = Some(text.clone());
                     session.last_message_item_id = Some(item_id.clone());
                     session.tool_calls_since_last_message =
@@ -3162,6 +3383,8 @@ impl AiSessionController {
                     let turns = session.turns.get_or_insert_with(Vec::new);
                     let turn = ensure_turn(turns, &turn_id, &timestamp);
                     let object = turn.as_object_mut().expect("turn object");
+                    object.insert("source".to_string(), json!("realtime"));
+                    object.insert("summary".to_string(), json!(text));
                     object.insert("lastMessage".to_string(), json!(text));
                     object.insert("lastMessageItemId".to_string(), json!(item_id));
                     object.insert("phase".to_string(), json!("responding"));
@@ -3197,10 +3420,10 @@ impl AiSessionController {
             }
             ProviderEvent::ToolActivity {
                 provider_session_id,
-                turn_id,
+                turn_id: _,
                 item,
                 running,
-                observed_at,
+                observed_at: _,
             } => {
                 let tool_activity = {
                     let mut trackers = self.tool_activity.lock().await;
@@ -3212,39 +3435,12 @@ impl AiSessionController {
                     }
                 };
                 self.update_by_provider_id(&provider_session_id, |session| {
-                    let timestamp = observed_at.unwrap_or_else(now_iso);
                     session.current_tool = tool_activity.current_tool.clone();
                     session.tool_calls_since_last_message =
                         tool_activity.tool_calls_since_last_message;
-                    session.counters.tool_calls = session
-                        .counters
-                        .tool_calls
-                        .saturating_add(tool_activity.new_tool_ids);
-                    session.counters.edits = session
-                        .counters
-                        .edits
-                        .saturating_add(tool_activity.new_edits);
-                    if running && tool_activity.new_tool_ids > 0 {
-                        session.phase = if tool_activity.new_edits > 0 {
-                            "editing".to_string()
-                        } else {
-                            "tool".to_string()
-                        };
-                    }
-                    if let Some(turn_id) = turn_id {
-                        let turns = session.turns.get_or_insert_with(Vec::new);
-                        let turn = ensure_turn(turns, &turn_id, &timestamp);
-                        let object = turn.as_object_mut().expect("turn object");
-                        object.insert(
-                            "summary".to_string(),
-                            json!(item.get("name").and_then(Value::as_str).unwrap_or("Tool")),
-                        );
-                        object.insert("updatedAt".to_string(), json!(timestamp));
-                        if running && tool_activity.new_tool_ids > 0 {
-                            object.insert("phase".to_string(), json!("tool"));
-                        }
-                        bump_turn_revision(object);
-                    }
+                    // ToolActivity is transient presentation state (Node tool-activity).
+                    // It cannot synthesize response text, turn revisions or cumulative
+                    // counters; those belong to their authoritative message/snapshot.
                     true
                 })
             }
@@ -3259,26 +3455,34 @@ impl AiSessionController {
                 }
                 session.status = "waiting".to_string();
                 session.phase = "approval".to_string();
-                session.summary = Some(summary);
+                session.error = None;
+                session.unread = false;
+                session.summary = Some(summary.clone());
                 session.actions = Some(self.session_actions_for(session, Some("waiting")));
                 session.counters.approvals = session.counters.approvals.saturating_add(1);
+                if let Some(turn_id) = session.active_turn_id.as_deref() {
+                    let timestamp = now_iso();
+                    let turns = session.turns.get_or_insert_with(Vec::new);
+                    let object = ensure_turn(turns, turn_id, &timestamp)
+                        .as_object_mut()
+                        .expect("turn object");
+                    object.insert("providerTurnId".to_string(), json!(turn_id));
+                    object.insert("status".to_string(), json!("waiting"));
+                    object.insert("phase".to_string(), json!("approval"));
+                    object.insert("summary".to_string(), json!(summary));
+                    object.insert("source".to_string(), json!("realtime"));
+                    object.insert("updatedAt".to_string(), json!(timestamp));
+                    bump_turn_revision(object);
+                }
                 true
             }),
             ProviderEvent::ApprovalResolved {
                 provider_session_id,
                 decision,
             } => self.update_by_provider_id(&provider_session_id, |session| {
-                session.status = if decision == "skip" {
-                    "idle".to_string()
-                } else {
-                    "running".to_string()
-                };
-                session.phase = if decision == "skip" {
-                    "unknown".to_string()
-                } else {
-                    "thinking".to_string()
-                };
-                true
+                let changed = apply_approval_resolution(session, &decision);
+                session.actions = Some(self.session_actions_for(session, Some(&session.status)));
+                changed
             }),
             ProviderEvent::ConnectionChanged { connected } => {
                 if !connected {
@@ -3290,6 +3494,36 @@ impl AiSessionController {
             }
         };
         changed
+    }
+
+    async fn apply_adapter_snapshot(
+        &self,
+        provider_session_id: &str,
+        snapshot: crate::provider_snapshot::ProviderSessionSnapshot,
+    ) -> Result<bool, ProviderError> {
+        let Some(session) =
+            self.runtime.list().into_iter().find(|session| {
+                session.provider_session_id.as_deref() == Some(provider_session_id)
+            })
+        else {
+            return Ok(false);
+        };
+        let before = session.clone();
+        let updated = self.runtime.update(&session.id, |session| {
+            crate::provider_snapshot::apply_snapshot(session, snapshot);
+            session.actions = Some(self.session_actions_for(session, Some(&session.status)));
+            Ok(*session != before)
+        })?;
+        let session_changed = updated != before;
+        let status = match updated.status.as_str() {
+            "running" | "waiting" => "running",
+            "failed" => "errored",
+            _ => "completed",
+        };
+        let lifecycle_changed = self
+            .record_sub_agent_lifecycle(provider_session_id, status, updated.error.as_deref())
+            .await;
+        Ok(session_changed || lifecycle_changed)
     }
 
     async fn replace_sub_agents(&self, provider_session_id: &str, sub_agents: &[Value]) -> bool {
@@ -3748,6 +3982,135 @@ fn apply_lifecycle(session: &mut AiSession, status: &str) -> bool {
     }
 }
 
+// A lifecycle acknowledgement is authoritative at the controller boundary. The
+// later provider completion repeats that transition and must preserve the
+// committed turn's timestamp, response, source and content revision.
+fn complete_session_turn(
+    session: &mut AiSession,
+    turn_id: Option<&str>,
+    provider_turn_id: Option<&str>,
+    status: &str,
+    completed_at: &str,
+    text: Option<&str>,
+    source: &str,
+) -> bool {
+    let previous = (
+        session.status.clone(),
+        session.phase.clone(),
+        session.active_turn_id.clone(),
+        session.completed_at.clone(),
+        session.summary.clone(),
+        session.last_message.clone(),
+        session.current_tool.clone(),
+        session.unread,
+    );
+    let was_active = matches!(session.status.as_str(), "running" | "waiting");
+    let mut completed_at = completed_at.to_string();
+    let mut had_completion = false;
+    let mut turn_changed = false;
+    if let Some(turn) = turn_id.and_then(|id| {
+        session
+            .turns
+            .as_mut()
+            .and_then(|turns| find_turn_mut(turns, id))
+    }) {
+        let object = turn.as_object_mut().expect("turn object");
+        let before = object.clone();
+        if let Some(existing) = object.get("completedAt").and_then(Value::as_str) {
+            completed_at = existing.to_string();
+            had_completion = true;
+        }
+        object.insert("status".to_string(), json!(status));
+        object.insert("phase".to_string(), json!("unknown"));
+        object.insert("completedAt".to_string(), json!(completed_at));
+        if let Some(text) = text {
+            object.insert("summary".to_string(), json!(text));
+            object.insert("lastMessage".to_string(), json!(text));
+        }
+        if let Some(id) = provider_turn_id {
+            object.insert("providerTurnId".to_string(), json!(id));
+        }
+        turn_changed = *object != before;
+        if turn_changed {
+            object.insert("source".to_string(), json!(source));
+            object.insert("updatedAt".to_string(), json!(now_iso()));
+            bump_turn_revision(object);
+        }
+    }
+    session.status = if status == "failed" { "failed" } else { "idle" }.to_string();
+    session.phase = "unknown".to_string();
+    session.active_turn_id = None;
+    session.completed_at = Some(completed_at);
+    session.current_tool = None;
+    if let Some(text) = text {
+        session.summary = Some(text.to_string());
+        session.last_message = Some(text.to_string());
+    } else if !had_completion {
+        session.summary = None;
+        session.last_message = None;
+    }
+    if was_active {
+        session.unread = true;
+    }
+    turn_changed
+        || previous
+            != (
+                session.status.clone(),
+                session.phase.clone(),
+                session.active_turn_id.clone(),
+                session.completed_at.clone(),
+                session.summary.clone(),
+                session.last_message.clone(),
+                session.current_tool.clone(),
+                session.unread,
+            )
+}
+
+fn apply_approval_resolution(session: &mut AiSession, decision: &str) -> bool {
+    let skip = decision == "skip";
+    let status = if skip { "idle" } else { "running" };
+    let phase = if skip { "unknown" } else { "thinking" };
+    let mut changed = session.status != status || session.phase != phase;
+    if skip {
+        if matches!(session.status.as_str(), "running" | "waiting") {
+            changed |= !session.unread;
+            session.unread = true;
+        }
+        changed |= session.current_tool.is_some();
+        session.current_tool = None;
+    } else {
+        changed |= session.unread || session.error.is_some();
+        session.unread = false;
+        session.error = None;
+    }
+    session.status = status.to_string();
+    session.phase = phase.to_string();
+    if let Some(turn) = session.active_turn_id.as_deref().and_then(|id| {
+        session
+            .turns
+            .as_mut()
+            .and_then(|turns| find_turn_mut(turns, id))
+    }) {
+        let object = turn.as_object_mut().expect("turn object");
+        let before = object.clone();
+        object.insert(
+            "status".to_string(),
+            json!(if skip { "completed" } else { "running" }),
+        );
+        object.insert("phase".to_string(), json!(phase));
+        if skip && object.get("completedAt").and_then(Value::as_str).is_none() {
+            object.insert("completedAt".to_string(), json!(now_iso()));
+        }
+        if *object != before {
+            object.insert("source".to_string(), json!("control"));
+            object.insert("updatedAt".to_string(), json!(now_iso()));
+            bump_turn_revision(object);
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn ensure_turn<'a>(turns: &'a mut Vec<Value>, turn_id: &str, timestamp: &str) -> &'a mut Value {
     let index = turns.iter().position(|turn| {
         turn.get("id").and_then(Value::as_str) == Some(turn_id)
@@ -3895,6 +4258,21 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod opencode_interaction_parity {
+        include!("opencode_interaction_parity.rs");
+    }
+    #[cfg(unix)]
+    mod codex_interaction_parity {
+        include!("codex_interaction_parity.rs");
+    }
+    #[cfg(unix)]
+    mod rollback_parity {
+        include!("provider_rollback_parity.rs");
+    }
+    #[cfg(unix)]
+    mod commit_parity {
+        include!("provider_commit_parity.rs");
+    }
     use controlled_instance_protocol::{
         AiSessionCounters, AiSessionProviderActions, AiSessionProviderTimelineCapabilities,
         AiSessionQueue,
@@ -3960,6 +4338,121 @@ mod tests {
         (runtime, controller, directory)
     }
 
+    #[test]
+    fn restarted_queue_reclaims_upload_drafts_before_they_can_be_cancelled() {
+        for explicit_message_id in [true, false] {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let sessions_dir = directory.path().join("sessions");
+            let runtime = Arc::new(AiSessionRuntime::new("test", Some(sessions_dir.clone())));
+            let session = test_session();
+            runtime.save(session.clone()).expect("save session");
+            let attachments = AiSessionConversationAttachmentStore::new(directory.path());
+            let draft = attachments
+                .create_draft(crate::AiSessionAttachmentDraftInput {
+                    id: None,
+                    scope_type: AiSessionAttachmentScopeType::Session,
+                    scope_id: session.id.clone(),
+                    kind: AiSessionAttachmentKind::File,
+                    name: "restart.txt".to_string(),
+                    mime: "text/plain".to_string(),
+                    size: 7,
+                    content: b"restart".to_vec(),
+                })
+                .expect("upload draft");
+            let staged = attachments
+                .stage_message(StageMessageAttachmentsInput {
+                    session_id: session.id.clone(),
+                    message_id: "msg_restart".to_string(),
+                    attachments: Vec::new(),
+                    retained_attachment_ids: Vec::new(),
+                    runtime_path_root: None,
+                    draft_scope_type: Some(AiSessionAttachmentScopeType::Session),
+                    draft_scope_id: Some(session.id.clone()),
+                    draft_attachment_ids: vec![draft.id.clone()],
+                })
+                .expect("stage queue attachment");
+            runtime
+                .enqueue_message(
+                    &session.id,
+                    "Dispatch after restart",
+                    attachments
+                        .message_attachment_metas(&session.id, &staged.message_id)
+                        .into_iter()
+                        .map(|meta| serde_json::to_value(meta).expect("metadata"))
+                        .collect(),
+                    Vec::new(),
+                    None,
+                    explicit_message_id.then_some(staged.message_id.as_str()),
+                )
+                .expect("persist queue");
+            drop(runtime);
+            drop(attachments);
+
+            let runtime = Arc::new(AiSessionRuntime::new("test", Some(sessions_dir)));
+            let attachments = Arc::new(AiSessionConversationAttachmentStore::new(directory.path()));
+            let _controller = AiSessionController::new(
+                runtime.clone(),
+                attachments.clone(),
+                Arc::new(attachments.draft_streams()),
+                None,
+            );
+            assert_eq!(
+                runtime
+                    .queue(&session.id)
+                    .expect("restored queue")
+                    .items
+                    .len(),
+                1
+            );
+            assert!(
+                !attachments
+                    .cancel_draft(
+                        AiSessionAttachmentScopeType::Session,
+                        &session.id,
+                        &draft.id
+                    )
+                    .expect("cancel attempt"),
+                "queue owns the restored upload; explicit message ID: {explicit_message_id}"
+            );
+            assert!(!directory
+                .path()
+                .join("ai-session-attachments/drafts")
+                .join(format!("{}.json", draft.id))
+                .exists());
+            let persisted: Value = serde_json::from_slice(
+                &std::fs::read(
+                    directory
+                        .path()
+                        .join("ai-session-attachments/manifests")
+                        .join(format!("{}.json", draft.id)),
+                )
+                .expect("persisted manifest"),
+            )
+            .expect("manifest JSON");
+            assert_eq!(persisted["state"], "staged");
+            let content = attachments
+                .content(&session.id, &staged.message_id, &draft.id)
+                .expect("queued content remains staged");
+            assert_eq!(
+                std::fs::read(content.path).expect("read content"),
+                b"restart"
+            );
+            assert_eq!(
+                attachments
+                    .rollback_message(&session.id, &staged.message_id)
+                    .expect("rollback"),
+                1
+            );
+            assert!(attachments
+                .cancel_draft(
+                    AiSessionAttachmentScopeType::Session,
+                    &session.id,
+                    &draft.id
+                )
+                .expect("cancel restored draft"));
+        }
+    }
+
     #[derive(Default)]
     struct MaterializationProvider {
         create_calls: std::sync::atomic::AtomicUsize,
@@ -3982,7 +4475,12 @@ mod tests {
                 permission_modes: Vec::new(),
                 timeline: AiSessionProviderTimelineCapabilities::default(),
                 model_selection: None,
-                reasoning_effort: None,
+                reasoning_effort: Some(
+                    controlled_instance_protocol::AiSessionReasoningEffortCapabilities {
+                        select_at_create: true,
+                        update_during_session: false,
+                    },
+                ),
                 hierarchy: None,
             }
         }
@@ -4853,7 +5351,7 @@ mod tests {
             Some("tool-b")
         );
         assert_eq!(running.tool_calls_since_last_message, 2);
-        assert_eq!(running.counters.tool_calls, 2);
+        assert_eq!(running.counters.tool_calls, 0);
 
         controller
             .apply_provider_event(ProviderEvent::ToolActivity {
@@ -4874,7 +5372,7 @@ mod tests {
             Some("tool-b")
         );
         assert_eq!(after_first.tool_calls_since_last_message, 2);
-        assert_eq!(after_first.counters.tool_calls, 2);
+        assert_eq!(after_first.counters.tool_calls, 0);
 
         controller
             .apply_provider_event(ProviderEvent::ToolActivity {

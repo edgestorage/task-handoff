@@ -1,0 +1,1433 @@
+{
+  "source": "Node production HTTP and WebEventBus; HEAD 9b2d6e17, fixed Date, two isolated owners",
+  "expected": {
+    "ai": {
+      "old": {
+        "states": [
+          {
+            "streamId": "ai-old",
+            "revision": 1,
+            "lastEventAt": "2026-11-05T00:00:00.000Z",
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "<ai-old-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:00.000Z"
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:00.000Z"
+            }
+          },
+          {
+            "streamId": "ai-old",
+            "revision": 2,
+            "lastEventAt": "2026-11-05T00:00:01.000Z",
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "<ai-old-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "storyId": "old-2",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:01.000Z"
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:01.000Z"
+            }
+          },
+          {
+            "streamId": "ai-old",
+            "revision": 3,
+            "lastEventAt": "2026-11-05T00:00:02.000Z",
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "<ai-old-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "storyId": "old-3",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:02.000Z"
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:02.000Z"
+            }
+          }
+        ],
+        "events": [
+          {
+            "type": "ai-session.snapshot",
+            "payload": {
+              "meta": {
+                "streamId": "ai-old",
+                "instanceId": "standalone",
+                "revision": 1,
+                "previousRevision": 0,
+                "traceId": "<ai-old-trace-1>",
+                "generatedAt": "2026-11-05T00:00:00.000Z",
+                "reason": "startup"
+              },
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "sessions": [
+                  {
+                    "id": "<ai-old-session>",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-epoch",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Epoch session",
+                    "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                    "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                    "unread": false,
+                    "turnCount": 0,
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-05T00:00:00.000Z",
+                    "updatedAt": "2026-11-05T00:00:00.000Z"
+                  }
+                ],
+                "updatedAt": "2026-11-05T00:00:00.000Z"
+              }
+            }
+          },
+          {
+            "type": "ai-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "ai-old",
+                "instanceId": "standalone",
+                "revision": 2,
+                "previousRevision": 1,
+                "traceId": "<ai-old-trace-2>",
+                "generatedAt": "2026-11-05T00:00:01.000Z",
+                "reason": "control-action"
+              },
+              "upserted": [
+                {
+                  "id": "<ai-old-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "storyId": "old-2",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:01.000Z"
+                }
+              ],
+              "removed": []
+            }
+          },
+          {
+            "type": "ai-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "ai-old",
+                "instanceId": "standalone",
+                "revision": 3,
+                "previousRevision": 2,
+                "traceId": "<ai-old-trace-3>",
+                "generatedAt": "2026-11-05T00:00:02.000Z",
+                "reason": "control-action"
+              },
+              "upserted": [
+                {
+                  "id": "<ai-old-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "storyId": "old-3",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:02.000Z"
+                }
+              ],
+              "removed": []
+            }
+          }
+        ],
+        "delta": {
+          "streamId": "ai-old",
+          "instanceId": "standalone",
+          "sinceRevision": 1,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 1,
+          "syncRequired": false,
+          "events": [
+            {
+              "type": "ai-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "ai-old",
+                  "instanceId": "standalone",
+                  "revision": 2,
+                  "previousRevision": 1,
+                  "traceId": "<ai-old-trace-2>",
+                  "generatedAt": "2026-11-05T00:00:01.000Z",
+                  "reason": "control-action"
+                },
+                "upserted": [
+                  {
+                    "id": "<ai-old-session>",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-epoch",
+                    "storyId": "old-2",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Epoch session",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-05T00:00:00.000Z",
+                    "updatedAt": "2026-11-05T00:00:01.000Z",
+                    "unread": false,
+                    "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                    "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                    "turnCount": 0,
+                    "subAgentCount": 0
+                  }
+                ],
+                "removed": []
+              }
+            },
+            {
+              "type": "ai-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "ai-old",
+                  "instanceId": "standalone",
+                  "revision": 3,
+                  "previousRevision": 2,
+                  "traceId": "<ai-old-trace-3>",
+                  "generatedAt": "2026-11-05T00:00:02.000Z",
+                  "reason": "control-action"
+                },
+                "upserted": [
+                  {
+                    "id": "<ai-old-session>",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-epoch",
+                    "storyId": "old-3",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Epoch session",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-05T00:00:00.000Z",
+                    "updatedAt": "2026-11-05T00:00:02.000Z",
+                    "unread": false,
+                    "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                    "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                    "turnCount": 0,
+                    "subAgentCount": 0
+                  }
+                ],
+                "removed": []
+              }
+            }
+          ]
+        }
+      },
+      "next": {
+        "states": [
+          {
+            "streamId": "ai-next",
+            "revision": 1,
+            "lastEventAt": "2026-11-05T00:00:10.000Z",
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "<ai-next-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:10.000Z"
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:10.000Z"
+            }
+          },
+          {
+            "streamId": "ai-next",
+            "revision": 2,
+            "lastEventAt": "2026-11-05T00:00:11.000Z",
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "<ai-next-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "storyId": "next-2",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:11.000Z"
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:11.000Z"
+            }
+          },
+          {
+            "streamId": "ai-next",
+            "revision": 3,
+            "lastEventAt": "2026-11-05T00:00:12.000Z",
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "<ai-next-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "storyId": "next-3",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:12.000Z"
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:12.000Z"
+            }
+          }
+        ],
+        "events": [
+          {
+            "type": "ai-session.snapshot",
+            "payload": {
+              "meta": {
+                "streamId": "ai-next",
+                "instanceId": "standalone",
+                "revision": 1,
+                "previousRevision": 0,
+                "traceId": "<ai-next-trace-1>",
+                "generatedAt": "2026-11-05T00:00:10.000Z",
+                "reason": "startup"
+              },
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "sessions": [
+                  {
+                    "id": "<ai-next-session>",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-epoch",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Epoch session",
+                    "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                    "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                    "unread": false,
+                    "turnCount": 0,
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-05T00:00:10.000Z",
+                    "updatedAt": "2026-11-05T00:00:10.000Z"
+                  }
+                ],
+                "updatedAt": "2026-11-05T00:00:10.000Z"
+              }
+            }
+          },
+          {
+            "type": "ai-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "ai-next",
+                "instanceId": "standalone",
+                "revision": 2,
+                "previousRevision": 1,
+                "traceId": "<ai-next-trace-2>",
+                "generatedAt": "2026-11-05T00:00:11.000Z",
+                "reason": "control-action"
+              },
+              "upserted": [
+                {
+                  "id": "<ai-next-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "storyId": "next-2",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:11.000Z"
+                }
+              ],
+              "removed": []
+            }
+          },
+          {
+            "type": "ai-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "ai-next",
+                "instanceId": "standalone",
+                "revision": 3,
+                "previousRevision": 2,
+                "traceId": "<ai-next-trace-3>",
+                "generatedAt": "2026-11-05T00:00:12.000Z",
+                "reason": "control-action"
+              },
+              "upserted": [
+                {
+                  "id": "<ai-next-session>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-epoch",
+                  "storyId": "next-3",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Epoch session",
+                  "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                  "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                  "unread": false,
+                  "turnCount": 0,
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:12.000Z"
+                }
+              ],
+              "removed": []
+            }
+          }
+        ],
+        "delta": {
+          "streamId": "ai-next",
+          "instanceId": "standalone",
+          "sinceRevision": 1,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 1,
+          "syncRequired": false,
+          "events": [
+            {
+              "type": "ai-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "ai-next",
+                  "instanceId": "standalone",
+                  "revision": 2,
+                  "previousRevision": 1,
+                  "traceId": "<ai-next-trace-2>",
+                  "generatedAt": "2026-11-05T00:00:11.000Z",
+                  "reason": "control-action"
+                },
+                "upserted": [
+                  {
+                    "id": "<ai-next-session>",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-epoch",
+                    "storyId": "next-2",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Epoch session",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-05T00:00:10.000Z",
+                    "updatedAt": "2026-11-05T00:00:11.000Z",
+                    "unread": false,
+                    "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                    "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                    "turnCount": 0,
+                    "subAgentCount": 0
+                  }
+                ],
+                "removed": []
+              }
+            },
+            {
+              "type": "ai-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "ai-next",
+                  "instanceId": "standalone",
+                  "revision": 3,
+                  "previousRevision": 2,
+                  "traceId": "<ai-next-trace-3>",
+                  "generatedAt": "2026-11-05T00:00:12.000Z",
+                  "reason": "control-action"
+                },
+                "upserted": [
+                  {
+                    "id": "<ai-next-session>",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-epoch",
+                    "storyId": "next-3",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Epoch session",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-05T00:00:10.000Z",
+                    "updatedAt": "2026-11-05T00:00:12.000Z",
+                    "unread": false,
+                    "detailRevision": "8J1v3lisaTdoB00MdJ1bq6",
+                    "turnsRevision": "T1PNoYwrqgwDVLtfmj7L5e",
+                    "turnCount": 0,
+                    "subAgentCount": 0
+                  }
+                ],
+                "removed": []
+              }
+            }
+          ]
+        }
+      }
+    },
+    "app": {
+      "old": {
+        "states": [
+          {
+            "streamId": "app-old",
+            "revision": 1,
+            "lastEventAt": "2026-11-05T00:00:00.000Z",
+            "snapshot": {
+              "runningCount": 1,
+              "problemCount": 0,
+              "sessions": [
+                {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "old-1",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:00.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:00.000Z"
+            }
+          },
+          {
+            "streamId": "app-old",
+            "revision": 2,
+            "lastEventAt": "2026-11-05T00:00:01.000Z",
+            "snapshot": {
+              "runningCount": 1,
+              "problemCount": 0,
+              "sessions": [
+                {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "old-2",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:00.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:01.000Z"
+            }
+          },
+          {
+            "streamId": "app-old",
+            "revision": 3,
+            "lastEventAt": "2026-11-05T00:00:02.000Z",
+            "snapshot": {
+              "runningCount": 1,
+              "problemCount": 0,
+              "sessions": [
+                {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "old-3",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:00.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:02.000Z"
+            }
+          }
+        ],
+        "events": [
+          {
+            "type": "app-session.snapshot",
+            "payload": {
+              "meta": {
+                "streamId": "app-old",
+                "instanceId": "standalone",
+                "revision": 1,
+                "previousRevision": 0,
+                "traceId": "<app-old-trace-1>",
+                "generatedAt": "2026-11-05T00:00:00.000Z",
+                "reason": "app-session-created"
+              },
+              "snapshot": {
+                "runningCount": 1,
+                "problemCount": 0,
+                "sessions": [
+                  {
+                    "id": "app_epoch",
+                    "appId": "terminal-tty",
+                    "title": "old-1",
+                    "kind": "tty",
+                    "status": "running",
+                    "createdAt": "2026-11-05T00:00:00.000Z",
+                    "updatedAt": "2026-11-05T00:00:00.000Z",
+                    "paths": {
+                      "sessionDir": "/tmp/session",
+                      "logDir": "/tmp/logs"
+                    },
+                    "bindings": [
+                      {
+                        "type": "app-session",
+                        "id": "app_epoch"
+                      }
+                    ],
+                    "workspace": {
+                      "cwd": "/workspace"
+                    }
+                  }
+                ],
+                "updatedAt": "2026-11-05T00:00:00.000Z"
+              }
+            }
+          },
+          {
+            "type": "app-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "app-old",
+                "instanceId": "standalone",
+                "revision": 2,
+                "previousRevision": 1,
+                "traceId": "<app-old-trace-2>",
+                "generatedAt": "2026-11-05T00:00:01.000Z",
+                "reason": "app-session-updated"
+              },
+              "session": {
+                "id": "app_epoch",
+                "appId": "terminal-tty",
+                "title": "old-2",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/session",
+                  "logDir": "/tmp/logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_epoch"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            }
+          },
+          {
+            "type": "app-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "app-old",
+                "instanceId": "standalone",
+                "revision": 3,
+                "previousRevision": 2,
+                "traceId": "<app-old-trace-3>",
+                "generatedAt": "2026-11-05T00:00:02.000Z",
+                "reason": "app-session-updated"
+              },
+              "session": {
+                "id": "app_epoch",
+                "appId": "terminal-tty",
+                "title": "old-3",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:00.000Z",
+                "updatedAt": "2026-11-05T00:00:00.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/session",
+                  "logDir": "/tmp/logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_epoch"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            }
+          }
+        ],
+        "delta": {
+          "streamId": "app-old",
+          "instanceId": "standalone",
+          "sinceRevision": 1,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 1,
+          "syncRequired": false,
+          "events": [
+            {
+              "type": "app-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "app-old",
+                  "instanceId": "standalone",
+                  "revision": 2,
+                  "previousRevision": 1,
+                  "traceId": "<app-old-trace-2>",
+                  "generatedAt": "2026-11-05T00:00:01.000Z",
+                  "reason": "app-session-updated"
+                },
+                "session": {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "old-2",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:00.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              }
+            },
+            {
+              "type": "app-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "app-old",
+                  "instanceId": "standalone",
+                  "revision": 3,
+                  "previousRevision": 2,
+                  "traceId": "<app-old-trace-3>",
+                  "generatedAt": "2026-11-05T00:00:02.000Z",
+                  "reason": "app-session-updated"
+                },
+                "session": {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "old-3",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:00.000Z",
+                  "updatedAt": "2026-11-05T00:00:00.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "next": {
+        "states": [
+          {
+            "streamId": "app-next",
+            "revision": 1,
+            "lastEventAt": "2026-11-05T00:00:10.000Z",
+            "snapshot": {
+              "runningCount": 1,
+              "problemCount": 0,
+              "sessions": [
+                {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "next-1",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:10.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:10.000Z"
+            }
+          },
+          {
+            "streamId": "app-next",
+            "revision": 2,
+            "lastEventAt": "2026-11-05T00:00:11.000Z",
+            "snapshot": {
+              "runningCount": 1,
+              "problemCount": 0,
+              "sessions": [
+                {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "next-2",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:10.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:11.000Z"
+            }
+          },
+          {
+            "streamId": "app-next",
+            "revision": 3,
+            "lastEventAt": "2026-11-05T00:00:12.000Z",
+            "snapshot": {
+              "runningCount": 1,
+              "problemCount": 0,
+              "sessions": [
+                {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "next-3",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:10.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              ],
+              "updatedAt": "2026-11-05T00:00:12.000Z"
+            }
+          }
+        ],
+        "events": [
+          {
+            "type": "app-session.snapshot",
+            "payload": {
+              "meta": {
+                "streamId": "app-next",
+                "instanceId": "standalone",
+                "revision": 1,
+                "previousRevision": 0,
+                "traceId": "<app-next-trace-1>",
+                "generatedAt": "2026-11-05T00:00:10.000Z",
+                "reason": "app-session-created"
+              },
+              "snapshot": {
+                "runningCount": 1,
+                "problemCount": 0,
+                "sessions": [
+                  {
+                    "id": "app_epoch",
+                    "appId": "terminal-tty",
+                    "title": "next-1",
+                    "kind": "tty",
+                    "status": "running",
+                    "createdAt": "2026-11-05T00:00:10.000Z",
+                    "updatedAt": "2026-11-05T00:00:10.000Z",
+                    "paths": {
+                      "sessionDir": "/tmp/session",
+                      "logDir": "/tmp/logs"
+                    },
+                    "bindings": [
+                      {
+                        "type": "app-session",
+                        "id": "app_epoch"
+                      }
+                    ],
+                    "workspace": {
+                      "cwd": "/workspace"
+                    }
+                  }
+                ],
+                "updatedAt": "2026-11-05T00:00:10.000Z"
+              }
+            }
+          },
+          {
+            "type": "app-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "app-next",
+                "instanceId": "standalone",
+                "revision": 2,
+                "previousRevision": 1,
+                "traceId": "<app-next-trace-2>",
+                "generatedAt": "2026-11-05T00:00:11.000Z",
+                "reason": "app-session-updated"
+              },
+              "session": {
+                "id": "app_epoch",
+                "appId": "terminal-tty",
+                "title": "next-2",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:10.000Z",
+                "updatedAt": "2026-11-05T00:00:10.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/session",
+                  "logDir": "/tmp/logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_epoch"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            }
+          },
+          {
+            "type": "app-session.patch",
+            "payload": {
+              "meta": {
+                "streamId": "app-next",
+                "instanceId": "standalone",
+                "revision": 3,
+                "previousRevision": 2,
+                "traceId": "<app-next-trace-3>",
+                "generatedAt": "2026-11-05T00:00:12.000Z",
+                "reason": "app-session-updated"
+              },
+              "session": {
+                "id": "app_epoch",
+                "appId": "terminal-tty",
+                "title": "next-3",
+                "kind": "tty",
+                "status": "running",
+                "createdAt": "2026-11-05T00:00:10.000Z",
+                "updatedAt": "2026-11-05T00:00:10.000Z",
+                "paths": {
+                  "sessionDir": "/tmp/session",
+                  "logDir": "/tmp/logs"
+                },
+                "bindings": [
+                  {
+                    "type": "app-session",
+                    "id": "app_epoch"
+                  }
+                ],
+                "workspace": {
+                  "cwd": "/workspace"
+                }
+              }
+            }
+          }
+        ],
+        "delta": {
+          "streamId": "app-next",
+          "instanceId": "standalone",
+          "sinceRevision": 1,
+          "latestRevision": 3,
+          "earliestRetainedRevision": 1,
+          "syncRequired": false,
+          "events": [
+            {
+              "type": "app-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "app-next",
+                  "instanceId": "standalone",
+                  "revision": 2,
+                  "previousRevision": 1,
+                  "traceId": "<app-next-trace-2>",
+                  "generatedAt": "2026-11-05T00:00:11.000Z",
+                  "reason": "app-session-updated"
+                },
+                "session": {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "next-2",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:10.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              }
+            },
+            {
+              "type": "app-session.patch",
+              "payload": {
+                "meta": {
+                  "streamId": "app-next",
+                  "instanceId": "standalone",
+                  "revision": 3,
+                  "previousRevision": 2,
+                  "traceId": "<app-next-trace-3>",
+                  "generatedAt": "2026-11-05T00:00:12.000Z",
+                  "reason": "app-session-updated"
+                },
+                "session": {
+                  "id": "app_epoch",
+                  "appId": "terminal-tty",
+                  "title": "next-3",
+                  "kind": "tty",
+                  "status": "running",
+                  "createdAt": "2026-11-05T00:00:10.000Z",
+                  "updatedAt": "2026-11-05T00:00:10.000Z",
+                  "paths": {
+                    "sessionDir": "/tmp/session",
+                    "logDir": "/tmp/logs"
+                  },
+                  "bindings": [
+                    {
+                      "type": "app-session",
+                      "id": "app_epoch"
+                    }
+                  ],
+                  "workspace": {
+                    "cwd": "/workspace"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

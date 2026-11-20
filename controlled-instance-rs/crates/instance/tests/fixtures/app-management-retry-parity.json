@@ -1,0 +1,66 @@
+{
+  "scenario": "postcondition-failure-then-retry",
+  "steps": [
+    {
+      "name": "first-install",
+      "job": {
+        "operation": "install",
+        "state": "failed",
+        "phase": "install-package",
+        "hasStartedAt": true,
+        "hasFinishedAt": true,
+        "error": {
+          "code": "postcondition_failed",
+          "message": "App install completed but detection did not confirm the required state.",
+          "retryable": true
+        }
+      },
+      "app": {
+        "state": "not-installed",
+        "managementSource": "none",
+        "canInstall": true,
+        "canUninstall": false,
+        "canUpdate": false,
+        "installReason": null,
+        "updateReason": "NOT_INSTALLED"
+      },
+      "executions": 1,
+      "launcherExists": false,
+      "manifestExists": false
+    },
+    {
+      "name": "retry-install",
+      "job": {
+        "operation": "install",
+        "state": "succeeded",
+        "phase": "verify",
+        "hasStartedAt": true,
+        "hasFinishedAt": true,
+        "error": null
+      },
+      "app": {
+        "state": "installed",
+        "managementSource": "recipe",
+        "canInstall": false,
+        "canUninstall": true,
+        "canUpdate": true,
+        "installReason": "ALREADY_INSTALLED",
+        "updateReason": null
+      },
+      "executions": 2,
+      "launcherExists": true,
+      "manifestExists": true
+    }
+  ],
+  "jobIdsDiffer": true,
+  "eventStates": [
+    "queued",
+    "running",
+    "running",
+    "failed",
+    "queued",
+    "running",
+    "running",
+    "succeeded"
+  ]
+}

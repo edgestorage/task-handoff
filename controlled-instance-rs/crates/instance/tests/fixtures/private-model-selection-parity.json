@@ -1,0 +1,98 @@
+{
+  "scenarios": [
+    {
+      "name": "default",
+      "result": {
+        "modelEntityId": "model-primary",
+        "modelName": "Primary Label",
+        "modelUpstreamName": "upstream-primary"
+      }
+    },
+    {
+      "name": "unsupported-agent",
+      "result": null
+    },
+    {
+      "name": "renamed-session",
+      "result": {
+        "modelEntityId": "model-primary",
+        "modelName": "Renamed Primary",
+        "modelUpstreamName": "upstream-primary"
+      }
+    },
+    {
+      "name": "upstream-client-name",
+      "result": {
+        "modelEntityId": "model-primary",
+        "modelName": "Renamed Primary",
+        "modelUpstreamName": "upstream-primary"
+      }
+    },
+    {
+      "name": "colliding-identity-wins",
+      "result": {
+        "modelEntityId": "model-primary",
+        "modelName": "upstream-a",
+        "modelUpstreamName": "shared"
+      }
+    },
+    {
+      "name": "stale-entity-target",
+      "error": {
+        "code": "AI_SESSION_MODEL_TARGET_UNAVAILABLE",
+        "statusCode": 409,
+        "message": "The selected model has not taken effect in this running instance. Try again in a moment, or restart the instance to apply the latest model configuration."
+      }
+    },
+    {
+      "name": "stale-entity-session",
+      "error": {
+        "code": "AI_SESSION_MODEL_ENTITY_UNAVAILABLE",
+        "statusCode": 409,
+        "message": "The model previously selected for this session is no longer available. Select another model to continue."
+      }
+    },
+    {
+      "name": "stale-name-target",
+      "error": {
+        "code": "AI_SESSION_MODEL_TARGET_UNAVAILABLE",
+        "statusCode": 409,
+        "message": "The selected model has not taken effect in this running instance. Try again in a moment, or restart the instance to apply the latest model configuration."
+      }
+    },
+    {
+      "name": "stale-name-session",
+      "error": {
+        "code": "AI_SESSION_MODEL_NAME_UNAVAILABLE",
+        "statusCode": 409,
+        "message": "The model previously selected for this session is no longer available. Select another model to continue."
+      }
+    }
+  ],
+  "summary": {
+    "protocolVersion": "2026-08-27",
+    "instanceId": "ins_0000000000000",
+    "updatedAt": "2026-11-20T00:00:00.000Z",
+    "entities": [
+      {
+        "id": "model-primary",
+        "protocols": [
+          "openai-responses"
+        ],
+        "modelNames": [
+          {
+            "upstreamName": "upstream-primary",
+            "name": "Primary Label",
+            "order": 0
+          },
+          {
+            "upstreamName": "upstream-secondary",
+            "name": "Secondary Label",
+            "order": 1
+          }
+        ]
+      }
+    ]
+  },
+  "summaryLeaksKey": false
+}

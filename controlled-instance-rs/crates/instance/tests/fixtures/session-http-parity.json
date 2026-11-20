@@ -1,0 +1,1789 @@
+{
+  "scenarios": [
+    {
+      "name": "create-success-replay-restart",
+      "expected": {
+        "stateBefore": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": []
+              }
+            }
+          }
+        },
+        "created": {
+          "status": 200,
+          "body": {
+            "data": {
+              "disposition": "created",
+              "aiSessionId": "<session-1>",
+              "providerSessionId": "provider-http-1",
+              "creationSource": "ai-session"
+            }
+          }
+        },
+        "stateAfterCreate": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 2,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-http-1",
+                    "cwd": "<root>",
+                    "cwdFolderId": "folder-session-http",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-http-1",
+                    "userPrompt": "Start over HTTP",
+                    "unread": false,
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "replayed": {
+          "status": 200,
+          "body": {
+            "data": {
+              "disposition": "already-created",
+              "aiSessionId": "<session-1>",
+              "providerSessionId": "provider-http-1",
+              "creationSource": "ai-session"
+            }
+          }
+        },
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 2,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-http-1",
+                    "cwd": "<root>",
+                    "cwdFolderId": "folder-session-http",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-http-1",
+                    "userPrompt": "Start over HTTP",
+                    "unread": false,
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "persisted": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-http-1",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-http-1",
+            "turns": [
+              {
+                "id": "<turn-1>",
+                "providerTurnId": "turn-http-1",
+                "status": "running",
+                "phase": "thinking",
+                "userPrompt": "Start over HTTP",
+                "userMessages": [
+                  {
+                    "id": "<id-1>",
+                    "text": "Start over HTTP"
+                  }
+                ]
+              }
+            ],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            }
+          }
+        ],
+        "reopened": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-http-1",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-http-1",
+            "turns": [
+              {
+                "id": "<turn-1>",
+                "providerTurnId": "turn-http-1",
+                "status": "running",
+                "phase": "thinking",
+                "userPrompt": "Start over HTTP",
+                "userMessages": [
+                  {
+                    "id": "<id-1>",
+                    "text": "Start over HTTP"
+                  }
+                ]
+              }
+            ],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            }
+          }
+        ],
+        "calls": [
+          {
+            "action": "create",
+            "cwd": "<root>"
+          },
+          {
+            "action": "start",
+            "sessionId": "<session-1>",
+            "message": "Start over HTTP"
+          }
+        ]
+      }
+    },
+    {
+      "name": "create-first-turn-failure",
+      "failure": "start",
+      "expected": {
+        "stateBefore": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": []
+              }
+            }
+          }
+        },
+        "created": {
+          "status": 502,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_MATERIALIZATION_FAILED",
+              "message": "provider start rejected"
+            }
+          }
+        },
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": []
+              }
+            }
+          }
+        },
+        "persisted": [],
+        "reopened": [],
+        "calls": [
+          {
+            "action": "create",
+            "cwd": "<root>"
+          },
+          {
+            "action": "start",
+            "sessionId": "<session-1>",
+            "message": "Fail during materialization"
+          },
+          {
+            "action": "delete",
+            "providerSessionId": "provider-http-1"
+          },
+          {
+            "action": "unsubscribe",
+            "providerSessionId": "provider-http-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "send-success-and-missing",
+      "expected": {
+        "stateBefore": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-send-http",
+                    "cwd": "<root>",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "unread": false,
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "sent": {
+          "status": 200,
+          "body": {
+            "data": {
+              "provider": "codex",
+              "action": "send",
+              "turnId": "<turn-1>",
+              "providerTurnId": "turn-http-1",
+              "sessionId": "<session-1>",
+              "messageId": "<message-1>"
+            }
+          }
+        },
+        "detail": {
+          "status": 200,
+          "body": {
+            "data": {
+              "kind": "updated",
+              "detail": {
+                "id": "<id-1>",
+                "cwd": "<root>",
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "subAgents": []
+              }
+            }
+          }
+        },
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 2,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-send-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-http-1",
+                    "userPrompt": "Send over HTTP",
+                    "unread": false,
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "persisted": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-send-http",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-http-1",
+            "turns": [
+              {
+                "id": "<turn-1>",
+                "providerTurnId": "turn-http-1",
+                "status": "running",
+                "phase": "thinking",
+                "userPrompt": "Send over HTTP",
+                "userMessages": [
+                  {
+                    "id": "<id-2>",
+                    "text": "Send over HTTP"
+                  }
+                ]
+              }
+            ],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            }
+          }
+        ],
+        "reopened": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-send-http",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-http-1",
+            "turns": [
+              {
+                "id": "<turn-1>",
+                "providerTurnId": "turn-http-1",
+                "status": "running",
+                "phase": "thinking",
+                "userPrompt": "Send over HTTP",
+                "userMessages": [
+                  {
+                    "id": "<id-2>",
+                    "text": "Send over HTTP"
+                  }
+                ]
+              }
+            ],
+            "queue": {
+              "revision": 0,
+              "pendingCount": 0,
+              "items": []
+            }
+          }
+        ],
+        "missing": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_NOT_FOUND",
+              "message": "AI session not found."
+            }
+          }
+        },
+        "calls": [
+          {
+            "action": "start",
+            "sessionId": "<session-1>",
+            "message": "Send over HTTP"
+          }
+        ]
+      }
+    },
+    {
+      "name": "read-clears-unread-and-unknown",
+      "expected": {
+        "stateBefore": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-read-http",
+                    "cwd": "<root>",
+                    "status": "idle",
+                    "phase": "responding",
+                    "unread": true,
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "first": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "unread": false
+            }
+          }
+        },
+        "second": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "unread": false
+            }
+          }
+        },
+        "missing": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_NOT_FOUND",
+              "message": "AI Session was not found."
+            }
+          }
+        },
+        "unread": [
+          true,
+          false,
+          false
+        ],
+        "updatedAtPreserved": [
+          true,
+          true
+        ],
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 2,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-read-http",
+                    "cwd": "<root>",
+                    "status": "idle",
+                    "phase": "responding",
+                    "unread": false,
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "queue-pause-resume-and-unknown",
+      "expected": {
+        "stateBefore": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-queue-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-active",
+                    "unread": false,
+                    "queue": {
+                      "revision": 1,
+                      "pendingCount": 1,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "initialQueue": {
+          "status": 200,
+          "body": {
+            "data": {
+              "revision": 1,
+              "pendingCount": 1,
+              "items": [
+                {
+                  "id": "<queue-1>",
+                  "message": "Queued while paused",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        },
+        "paused": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "queueRevision": 1,
+              "action": "pause"
+            }
+          }
+        },
+        "pausedQueue": {
+          "status": 200,
+          "body": {
+            "data": {
+              "revision": 1,
+              "pendingCount": 1,
+              "paused": true,
+              "items": [
+                {
+                  "id": "<queue-1>",
+                  "message": "Queued while paused",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        },
+        "completedQueue": {
+          "status": 200,
+          "body": {
+            "data": {
+              "revision": 1,
+              "pendingCount": 1,
+              "paused": true,
+              "items": [
+                {
+                  "id": "<queue-1>",
+                  "message": "Queued while paused",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        },
+        "sentWhilePaused": 0,
+        "resumed": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "queueRevision": 1,
+              "action": "pause"
+            }
+          }
+        },
+        "drainedQueue": {
+          "status": 200,
+          "body": {
+            "data": {
+              "revision": 3,
+              "pendingCount": 0,
+              "items": []
+            }
+          }
+        },
+        "sentMessages": [
+          "Queued while paused"
+        ],
+        "missing": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_NOT_FOUND",
+              "message": "AI session not found."
+            }
+          }
+        },
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 5,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-queue-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-http-1",
+                    "userPrompt": "Queued while paused",
+                    "unread": false,
+                    "queue": {
+                      "revision": 3,
+                      "pendingCount": 0,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "queue-mutations-and-errors",
+      "expected": {
+        "stateBefore": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-queue-mutations-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-queue-mutations",
+                    "unread": false,
+                    "queue": {
+                      "revision": 4,
+                      "pendingCount": 2,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "initialQueue": {
+          "status": 200,
+          "body": {
+            "data": {
+              "revision": 4,
+              "pendingCount": 2,
+              "items": [
+                {
+                  "id": "<queue-1>",
+                  "message": "first queued",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                },
+                {
+                  "id": "<queue-2>",
+                  "message": "second queued",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                },
+                {
+                  "id": "<queue-3>",
+                  "message": "third queued",
+                  "attachments": [],
+                  "references": [],
+                  "status": "failed",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>",
+                  "error": "temporary"
+                }
+              ]
+            }
+          }
+        },
+        "edited": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "queueRevision": 5,
+              "action": "edit",
+              "queueId": "<queue-2>"
+            }
+          }
+        },
+        "stale": {
+          "status": 409,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_QUEUE_REVISION_CONFLICT",
+              "message": "AI session queue changed at revision 5."
+            }
+          }
+        },
+        "reordered": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "queueRevision": 6,
+              "action": "reorder"
+            }
+          }
+        },
+        "invalid": {
+          "status": 409,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_QUEUE_ORDER_INVALID",
+              "message": "Queue order must contain every currently queued message exactly once."
+            }
+          }
+        },
+        "failedEdit": {
+          "status": 409,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_QUEUE_ITEM_NOT_EDITABLE",
+              "message": "Only queued messages can be edited."
+            }
+          }
+        },
+        "retried": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "queueRevision": 7,
+              "action": "retry",
+              "queueId": "<queue-3>"
+            }
+          }
+        },
+        "removed": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "queueRevision": 8,
+              "action": "remove",
+              "queueId": "<queue-1>"
+            }
+          }
+        },
+        "missingItem": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_QUEUE_ITEM_NOT_FOUND",
+              "message": "Queued message not found."
+            }
+          }
+        },
+        "missingSession": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_NOT_FOUND",
+              "message": "AI session not found."
+            }
+          }
+        },
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 5,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-queue-mutations-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-queue-mutations",
+                    "unread": false,
+                    "queue": {
+                      "revision": 8,
+                      "pendingCount": 2,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "persisted": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-queue-mutations-http",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-queue-mutations",
+            "turns": [],
+            "queue": {
+              "revision": 8,
+              "pendingCount": 2,
+              "items": [
+                {
+                  "id": "<queue-2>",
+                  "message": "edited second",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                },
+                {
+                  "id": "<queue-3>",
+                  "message": "third queued",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        ],
+        "reopened": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-queue-mutations-http",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-queue-mutations",
+            "turns": [],
+            "queue": {
+              "revision": 8,
+              "pendingCount": 2,
+              "items": [
+                {
+                  "id": "<queue-2>",
+                  "message": "edited second",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                },
+                {
+                  "id": "<queue-3>",
+                  "message": "third queued",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        ],
+        "calls": []
+      }
+    },
+    {
+      "name": "queue-steer-success",
+      "expected": {
+        "stateBefore": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-queue-steer-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-steer-active",
+                    "userPrompt": "Initial steer target",
+                    "unread": false,
+                    "queue": {
+                      "revision": 1,
+                      "pendingCount": 1,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "initialQueue": {
+          "status": 200,
+          "body": {
+            "data": {
+              "revision": 1,
+              "pendingCount": 1,
+              "items": [
+                {
+                  "id": "<queue-1>",
+                  "messageId": "<message-1>",
+                  "message": "Steer this into the turn",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        },
+        "steered": {
+          "status": 200,
+          "body": {
+            "data": {
+              "provider": "codex",
+              "action": "steer",
+              "turnId": "<turn-1>",
+              "providerTurnId": "turn-steer-active",
+              "queueId": "<queue-1>",
+              "sessionId": "<session-1>",
+              "messageId": "<message-1>"
+            }
+          }
+        },
+        "queue": {
+          "status": 200,
+          "body": {
+            "data": {
+              "revision": 2,
+              "pendingCount": 0,
+              "items": []
+            }
+          }
+        },
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 2,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-queue-steer-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-steer-active",
+                    "userPrompt": "Steer this into the turn",
+                    "unread": false,
+                    "queue": {
+                      "revision": 2,
+                      "pendingCount": 0,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "persisted": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-queue-steer-http",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-steer-active",
+            "turns": [
+              {
+                "id": "<turn-1>",
+                "providerTurnId": "turn-steer-active",
+                "status": "running",
+                "phase": "thinking",
+                "userPrompt": "Steer this into the turn",
+                "userMessages": [
+                  {
+                    "id": "<id-1>",
+                    "text": "Initial steer target"
+                  },
+                  {
+                    "id": "<id-2>",
+                    "text": "Steer this into the turn"
+                  }
+                ]
+              }
+            ],
+            "queue": {
+              "revision": 2,
+              "pendingCount": 0,
+              "items": []
+            }
+          }
+        ],
+        "reopened": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-queue-steer-http",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-steer-active",
+            "turns": [
+              {
+                "id": "<turn-1>",
+                "providerTurnId": "turn-steer-active",
+                "status": "running",
+                "phase": "thinking",
+                "userPrompt": "Steer this into the turn",
+                "userMessages": [
+                  {
+                    "id": "<id-1>",
+                    "text": "Initial steer target"
+                  },
+                  {
+                    "id": "<id-2>",
+                    "text": "Steer this into the turn"
+                  }
+                ]
+              }
+            ],
+            "queue": {
+              "revision": 2,
+              "pendingCount": 0,
+              "items": []
+            }
+          }
+        ],
+        "calls": [
+          {
+            "action": "steer",
+            "sessionId": "<session-1>",
+            "message": "Steer this into the turn"
+          }
+        ]
+      }
+    },
+    {
+      "name": "queue-steer-failure",
+      "failure": "steer",
+      "expected": {
+        "stateBefore": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-queue-steer-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-steer-active",
+                    "userPrompt": "Initial steer target",
+                    "unread": false,
+                    "queue": {
+                      "revision": 1,
+                      "pendingCount": 1,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "initialQueue": {
+          "status": 200,
+          "body": {
+            "data": {
+              "revision": 1,
+              "pendingCount": 1,
+              "items": [
+                {
+                  "id": "<queue-1>",
+                  "messageId": "<message-1>",
+                  "message": "Steer this into the turn",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        },
+        "steered": {
+          "status": 502,
+          "body": {
+            "error": {
+              "code": "PROVIDER_STEER_REJECTED",
+              "message": "provider steer rejected"
+            }
+          }
+        },
+        "queue": {
+          "status": 200,
+          "body": {
+            "data": {
+              "revision": 1,
+              "pendingCount": 1,
+              "items": [
+                {
+                  "id": "<queue-1>",
+                  "messageId": "<message-1>",
+                  "message": "Steer this into the turn",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        },
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-queue-steer-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-steer-active",
+                    "userPrompt": "Initial steer target",
+                    "unread": false,
+                    "queue": {
+                      "revision": 1,
+                      "pendingCount": 1,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "persisted": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-queue-steer-http",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-steer-active",
+            "turns": [
+              {
+                "id": "<turn-1>",
+                "providerTurnId": "turn-steer-active",
+                "status": "running",
+                "phase": "thinking",
+                "userPrompt": "Initial steer target",
+                "userMessages": [
+                  {
+                    "id": "<id-1>",
+                    "text": "Initial steer target"
+                  }
+                ]
+              }
+            ],
+            "queue": {
+              "revision": 1,
+              "pendingCount": 1,
+              "items": [
+                {
+                  "id": "<queue-1>",
+                  "messageId": "<message-1>",
+                  "message": "Steer this into the turn",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        ],
+        "reopened": [
+          {
+            "id": "<session-1>",
+            "providerSessionId": "provider-queue-steer-http",
+            "creationSource": "ai-session",
+            "status": "running",
+            "phase": "thinking",
+            "activeTurnId": "turn-steer-active",
+            "turns": [
+              {
+                "id": "<turn-1>",
+                "providerTurnId": "turn-steer-active",
+                "status": "running",
+                "phase": "thinking",
+                "userPrompt": "Initial steer target",
+                "userMessages": [
+                  {
+                    "id": "<id-1>",
+                    "text": "Initial steer target"
+                  }
+                ]
+              }
+            ],
+            "queue": {
+              "revision": 1,
+              "pendingCount": 1,
+              "items": [
+                {
+                  "id": "<queue-1>",
+                  "messageId": "<message-1>",
+                  "message": "Steer this into the turn",
+                  "attachments": [],
+                  "references": [],
+                  "status": "queued",
+                  "createdAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ]
+            }
+          }
+        ],
+        "calls": [
+          {
+            "action": "steer",
+            "sessionId": "<session-1>",
+            "message": "Steer this into the turn"
+          }
+        ]
+      }
+    },
+    {
+      "name": "read-query-fallbacks",
+      "expected": {
+        "stateBefore": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream-1>",
+              "revision": 1,
+              "lastEventAt": "<time>",
+              "snapshot": {
+                "runningCount": 1,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "updatedAt": "<time>",
+                "sessions": [
+                  {
+                    "id": "<session-1>",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-read-query-http",
+                    "cwd": "<root>",
+                    "status": "running",
+                    "phase": "thinking",
+                    "activeTurnId": "turn-read-query",
+                    "userPrompt": "Read query fallback",
+                    "unread": false,
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "detailRevision": "<detail-revision>",
+        "duplicateDetailRevision": {
+          "status": 200,
+          "body": {
+            "data": {
+              "kind": "updated",
+              "revision": "<detail-revision>",
+              "detail": {
+                "id": "<id-1>",
+                "cwd": "<root>",
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "subAgents": []
+              }
+            }
+          }
+        },
+        "turnRevision": "<turn-revision>",
+        "duplicateTurnRevision": {
+          "status": 200,
+          "body": {
+            "data": {
+              "kind": "updated",
+              "revision": "<turn-revision>",
+              "body": {
+                "sessionId": "<session-1>",
+                "revision": "<turn-revision>",
+                "turn": {
+                  "id": "<turn-1>",
+                  "providerTurnId": "turn-read-query",
+                  "source": "control",
+                  "userPrompt": "Read query fallback",
+                  "status": "running",
+                  "phase": "thinking",
+                  "revision": 1,
+                  "sourcePriority": 90,
+                  "observedAt": "<time>",
+                  "startedAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              }
+            }
+          }
+        },
+        "turnsDuplicateProjection": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "turns": [
+                {
+                  "id": "<turn-1>",
+                  "providerTurnId": "turn-read-query",
+                  "source": "control",
+                  "userPrompt": "Read query fallback",
+                  "status": "running",
+                  "phase": "thinking",
+                  "revision": 1,
+                  "sourcePriority": 90,
+                  "observedAt": "<time>",
+                  "startedAt": "<time>",
+                  "updatedAt": "<time>"
+                }
+              ],
+              "nextCursor": {
+                "turnId": "<turn-1>",
+                "revision": 1
+              }
+            }
+          }
+        },
+        "turnsDuplicateAfterRevision": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "turns": [],
+              "nextCursor": {
+                "turnId": "<turn-1>",
+                "revision": 0
+              }
+            }
+          }
+        },
+        "timelineDuplicateRevision": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_CONTROL_INVALID",
+              "message": "revision: Invalid input: expected string, received array"
+            }
+          }
+        },
+        "turnTimelineDuplicateRevision": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_CONTROL_INVALID",
+              "message": "revision: Invalid input: expected string, received array"
+            }
+          }
+        },
+        "transcript": {
+          "status": 200,
+          "body": {
+            "data": {
+              "path": "<root>/transcript.jsonl",
+              "lineCount": 3,
+              "tail": "third"
+            }
+          }
+        },
+        "duplicateTranscriptTail": {
+          "status": 200,
+          "body": {
+            "data": {
+              "path": "<root>/transcript.jsonl",
+              "lineCount": 3,
+              "tail": "first\nsecond\nthird"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "history-and-log-query-fallbacks",
+      "expected": {
+        "history": {
+          "default": {
+            "status": 200,
+            "body": {
+              "data": {
+                "items": [
+                  {
+                    "id": "<session-1>",
+                    "agent": "claude",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-ai-query-claude",
+                    "title": "Claude history",
+                    "cwd": "<root>",
+                    "lastActiveAt": "<time>",
+                    "archivedAt": "<time>"
+                  },
+                  {
+                    "id": "<session-2>",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-ai-query-codex",
+                    "title": "Codex history",
+                    "cwd": "<root>",
+                    "lastActiveAt": "<time>",
+                    "archivedAt": "<time>"
+                  }
+                ]
+              }
+            }
+          },
+          "codexOnly": {
+            "status": 200,
+            "body": {
+              "data": {
+                "items": [
+                  {
+                    "id": "<session-2>",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-ai-query-codex",
+                    "title": "Codex history",
+                    "cwd": "<root>",
+                    "lastActiveAt": "<time>",
+                    "archivedAt": "<time>"
+                  }
+                ]
+              }
+            }
+          },
+          "duplicateAgents": {
+            "status": 500,
+            "body": {
+              "statusCode": 500,
+              "error": "Internal Server Error",
+              "message": "request.query.agents?.split is not a function"
+            }
+          },
+          "duplicateHierarchy": {
+            "status": 200,
+            "body": {
+              "data": {
+                "items": [
+                  {
+                    "id": "<session-1>",
+                    "agent": "claude",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-ai-query-claude",
+                    "title": "Claude history",
+                    "cwd": "<root>",
+                    "lastActiveAt": "<time>",
+                    "archivedAt": "<time>"
+                  },
+                  {
+                    "id": "<session-2>",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "provider-ai-query-codex",
+                    "title": "Codex history",
+                    "cwd": "<root>",
+                    "lastActiveAt": "<time>",
+                    "archivedAt": "<time>"
+                  }
+                ]
+              }
+            }
+          },
+          "detailDuplicateHierarchy": {
+            "status": 200,
+            "body": {
+              "data": {
+                "item": {
+                  "id": "<session-2>",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "provider-ai-query-codex",
+                  "title": "Codex history",
+                  "cwd": "<root>",
+                  "lastActiveAt": "<time>",
+                  "archivedAt": "<time>"
+                },
+                "turns": []
+              }
+            }
+          }
+        },
+        "logs": {
+          "default": {
+            "status": 200,
+            "body": {
+              "data": {
+                "sessionId": "<session-3>",
+                "logDir": "<root>/logs/app-sessions/aps_query_logs",
+                "maxBytes": 65536,
+                "files": [
+                  {
+                    "name": "main.log",
+                    "size": 16,
+                    "updatedAt": "<time>",
+                    "truncated": false,
+                    "content": "0123456789abcdef"
+                  }
+                ]
+              }
+            }
+          },
+          "single": {
+            "status": 200,
+            "body": {
+              "data": {
+                "sessionId": "<session-3>",
+                "logDir": "<root>/logs/app-sessions/aps_query_logs",
+                "maxBytes": 2048,
+                "files": [
+                  {
+                    "name": "main.log",
+                    "size": 16,
+                    "updatedAt": "<time>",
+                    "truncated": false,
+                    "content": "0123456789abcdef"
+                  }
+                ]
+              }
+            }
+          },
+          "duplicate": {
+            "status": 200,
+            "body": {
+              "data": {
+                "sessionId": "<session-3>",
+                "logDir": "<root>/logs/app-sessions/aps_query_logs",
+                "maxBytes": 65536,
+                "files": [
+                  {
+                    "name": "main.log",
+                    "size": 16,
+                    "updatedAt": "<time>",
+                    "truncated": false,
+                    "content": "0123456789abcdef"
+                  }
+                ]
+              }
+            }
+          },
+          "duplicateEmpty": {
+            "status": 200,
+            "body": {
+              "data": {
+                "sessionId": "<session-3>",
+                "logDir": "<root>/logs/app-sessions/aps_query_logs",
+                "maxBytes": 65536,
+                "files": [
+                  {
+                    "name": "main.log",
+                    "size": 16,
+                    "updatedAt": "<time>",
+                    "truncated": false,
+                    "content": "0123456789abcdef"
+                  }
+                ]
+              }
+            }
+          },
+          "invalid": {
+            "status": 200,
+            "body": {
+              "data": {
+                "sessionId": "<session-3>",
+                "logDir": "<root>/logs/app-sessions/aps_query_logs",
+                "maxBytes": 65536,
+                "files": [
+                  {
+                    "name": "main.log",
+                    "size": 16,
+                    "updatedAt": "<time>",
+                    "truncated": false,
+                    "content": "0123456789abcdef"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "novnc-resize-query",
+      "expected": {
+        "novnc": {
+          "default": {
+            "status": 302,
+            "location": "/api/novnc/vnc.html?path=vnc%2Findex.html&autoconnect=1&resize=scale"
+          },
+          "remote": {
+            "status": 302,
+            "location": "/api/novnc/vnc.html?path=vnc%2Findex.html&autoconnect=1&resize=remote"
+          },
+          "duplicate": {
+            "status": 302,
+            "location": "/api/novnc/vnc.html?path=vnc%2Findex.html&autoconnect=1&resize=scale"
+          },
+          "duplicateMixed": {
+            "status": 302,
+            "location": "/api/novnc/vnc.html?path=vnc%2Findex.html&autoconnect=1&resize=scale"
+          }
+        }
+      }
+    }
+  ]
+}

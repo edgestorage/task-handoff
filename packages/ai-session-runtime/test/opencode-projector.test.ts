@@ -1,7 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import type { OpenCodeMessage, OpenCodePart, OpenCodeSession } from "../src/opencode/wire.ts";
 import { openCodeErrorText, projectOpenCodePart, projectOpenCodeSession } from "../src/opencode/projector.ts";
+
+test("OpenCode projections match the shared Node/Rust provider fixtures", () => {
+  const fixtures = JSON.parse(readFileSync(new URL("../../../controlled-instance-rs/crates/ai-session/tests/fixtures/opencode-projection-parity.json", import.meta.url), "utf8"));
+  const wire = (value: unknown) => JSON.parse(JSON.stringify(value));
+  for (const fixture of fixtures.parts) {
+    assert.deepEqual(wire(projectOpenCodePart(fixture.part, "u1")), fixture.expected, fixture.name);
+  }
+  for (const fixture of fixtures.sessions) {
+    const { snapshot } = projectOpenCodeSession(fixture.input);
+    assert.deepEqual({
+      lastMessage: snapshot.lastMessage ?? null,
+      lastMessageItemId: snapshot.lastMessageItemId ?? null,
+      currentTool: wire(snapshot.currentTool ?? null),
+      summary: snapshot.summary ?? null,
+      turnLastMessages: snapshot.turns?.map((turn) => turn.lastMessage ?? null),
+    }, fixture.expected, fixture.name);
+  }
+});
 
 const session: OpenCodeSession = {
   id: "ses_test",

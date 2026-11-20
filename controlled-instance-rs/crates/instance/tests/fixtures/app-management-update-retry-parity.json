@@ -1,0 +1,78 @@
+{
+  "scenario": "update-failure-then-retry",
+  "initial": {
+    "app": {
+      "state": "installed",
+      "managementSource": "recipe",
+      "canInstall": false,
+      "canUninstall": true,
+      "canUpdate": true,
+      "installReason": "ALREADY_INSTALLED",
+      "updateReason": null
+    },
+    "launcherContents": "#!/bin/sh\necho 1.0.0\n"
+  },
+  "steps": [
+    {
+      "name": "first-update",
+      "job": {
+        "operation": "update",
+        "state": "failed",
+        "phase": "update-package",
+        "hasStartedAt": true,
+        "hasFinishedAt": true,
+        "error": {
+          "code": "update_failed",
+          "message": "simulated update failure",
+          "retryable": true
+        }
+      },
+      "app": {
+        "state": "installed",
+        "managementSource": "recipe",
+        "canInstall": false,
+        "canUninstall": true,
+        "canUpdate": true,
+        "installReason": "ALREADY_INSTALLED",
+        "updateReason": null
+      },
+      "executions": 1,
+      "launcherContents": "#!/bin/sh\necho 1.0.0\n",
+      "manifestExists": true
+    },
+    {
+      "name": "retry-update",
+      "job": {
+        "operation": "update",
+        "state": "succeeded",
+        "phase": "verify",
+        "hasStartedAt": true,
+        "hasFinishedAt": true,
+        "error": null
+      },
+      "app": {
+        "state": "installed",
+        "managementSource": "recipe",
+        "canInstall": false,
+        "canUninstall": true,
+        "canUpdate": true,
+        "installReason": "ALREADY_INSTALLED",
+        "updateReason": null
+      },
+      "executions": 2,
+      "launcherContents": "#!/bin/sh\necho 2.0.0\n",
+      "manifestExists": true
+    }
+  ],
+  "jobIdsDiffer": true,
+  "eventStates": [
+    "queued",
+    "running",
+    "running",
+    "failed",
+    "queued",
+    "running",
+    "running",
+    "succeeded"
+  ]
+}

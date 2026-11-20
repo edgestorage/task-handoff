@@ -756,6 +756,23 @@ test("OpenCode global SSE accepts CRLF frames and sync events without properties
   assert.deepEqual(received, ["server.connected", "sync", "session.status"]);
 });
 
+test("OpenCode SSE preserves Unicode and an initial BOM across one-byte chunks", async () => {
+  for (const prefix of ["", "\uFEFF"]) {
+    const expected = { directory: "/tmp", payload: { type: "message.part.delta", properties: { sessionID: "s1", messageID: "a1", partID: "p1", field: "text", delta: "你好😀 e\u0301" } } };
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const byte of new TextEncoder().encode(`${prefix}data: ${JSON.stringify(expected)}\r\n\r\n`)) {
+          controller.enqueue(Uint8Array.of(byte));
+        }
+        controller.close();
+      },
+    });
+    const received = [];
+    await consumeOpenCodeSse(stream, (event) => { received.push(event); }, new AbortController().signal);
+    assert.deepEqual(received, [expected]);
+  }
+});
+
 test("OpenCode global discovery requests child sessions", async () => {
   const originalFetch = global.fetch;
   let requestUrl;

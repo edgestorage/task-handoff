@@ -6,6 +6,7 @@ mod opencode;
 mod persistence;
 mod persistence_settings;
 mod provider;
+mod provider_snapshot;
 mod timeline;
 mod title;
 
@@ -59,10 +60,12 @@ pub use provider::{
     AiSessionForkResult, AiSessionManagedCreateOptions, AiSessionMessageInput,
     AiSessionModelSelection, AiSessionModelSelectionIntent, AiSessionModelSelectionResolver,
     AiSessionPermissionMode, AiSessionReference, AiSessionResumeResult, AiSessionRuntimePathInput,
-    AiSessionSendMode, AiSessionStoryAgentToolResolver, ProviderAction, ProviderAttachment,
-    ProviderCreateInput, ProviderCreateResult, ProviderError, ProviderEvent, ProviderForkCreation,
-    ProviderForkInput, ProviderMessage, ProviderMessageInput, ProviderResumeResult,
+    AiSessionSendMode, AiSessionStoryAgentToolResolver, ProviderAction, ProviderApprovalObserver,
+    ProviderApprovalUpdate, ProviderAttachment, ProviderCreateInput, ProviderCreateResult,
+    ProviderError, ProviderEvent, ProviderForkCreation, ProviderForkInput, ProviderMessage,
+    ProviderMessageInput, ProviderResumeResult,
 };
+pub use provider_snapshot::ProviderSessionSnapshot;
 pub use timeline::{
     ai_session_timeline_item_revision, ai_session_timeline_revision,
     ai_session_tool_activity_window, sync_ai_session_timeline_items, validate_known_timeline_items,
@@ -176,6 +179,51 @@ pub struct AiSession {
 }
 
 impl AiSession {
+    /// Apply a snapshot that has lifecycle/metadata but no conversation turns.
+    /// Such observations cannot settle an accepted prompt whose response has
+    /// not arrived, nor can they rewrite turn content/revisions or body clocks.
+    pub fn apply_metadata_snapshot_lifecycle(
+        &mut self,
+        status: Option<&str>,
+        phase: Option<&str>,
+        mut actions: Value,
+    ) {
+        let pending = self.status == "running"
+            && self.active_turn_id.as_deref().is_some_and(|id| {
+                let turn = self
+                    .turns
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .find(|turn| turn["id"] == id || turn["providerTurnId"] == id);
+                turn.is_none_or(|turn| {
+                    ["summary", "lastMessage"]
+                        .iter()
+                        .all(|key| turn[*key].as_str().is_none_or(|text| text.is_empty()))
+                })
+            });
+        if !pending {
+            if let Some(status) = status {
+                self.unread = if matches!(status, "running" | "waiting") {
+                    false
+                } else {
+                    self.unread || matches!(self.status.as_str(), "running" | "waiting")
+                };
+                self.status = status.to_string();
+                if matches!(status, "idle" | "failed") {
+                    self.active_turn_id = None;
+                }
+            } else if matches!(self.status.as_str(), "running" | "waiting") {
+                self.unread = false;
+            }
+            if let Some(phase) = phase {
+                self.phase = phase.to_string();
+            }
+        }
+        actions["interrupt"] = Value::Bool(matches!(self.status.as_str(), "running" | "waiting"));
+        self.actions = Some(actions);
+    }
+
     pub fn from_history_item(
         item: &AiSessionHistoryItem,
         previous: Option<&AiSession>,
@@ -412,6 +460,10 @@ impl AiSession {
                 if let Some(provider_turn_id) = turn.get("providerTurnId") {
                     entry.insert("providerTurnId".to_string(), provider_turn_id.clone());
                 }
+                entry.insert(
+                    "bodyRevision".to_string(),
+                    Value::String(turn_body_revision(turn)),
+                );
                 Value::Object(entry)
             })
             .collect::<Vec<_>>();
@@ -432,6 +484,7 @@ pub struct AiSessionRuntime {
     persistence_status: RwLock<AiSessionPersistenceStatus>,
     persistence_dir: Option<PathBuf>,
     mutation: Mutex<()>,
+    conversation_attachments: RwLock<Option<std::sync::Arc<AiSessionConversationAttachmentStore>>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -465,11 +518,22 @@ impl AiSessionRuntime {
             persistence_status: RwLock::new(AiSessionPersistenceStatus::default()),
             persistence_dir,
             mutation: Mutex::new(()),
+            conversation_attachments: RwLock::new(None),
         };
         if let Some(directory) = runtime.persistence_dir.as_deref() {
             runtime.load(directory);
         }
         runtime
+    }
+
+    pub fn set_conversation_attachments(
+        &self,
+        store: std::sync::Arc<AiSessionConversationAttachmentStore>,
+    ) {
+        *self
+            .conversation_attachments
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(store);
     }
 
     pub fn stream_id(&self) -> &str {
@@ -1010,7 +1074,16 @@ impl AiSessionRuntime {
             stale_count: 0,
             sessions: sessions
                 .into_iter()
-                .map(|session| session.summary())
+                .map(|session| {
+                    let owner = self
+                        .conversation_attachments
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    match owner.as_ref() {
+                        Some(owner) => owner.project_session(session).summary(),
+                        None => session.summary(),
+                    }
+                })
                 .collect(),
             updated_at: now_iso(),
         }
@@ -1208,16 +1281,9 @@ fn revision_hash(value: &Value) -> String {
 }
 
 fn canonical_value(value: &Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(items.iter().map(canonical_value).collect()),
-        Value::Object(object) => Value::Object(
-            object
-                .iter()
-                .map(|(key, value)| (key.clone(), canonical_value(value)))
-                .collect(),
-        ),
-        _ => value.clone(),
-    }
+    let mut canonical = value.clone();
+    canonical.sort_all_objects();
+    canonical
 }
 
 fn default_creation_source() -> String {
@@ -1245,6 +1311,20 @@ fn is_safe_session_id(id: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn turn_revisions_ignore_nested_object_key_order() {
+        let first: Value =
+            serde_json::from_str(r#"{"userMessages":[{"text":"hello","id":"m1"}],"id":"t1"}"#)
+                .expect("first");
+        let reordered: Value =
+            serde_json::from_str(r#"{"id":"t1","userMessages":[{"id":"m1","text":"hello"}]}"#)
+                .expect("reordered");
+        assert_eq!(turn_body_revision(&first), turn_body_revision(&reordered));
+        let mut changed = reordered;
+        changed["userMessages"][0]["text"] = json!("changed");
+        assert_ne!(turn_body_revision(&first), turn_body_revision(&changed));
+    }
 
     #[test]
     fn compact_text_uses_utf16_code_unit_limits() {

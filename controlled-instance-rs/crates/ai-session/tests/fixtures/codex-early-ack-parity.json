@@ -1,0 +1,1995 @@
+{
+  "scenarios": [
+    {
+      "id": "C01-started-delta",
+      "controls": true,
+      "beforeAck": [
+        {
+          "name": "early-started",
+          "notification": {
+            "method": "turn/started",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "startedAt": 1793923190
+              }
+            }
+          },
+          "wait": {
+            "status": "running",
+            "activeTurnId": "turn-u041"
+          }
+        },
+        {
+          "name": "early-delta",
+          "notification": {
+            "method": "item/agentMessage/delta",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "itemId": "answer-u041",
+              "delta": "Hello 世界"
+            }
+          },
+          "deltas": 1
+        }
+      ],
+      "steps": [
+        {
+          "name": "early-final",
+          "notification": {
+            "method": "item/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "item": {
+                "id": "answer-u041",
+                "type": "agentMessage",
+                "text": "Hello 世界"
+              }
+            }
+          },
+          "wait": {
+            "lastMessage": "Hello 世界"
+          },
+          "timeline": 1
+        },
+        {
+          "name": "early-completed",
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "status": "completed",
+                "completedAt": 1793923200
+              }
+            }
+          },
+          "wait": {
+            "status": "idle",
+            "activeTurnId": null
+          }
+        }
+      ],
+      "assertAck": true,
+      "expected": {
+        "action": {
+          "provider": "codex",
+          "action": "send",
+          "turnId": "turn-u041",
+          "providerTurnId": "turn-u041"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-started",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-delta",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "turnId": "turn-u041",
+                "itemId": "answer-u041",
+                "delta": "Hello 世界"
+              }
+            ],
+            "timeline": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 3,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "turnId": "turn-u041",
+                "itemId": "answer-u041",
+                "delta": "Hello 世界"
+              }
+            ],
+            "timeline": []
+          },
+          {
+            "name": "early-final",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": "Hello 世界",
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer-u041",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Hello 世界",
+                  "lastMessage": "Hello 世界",
+                  "lastMessageItemId": "answer-u041",
+                  "revision": 4,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "turnId": "turn-u041",
+                "itemId": "answer-u041",
+                "delta": "Hello 世界"
+              }
+            ],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "answer-u041",
+                  "turnId": "turn-u041",
+                  "type": "ai-message",
+                  "text": "Hello 世界"
+                }
+              }
+            ]
+          },
+          {
+            "name": "early-completed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": "answer-u041",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Hello 世界",
+                  "lastMessage": "Hello 世界",
+                  "lastMessageItemId": "answer-u041",
+                  "revision": 5,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "turnId": "turn-u041",
+                "itemId": "answer-u041",
+                "delta": "Hello 世界"
+              }
+            ],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "answer-u041",
+                  "turnId": "turn-u041",
+                  "type": "ai-message",
+                  "text": "Hello 世界"
+                }
+              }
+            ]
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": "answer-u041",
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": "Hello 世界",
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer-u041",
+              "revision": 5,
+              "source": "realtime",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [],
+        "outcomes": []
+      }
+    },
+    {
+      "id": "C02-completed",
+      "controls": true,
+      "beforeAck": [
+        {
+          "name": "early-started",
+          "notification": {
+            "method": "turn/started",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "startedAt": 1793923190
+              }
+            }
+          },
+          "wait": {
+            "status": "running",
+            "activeTurnId": "turn-u041"
+          }
+        },
+        {
+          "name": "early-delta",
+          "notification": {
+            "method": "item/agentMessage/delta",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "itemId": "answer-u041",
+              "delta": "Hello 世界"
+            }
+          },
+          "deltas": 1
+        },
+        {
+          "name": "early-final",
+          "notification": {
+            "method": "item/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "item": {
+                "id": "answer-u041",
+                "type": "agentMessage",
+                "text": "Hello 世界"
+              }
+            }
+          },
+          "wait": {
+            "lastMessage": "Hello 世界"
+          },
+          "timeline": 1
+        },
+        {
+          "name": "early-completed",
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "status": "completed",
+                "completedAt": 1793923200
+              }
+            }
+          },
+          "wait": {
+            "status": "idle",
+            "activeTurnId": null
+          }
+        }
+      ],
+      "steps": [],
+      "assertAck": true,
+      "expected": {
+        "action": {
+          "provider": "codex",
+          "action": "send",
+          "turnId": "turn-u041",
+          "providerTurnId": "turn-u041"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-started",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-delta",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "turnId": "turn-u041",
+                "itemId": "answer-u041",
+                "delta": "Hello 世界"
+              }
+            ],
+            "timeline": []
+          },
+          {
+            "name": "early-final",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "turn-u041",
+              "userPrompt": null,
+              "summary": "Hello 世界",
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer-u041",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": null,
+                  "summary": "Hello 世界",
+                  "lastMessage": "Hello 世界",
+                  "lastMessageItemId": "answer-u041",
+                  "revision": 2,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "turnId": "turn-u041",
+                "itemId": "answer-u041",
+                "delta": "Hello 世界"
+              }
+            ],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "answer-u041",
+                  "turnId": "turn-u041",
+                  "type": "ai-message",
+                  "text": "Hello 世界"
+                }
+              }
+            ]
+          },
+          {
+            "name": "early-completed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": "answer-u041",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": null,
+                  "summary": "Hello 世界",
+                  "lastMessage": "Hello 世界",
+                  "lastMessageItemId": "answer-u041",
+                  "revision": 3,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "turnId": "turn-u041",
+                "itemId": "answer-u041",
+                "delta": "Hello 世界"
+              }
+            ],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "answer-u041",
+                  "turnId": "turn-u041",
+                  "type": "ai-message",
+                  "text": "Hello 世界"
+                }
+              }
+            ]
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": "answer-u041",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Hello 世界",
+                  "lastMessage": "Hello 世界",
+                  "lastMessageItemId": "answer-u041",
+                  "revision": 5,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "turnId": "turn-u041",
+                "itemId": "answer-u041",
+                "delta": "Hello 世界"
+              }
+            ],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "answer-u041",
+                  "turnId": "turn-u041",
+                  "type": "ai-message",
+                  "text": "Hello 世界"
+                }
+              }
+            ]
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": "answer-u041",
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": "Hello 世界",
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer-u041",
+              "revision": 5,
+              "source": "control",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [],
+        "outcomes": []
+      }
+    },
+    {
+      "id": "C03-approval",
+      "controls": true,
+      "beforeAck": [
+        {
+          "name": "early-started",
+          "notification": {
+            "method": "turn/started",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "startedAt": 1793923190
+              }
+            }
+          },
+          "wait": {
+            "status": "running",
+            "activeTurnId": "turn-u041"
+          }
+        },
+        {
+          "name": "early-approval",
+          "notification": {
+            "id": 701,
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "itemId": "command-u041",
+              "command": "echo test",
+              "reason": "Run command"
+            }
+          },
+          "wait": {
+            "status": "waiting",
+            "phase": "approval"
+          }
+        }
+      ],
+      "steps": [
+        {
+          "name": "allow",
+          "action": "approval",
+          "decision": "allow",
+          "responses": 1
+        },
+        {
+          "name": "early-completed",
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "status": "completed",
+                "completedAt": 1793923200
+              }
+            }
+          },
+          "wait": {
+            "status": "idle",
+            "activeTurnId": null
+          }
+        }
+      ],
+      "assertAck": true,
+      "expected": {
+        "action": {
+          "provider": "codex",
+          "action": "send",
+          "turnId": "turn-u041",
+          "providerTurnId": "turn-u041"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-started",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-approval",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "turn-u041",
+              "userPrompt": null,
+              "summary": "Run command · Command: echo test",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": null,
+                  "summary": "Run command · Command: echo test",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": "Run command · Command: echo test",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Run command · Command: echo test",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 4,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "allow",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": "Run command · Command: echo test",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Run command · Command: echo test",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 5,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-completed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Run command · Command: echo test",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 6,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 1
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": "Run command · Command: echo test",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 6,
+              "source": "realtime",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [
+          {
+            "id": 701,
+            "result": {
+              "decision": "accept"
+            }
+          }
+        ],
+        "outcomes": [
+          {
+            "name": "allow",
+            "result": {
+              "provider": "codex",
+              "action": "approval",
+              "decision": "allow"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "C04-failed",
+      "controls": true,
+      "beforeAck": [
+        {
+          "name": "early-started",
+          "notification": {
+            "method": "turn/started",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "startedAt": 1793923190
+              }
+            }
+          },
+          "wait": {
+            "status": "running",
+            "activeTurnId": "turn-u041"
+          }
+        },
+        {
+          "name": "early-failed",
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "status": "failed",
+                "error": {
+                  "message": "Early turn failed"
+                },
+                "completedAt": 1793923200
+              }
+            }
+          },
+          "wait": {
+            "status": "failed",
+            "error": "Early turn failed",
+            "activeTurnId": null
+          }
+        }
+      ],
+      "steps": [
+        {
+          "name": "duplicate-failed",
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "status": "failed",
+                "error": {
+                  "message": "Early turn failed"
+                },
+                "completedAt": 1793923200
+              }
+            }
+          },
+          "wait": {
+            "status": "failed",
+            "error": "Early turn failed",
+            "activeTurnId": null
+          }
+        }
+      ],
+      "assertAck": true,
+      "expected": {
+        "action": {
+          "provider": "codex",
+          "action": "send",
+          "turnId": "turn-u041",
+          "providerTurnId": "turn-u041"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-started",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-failed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "failed",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": "Early turn failed",
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "failed",
+                  "phase": "unknown",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "failed",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": "Early turn failed",
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "failed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 4,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "duplicate-failed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "failed",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": "Early turn failed",
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "failed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 4,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "failed",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": "Early turn failed",
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "failed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 4,
+              "source": "control",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [],
+        "outcomes": []
+      }
+    },
+    {
+      "id": "C05-rejected",
+      "controls": true,
+      "beforeAck": [
+        {
+          "name": "early-started",
+          "notification": {
+            "method": "turn/started",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "startedAt": 1793923190
+              }
+            }
+          },
+          "wait": {
+            "status": "running",
+            "activeTurnId": "turn-u041"
+          }
+        },
+        {
+          "name": "early-failed",
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "status": "failed",
+                "error": {
+                  "message": "Early turn failed"
+                },
+                "completedAt": 1793923200
+              }
+            }
+          },
+          "wait": {
+            "status": "failed",
+            "error": "Early turn failed",
+            "activeTurnId": null
+          }
+        }
+      ],
+      "steps": [],
+      "ackReply": {
+        "error": {
+          "code": -32000,
+          "message": "fixture turn rejected"
+        }
+      },
+      "assertAck": true,
+      "expected": {
+        "action": null,
+        "rejection": {
+          "message": "fixture turn rejected"
+        },
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-started",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "early-failed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "failed",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": "Early turn failed",
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "failed",
+                  "phase": "unknown",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "rejected",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "failed",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": "Early turn failed",
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "failed",
+                  "phase": "unknown",
+                  "userPrompt": null,
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": []
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "failed",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": null,
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": "Early turn failed",
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "failed",
+              "phase": "unknown",
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 2,
+              "source": "realtime",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": []
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [],
+        "outcomes": []
+      }
+    }
+  ]
+}

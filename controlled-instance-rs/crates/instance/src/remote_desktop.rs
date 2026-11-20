@@ -432,13 +432,13 @@ async fn proxy_fallback(
                         if upstream.send(UpstreamMessage::Text(text.to_string().into())).await.is_err() { break; }
                     }
                     Some(Ok(Message::Binary(data))) => {
-                        if upstream.send(UpstreamMessage::Binary(data.into())).await.is_err() { break; }
+                        if upstream.send(UpstreamMessage::Binary(data)).await.is_err() { break; }
                     }
                     Some(Ok(Message::Ping(data))) => {
-                        if upstream.send(UpstreamMessage::Ping(data.into())).await.is_err() { break; }
+                        if upstream.send(UpstreamMessage::Ping(data)).await.is_err() { break; }
                     }
                     Some(Ok(Message::Pong(data))) => {
-                        if upstream.send(UpstreamMessage::Pong(data.into())).await.is_err() { break; }
+                        if upstream.send(UpstreamMessage::Pong(data)).await.is_err() { break; }
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Err(_)) => break,
@@ -447,16 +447,20 @@ async fn proxy_fallback(
             outgoing = upstream.next() => {
                 match outgoing {
                     Some(Ok(UpstreamMessage::Text(text))) => {
-                        if socket.send(Message::Text(text.to_string().into())).await.is_err() { break; }
+                        let sent = socket.send(Message::Text(text.to_string().into())).await;
+                        if sent.is_err() { break; }
                     }
                     Some(Ok(UpstreamMessage::Binary(data))) => {
-                        if socket.send(Message::Binary(data.into())).await.is_err() { break; }
+                        let sent = socket.send(Message::Binary(data)).await;
+                        if sent.is_err() { break; }
                     }
                     Some(Ok(UpstreamMessage::Ping(data))) => {
-                        if socket.send(Message::Ping(data.into())).await.is_err() { break; }
+                        let sent = socket.send(Message::Ping(data)).await;
+                        if sent.is_err() { break; }
                     }
                     Some(Ok(UpstreamMessage::Pong(data))) => {
-                        if socket.send(Message::Pong(data.into())).await.is_err() { break; }
+                        let sent = socket.send(Message::Pong(data)).await;
+                        if sent.is_err() { break; }
                     }
                     Some(Ok(UpstreamMessage::Close(_))) | None => break,
                     Some(Err(_)) => break,
@@ -562,7 +566,10 @@ async fn signaling(service: DesktopService, mut socket: WebSocket) {
                     send(&mut socket,json!({"type":"snapshot","snapshot":event.snapshot})).await?;
                     if terminal {return Ok::<(),()>(());}
                 }
-                Ok(DesktopEvent::Changed)=>{if !service.is_current_boot(&boot).await{return Err(());}},
+                Ok(DesktopEvent::Changed)=>{
+                    let current=service.is_current_boot(&boot).await;
+                    if !current{return Err(());}
+                },
                 Ok(DesktopEvent::ResnapshotRequired)|Err(_)=>return Err(()),
                 _=>{}
             }

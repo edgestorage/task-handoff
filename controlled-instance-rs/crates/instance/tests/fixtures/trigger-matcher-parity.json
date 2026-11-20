@@ -1,0 +1,138 @@
+{
+  "cases": [
+    {
+      "name": "typescript recursive with explicit ignore",
+      "globs": [
+        "**/*.ts"
+      ],
+      "ignored": [
+        "generated/**"
+      ],
+      "paths": {
+        "index.ts": null,
+        "src/index.ts": null,
+        "src/deep/index.ts": null,
+        "src/index.js": null,
+        "generated/index.ts": null,
+        "node_modules/pkg/index.ts": null,
+        ".hidden/index.ts": null
+      },
+      "expected": {
+        "index.ts": true,
+        "src/index.ts": true,
+        "src/deep/index.ts": true,
+        "src/index.js": false,
+        "generated/index.ts": false,
+        "node_modules/pkg/index.ts": false,
+        ".hidden/index.ts": true
+      }
+    },
+    {
+      "name": "brace expansion and vendor exclusion",
+      "globs": [
+        "**/*.{rs,ts}"
+      ],
+      "ignored": [
+        "**/vendor/**"
+      ],
+      "paths": {
+        "main.rs": null,
+        "src/main.ts": null,
+        ".hidden/main.rs": null,
+        "src/nested/main.rs": null,
+        "src/main.test.rs": null,
+        "src/vendor/main.rs": null,
+        "src/main.js": null
+      },
+      "expected": {
+        "main.rs": true,
+        "src/main.ts": true,
+        ".hidden/main.rs": true,
+        "src/nested/main.rs": true,
+        "src/main.test.rs": true,
+        "src/vendor/main.rs": false,
+        "src/main.js": false
+      }
+    },
+    {
+      "name": "extglob exclusion",
+      "globs": [
+        "**/!(*.test).rs"
+      ],
+      "ignored": [],
+      "paths": {
+        "main.rs": null,
+        "src/main.rs": null,
+        "src/main.test.rs": null,
+        "src/deep/main.test.rs": null
+      },
+      "expected": {
+        "main.rs": true,
+        "src/main.rs": true,
+        "src/main.test.rs": false,
+        "src/deep/main.test.rs": false
+      }
+    },
+    {
+      "name": "single segment boundary",
+      "globs": [
+        "src/*.rs"
+      ],
+      "ignored": [],
+      "paths": {
+        "src/main.rs": null,
+        "src/nested/main.rs": null,
+        "src/main.ts": null
+      },
+      "expected": {
+        "src/main.rs": true,
+        "src/nested/main.rs": false,
+        "src/main.ts": false
+      }
+    },
+    {
+      "name": "default ignore anchoring",
+      "globs": [
+        "**/*"
+      ],
+      "ignored": [],
+      "paths": {
+        ".git/config": null,
+        "src/node_modules/pkg/index.js": null,
+        "dist/main.js": null,
+        "build/main.js": null,
+        "src/error.log": null,
+        "src/catalog.json": null,
+        "src/node_modules": null,
+        "src/dist": null
+      },
+      "expected": {
+        ".git/config": false,
+        "src/node_modules/pkg/index.js": false,
+        "dist/main.js": false,
+        "build/main.js": false,
+        "src/error.log": false,
+        "src/catalog.json": true,
+        "src/node_modules": true,
+        "src/dist": true
+      }
+    },
+    {
+      "name": "dotfile exact match",
+      "globs": [
+        "**/.env"
+      ],
+      "ignored": [],
+      "paths": {
+        ".env": null,
+        "config/.env": null,
+        "config/.env.local": null
+      },
+      "expected": {
+        ".env": true,
+        "config/.env": true,
+        "config/.env.local": false
+      }
+    }
+  ]
+}

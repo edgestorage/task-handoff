@@ -224,6 +224,9 @@ export function aiSessionTurnsRevision(session: AiSessionStatus) {
   const index = aiSessionConversationTurns(session).map((turn) => ({
     id: turn.id,
     providerTurnId: turn.providerTurnId,
+    // Content identity includes every rendered body/lifecycle field. The
+    // adapter's observation-only internal clock remains outside this identity.
+    bodyRevision: aiSessionTurnBodyRevision(turn),
   }));
   const revision = createHash("sha256")
     .update(JSON.stringify(canonicalDetailValue(index)))
@@ -511,7 +514,7 @@ export class AiSessionRegistry {
     return session ? this.projectConversationAttachments(session) : undefined;
   }
 
-  private projectConversationAttachments(session: AiSessionStatus): AiSessionStatus {
+  private projectConversationAttachments(session: AiSessionStatus, collectGarbage = true): AiSessionStatus {
     if (!this.conversationAttachments) return session;
     return {
       ...session,
@@ -519,7 +522,9 @@ export class AiSessionRegistry {
         ...turn,
         userMessages: turn.userMessages?.map((message) => ({
           ...message,
-          attachments: this.conversationAttachments!.resolveMessageAttachments(session.id, message.id, message.attachments),
+          attachments: collectGarbage
+            ? this.conversationAttachments!.resolveMessageAttachments(session.id, message.id, message.attachments)
+            : this.conversationAttachments!.projectMessageAttachments(session.id, message.id, message.attachments),
         })),
       })),
     };
@@ -1127,7 +1132,7 @@ export class AiSessionRegistry {
       runningCount: sessions.filter((session) => session.status === "running").length,
       waitingCount: sessions.filter((session) => session.status === "waiting").length,
       staleCount: 0,
-      sessions: sessions.map((session) => summaryForHeartbeat(this.projectConversationAttachments(session))),
+      sessions: sessions.map((session) => summaryForHeartbeat(this.projectConversationAttachments(session, false))),
       updatedAt: nowIso(),
     };
   }

@@ -1,0 +1,2396 @@
+{
+  "source": {
+    "head": "9b2d6e17cce4a6a65d00f2ed4504f45546256edf",
+    "compatibility": "v0.0.47",
+    "beforeSha256": "4362f654ceceacf3a1094737d0dab9d6e1ce81afb824945c2fc297d7a5e76920",
+    "n1Writer": "Node history-store source is byte-identical to v0.0.47 (git diff verified); initial index/detail are real writer output.",
+    "normalization": "None: full records, absolute timestamps, IDs, turn order, hashed detail paths, index/body payloads and removals compared.",
+    "afterSha256": "596ed972ac69d5d7c5faaadc6307c71f8ded4306553ec8f139029c0a241b15ef",
+    "sourceFix": "Compensate detail/index writer failures only when the original index is confirmed; retain body if index committed or cannot be checked, surface rollback failure. Includes errors reported after body or index replacement. Handled errors only; no crash transaction guarantee."
+  },
+  "input": {
+    "old": {
+      "id": "ais_history",
+      "agent": "codex",
+      "creationSource": "ai-session",
+      "providerSessionId": "provider-history",
+      "title": "Old history",
+      "userPrompt": "Old prompt",
+      "lastMessage": "Old answer",
+      "cwd": "/workspace",
+      "modelSelection": {
+        "modelEntityId": "model-history",
+        "modelName": "Migration model"
+      },
+      "reasoningEffort": "high",
+      "lastActiveAt": "2026-11-02T00:00:00.000Z",
+      "archivedAt": "2026-11-02T00:00:01.000Z"
+    },
+    "oldTurns": [
+      {
+        "id": "turn-old",
+        "providerTurnId": "provider-turn-old",
+        "userPrompt": "Old prompt",
+        "status": "completed",
+        "phase": "responding",
+        "lastMessage": "Old answer",
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "completedAt": "2026-11-02T00:00:01.000Z"
+      }
+    ],
+    "updated": {
+      "id": "ais_history",
+      "agent": "codex",
+      "creationSource": "ai-session",
+      "providerSessionId": "provider-history",
+      "title": "Updated history",
+      "userPrompt": "Old prompt",
+      "lastMessage": "Updated answer",
+      "cwd": "/workspace",
+      "modelSelection": {
+        "modelEntityId": "model-history",
+        "modelName": "Migration model"
+      },
+      "reasoningEffort": "high",
+      "lastActiveAt": "2026-11-02T00:01:00.000Z",
+      "archivedAt": "2026-11-02T00:01:01.000Z"
+    },
+    "updatedTurns": [
+      {
+        "id": "turn-old",
+        "providerTurnId": "provider-turn-old",
+        "userPrompt": "Old prompt",
+        "status": "completed",
+        "phase": "responding",
+        "lastMessage": "Old answer",
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "completedAt": "2026-11-02T00:00:01.000Z"
+      },
+      {
+        "id": "turn-next",
+        "providerTurnId": "provider-turn-next",
+        "userPrompt": "Next prompt",
+        "status": "completed",
+        "lastMessage": "Updated answer"
+      }
+    ],
+    "new": {
+      "id": "ais_history_new",
+      "agent": "codex",
+      "creationSource": "ai-session",
+      "providerSessionId": "provider-history-new",
+      "title": "New history",
+      "userPrompt": "Old prompt",
+      "lastMessage": "Updated answer",
+      "cwd": "/workspace",
+      "modelSelection": {
+        "modelEntityId": "model-history",
+        "modelName": "Migration model"
+      },
+      "reasoningEffort": "high",
+      "lastActiveAt": "2026-11-02T00:01:00.000Z",
+      "archivedAt": "2026-11-02T00:01:01.000Z"
+    },
+    "newTurns": [
+      {
+        "id": "turn-new",
+        "userPrompt": "New prompt",
+        "status": "completed",
+        "lastMessage": "New answer"
+      }
+    ],
+    "n1Index": {
+      "schemaVersion": 1,
+      "items": [
+        {
+          "id": "ais_history",
+          "agent": "codex",
+          "creationSource": "ai-session",
+          "providerSessionId": "provider-history",
+          "modelSelection": {
+            "modelEntityId": "model-history",
+            "modelName": "Migration model"
+          },
+          "reasoningEffort": "high",
+          "title": "Old history",
+          "userPrompt": "Old prompt",
+          "lastMessage": "Old answer",
+          "cwd": "/workspace",
+          "lastActiveAt": "2026-11-02T00:00:00.000Z",
+          "archivedAt": "2026-11-02T00:00:01.000Z"
+        }
+      ]
+    },
+    "n1Detail": {
+      "item": {
+        "id": "ais_history",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-history",
+        "modelSelection": {
+          "modelEntityId": "model-history",
+          "modelName": "Migration model"
+        },
+        "reasoningEffort": "high",
+        "title": "Old history",
+        "userPrompt": "Old prompt",
+        "lastMessage": "Old answer",
+        "cwd": "/workspace",
+        "lastActiveAt": "2026-11-02T00:00:00.000Z",
+        "archivedAt": "2026-11-02T00:00:01.000Z"
+      },
+      "turns": [
+        {
+          "id": "turn-old",
+          "providerTurnId": "provider-turn-old",
+          "userPrompt": "Old prompt",
+          "status": "completed",
+          "phase": "responding",
+          "lastMessage": "Old answer",
+          "startedAt": "2026-11-02T00:00:00.000Z",
+          "completedAt": "2026-11-02T00:00:01.000Z"
+        }
+      ]
+    }
+  },
+  "expected": {
+    "C01": {
+      "items": [
+        {
+          "id": "ais_history",
+          "agent": "codex",
+          "creationSource": "ai-session",
+          "providerSessionId": "provider-history",
+          "modelSelection": {
+            "modelEntityId": "model-history",
+            "modelName": "Migration model"
+          },
+          "reasoningEffort": "high",
+          "title": "Updated history",
+          "userPrompt": "Old prompt",
+          "lastMessage": "Updated answer",
+          "cwd": "/workspace",
+          "lastActiveAt": "2026-11-02T00:01:00.000Z",
+          "archivedAt": "2026-11-02T00:01:01.000Z"
+        },
+        {
+          "id": "ais_history_new",
+          "agent": "codex",
+          "creationSource": "ai-session",
+          "providerSessionId": "provider-history-new",
+          "modelSelection": {
+            "modelEntityId": "model-history",
+            "modelName": "Migration model"
+          },
+          "reasoningEffort": "high",
+          "title": "New history",
+          "userPrompt": "Old prompt",
+          "lastMessage": "Updated answer",
+          "cwd": "/workspace",
+          "lastActiveAt": "2026-11-02T00:01:00.000Z",
+          "archivedAt": "2026-11-02T00:01:01.000Z"
+        }
+      ],
+      "oldDetail": {
+        "item": {
+          "id": "ais_history",
+          "agent": "codex",
+          "creationSource": "ai-session",
+          "providerSessionId": "provider-history",
+          "modelSelection": {
+            "modelEntityId": "model-history",
+            "modelName": "Migration model"
+          },
+          "reasoningEffort": "high",
+          "title": "Updated history",
+          "userPrompt": "Old prompt",
+          "lastMessage": "Updated answer",
+          "cwd": "/workspace",
+          "lastActiveAt": "2026-11-02T00:01:00.000Z",
+          "archivedAt": "2026-11-02T00:01:01.000Z"
+        },
+        "turns": [
+          {
+            "id": "turn-old",
+            "providerTurnId": "provider-turn-old",
+            "userPrompt": "Old prompt",
+            "status": "completed",
+            "phase": "responding",
+            "lastMessage": "Old answer",
+            "startedAt": "2026-11-02T00:00:00.000Z",
+            "completedAt": "2026-11-02T00:00:01.000Z"
+          },
+          {
+            "id": "turn-next",
+            "providerTurnId": "provider-turn-next",
+            "userPrompt": "Next prompt",
+            "status": "completed",
+            "lastMessage": "Updated answer"
+          }
+        ]
+      },
+      "newDetail": {
+        "item": {
+          "id": "ais_history_new",
+          "agent": "codex",
+          "creationSource": "ai-session",
+          "providerSessionId": "provider-history-new",
+          "modelSelection": {
+            "modelEntityId": "model-history",
+            "modelName": "Migration model"
+          },
+          "reasoningEffort": "high",
+          "title": "New history",
+          "userPrompt": "Old prompt",
+          "lastMessage": "Updated answer",
+          "cwd": "/workspace",
+          "lastActiveAt": "2026-11-02T00:01:00.000Z",
+          "archivedAt": "2026-11-02T00:01:01.000Z"
+        },
+        "turns": [
+          {
+            "id": "turn-new",
+            "userPrompt": "New prompt",
+            "status": "completed",
+            "lastMessage": "New answer"
+          }
+        ]
+      },
+      "index": {
+        "schemaVersion": 1,
+        "items": [
+          {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Updated history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          },
+          {
+            "id": "ais_history_new",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history-new",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "New history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          }
+        ]
+      },
+      "oldBody": {
+        "item": {
+          "id": "ais_history",
+          "agent": "codex",
+          "creationSource": "ai-session",
+          "providerSessionId": "provider-history",
+          "modelSelection": {
+            "modelEntityId": "model-history",
+            "modelName": "Migration model"
+          },
+          "reasoningEffort": "high",
+          "title": "Updated history",
+          "userPrompt": "Old prompt",
+          "lastMessage": "Updated answer",
+          "cwd": "/workspace",
+          "lastActiveAt": "2026-11-02T00:01:00.000Z",
+          "archivedAt": "2026-11-02T00:01:01.000Z"
+        },
+        "turns": [
+          {
+            "id": "turn-old",
+            "providerTurnId": "provider-turn-old",
+            "userPrompt": "Old prompt",
+            "status": "completed",
+            "phase": "responding",
+            "lastMessage": "Old answer",
+            "startedAt": "2026-11-02T00:00:00.000Z",
+            "completedAt": "2026-11-02T00:00:01.000Z"
+          },
+          {
+            "id": "turn-next",
+            "providerTurnId": "provider-turn-next",
+            "userPrompt": "Next prompt",
+            "status": "completed",
+            "lastMessage": "Updated answer"
+          }
+        ]
+      },
+      "newBody": {
+        "item": {
+          "id": "ais_history_new",
+          "agent": "codex",
+          "creationSource": "ai-session",
+          "providerSessionId": "provider-history-new",
+          "modelSelection": {
+            "modelEntityId": "model-history",
+            "modelName": "Migration model"
+          },
+          "reasoningEffort": "high",
+          "title": "New history",
+          "userPrompt": "Old prompt",
+          "lastMessage": "Updated answer",
+          "cwd": "/workspace",
+          "lastActiveAt": "2026-11-02T00:01:00.000Z",
+          "archivedAt": "2026-11-02T00:01:01.000Z"
+        },
+        "turns": [
+          {
+            "id": "turn-new",
+            "userPrompt": "New prompt",
+            "status": "completed",
+            "lastMessage": "New answer"
+          }
+        ]
+      },
+      "detailFiles": [
+        "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json",
+        "fdd2bb14fd180f58595f786289a2047d720e2b2e893e0eac35844bfe9848d62f.json"
+      ],
+      "removed": []
+    },
+    "C02": {
+      "observed": {
+        "items": [
+          {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          }
+        ],
+        "oldDetail": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newDetail": null,
+        "index": {
+          "schemaVersion": 1,
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "oldBody": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newBody": null,
+        "detailFiles": [
+          "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+        ],
+        "removed": []
+      },
+      "reopened": {
+        "items": [
+          {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          }
+        ],
+        "oldDetail": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newDetail": null,
+        "index": {
+          "schemaVersion": 1,
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "oldBody": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newBody": null,
+        "detailFiles": [
+          "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+        ],
+        "removed": []
+      }
+    },
+    "C03": {
+      "failed": true,
+      "afterFailure": {
+        "items": [
+          {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          }
+        ],
+        "oldDetail": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newDetail": null,
+        "index": {
+          "schemaVersion": 1,
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "oldBody": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newBody": null,
+        "detailFiles": [
+          "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+        ],
+        "removed": []
+      },
+      "afterRetry": {
+        "items": [
+          {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Updated history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          }
+        ],
+        "oldDetail": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Updated history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            },
+            {
+              "id": "turn-next",
+              "providerTurnId": "provider-turn-next",
+              "userPrompt": "Next prompt",
+              "status": "completed",
+              "lastMessage": "Updated answer"
+            }
+          ]
+        },
+        "newDetail": null,
+        "index": {
+          "schemaVersion": 1,
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            }
+          ]
+        },
+        "oldBody": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Updated history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            },
+            {
+              "id": "turn-next",
+              "providerTurnId": "provider-turn-next",
+              "userPrompt": "Next prompt",
+              "status": "completed",
+              "lastMessage": "Updated answer"
+            }
+          ]
+        },
+        "newBody": null,
+        "detailFiles": [
+          "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+        ],
+        "removed": []
+      }
+    },
+    "C04": {
+      "failed": true,
+      "afterFailure": {
+        "items": [
+          {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          }
+        ],
+        "oldDetail": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newDetail": null,
+        "index": {
+          "schemaVersion": 1,
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "oldBody": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newBody": null,
+        "detailFiles": [
+          "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+        ],
+        "removed": []
+      },
+      "afterRetry": {
+        "items": [
+          {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Updated history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          }
+        ],
+        "oldDetail": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Updated history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            },
+            {
+              "id": "turn-next",
+              "providerTurnId": "provider-turn-next",
+              "userPrompt": "Next prompt",
+              "status": "completed",
+              "lastMessage": "Updated answer"
+            }
+          ]
+        },
+        "newDetail": null,
+        "index": {
+          "schemaVersion": 1,
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            }
+          ]
+        },
+        "oldBody": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Updated history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            },
+            {
+              "id": "turn-next",
+              "providerTurnId": "provider-turn-next",
+              "userPrompt": "Next prompt",
+              "status": "completed",
+              "lastMessage": "Updated answer"
+            }
+          ]
+        },
+        "newBody": null,
+        "detailFiles": [
+          "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+        ],
+        "removed": []
+      }
+    },
+    "C05": {
+      "failed": true,
+      "afterFailure": {
+        "items": [
+          {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          }
+        ],
+        "oldDetail": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newDetail": null,
+        "index": {
+          "schemaVersion": 1,
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "oldBody": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newBody": null,
+        "detailFiles": [
+          "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+        ],
+        "removed": []
+      },
+      "afterRetry": {
+        "items": [
+          {
+            "id": "ais_history_new",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history-new",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "New history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          },
+          {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          }
+        ],
+        "oldDetail": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newDetail": {
+          "item": {
+            "id": "ais_history_new",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history-new",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "New history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-new",
+              "userPrompt": "New prompt",
+              "status": "completed",
+              "lastMessage": "New answer"
+            }
+          ]
+        },
+        "index": {
+          "schemaVersion": 1,
+          "items": [
+            {
+              "id": "ais_history_new",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history-new",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "New history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "oldBody": {
+          "item": {
+            "id": "ais_history",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "Old history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Old answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:00:00.000Z",
+            "archivedAt": "2026-11-02T00:00:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-old",
+              "providerTurnId": "provider-turn-old",
+              "userPrompt": "Old prompt",
+              "status": "completed",
+              "phase": "responding",
+              "lastMessage": "Old answer",
+              "startedAt": "2026-11-02T00:00:00.000Z",
+              "completedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ]
+        },
+        "newBody": {
+          "item": {
+            "id": "ais_history_new",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-history-new",
+            "modelSelection": {
+              "modelEntityId": "model-history",
+              "modelName": "Migration model"
+            },
+            "reasoningEffort": "high",
+            "title": "New history",
+            "userPrompt": "Old prompt",
+            "lastMessage": "Updated answer",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-02T00:01:00.000Z",
+            "archivedAt": "2026-11-02T00:01:01.000Z"
+          },
+          "turns": [
+            {
+              "id": "turn-new",
+              "userPrompt": "New prompt",
+              "status": "completed",
+              "lastMessage": "New answer"
+            }
+          ]
+        },
+        "detailFiles": [
+          "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json",
+          "fdd2bb14fd180f58595f786289a2047d720e2b2e893e0eac35844bfe9848d62f.json"
+        ],
+        "removed": []
+      }
+    },
+    "C06": {
+      "after-commit": {
+        "failed": true,
+        "indexCommitted": true,
+        "rollbackFailed": false,
+        "unverified": false,
+        "afterFailure": {
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            }
+          ],
+          "oldDetail": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newDetail": null,
+          "index": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "ais_history",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-history",
+                "modelSelection": {
+                  "modelEntityId": "model-history",
+                  "modelName": "Migration model"
+                },
+                "reasoningEffort": "high",
+                "title": "Updated history",
+                "userPrompt": "Old prompt",
+                "lastMessage": "Updated answer",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-02T00:01:00.000Z",
+                "archivedAt": "2026-11-02T00:01:01.000Z"
+              }
+            ]
+          },
+          "oldBody": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newBody": null,
+          "detailFiles": [
+            "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+          ],
+          "removed": []
+        },
+        "afterRetry": {
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            }
+          ],
+          "oldDetail": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newDetail": null,
+          "index": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "ais_history",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-history",
+                "modelSelection": {
+                  "modelEntityId": "model-history",
+                  "modelName": "Migration model"
+                },
+                "reasoningEffort": "high",
+                "title": "Updated history",
+                "userPrompt": "Old prompt",
+                "lastMessage": "Updated answer",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-02T00:01:00.000Z",
+                "archivedAt": "2026-11-02T00:01:01.000Z"
+              }
+            ]
+          },
+          "oldBody": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newBody": null,
+          "detailFiles": [
+            "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+          ],
+          "removed": []
+        }
+      },
+      "detail-after-commit": {
+        "failed": true,
+        "indexCommitted": false,
+        "rollbackFailed": false,
+        "unverified": false,
+        "afterFailure": {
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ],
+          "oldDetail": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              }
+            ]
+          },
+          "newDetail": null,
+          "index": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "ais_history",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-history",
+                "modelSelection": {
+                  "modelEntityId": "model-history",
+                  "modelName": "Migration model"
+                },
+                "reasoningEffort": "high",
+                "title": "Old history",
+                "userPrompt": "Old prompt",
+                "lastMessage": "Old answer",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-02T00:00:00.000Z",
+                "archivedAt": "2026-11-02T00:00:01.000Z"
+              }
+            ]
+          },
+          "oldBody": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              }
+            ]
+          },
+          "newBody": null,
+          "detailFiles": [
+            "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+          ],
+          "removed": []
+        },
+        "afterRetry": {
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            }
+          ],
+          "oldDetail": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newDetail": null,
+          "index": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "ais_history",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-history",
+                "modelSelection": {
+                  "modelEntityId": "model-history",
+                  "modelName": "Migration model"
+                },
+                "reasoningEffort": "high",
+                "title": "Updated history",
+                "userPrompt": "Old prompt",
+                "lastMessage": "Updated answer",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-02T00:01:00.000Z",
+                "archivedAt": "2026-11-02T00:01:01.000Z"
+              }
+            ]
+          },
+          "oldBody": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newBody": null,
+          "detailFiles": [
+            "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+          ],
+          "removed": []
+        }
+      },
+      "rollback-failure": {
+        "failed": true,
+        "indexCommitted": false,
+        "rollbackFailed": true,
+        "unverified": false,
+        "afterFailure": {
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ],
+          "oldDetail": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newDetail": null,
+          "index": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "ais_history",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-history",
+                "modelSelection": {
+                  "modelEntityId": "model-history",
+                  "modelName": "Migration model"
+                },
+                "reasoningEffort": "high",
+                "title": "Old history",
+                "userPrompt": "Old prompt",
+                "lastMessage": "Old answer",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-02T00:00:00.000Z",
+                "archivedAt": "2026-11-02T00:00:01.000Z"
+              }
+            ]
+          },
+          "oldBody": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newBody": null,
+          "detailFiles": [
+            "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+          ],
+          "removed": []
+        },
+        "afterRetry": {
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            }
+          ],
+          "oldDetail": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newDetail": null,
+          "index": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "ais_history",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-history",
+                "modelSelection": {
+                  "modelEntityId": "model-history",
+                  "modelName": "Migration model"
+                },
+                "reasoningEffort": "high",
+                "title": "Updated history",
+                "userPrompt": "Old prompt",
+                "lastMessage": "Updated answer",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-02T00:01:00.000Z",
+                "archivedAt": "2026-11-02T00:01:01.000Z"
+              }
+            ]
+          },
+          "oldBody": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newBody": null,
+          "detailFiles": [
+            "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+          ],
+          "removed": []
+        }
+      },
+      "unverifiable": {
+        "failed": true,
+        "indexCommitted": false,
+        "rollbackFailed": false,
+        "unverified": true,
+        "afterFailure": {
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            }
+          ],
+          "oldDetail": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newDetail": null,
+          "index": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "ais_history",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-history",
+                "modelSelection": {
+                  "modelEntityId": "model-history",
+                  "modelName": "Migration model"
+                },
+                "reasoningEffort": "high",
+                "title": "Old history",
+                "userPrompt": "Old prompt",
+                "lastMessage": "Old answer",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-02T00:00:00.000Z",
+                "archivedAt": "2026-11-02T00:00:01.000Z"
+              }
+            ]
+          },
+          "oldBody": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Old history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Old answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:00:00.000Z",
+              "archivedAt": "2026-11-02T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newBody": null,
+          "detailFiles": [
+            "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+          ],
+          "removed": []
+        },
+        "afterRetry": {
+          "items": [
+            {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            }
+          ],
+          "oldDetail": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newDetail": null,
+          "index": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "ais_history",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-history",
+                "modelSelection": {
+                  "modelEntityId": "model-history",
+                  "modelName": "Migration model"
+                },
+                "reasoningEffort": "high",
+                "title": "Updated history",
+                "userPrompt": "Old prompt",
+                "lastMessage": "Updated answer",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-02T00:01:00.000Z",
+                "archivedAt": "2026-11-02T00:01:01.000Z"
+              }
+            ]
+          },
+          "oldBody": {
+            "item": {
+              "id": "ais_history",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-history",
+              "modelSelection": {
+                "modelEntityId": "model-history",
+                "modelName": "Migration model"
+              },
+              "reasoningEffort": "high",
+              "title": "Updated history",
+              "userPrompt": "Old prompt",
+              "lastMessage": "Updated answer",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-02T00:01:00.000Z",
+              "archivedAt": "2026-11-02T00:01:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-old",
+                "providerTurnId": "provider-turn-old",
+                "userPrompt": "Old prompt",
+                "status": "completed",
+                "phase": "responding",
+                "lastMessage": "Old answer",
+                "startedAt": "2026-11-02T00:00:00.000Z",
+                "completedAt": "2026-11-02T00:00:01.000Z"
+              },
+              {
+                "id": "turn-next",
+                "providerTurnId": "provider-turn-next",
+                "userPrompt": "Next prompt",
+                "status": "completed",
+                "lastMessage": "Updated answer"
+              }
+            ]
+          },
+          "newBody": null,
+          "detailFiles": [
+            "066bb353c2164b5da8faa239eb1fdc18180d89962f2f767d10fbdbc8e884858f.json"
+          ],
+          "removed": []
+        }
+      }
+    }
+  }
+}

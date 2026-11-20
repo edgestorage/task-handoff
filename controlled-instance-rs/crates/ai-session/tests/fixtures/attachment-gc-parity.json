@@ -1,0 +1,3891 @@
+{
+  "source": "U03.6 actual Node owners and settings HTTP; inputRef=history-retention-parity.json/input; owner clock=2026-11-05T00:00:00.000Z; settings contentDeletedAt verified same-batch and clock-bounded then mapped to <gc-time>",
+  "expected": {
+    "C01": {
+      "before": {
+        "retentionDays": 30,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/blobs/3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd": "6368696c64206279746573",
+          "ai-session-attachments/blobs/98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88": "736861726564206279746573",
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        }
+      },
+      "result": {
+        "ok": true,
+        "removedDrafts": 0,
+        "expiredContent": 3
+      },
+      "after": {
+        "retentionDays": 0,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        }
+      },
+      "repeated": {
+        "removedDrafts": 0,
+        "expiredContent": 0
+      },
+      "reopened": {
+        "retentionDays": 30,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        }
+      }
+    },
+    "C02": {
+      "before": {
+        "retentionDays": 30,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/blobs/3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd": "6368696c64206279746573",
+          "ai-session-attachments/blobs/98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88": "736861726564206279746573",
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        }
+      },
+      "failure": {
+        "ok": false,
+        "kind": "permission-denied"
+      },
+      "afterFailure": {
+        "retentionDays": 0,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/blobs/3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd": "6368696c64206279746573",
+          "ai-session-attachments/blobs/98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88": "736861726564206279746573",
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        }
+      },
+      "retry": {
+        "ok": true,
+        "removedDrafts": 0,
+        "expiredContent": 3
+      },
+      "after": {
+        "retentionDays": 0,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        }
+      },
+      "repeated": {
+        "removedDrafts": 0,
+        "expiredContent": 0
+      },
+      "reopened": {
+        "retentionDays": 30,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        }
+      }
+    },
+    "C03": {
+      "before": {
+        "retentionDays": 30,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/blobs/3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd": "6368696c64206279746573",
+          "ai-session-attachments/blobs/98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88": "736861726564206279746573",
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        }
+      },
+      "failure": {
+        "ok": false,
+        "kind": "permission-denied"
+      },
+      "afterFailure": {
+        "retentionDays": 0,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/blobs/3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd": "6368696c64206279746573",
+          "ai-session-attachments/blobs/98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88": "736861726564206279746573",
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        }
+      },
+      "reopenedFailure": {
+        "retentionDays": 30,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/blobs/3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd": "6368696c64206279746573",
+          "ai-session-attachments/blobs/98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88": "736861726564206279746573",
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        }
+      },
+      "retry": {
+        "ok": true,
+        "removedDrafts": 0,
+        "expiredContent": 3
+      },
+      "after": {
+        "retentionDays": 0,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        }
+      },
+      "repeated": {
+        "removedDrafts": 0,
+        "expiredContent": 0
+      },
+      "reopened": {
+        "retentionDays": 30,
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletionReason": "expired"
+          }
+        }
+      }
+    },
+    "C04": {
+      "before": {
+        "settings": {
+          "schemaVersion": 3,
+          "historyLimit": 10,
+          "attachmentRetentionDays": 30,
+          "maxFileAttachmentBytes": 512000
+        },
+        "live": {
+          "historyLimit": 10,
+          "attachmentRetentionDays": 30,
+          "maxFileAttachmentBytes": 512000
+        },
+        "items": [
+          {
+            "id": "history-new-root",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-new-root",
+            "title": "new-root",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-05T00:00:02.000Z",
+            "archivedAt": "2026-11-05T00:00:02.000Z"
+          },
+          {
+            "id": "history-old-child",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-old-child",
+            "lineage": {
+              "kind": "subagent",
+              "parentProviderSessionId": "provider-old-root"
+            },
+            "title": "old-child",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-05T00:00:01.000Z",
+            "archivedAt": "2026-11-05T00:00:01.000Z"
+          },
+          {
+            "id": "history-old-root",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-old-root",
+            "title": "old-root",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-05T00:00:00.000Z",
+            "archivedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/blobs/3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd": "6368696c64206279746573",
+          "ai-session-attachments/blobs/98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88": "736861726564206279746573",
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        }
+      },
+      "response": {
+        "status": 500,
+        "contentType": "application/json",
+        "body": {
+          "error": {
+            "code": "AI_SESSION_PERSISTENCE_SETTINGS_APPLY_FAILED",
+            "message": "AI session persistence settings could not be applied."
+          }
+        }
+      },
+      "afterFailure": {
+        "settings": {
+          "schemaVersion": 3,
+          "historyLimit": 1,
+          "attachmentRetentionDays": 0,
+          "maxFileAttachmentBytes": 2048
+        },
+        "live": {
+          "historyLimit": 10,
+          "attachmentRetentionDays": 0,
+          "maxFileAttachmentBytes": 512000
+        },
+        "items": [
+          {
+            "id": "history-new-root",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-new-root",
+            "title": "new-root",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-05T00:00:02.000Z",
+            "archivedAt": "2026-11-05T00:00:02.000Z"
+          },
+          {
+            "id": "history-old-child",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-old-child",
+            "lineage": {
+              "kind": "subagent",
+              "parentProviderSessionId": "provider-old-root"
+            },
+            "title": "old-child",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-05T00:00:01.000Z",
+            "archivedAt": "2026-11-05T00:00:01.000Z"
+          },
+          {
+            "id": "history-old-root",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-old-root",
+            "title": "old-root",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-05T00:00:00.000Z",
+            "archivedAt": "2026-11-05T00:00:00.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/2c0cb7abc67b505e8ea0b383b246f2f39851bcfb78e6f33d1a1b0ca9b7ee9ed1.json": {
+            "item": {
+              "id": "history-old-child",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-child",
+              "lineage": {
+                "kind": "subagent",
+                "parentProviderSessionId": "provider-old-root"
+              },
+              "title": "old-child",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:01.000Z",
+              "archivedAt": "2026-11-05T00:00:01.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-child",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-child",
+                    "text": "old-child",
+                    "attachments": [
+                      {
+                        "id": "att_58fdefcda4054cb98b31904d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 11,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/dae9d797fae4852d4fed05cb08fccacf79424bf9a449ff31e574564aa27ebe5c.json": {
+            "item": {
+              "id": "history-old-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-old-root",
+              "title": "old-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:00.000Z",
+              "archivedAt": "2026-11-05T00:00:00.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-old-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-old-root",
+                    "text": "old-root",
+                    "attachments": [
+                      {
+                        "id": "att_17b09f8b2c6e4c2982bec4b3",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              },
+              {
+                "id": "history-old-child",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-child",
+                "lineage": {
+                  "kind": "subagent",
+                  "parentProviderSessionId": "provider-old-root"
+                },
+                "title": "old-child",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:01.000Z",
+                "archivedAt": "2026-11-05T00:00:01.000Z"
+              },
+              {
+                "id": "history-old-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-old-root",
+                "title": "old-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:00.000Z",
+                "archivedAt": "2026-11-05T00:00:00.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/blobs/3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd": "6368696c64206279746573",
+          "ai-session-attachments/blobs/98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88": "736861726564206279746573",
+          "ai-session-attachments/manifests/att_17b09f8b2c6e4c2982bec4b3.json": {
+            "schemaVersion": 1,
+            "id": "att_17b09f8b2c6e4c2982bec4b3",
+            "inputId": "input",
+            "sessionId": "history-old-root",
+            "messageId": "message-history-old-root",
+            "turnId": "turn-history-old-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          },
+          "ai-session-attachments/manifests/att_58fdefcda4054cb98b31904d.json": {
+            "schemaVersion": 1,
+            "id": "att_58fdefcda4054cb98b31904d",
+            "inputId": "input",
+            "sessionId": "history-old-child",
+            "messageId": "message-history-old-child",
+            "turnId": "turn-history-old-child",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 11,
+            "blobHash": "3213ecb237dfa66616325381de8ea48394223085564c8afedc41d9f8c8fd16bd",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z"
+          }
+        }
+      },
+      "retry": {
+        "status": 200,
+        "contentType": "application/json",
+        "body": {
+          "data": {
+            "applied": true,
+            "historyLimit": 1,
+            "attachmentRetentionDays": 0,
+            "maxFileAttachmentBytes": 2048,
+            "removedHistoryCount": 2
+          }
+        }
+      },
+      "after": {
+        "settings": {
+          "schemaVersion": 3,
+          "historyLimit": 1,
+          "attachmentRetentionDays": 0,
+          "maxFileAttachmentBytes": 2048
+        },
+        "live": {
+          "historyLimit": 1,
+          "attachmentRetentionDays": 0,
+          "maxFileAttachmentBytes": 2048
+        },
+        "items": [
+          {
+            "id": "history-new-root",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-new-root",
+            "title": "new-root",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-05T00:00:02.000Z",
+            "archivedAt": "2026-11-05T00:00:02.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "<gc-time>",
+            "contentDeletionReason": "expired"
+          }
+        }
+      },
+      "reopened": {
+        "settings": {
+          "schemaVersion": 3,
+          "historyLimit": 1,
+          "attachmentRetentionDays": 0,
+          "maxFileAttachmentBytes": 2048
+        },
+        "live": {
+          "historyLimit": 1,
+          "attachmentRetentionDays": 0,
+          "maxFileAttachmentBytes": 2048
+        },
+        "items": [
+          {
+            "id": "history-new-root",
+            "agent": "codex",
+            "creationSource": "ai-session",
+            "providerSessionId": "provider-new-root",
+            "title": "new-root",
+            "cwd": "/workspace",
+            "lastActiveAt": "2026-11-05T00:00:02.000Z",
+            "archivedAt": "2026-11-05T00:00:02.000Z"
+          }
+        ],
+        "files": {
+          "ai-session-history/details/e679bf05aecd14caac45a2a02f92b433324fa55be966455c54a0381df365098e.json": {
+            "item": {
+              "id": "history-new-root",
+              "agent": "codex",
+              "creationSource": "ai-session",
+              "providerSessionId": "provider-new-root",
+              "title": "new-root",
+              "cwd": "/workspace",
+              "lastActiveAt": "2026-11-05T00:00:02.000Z",
+              "archivedAt": "2026-11-05T00:00:02.000Z"
+            },
+            "turns": [
+              {
+                "id": "turn-history-new-root",
+                "userMessages": [
+                  {
+                    "id": "message-history-new-root",
+                    "text": "new-root",
+                    "attachments": [
+                      {
+                        "id": "att_4e202b84d4fd465997d3e40d",
+                        "kind": "image",
+                        "name": "input.png",
+                        "mime": "image/png",
+                        "size": 12,
+                        "contentState": "available"
+                      }
+                    ]
+                  }
+                ],
+                "status": "completed"
+              }
+            ]
+          },
+          "ai-session-history/index.json": {
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "history-new-root",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "provider-new-root",
+                "title": "new-root",
+                "cwd": "/workspace",
+                "lastActiveAt": "2026-11-05T00:00:02.000Z",
+                "archivedAt": "2026-11-05T00:00:02.000Z"
+              }
+            ]
+          },
+          "ai-session-attachments/manifests/att_4e202b84d4fd465997d3e40d.json": {
+            "schemaVersion": 1,
+            "id": "att_4e202b84d4fd465997d3e40d",
+            "inputId": "input",
+            "sessionId": "history-new-root",
+            "messageId": "message-history-new-root",
+            "turnId": "turn-history-new-root",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "98aa966a36056043cbb7e279cadf62728507e9101f2db4797e4461345fda7a88",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "committedAt": "2026-11-05T00:00:00.000Z",
+            "contentDeletedAt": "<gc-time>",
+            "contentDeletionReason": "expired"
+          }
+        }
+      }
+    }
+  }
+}

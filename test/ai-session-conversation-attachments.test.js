@@ -120,6 +120,68 @@ test("attachment store restores staged input as retryable draft and expires it w
   assert.equal(fs.readdirSync(path.join(dataDir, "ai-session-attachments", "blobs")).length, 0);
 });
 
+test("uncommitted manifests expire after one day while shared committed content survives", (t) => {
+  for (const mode of ["staged", "rollback", "restart", "expired restart"]) {
+    const dataDir = tempDir();
+    t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+    const createdAt = Date.parse("2026-11-04T00:00:00.000Z");
+    let now = createdAt;
+    let store = new AiSessionConversationAttachmentStore({ dataDir }, { now: () => now });
+    const stage = (messageId, data) => store.stageMessage({ sessionId: "ses_1", messageId, attachments: [inlineAttachment("input_1", data)] });
+    const committed = stage("committed", "shared");
+    store.commitMessage("ses_1", "committed", "turn_1");
+    const shared = stage("shared", "shared");
+    const unique = stage("unique", "unique");
+    if (mode === "rollback") {
+      assert.equal(store.rollbackMessage("ses_1", "shared"), 1);
+      assert.equal(store.rollbackMessage("ses_1", "unique"), 1);
+    } else if (mode === "restart") {
+      store = new AiSessionConversationAttachmentStore({ dataDir }, { now: () => now });
+    }
+    now = createdAt + 24 * 60 * 60 * 1000 - 1;
+    assert.deepEqual(store.gc(), { removedDrafts: 0, expiredContent: 0 }, mode);
+    assert.equal(store.attachmentsForMessage("ses_1", "unique").length, 1);
+    now += 1;
+    if (mode === "expired restart") {
+      store = new AiSessionConversationAttachmentStore({ dataDir }, { now: () => now });
+    } else {
+      assert.deepEqual(store.gc(), { removedDrafts: 2, expiredContent: 0 }, mode);
+    }
+    for (const [messageId, staged] of [["shared", shared], ["unique", unique]]) {
+      assert.deepEqual(store.attachmentsForMessage("ses_1", messageId), []);
+      assert.equal(fs.existsSync(path.join(dataDir, "ai-session-attachments", "manifests", `${staged.attachments[0].id}.json`)), false);
+    }
+    assert.equal(fs.existsSync(unique.providerAttachments[0].retainedPath), false);
+    assert.equal(fs.readFileSync(store.content("ses_1", "committed", committed.attachments[0].id).path, "utf8"), "shared");
+    assert.deepEqual(store.gc(), { removedDrafts: 0, expiredContent: 0 }, mode);
+  }
+});
+
+test("claiming requires every attachment to belong to the same session and message", (t) => {
+  const dataDir = tempDir();
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const store = new AiSessionConversationAttachmentStore({ dataDir });
+  const first = store.stageMessage({ sessionId: "ses_1", messageId: "first", attachments: [inlineAttachment("input_1", "first")] });
+  const second = store.stageMessage({ sessionId: "ses_1", messageId: "second", attachments: [inlineAttachment("input_2", "second")] });
+  const firstId = first.attachments[0].id;
+  store.rollbackMessage("ses_1", "first");
+  store.rollbackMessage("ses_1", "second");
+  for (const [sessionId, messageId, ids] of [
+    ["ses_1", "first", []],
+    ["other_session", "first", [firstId]],
+    ["ses_1", "other_message", [firstId]],
+    ["ses_1", "first", [firstId, "missing"]],
+    ["ses_1", "first", [firstId, second.attachments[0].id]],
+  ]) {
+    assert.equal(store.claimMessageAttachments(sessionId, messageId, ids), false);
+    assert.throws(() => store.content("ses_1", "first", firstId), { statusCode: 404 });
+  }
+  assert.equal(store.claimMessageAttachments("ses_1", "first", [firstId]), true);
+  assert.equal(store.content("ses_1", "first", firstId).attachment.contentState, "available");
+  assert.equal(store.rollbackMessage("ses_1", "first"), 1);
+  assert.throws(() => store.content("ses_1", "first", firstId), { statusCode: 404 });
+});
+
 test("attachment store rejects capacity overflow and isolates corrupt persisted entries", () => {
   const capacityDir = tempDir();
   const constrained = new AiSessionConversationAttachmentStore({ dataDir: capacityDir }, { maxBytes: 3 });
@@ -315,4 +377,60 @@ test("streamed draft rejects declared-size mismatch without leaving content", as
   }), { code: "AI_SESSION_ATTACHMENT_SIZE_MISMATCH" });
   assert.equal(fs.readdirSync(path.join(dataDir, "ai-session-attachments", "blobs")).length, 0);
   assert.equal(fs.readdirSync(path.join(dataDir, "ai-session-attachments", "drafts")).length, 0);
+});
+
+test("completed drafts keep one day of retention across rollback and collection", async (t) => {
+  const dataDir = tempDir();
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const createdAt = Date.parse("2026-11-04T00:00:00.000Z");
+  let now = createdAt;
+  const store = new AiSessionConversationAttachmentStore({ dataDir }, { now: () => now });
+  const draft = await store.createDraft({ scopeType: "session", scopeId: "ses_1", kind: "file", name: "notes.txt", mime: "text/plain", size: 5, source: Readable.from(["hello"]) });
+  assert.equal(Date.parse(draft.expiresAt), createdAt + 24 * 60 * 60 * 1000);
+  now += 60 * 60 * 1000;
+  assert.equal(store.gc().removedDrafts, 0);
+  store.stageDrafts({ scopeType: "session", scopeId: "ses_1", sessionId: "ses_1", messageId: "msg_1", attachmentIds: [draft.id] });
+  store.rollbackMessage("ses_1", "msg_1");
+  const files = fs.readdirSync(path.join(dataDir, "ai-session-attachments", "drafts"));
+  const restored = JSON.parse(fs.readFileSync(path.join(dataDir, "ai-session-attachments", "drafts", files[0]), "utf8"));
+  assert.equal(restored.expiresAt, draft.expiresAt);
+  now = createdAt + 24 * 60 * 60 * 1000;
+  assert.equal(store.gc().removedDrafts, 1);
+});
+
+test("failed draft persistence removes unowned content and preserves committed shared content", async (t) => {
+  const dataDir = tempDir();
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const store = new AiSessionConversationAttachmentStore({ dataDir });
+  const committed = store.stageMessage({ sessionId: "ses_1", messageId: "committed", attachments: [inlineAttachment("input_1", "shared")] });
+  store.commitMessage("ses_1", "committed");
+  const draftDir = path.join(dataDir, "ai-session-attachments", "drafts");
+  fs.rmdirSync(draftDir);
+  fs.writeFileSync(draftDir, "blocked");
+  for (const content of ["unique", "shared"]) {
+    await assert.rejects(() => store.createDraft({ id: "att_0123456789abcdef01234567", scopeType: "session", scopeId: "ses_1", kind: "file", name: "notes.txt", mime: "text/plain", size: content.length, source: Readable.from([content]) }));
+    assert.equal(fs.readdirSync(path.join(dataDir, "ai-session-attachments", "blobs")).length, 1);
+    assert.equal(fs.readFileSync(committed.providerAttachments[0].retainedPath, "utf8"), "shared");
+  }
+  fs.unlinkSync(draftDir);
+  fs.mkdirSync(draftDir);
+  assert.equal((await store.createDraft({ id: "att_0123456789abcdef01234567", scopeType: "session", scopeId: "ses_1", kind: "file", name: "notes.txt", mime: "text/plain", size: 6, source: Readable.from(["unique"]) })).size, 6);
+});
+
+test("failed rollback preserves the durable owner until draft recovery succeeds", async (t) => {
+  const dataDir = tempDir();
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const store = new AiSessionConversationAttachmentStore({ dataDir });
+  const draft = await store.createDraft({ scopeType: "session", scopeId: "ses_1", kind: "file", name: "notes.txt", mime: "text/plain", size: 5, source: Readable.from(["retry"]) });
+  store.stageDrafts({ scopeType: "session", scopeId: "ses_1", sessionId: "ses_1", messageId: "msg_retry", attachmentIds: [draft.id] });
+  const draftDir = path.join(dataDir, "ai-session-attachments", "drafts");
+  fs.rmdirSync(draftDir);
+  fs.writeFileSync(draftDir, "blocked");
+  assert.throws(() => store.rollbackMessage("ses_1", "msg_retry"));
+  assert.ok(fs.existsSync(path.join(dataDir, "ai-session-attachments", "manifests", `${draft.id}.json`)));
+  assert.equal(store.content("ses_1", "msg_retry", draft.id).attachment.contentState, "available");
+  fs.unlinkSync(draftDir);
+  fs.mkdirSync(draftDir);
+  const restored = new AiSessionConversationAttachmentStore({ dataDir });
+  assert.equal(restored.cancelDraft("session", "ses_1", draft.id), true);
 });

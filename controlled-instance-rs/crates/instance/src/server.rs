@@ -1,10 +1,12 @@
+mod attachment_source;
+
 use axum::{
     body::{to_bytes, Body, Bytes},
     extract::{
         rejection::{JsonRejection, MissingJsonContentType},
         ws::{Message, WebSocket, WebSocketUpgrade},
-        DefaultBodyLimit, FromRequest, FromRequestParts, OriginalUri, Path, Query, RawQuery,
-        Request, State,
+        DefaultBodyLimit, FromRequest, FromRequestParts, OriginalUri, Path, RawQuery, Request,
+        State,
     },
     http::{header, HeaderMap, Method, StatusCode, Uri},
     middleware::{self, Next},
@@ -38,7 +40,7 @@ use controlled_instance_protocol::{
     TriggerAiSessionStatus, TriggerCreateInput, TriggerDeploymentCreateInput,
     TriggerDeploymentOrigin, TriggerPatchInput, TriggerPolicyInput, TriggerRunInput,
     TriggerScheduleKind, TriggerSource, TriggerTarget, TriggerWhenBusy,
-    COMPACT_EVENT_ENVELOPE_VERSION, SESSION_STREAM_PROTOCOL_VERSION, TTY_STREAM_PROTOCOL_VERSION,
+    COMPACT_EVENT_ENVELOPE_VERSION, TTY_STREAM_PROTOCOL_VERSION,
 };
 use controlled_instance_workspace::{
     branch_mutation_result, checkout_branch, checkout_branch_for_ai_session, commit_repository,
@@ -83,6 +85,7 @@ const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
 ];
 const MCP_KEEPALIVE_INTERVAL: TokioDuration = TokioDuration::from_secs(15);
 const MCP_BODY_LIMIT: usize = 256 * 1024;
+const AGENT_TOOL_BODY_LIMIT: usize = 256 * 1024;
 const DEFAULT_JSON_BODY_LIMIT: usize = 1024 * 1024;
 
 fn ai_session_open_app_binding_timeout() -> TokioDuration {
@@ -143,7 +146,7 @@ fn js_truthy(value: &Value) -> bool {
 }
 
 fn parse_js_number(value: &str) -> Option<f64> {
-    let value = value.trim();
+    let value = trim_js_whitespace(value);
     if value.is_empty() {
         return Some(0.0);
     }
@@ -156,9 +159,7 @@ fn parse_js_number(value: &str) -> Option<f64> {
         ("0O", 8),
     ] {
         if let Some(digits) = value.strip_prefix(prefix) {
-            return u128::from_str_radix(digits, radix)
-                .ok()
-                .map(|value| value as f64);
+            return parse_js_radix_number(digits, f64::from(radix));
         }
     }
     match value {
@@ -277,17 +278,13 @@ pub fn router(state: AppState) -> Router {
             "/api/internal/ai-session-persistence-settings",
             put(update_ai_session_persistence_settings),
         )
-        .route(
-            "/api/internal/agent-tools/invoke",
-            post(invoke_agent_tool).layer(DefaultBodyLimit::max(256 * 1024)),
-        )
+        .route("/api/internal/agent-tools/invoke", post(invoke_agent_tool))
         .route(
             "/api/internal/agent-tools/mcp",
             get(agent_tool_mcp_get)
                 .head(agent_tool_mcp_head)
                 .post(agent_tool_mcp_post)
-                .delete(agent_tool_mcp_delete)
-                .layer(DefaultBodyLimit::max(256 * 1024)),
+                .delete(agent_tool_mcp_delete),
         )
         .route("/api/config-sync/presets", get(config_sync_presets))
         .route("/api/config-sync/programs", get(config_sync_programs))
@@ -353,8 +350,7 @@ pub fn router(state: AppState) -> Router {
                 .put(app_session_web_root)
                 .patch(app_session_web_root)
                 .delete(app_session_web_root)
-                .options(app_session_web_root)
-                .layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+                .options(app_session_web_root),
         )
         .route(
             "/api/apps/sessions/{id}/web/{*rest}",
@@ -363,14 +359,10 @@ pub fn router(state: AppState) -> Router {
                 .put(app_session_web_proxy)
                 .patch(app_session_web_proxy)
                 .delete(app_session_web_proxy)
-                .options(app_session_web_proxy)
-                .layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+                .options(app_session_web_proxy),
         )
         .route("/api/ai-sessions", get(ai_sessions))
-        .route(
-            "/api/ai-sessions",
-            post(create_ai_session).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
-        )
+        .route("/api/ai-sessions", post(create_ai_session))
         .route("/api/ai-sessions/state", get(ai_sessions_state))
         .route("/api/ai-sessions/history", get(ai_session_history))
         .route(
@@ -380,7 +372,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai-sessions/{id}/turns", get(ai_session_turns))
         .route(
             "/api/ai-sessions/{id}/messages",
-            post(send_ai_session_message).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+            post(send_ai_session_message),
         )
         .route(
             "/api/ai-sessions/{id}/interrupt",
@@ -426,9 +418,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai-sessions/{id}/story", put(update_ai_session_story))
         .route(
             "/api/ai-session-attachments/drafts",
-            post(upload_ai_session_attachment_draft).layer(DefaultBodyLimit::max(
-                controlled_instance_protocol::AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT,
-            )),
+            post(upload_ai_session_attachment_draft),
         )
         .route(
             "/api/ai-session-attachments/drafts/{attachment_id}",
@@ -441,10 +431,7 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/ai-session-attachments/draft-streams/{attachment_id}",
             put(append_ai_session_attachment_draft_stream)
-                .delete(cancel_ai_session_attachment_draft_stream)
-                .layer(DefaultBodyLimit::max(
-                    controlled_instance_protocol::AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT,
-                )),
+                .delete(cancel_ai_session_attachment_draft_stream),
         )
         .route(
             "/api/ai-session-attachments/draft-streams/{attachment_id}/complete",
@@ -642,7 +629,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/{*rest}", any(api_not_found))
         .fallback(static_ui_fallback)
         .method_not_allowed_fallback(api_method_not_allowed)
-        .layer(DefaultBodyLimit::max(DEFAULT_JSON_BODY_LIMIT))
+        // fastify_body_parser owns limits on incoming bytes. Extractors consume
+        // normalized JSON, whose escaping can increase its encoded size.
+        .layer(DefaultBodyLimit::disable())
         .layer(middleware::map_response(normalize_body_limit_response))
         .layer(middleware::map_response(normalize_json_content_type))
         .layer(middleware::map_response(normalize_json_content_type))
@@ -712,14 +701,12 @@ fn repository_routes(prefix: &str) -> Router<AppState> {
             &format!("{prefix}/files"),
             get(repository_file_read)
                 .post(repository_file_create)
-                .layer(DefaultBodyLimit::max(5 * 1024 * 1024))
                 .put(repository_file_write)
-                .layer(DefaultBodyLimit::max(5 * 1024 * 1024))
                 .delete(repository_file_delete),
         )
         .route(
             &format!("{prefix}/files/rename"),
-            post(repository_file_rename).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
+            post(repository_file_rename),
         )
         .route(&format!("{prefix}/changes"), get(repository_changes))
         .route(
@@ -970,27 +957,7 @@ fn workspace_repository_target(cwd: &std::path::Path) -> RepositorySessionTarget
 }
 
 fn parse_js_non_negative_integer(value: &str) -> Option<f64> {
-    let value = value.trim();
-    let number = if value.is_empty() {
-        0.0
-    } else if let Some(hex) = value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-    {
-        parse_js_radix_number(hex, 16.0)?
-    } else if let Some(binary) = value
-        .strip_prefix("0b")
-        .or_else(|| value.strip_prefix("0B"))
-    {
-        parse_js_radix_number(binary, 2.0)?
-    } else if let Some(octal) = value
-        .strip_prefix("0o")
-        .or_else(|| value.strip_prefix("0O"))
-    {
-        parse_js_radix_number(octal, 8.0)?
-    } else {
-        value.parse::<f64>().ok()?
-    };
+    let number = parse_js_number(value)?;
     if !number.is_finite() || number < 0.0 || number.fract() != 0.0 {
         return None;
     }
@@ -1005,9 +972,6 @@ fn parse_js_radix_number(value: &str, radix: f64) -> Option<f64> {
     for character in value.chars() {
         let digit = character.to_digit(radix as u32)? as f64;
         number = number * radix + digit;
-        if !number.is_finite() {
-            return None;
-        }
     }
     Some(number)
 }
@@ -1106,7 +1070,7 @@ async fn repository_worktrees(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     if let Some(response) = repository_empty_query_error(&query) {
         return response;
@@ -2156,35 +2120,65 @@ fn repository_query_error(error: impl std::fmt::Display) -> Response {
     ))
 }
 
-fn repository_empty_query_error(
-    query: &std::collections::HashMap<String, String>,
-) -> Option<Response> {
-    query.keys().next().map(|key| {
-        repository_error(RepositoryOperationError::new(
-            "REPOSITORY_REQUEST_INVALID",
-            format!("Unrecognized key: \"{key}\""),
-        ))
+struct FastifyQuery(serde_json::Map<String, Value>);
+
+impl<S: Send + Sync> FromRequestParts<S> for FastifyQuery {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self(parse_query_object(
+            parts.uri.query().unwrap_or_default(),
+        )))
+    }
+}
+
+fn fastify_query_stream_id(query: &serde_json::Map<String, Value>) -> Option<&str> {
+    let raw = query.get("streamId")?;
+    if !js_truthy(raw) {
+        return None;
+    }
+    Some(match raw {
+        Value::String(stream_id) => stream_id.as_str(),
+        Value::Array(_) => "",
+        _ => "",
     })
 }
 
-fn repository_query_value(query: &std::collections::HashMap<String, String>) -> Value {
-    Value::Object(
-        query
-            .iter()
-            .map(|(key, value)| (key.clone(), Value::String(value.clone())))
-            .collect(),
+fn fastify_query_string<'a>(
+    query: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a str> {
+    match query.get(key) {
+        Some(Value::String(value)) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn fastify_query_subagents(query: &serde_json::Map<String, Value>) -> bool {
+    matches!(
+        query.get("hierarchy"),
+        Some(Value::String(hierarchy)) if hierarchy == "subagents"
     )
+}
+
+fn repository_empty_query_error(query: &serde_json::Map<String, Value>) -> Option<Response> {
+    let mut issues = Vec::new();
+    zod_unknown_object_keys(query, &[], Vec::new(), &mut issues);
+    (!issues.is_empty()).then(|| repository_validation_error(&issues))
 }
 
 #[allow(clippy::result_large_err)]
 fn parse_repository_query<T>(
-    query: &std::collections::HashMap<String, String>,
+    query: &serde_json::Map<String, Value>,
     validate: impl FnOnce(&mut serde_json::Map<String, Value>, &mut Vec<ZodIssue>),
 ) -> Result<T, Response>
 where
     T: DeserializeOwned,
 {
-    parse_repository_body(repository_query_value(query), |value| {
+    parse_repository_body(Value::Object(query.clone()), |value| {
         repository_validate_object(value, validate)
     })
 }
@@ -2203,49 +2197,56 @@ fn repository_coerced_integer_field(
         }
         return default;
     };
-    let Some(raw) = raw.as_str() else {
+    // Compatibility for v0.0.47: repository query numbers use Zod's
+    // Number(string) coercion, including radix prefixes and JS whitespace.
+    let number =
+        parse_js_number(&controlled_instance_core::text::js_string(&raw)).unwrap_or(f64::NAN);
+    if !number.is_finite() {
         issues.push(zod_invalid_type(
             "number",
             vec![json!(field)],
-            zod_received_type(&raw),
+            if number.is_nan() {
+                "NaN"
+            } else if number.is_sign_negative() {
+                "-Infinity"
+            } else {
+                "Infinity"
+            },
         ));
         return None;
-    };
-    let text = raw.trim();
-    let number = if text.is_empty() {
-        Some(0.0)
-    } else {
-        text.parse::<f64>().ok()
-    };
-    let Some(number) = number else {
-        issues.push(ZodIssue::InvalidType {
-            expected: "number".to_string(),
-            format: None,
-            code: "invalid_type",
-            path: vec![json!(field)],
-            message: "Invalid input: expected number, received NaN".to_string(),
-        });
-        return None;
-    };
-    if !number.is_finite() || number.fract() != 0.0 {
+    }
+    if number.fract() != 0.0 {
         issues.push(zod_invalid_int(vec![json!(field)]));
         return None;
     }
-    let value = number as i64;
-    if value < minimum {
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    if number > MAX_SAFE_INTEGER as f64 {
+        issues.push(zod_too_big(
+            "int",
+            vec![json!(field)],
+            MAX_SAFE_INTEGER as usize,
+        ));
+    } else if number < -(MAX_SAFE_INTEGER as f64) {
+        issues.push(zod_custom(
+            vec![json!(field)],
+            format!("Too small: expected int to be >=-{}", MAX_SAFE_INTEGER),
+        ));
+    }
+    if number < minimum as f64 {
         issues.push(zod_too_small(
             "number",
             vec![json!(field)],
             usize::try_from(minimum).unwrap_or_default(),
         ));
     }
-    if value > maximum {
+    if number > maximum as f64 {
         issues.push(zod_too_big(
             "number",
             vec![json!(field)],
             usize::try_from(maximum).unwrap_or_default(),
         ));
     }
+    let value = number as i64;
     object.insert(field.to_string(), json!(value));
     Some(value)
 }
@@ -2331,7 +2332,7 @@ fn validate_repository_diff_query(
 }
 
 fn body_too_large_response() -> Response {
-    mcp_body_too_large_error()
+    fastify_body_too_large_error()
 }
 
 async fn normalize_body_limit_response(mut response: Response) -> Response {
@@ -2461,7 +2462,20 @@ fn repository_string_field(
         }
     };
     let Some(raw) = raw.as_str() else {
-        issues.push(zod_invalid_type("string", path, zod_received_type(&raw)));
+        issues.push(zod_invalid_type(
+            "string",
+            path.clone(),
+            zod_received_type(&raw),
+        ));
+        // Zod's length checks also report array bounds after the type issue.
+        if let Some(values) = raw.as_array() {
+            if values.len() < minimum {
+                issues.push(zod_too_small("array", path.clone(), minimum));
+            }
+            if values.len() > maximum {
+                issues.push(zod_too_big("array", path, maximum));
+            }
+        }
         return None;
     };
     let value = if trim { trim_js_whitespace(raw) } else { raw };
@@ -3278,7 +3292,11 @@ fn valid_repository_relative_path(value: &str) -> bool {
     if value.contains('\0')
         || value.starts_with('/')
         || value.starts_with('\\')
-        || value.as_bytes().get(1) == Some(&b':')
+        || value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic)
+            && value.as_bytes().get(1) == Some(&b':')
             && matches!(value.as_bytes().get(2), Some(b'/') | Some(b'\\'))
     {
         return false;
@@ -3307,7 +3325,7 @@ async fn repository_context(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     if let Some(response) = repository_empty_query_error(&query) {
         return response;
@@ -3326,7 +3344,7 @@ async fn repository_remotes(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     if let Some(response) = repository_empty_query_error(&query) {
         return response;
@@ -3346,7 +3364,7 @@ async fn repository_directories(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     let query: RepositoryDirectoryQuery =
         match parse_repository_query(&query, validate_repository_directory_query) {
@@ -3372,7 +3390,7 @@ async fn repository_file_search(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     let query: RepositoryFileSearchQuery =
         match parse_repository_query(&query, validate_repository_file_search_query) {
@@ -3398,7 +3416,7 @@ async fn repository_file_content(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
     request: Request,
 ) -> Response {
     let query: RepositoryFileQuery =
@@ -3453,7 +3471,7 @@ async fn repository_file_read(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     let query: RepositoryFileQuery =
         match parse_repository_query(&query, validate_repository_file_query) {
@@ -3668,7 +3686,7 @@ async fn repository_changes(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     if let Some(response) = repository_empty_query_error(&query) {
         return response;
@@ -3685,7 +3703,7 @@ async fn repository_diff_route(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     let query: RepositoryDiffQuery =
         match parse_repository_query(&query, validate_repository_diff_query) {
@@ -3861,7 +3879,7 @@ async fn repository_branches(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     if let Some(response) = repository_empty_query_error(&query) {
         return response;
@@ -5254,20 +5272,6 @@ async fn diagnostics(State(state): State<AppState>) -> Json<ApiEnvelope<Value>> 
     })
 }
 
-#[derive(Debug, serde::Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct AiSessionsQuery {
-    stream_id: Option<String>,
-    since_revision: Option<String>,
-    hierarchy: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct AiSessionsStateQuery {
-    hierarchy: Option<String>,
-}
-
 async fn app_catalog(State(state): State<AppState>) -> Json<ApiEnvelope<Value>> {
     Json(ApiEnvelope {
         data: serde_json::to_value(state.app_runtime.catalog()).unwrap_or(Value::Null),
@@ -5556,52 +5560,41 @@ async fn update_ai_session_persistence_settings(
             )])
         }
     };
-    let settings = match state.ai_session_persistence_settings.put(input) {
-        Ok(settings) => settings,
-        Err(_) => {
-            return api_error(
-                StatusCode::BAD_REQUEST,
-                "AI_SESSION_PERSISTENCE_SETTINGS_INVALID",
-                "AI session persistence settings are invalid.",
-            );
+    // Validation is complete. These failures belong to applying an accepted
+    // desired policy, not to the input contract. Keep the persisted target for
+    // Node Agent retries and startup recovery if a later owner cannot apply it.
+    let applied = (|| -> anyhow::Result<_> {
+        let settings = state.ai_session_persistence_settings.put(input)?;
+        state
+            .ai_session_attachments
+            .set_retention_days(settings.attachment_retention_days)?;
+        state
+            .ai_session_attachments
+            .set_max_file_attachment_bytes(settings.max_file_attachment_bytes)?;
+        let history = state
+            .ai_session_history
+            .set_retention_limit(settings.history_limit)?;
+        Ok(
+            controlled_instance_protocol::AiSessionPersistenceSettingsApplyResult {
+                applied: true,
+                history_limit: history.limit,
+                attachment_retention_days: settings.attachment_retention_days,
+                max_file_attachment_bytes: settings.max_file_attachment_bytes,
+                removed_history_count: history.removed_ids.len(),
+            },
+        )
+    })();
+    match applied {
+        Ok(data) => Json(ApiEnvelope { data }).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "AI session persistence settings could not be applied");
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AI_SESSION_PERSISTENCE_SETTINGS_APPLY_FAILED",
+                "AI session persistence settings could not be applied.",
+            )
         }
-    };
-    let _ = state
-        .ai_session_attachments
-        .set_retention_days(settings.attachment_retention_days);
-    if let Err(error) = state
-        .ai_session_attachments
-        .set_max_file_attachment_bytes(settings.max_file_attachment_bytes)
-    {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            "AI_SESSION_PERSISTENCE_SETTINGS_INVALID",
-            &error.message,
-        );
     }
-    let history = match state
-        .ai_session_history
-        .set_retention_limit(settings.history_limit)
-    {
-        Ok(history) => history,
-        Err(_) => {
-            return api_error(
-                StatusCode::BAD_REQUEST,
-                "AI_SESSION_PERSISTENCE_SETTINGS_INVALID",
-                "AI session persistence settings are invalid.",
-            );
-        }
-    };
-    Json(ApiEnvelope {
-        data: controlled_instance_protocol::AiSessionPersistenceSettingsApplyResult {
-            applied: true,
-            history_limit: history.limit,
-            attachment_retention_days: settings.attachment_retention_days,
-            max_file_attachment_bytes: settings.max_file_attachment_bytes,
-            removed_history_count: history.removed_ids.len(),
-        },
-    })
-    .into_response()
 }
 
 fn managed_model_body_error(code: &str, error: JsonRejection) -> Response {
@@ -5651,20 +5644,53 @@ async fn config_sync_folders(State(state): State<AppState>, RawQuery(raw): RawQu
     }
 }
 
-fn parse_config_sync_folders_query(raw: &str) -> Result<(Option<String>, u32), Vec<ZodIssue>> {
+fn parse_query_object(raw: &str) -> serde_json::Map<String, Value> {
     let mut values = serde_json::Map::new();
-    for (key, value) in url::form_urlencoded::parse(raw.as_bytes()) {
-        match values.get_mut(key.as_ref()) {
+    // Compatibility for v0.0.47: Fastify preserves repeated keys as arrays and
+    // leaves an entire component undecoded if any percent escape is invalid.
+    // form_urlencoded's lossy decoding cannot preserve that file-path identity;
+    // use the existing percent-encoding library with strict component decoding.
+    for pair in raw.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let key = decode_query_component(key);
+        let value = Value::String(decode_query_component(value));
+        match values.get_mut(&key) {
             None => {
-                values.insert(key.into_owned(), Value::String(value.into_owned()));
+                values.insert(key, value);
             }
-            Some(Value::Array(items)) => items.push(Value::String(value.into_owned())),
+            Some(Value::Array(items)) => items.push(value),
             Some(existing) => {
                 let first = std::mem::replace(existing, Value::Null);
-                *existing = Value::Array(vec![first, Value::String(value.into_owned())]);
+                *existing = Value::Array(vec![first, value]);
             }
         }
     }
+    values
+}
+
+fn decode_query_component(raw: &str) -> String {
+    let raw = raw.replace('+', " ");
+    let bytes = raw.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'%'
+            && (bytes
+                .get(index + 1)
+                .is_none_or(|byte| !byte.is_ascii_hexdigit())
+                || bytes
+                    .get(index + 2)
+                    .is_none_or(|byte| !byte.is_ascii_hexdigit()))
+        {
+            return raw;
+        }
+    }
+    percent_encoding::percent_decode_str(&raw)
+        .decode_utf8()
+        .map(|decoded| decoded.into_owned())
+        .unwrap_or(raw)
+}
+
+fn parse_config_sync_folders_query(raw: &str) -> Result<(Option<String>, u32), Vec<ZodIssue>> {
+    let values = parse_query_object(raw);
     let mut issues = Vec::new();
     let unknown = values
         .keys()
@@ -5695,7 +5721,7 @@ fn parse_config_sync_folders_query(raw: &str) -> Result<(Option<String>, u32), V
     };
     let depth = match values.get("depth") {
         None => 0,
-        Some(Value::String(value)) => match js_number_from_string(value) {
+        Some(Value::String(value)) => match parse_js_number(value) {
             Some(number) if number.is_nan() => {
                 issues.push(zod_invalid_type_with_received(
                     "number",
@@ -5740,39 +5766,6 @@ fn parse_config_sync_folders_query(raw: &str) -> Result<(Option<String>, u32), V
         Ok((path, depth))
     } else {
         Err(issues)
-    }
-}
-
-fn js_number_from_string(value: &str) -> Option<f64> {
-    let value =
-        value.trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}');
-    if value.is_empty() {
-        return Some(0.0);
-    }
-    if let Some(value) = value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-    {
-        return i64::from_str_radix(value, 16)
-            .ok()
-            .map(|value| value as f64);
-    }
-    if let Some(value) = value
-        .strip_prefix("0o")
-        .or_else(|| value.strip_prefix("0O"))
-    {
-        return i64::from_str_radix(value, 8).ok().map(|value| value as f64);
-    }
-    if let Some(value) = value
-        .strip_prefix("0b")
-        .or_else(|| value.strip_prefix("0B"))
-    {
-        return i64::from_str_radix(value, 2).ok().map(|value| value as f64);
-    }
-    match value {
-        "Infinity" | "+Infinity" => Some(f64::INFINITY),
-        "-Infinity" => Some(f64::NEG_INFINITY),
-        _ => value.parse::<f64>().ok().or(Some(f64::NAN)),
     }
 }
 
@@ -6215,7 +6208,7 @@ fn app_management_error(error: AppManagementRequestError) -> Response {
         "message": error.message,
     });
     if let (Some(object), Some(details)) = (payload.as_object_mut(), error.details) {
-        object.insert("details".to_string(), details);
+        object.insert("details".to_string(), *details);
     }
     (status, Json(json!({ "error": payload }))).into_response()
 }
@@ -6345,10 +6338,12 @@ async fn app_profile_delete(
 
 async fn app_sessions(
     State(state): State<AppState>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     if let Some(raw_revision) = query.get("sinceRevision") {
-        let since_revision = match parse_js_non_negative_integer(raw_revision) {
+        let since_revision = match parse_js_non_negative_integer(
+            &controlled_instance_core::text::js_string(raw_revision),
+        ) {
             Some(value) => value,
             None => {
                 return api_error(
@@ -6358,7 +6353,7 @@ async fn app_sessions(
                 );
             }
         };
-        let Some(stream_id) = query.get("streamId") else {
+        let Some(stream_id) = fastify_query_stream_id(&query) else {
             return api_error(
                 StatusCode::BAD_REQUEST,
                 "APP_SESSION_DELTA_INVALID",
@@ -6563,9 +6558,9 @@ async fn app_session_delete(State(state): State<AppState>, Path(id): Path<String
 async fn app_session_logs(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
-    let max_bytes = app_logs_max_bytes(query.get("maxBytes").map(String::as_str));
+    let max_bytes = app_logs_max_bytes(query.get("maxBytes"));
     match state.app_runtime.read_logs(&id, max_bytes) {
         Ok(mut logs) => {
             if let Some(object) = logs.as_object_mut() {
@@ -6577,10 +6572,10 @@ async fn app_session_logs(
     }
 }
 
-fn app_logs_max_bytes(value: Option<&str>) -> f64 {
+fn app_logs_max_bytes(value: Option<&Value>) -> f64 {
     let requested = value
-        .filter(|value| !value.is_empty())
-        .and_then(parse_js_number)
+        .filter(|value| js_truthy(value))
+        .and_then(|value| parse_js_number(&controlled_instance_core::text::js_string(value)))
         .unwrap_or(f64::NAN);
     if requested.is_finite() {
         requested.clamp(1024.0, 512.0 * 1024.0)
@@ -6600,7 +6595,7 @@ fn json_js_number(value: f64) -> Value {
 async fn app_session_novnc(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     let Some(session) = state.app_runtime.get_session(&id) else {
         return api_error(
@@ -6616,7 +6611,7 @@ async fn app_session_novnc(
             "VNC session not found.",
         );
     };
-    let resize = if query.get("resize").is_some_and(|value| value == "remote") {
+    let resize = if fastify_query_string(&query, "resize") == Some("remote") {
         "remote"
     } else {
         "scale"
@@ -6727,14 +6722,12 @@ async fn app_session_vnc_socket(
             },
             message = socket.recv() => match message {
                 Some(Ok(Message::Binary(data))) => {
-                    if upstream_writer.write_all(&data).await.is_err() {
-                        break;
-                    }
+                    let written = upstream_writer.write_all(&data).await;
+                    if written.is_err() { break; }
                 }
                 Some(Ok(Message::Text(data))) => {
-                    if upstream_writer.write_all(data.as_bytes()).await.is_err() {
-                        break;
-                    }
+                    let written = upstream_writer.write_all(data.as_bytes()).await;
+                    if written.is_err() { break; }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 Some(Ok(Message::Ping(data))) => {
@@ -8306,17 +8299,13 @@ fn app_runtime_error(error: controlled_instance_app_runtime::AppRuntimeError) ->
     (status, Json(json!({ "error": payload }))).into_response()
 }
 
-async fn ai_sessions(
-    State(state): State<AppState>,
-    Query(query): Query<AiSessionsQuery>,
-) -> Response {
-    let subagents = query.hierarchy.as_deref() == Some("subagents");
-    let since_revision = query
-        .since_revision
-        .as_deref()
-        .and_then(parse_js_non_negative_integer);
+async fn ai_sessions(State(state): State<AppState>, FastifyQuery(query): FastifyQuery) -> Response {
+    let subagents = fastify_query_subagents(&query);
+    let since_revision = query.get("sinceRevision").and_then(|raw| {
+        parse_js_non_negative_integer(&controlled_instance_core::text::js_string(raw))
+    });
     if let Some(since_revision) = since_revision {
-        let Some(stream_id) = query.stream_id.as_deref() else {
+        let Some(stream_id) = fastify_query_stream_id(&query) else {
             return api_error(
                 StatusCode::BAD_REQUEST,
                 "AI_SESSION_DELTA_INVALID",
@@ -8337,51 +8326,51 @@ async fn ai_sessions(
 
 async fn ai_sessions_state(
     State(state): State<AppState>,
-    Query(query): Query<AiSessionsStateQuery>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Json<ApiEnvelope<Value>> {
     let mut ai_state = state.ai_sessions_state();
     ai_state.snapshot = project_ai_sessions_snapshot_for_consumer(
         ai_state.snapshot,
-        query.hierarchy.as_deref() == Some("subagents"),
+        fastify_query_subagents(&query),
     );
     Json(ApiEnvelope {
         data: serde_json::to_value(ai_state).unwrap_or_else(|_| json!({})),
     })
 }
 
-#[derive(Debug, serde::Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct AiSessionHistoryQuery {
-    agents: Option<String>,
-    hierarchy: Option<String>,
-}
-
 async fn ai_session_history(
     State(state): State<AppState>,
-    Query(query): Query<AiSessionHistoryQuery>,
-) -> Json<ApiEnvelope<controlled_instance_protocol::AiSessionHistoryList>> {
-    let requested = query
-        .agents
-        .as_deref()
-        .map(|agents| {
-            agents
+    FastifyQuery(query): FastifyQuery,
+) -> Response {
+    let requested = match query.get("agents") {
+        Some(Value::String(agents)) => {
+            let agents = agents
                 .split(',')
                 .map(str::trim)
                 .filter(|agent| !agent.is_empty())
                 .map(ToString::to_string)
-                .collect::<std::collections::HashSet<_>>()
-        })
-        .filter(|agents| !agents.is_empty())
-        .unwrap_or_else(|| {
-            std::collections::HashSet::from(["codex".to_string(), "claude".to_string()])
-        });
+                .collect::<std::collections::HashSet<_>>();
+            if agents.is_empty() {
+                std::collections::HashSet::from(["codex".to_string(), "claude".to_string()])
+            } else {
+                agents
+            }
+        }
+        Some(_) => {
+            return fastify_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "request.query.agents?.split is not a function",
+            );
+        }
+        None => std::collections::HashSet::from(["codex".to_string(), "claude".to_string()]),
+    };
     let member_ids = state
         .agent_run_bindings
         .list()
         .into_iter()
         .map(|binding| binding.ai_session_id)
         .collect::<std::collections::HashSet<_>>();
-    let subagents = query.hierarchy.as_deref() == Some("subagents");
+    let subagents = fastify_query_string(&query, "hierarchy") == Some("subagents");
     Json(ApiEnvelope {
         data: controlled_instance_protocol::AiSessionHistoryList {
             items: state
@@ -8393,30 +8382,28 @@ async fn ai_session_history(
                 .collect(),
         },
     })
-}
-
-#[derive(Debug, serde::Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct AiSessionHistoryDetailQuery {
-    hierarchy: Option<String>,
+    .into_response()
 }
 
 async fn ai_session_history_detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<AiSessionHistoryDetailQuery>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     match state.ai_session_history.detail(&id) {
         Some(mut detail) => {
             detail.item = project_ai_session_history_item_for_consumer(
                 detail.item,
-                query.hierarchy.as_deref() == Some("subagents"),
+                fastify_query_string(&query, "hierarchy") == Some("subagents"),
             );
-            detail.turns = project_history_attachment_turns(
+            detail.turns = match project_history_attachment_turns(
                 &detail.item.id,
                 detail.turns,
                 &state.ai_session_attachments,
-            );
+            ) {
+                Ok(turns) => turns,
+                Err(error) => return ai_session_attachment_error(error),
+            };
             Json(ApiEnvelope { data: detail }).into_response()
         }
         None => api_error(
@@ -8431,7 +8418,7 @@ fn project_history_attachment_turns(
     session_id: &str,
     turns: Vec<Value>,
     store: &controlled_instance_ai_session::AiSessionConversationAttachmentStore,
-) -> Vec<Value> {
+) -> Result<Vec<Value>, controlled_instance_ai_session::AiSessionAttachmentError> {
     turns
         .into_iter()
         .map(|mut turn| {
@@ -8440,7 +8427,7 @@ fn project_history_attachment_turns(
                 .and_then(|turn| turn.get_mut("userMessages"))
                 .and_then(Value::as_array_mut)
             else {
-                return turn;
+                return Ok(turn);
             };
             for message in messages {
                 let Some(record) = message.as_object_mut() else {
@@ -8462,44 +8449,54 @@ fn project_history_attachment_turns(
                     continue;
                 };
                 let resolved =
-                    store.resolve_message_attachments(session_id, &message_id, &attachments);
+                    store.resolve_message_attachments(session_id, &message_id, &attachments)?;
                 if let Ok(resolved) = serde_json::to_value(resolved) {
                     record.insert("attachments".to_string(), resolved);
                 }
             }
-            turn
+            Ok(turn)
         })
         .collect()
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AiSessionDetailQuery {
-    revision: Option<String>,
+// Read projections may run GC. Complete that projection before conditional
+// responses or body hashes, and never publish projected turns into the raw store.
+#[allow(clippy::result_large_err)]
+fn ai_session_conversation(
+    state: &AppState,
+    id: &str,
+) -> Result<controlled_instance_ai_session::AiSession, Response> {
+    let mut session = state.ai_sessions.get(id).ok_or_else(ai_session_not_found)?;
+    session.turns = session
+        .turns
+        .map(|turns| {
+            project_history_attachment_turns(&session.id, turns, &state.ai_session_attachments)
+        })
+        .transpose()
+        .map_err(ai_session_attachment_error)?;
+    Ok(session)
 }
 
 async fn ai_session_detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<AiSessionDetailQuery>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
-    let Some(session) = state.ai_sessions.get(&id) else {
-        return api_error(
-            StatusCode::NOT_FOUND,
-            "AI_SESSION_NOT_FOUND",
-            "AI session not found.",
-        );
+    let session = match ai_session_conversation(&state, &id) {
+        Ok(session) => session,
+        Err(response) => return response,
     };
     let revision = session.detail_revision();
-    if query.revision.as_deref() == Some(revision.as_str()) {
+    if fastify_query_string(&query, "revision") == Some(revision.as_str()) {
         return Json(ApiEnvelope {
             data: json!({ "kind": "not-modified", "revision": revision }),
         })
         .into_response();
     }
-    let mut detail = session.detail();
-    if let Some(object) = detail.as_object_mut() {
-        object.insert("id".to_string(), json!(session.id));
+    let mut detail = serde_json::Map::new();
+    detail.insert("id".to_string(), json!(session.id));
+    if let Value::Object(fields) = session.detail() {
+        detail.extend(fields);
     }
     Json(ApiEnvelope {
         data: json!({ "kind": "updated", "revision": revision, "detail": detail }),
@@ -9280,11 +9277,20 @@ fn zod_unknown_object_keys(
     path: Vec<Value>,
     issues: &mut Vec<ZodIssue>,
 ) {
-    let keys = object
+    let mut keys = object
         .keys()
         .filter(|key| !allowed.contains(&key.as_str()))
         .cloned()
         .collect::<Vec<_>>();
+    // Object.keys() lists canonical array indices before other keys, whose
+    // insertion order is retained by serde_json's preserve_order feature.
+    keys.sort_by_key(|key| {
+        key.parse::<u32>()
+            .ok()
+            .filter(|index| *index != u32::MAX && index.to_string() == *key)
+            .map(|index| (false, index))
+            .unwrap_or((true, 0))
+    });
     if !keys.is_empty() {
         issues.push(zod_unrecognized_keys(path, keys));
     }
@@ -9510,19 +9516,22 @@ fn zod_required_coerced_integer_field_at(
         });
         return None;
     };
-    let raw = raw.as_str().unwrap_or_default().trim();
-    let number = if raw.is_empty() {
-        0.0
-    } else {
-        raw.parse::<f64>().unwrap_or(f64::NAN)
-    };
+    let number =
+        parse_js_number(&controlled_instance_core::text::js_string(raw)).unwrap_or(f64::NAN);
     if !number.is_finite() {
         issues.push(ZodIssue::InvalidType {
             expected: "number".to_string(),
             format: None,
             code: "invalid_type",
             path,
-            message: "Invalid input: expected number, received NaN".to_string(),
+            message: format!(
+                "Invalid input: expected number, received {}",
+                if number.is_infinite() {
+                    "Infinity"
+                } else {
+                    "NaN"
+                }
+            ),
         });
         return None;
     }
@@ -9531,31 +9540,29 @@ fn zod_required_coerced_integer_field_at(
         return None;
     }
     const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
-    if number.abs() > MAX_SAFE_INTEGER as f64 {
-        issues.push(zod_too_big(
-            "int",
-            path,
-            usize::try_from(MAX_SAFE_INTEGER).unwrap_or(usize::MAX),
+    if number > MAX_SAFE_INTEGER as f64 {
+        issues.push(zod_too_big("int", path.clone(), MAX_SAFE_INTEGER as usize));
+    } else if number < -(MAX_SAFE_INTEGER as f64) {
+        issues.push(zod_custom(
+            path.clone(),
+            format!("Too small: expected int to be >=-{MAX_SAFE_INTEGER}"),
         ));
-        return None;
     }
-    let value = number as i64;
-    if value < minimum {
+    if minimum != i64::MIN && number < minimum as f64 {
         issues.push(zod_too_small(
             "number",
-            path,
+            path.clone(),
             usize::try_from(minimum).unwrap_or_default(),
         ));
-        return None;
     }
-    if value > maximum {
+    if number > maximum as f64 {
         issues.push(zod_too_big(
             "number",
             path,
             usize::try_from(maximum).unwrap_or(usize::MAX),
         ));
-        return None;
     }
+    let value = number as i64;
     Some(value)
 }
 
@@ -9860,27 +9867,23 @@ async fn invoke_agent_tool(
     State(state): State<AppState>,
     headers: HeaderMap,
     uri: Uri,
-    payload: Result<Json<AgentToolInvocationInput>, JsonRejection>,
+    request: Request,
 ) -> Response {
     if !state.node_agent_client.enabled() {
         return api_not_found().await;
     }
-    let Json(input) = match payload {
-        Ok(payload) => payload,
-        Err(error) => {
-            return api_error(
-                StatusCode::BAD_REQUEST,
-                "STORY_TOOL_FAILED",
-                &error.body_text(),
-            );
-        }
+    let body = match agent_tool_invoke_body(request).await {
+        Ok(body) => body,
+        Err(response) => return response,
     };
     if let Some(response) = agent_tool_auth_error(&state, &headers, &uri) {
         return response;
     }
-    if let Err(error) = input.validate() {
-        return story_tool_error(error);
-    }
+    let body = if js_truthy(&body) { body } else { json!({}) };
+    let input = match parse_agent_tool_invocation(&body) {
+        Ok(input) => input,
+        Err(error) => return story_tool_error(error),
+    };
     let call_id = input.call_id().map(ToString::to_string);
     match invoke_for_provider_session(
         &state.story_tools,
@@ -9899,6 +9902,231 @@ async fn invoke_agent_tool(
         Ok(data) => Json(ApiEnvelope { data }).into_response(),
         Err(error) => story_tool_error(error),
     }
+}
+
+async fn agent_tool_invoke_body(request: Request) -> Result<Value, Response> {
+    let media_type = fastify_body_media_type(request.headers());
+    if media_type == Some(FastifyBodyMediaType::OctetStream) {
+        return Ok(Value::Object(serde_json::Map::new()));
+    }
+    let (parts, body) = request.into_parts();
+    let bytes = read_fastify_body(body, &parts.headers, AGENT_TOOL_BODY_LIMIT).await?;
+    match media_type {
+        Some(FastifyBodyMediaType::Json) => {
+            parse_fastify_json_body(&bytes).map_err(IntoResponse::into_response)
+        }
+        Some(FastifyBodyMediaType::Text) => {
+            Ok(Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+        }
+        None if bytes.is_empty() => Ok(Value::Object(serde_json::Map::new())),
+        _ => Err(fastify_unsupported_media_type()),
+    }
+}
+
+fn parse_agent_tool_invocation(
+    body: &Value,
+) -> Result<AgentToolInvocationInput, crate::story_tools::StoryToolError> {
+    let Some(object) = body.as_object() else {
+        return Err(agent_tool_zod_error(vec![json!({
+            "expected": "object",
+            "code": "invalid_type",
+            "path": [],
+            "message": format!(
+                "Invalid input: expected object, received {}",
+                zod_received_type(body)
+            ),
+        })]));
+    };
+    let mut issues = Vec::new();
+
+    let provider = object
+        .get("provider")
+        .and_then(Value::as_str)
+        .filter(|value| *value == "opencode")
+        .map(ToString::to_string);
+    if provider.is_none() {
+        issues.push(json!({
+            "code": "invalid_value",
+            "values": ["opencode"],
+            "path": ["provider"],
+            "message": "Invalid input: expected \"opencode\"",
+        }));
+    }
+
+    let provider_session_id = match object.get("providerSessionId") {
+        None => {
+            issues.push(json!({
+                "expected": "string",
+                "code": "invalid_type",
+                "path": ["providerSessionId"],
+                "message": "Invalid input: expected string, received undefined",
+            }));
+            None
+        }
+        Some(Value::String(value)) => {
+            let length = value.encode_utf16().count();
+            if length < 1 {
+                issues.push(json!({
+                    "origin": "string",
+                    "code": "too_small",
+                    "minimum": 1,
+                    "inclusive": true,
+                    "path": ["providerSessionId"],
+                    "message": "Too small: expected string to have >=1 characters",
+                }));
+            } else if length > 240 {
+                issues.push(json!({
+                    "origin": "string",
+                    "code": "too_big",
+                    "maximum": 240,
+                    "inclusive": true,
+                    "path": ["providerSessionId"],
+                    "message": "Too big: expected string to have <=240 characters",
+                }));
+            }
+            Some(value.clone())
+        }
+        Some(value) => {
+            issues.push(json!({
+                "expected": "string",
+                "code": "invalid_type",
+                "path": ["providerSessionId"],
+                "message": format!(
+                    "Invalid input: expected string, received {}",
+                    zod_received_type(value)
+                ),
+            }));
+            None
+        }
+    };
+
+    let tool = object
+        .get("tool")
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            value
+                .parse::<controlled_instance_protocol::AiSessionAgentToolName>()
+                .ok()
+        });
+    if tool.is_none() {
+        let story_values = controlled_instance_protocol::AI_SESSION_AGENT_TOOL_NAMES
+            .iter()
+            .copied()
+            .filter(|value| *value != "agent_run")
+            .collect::<Vec<_>>();
+        let story_message = story_values
+            .iter()
+            .map(|value| format!("\"{value}\""))
+            .collect::<Vec<_>>()
+            .join("|");
+        issues.push(json!({
+            "code": "invalid_union",
+            "errors": [
+                [{
+                    "code": "invalid_value",
+                    "values": story_values,
+                    "path": [],
+                    "message": format!("Invalid option: expected one of {story_message}"),
+                }],
+                [{
+                    "code": "invalid_value",
+                    "values": ["agent_run"],
+                    "path": [],
+                    "message": "Invalid input: expected \"agent_run\"",
+                }],
+            ],
+            "path": ["tool"],
+            "message": "Invalid input",
+        }));
+    }
+
+    let call_id = match object.get("callId") {
+        None => None,
+        Some(Value::String(value)) => {
+            let value = trim_js_whitespace(value);
+            let length = value.encode_utf16().count();
+            if length < 1 {
+                issues.push(json!({
+                    "origin": "string",
+                    "code": "too_small",
+                    "minimum": 1,
+                    "inclusive": true,
+                    "path": ["callId"],
+                    "message": "Too small: expected string to have >=1 characters",
+                }));
+            } else if length > 240 {
+                issues.push(json!({
+                    "origin": "string",
+                    "code": "too_big",
+                    "maximum": 240,
+                    "inclusive": true,
+                    "path": ["callId"],
+                    "message": "Too big: expected string to have <=240 characters",
+                }));
+            }
+            Some(value.to_string())
+        }
+        Some(value) => {
+            issues.push(json!({
+                "expected": "string",
+                "code": "invalid_type",
+                "path": ["callId"],
+                "message": format!(
+                    "Invalid input: expected string, received {}",
+                    zod_received_type(value)
+                ),
+            }));
+            None
+        }
+    };
+
+    let allowed = [
+        "provider",
+        "providerSessionId",
+        "tool",
+        "arguments",
+        "callId",
+    ];
+    let unknown = object
+        .keys()
+        .filter(|key| !allowed.contains(&key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        let listed = unknown
+            .iter()
+            .map(|key| format!("\"{key}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        issues.push(json!({
+            "code": "unrecognized_keys",
+            "keys": unknown,
+            "path": [],
+            "message": format!(
+                "Unrecognized key{}: {listed}",
+                if unknown.len() == 1 { "" } else { "s" }
+            ),
+        }));
+    }
+
+    if !issues.is_empty() {
+        return Err(agent_tool_zod_error(issues));
+    }
+    Ok(AgentToolInvocationInput {
+        provider: provider.expect("validated provider"),
+        provider_session_id: provider_session_id.expect("validated provider session"),
+        tool: tool.expect("validated tool"),
+        arguments: object.get("arguments").cloned().unwrap_or(Value::Null),
+        call_id,
+    })
+}
+
+fn agent_tool_zod_error(issues: Vec<Value>) -> crate::story_tools::StoryToolError {
+    crate::story_tools::StoryToolError::new(
+        "STORY_TOOL_FAILED",
+        serde_json::to_string_pretty(&issues).expect("serialize agent tool issues"),
+        400,
+    )
 }
 
 async fn agent_tool_mcp_get(
@@ -10158,30 +10386,21 @@ fn mcp_protocol_version_error(headers: &HeaderMap) -> Option<Response> {
 }
 
 async fn mcp_fastify_body(request: Request) -> Result<Option<Value>, Response> {
-    let json_content_type = mcp_is_json_content_type(request.headers().get(header::CONTENT_TYPE));
-    let bytes = match to_bytes(request.into_body(), MCP_BODY_LIMIT).await {
-        Ok(bytes) => bytes,
-        Err(error) => return Err(mcp_body_error(error)),
-    };
-    if bytes.is_empty() {
-        return if json_content_type {
-            Err(mcp_fastify_body_error(
-                "FST_ERR_CTP_EMPTY_JSON_BODY",
-                "Body cannot be empty when content-type is set to 'application/json'",
-            ))
-        } else {
-            Ok(None)
-        };
-    }
-    if !json_content_type {
+    let media_type = fastify_body_media_type(request.headers());
+    if media_type == Some(FastifyBodyMediaType::OctetStream) {
+        // The instance registers octet-stream as a stream, not a buffer parser.
+        // MCP never consumes it: auth and the SDK media check run without reading.
         return Ok(None);
     }
-    serde_json::from_slice(&bytes).map(Some).map_err(|_| {
-        mcp_fastify_body_error(
-            "FST_ERR_CTP_INVALID_JSON_BODY",
-            "Body is not valid JSON but content-type is set to 'application/json'",
-        )
-    })
+    let (parts, body) = request.into_parts();
+    let bytes = read_fastify_body(body, &parts.headers, MCP_BODY_LIMIT).await?;
+    if media_type == Some(FastifyBodyMediaType::Json) {
+        parse_fastify_json_body(&bytes)
+            .map(Some)
+            .map_err(IntoResponse::into_response)
+    } else {
+        Ok(None)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10191,6 +10410,9 @@ enum FastifyBodyMediaType {
     OctetStream,
     Unsupported,
 }
+
+#[derive(Clone, Copy)]
+struct FastifyNormalizedBodySize(usize);
 
 fn fastify_body_media_type(headers: &HeaderMap) -> Option<FastifyBodyMediaType> {
     let content_type = headers
@@ -10215,6 +10437,7 @@ fn fastify_body_limit(method: &Method, path: &str) -> Option<usize> {
     if !path.starts_with("/api/")
         || matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
         || path == "/api/internal/agent-tools/mcp"
+        || path == "/api/internal/agent-tools/invoke"
     {
         return None;
     }
@@ -10235,9 +10458,6 @@ fn fastify_body_limit(method: &Method, path: &str) -> Option<usize> {
         && !path.ends_with("/complete")
     {
         return Some(controlled_instance_protocol::AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT);
-    }
-    if path == "/api/internal/agent-tools/invoke" {
-        return Some(256 * 1024);
     }
     if method == Method::POST && path == "/api/ai-sessions" {
         return Some(64 * 1024 * 1024);
@@ -10271,6 +10491,92 @@ fn fastify_raw_body_route(method: &Method, path: &str) -> bool {
             && !path.ends_with("/complete"))
 }
 
+async fn read_fastify_body(
+    body: Body,
+    headers: &HeaderMap,
+    limit: usize,
+) -> Result<Bytes, Response> {
+    let media_type = fastify_body_media_type(headers);
+    if media_type == Some(FastifyBodyMediaType::Unsupported) {
+        return Err(fastify_unsupported_media_type());
+    }
+    let string_parser = matches!(
+        media_type,
+        Some(FastifyBodyMediaType::Json | FastifyBodyMediaType::Text)
+    );
+    let content_length = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    if string_parser && content_length.is_some_and(|length| length > limit) {
+        return Err(fastify_body_too_large_error());
+    }
+    let mut bytes = to_bytes(body, limit)
+        .await
+        .map_err(fastify_body_read_error)?;
+    if string_parser {
+        // Fastify's string parsers use Node's UTF-8 StringDecoder, then compare
+        // the decoded byte count with both bodyLimit and Content-Length.
+        let decoded = String::from_utf8_lossy(&bytes);
+        if decoded.len() > limit {
+            return Err(fastify_body_too_large_error());
+        }
+        if content_length.is_some_and(|length| length != decoded.len()) {
+            return Err(fastify_body_error(
+                StatusCode::BAD_REQUEST,
+                "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+                "Request body size did not match Content-Length",
+            ));
+        }
+        if let std::borrow::Cow::Owned(decoded) = decoded {
+            bytes = decoded.into_bytes().into();
+        }
+    }
+    if media_type.is_none() && !bytes.is_empty() {
+        return Err(fastify_unsupported_media_type());
+    }
+    Ok(bytes)
+}
+
+fn fastify_unsupported_media_type() -> Response {
+    fastify_body_error(
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "Unsupported Media Type",
+    )
+}
+
+enum FastifyJsonBodyError {
+    Empty,
+    Invalid,
+}
+
+impl IntoResponse for FastifyJsonBodyError {
+    fn into_response(self) -> Response {
+        let (code, message) = match self {
+            Self::Empty => (
+                "FST_ERR_CTP_EMPTY_JSON_BODY",
+                "Body cannot be empty when content-type is set to 'application/json'",
+            ),
+            Self::Invalid => (
+                "FST_ERR_CTP_INVALID_JSON_BODY",
+                "Body is not valid JSON but content-type is set to 'application/json'",
+            ),
+        };
+        fastify_bad_request_body_error(code, message)
+    }
+}
+
+fn parse_fastify_json_body(bytes: &[u8]) -> Result<Value, FastifyJsonBodyError> {
+    if bytes.is_empty() {
+        return Err(FastifyJsonBodyError::Empty);
+    }
+    // secure-json-parse accepts exactly one initial BOM after UTF-8 decoding.
+    // A BOM alone is invalid JSON, not an empty transport body.
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    serde_json::from_slice(bytes).map_err(|_| FastifyJsonBodyError::Invalid)
+}
+
 async fn fastify_body_parser(request: Request, next: Next) -> Response {
     let Some(limit) = fastify_body_limit(request.method(), request.uri().path()) else {
         return next.run(request).await;
@@ -10279,72 +10585,34 @@ async fn fastify_body_parser(request: Request, next: Next) -> Response {
         fastify_body_defaults_to_empty_object(request.method(), request.uri().path());
     let raw_body = fastify_raw_body_route(request.method(), request.uri().path());
     let media_type = fastify_body_media_type(request.headers());
+    if raw_body && media_type == Some(FastifyBodyMediaType::OctetStream) {
+        // Fastify hands the stream to the upload owner. Validate scope/offset
+        // before polling, then enforce the owner's declared-size invariant.
+        return next.run(request).await;
+    }
     let (mut parts, body) = request.into_parts();
-    let mut bytes = match to_bytes(body, limit).await {
+    let mut bytes = match read_fastify_body(body, &parts.headers, limit).await {
         Ok(bytes) => bytes,
-        Err(_) => return mcp_body_too_large_error(),
+        Err(response) => return response,
     };
-    if raw_body {
-        match media_type {
-            Some(FastifyBodyMediaType::Json) => {
-                if bytes.is_empty() {
-                    return fastify_body_error(
-                        StatusCode::BAD_REQUEST,
-                        "FST_ERR_CTP_EMPTY_JSON_BODY",
-                        "Body cannot be empty when content-type is set to 'application/json'",
-                    );
-                }
-                if serde_json::from_slice::<Value>(&bytes).is_err() {
-                    return fastify_body_error(
-                        StatusCode::BAD_REQUEST,
-                        "FST_ERR_CTP_INVALID_JSON_BODY",
-                        "Body is not valid JSON but content-type is set to 'application/json'",
-                    );
-                }
-            }
-            Some(FastifyBodyMediaType::Unsupported) => {
-                return fastify_body_error(
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    "FST_ERR_CTP_INVALID_MEDIA_TYPE",
-                    "Unsupported Media Type",
-                );
-            }
-            None if !bytes.is_empty() => {
-                return fastify_body_error(
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    "FST_ERR_CTP_INVALID_MEDIA_TYPE",
-                    "Unsupported Media Type",
-                );
-            }
-            _ => {}
+    if media_type == Some(FastifyBodyMediaType::Json) {
+        let value = match parse_fastify_json_body(&bytes) {
+            Ok(value) => value,
+            Err(error) => return error.into_response(),
+        };
+        if bytes.starts_with(b"\xef\xbb\xbf") {
+            bytes = bytes.slice(3..);
         }
+        if !raw_body && defaults_to_empty_object && !js_truthy(&value) {
+            bytes = Bytes::from_static(b"{}");
+        }
+    }
+    if raw_body {
         return next
             .run(Request::from_parts(parts, Body::from(bytes)))
             .await;
     }
     match media_type {
-        Some(FastifyBodyMediaType::Json) => {
-            if bytes.is_empty() {
-                return fastify_body_error(
-                    StatusCode::BAD_REQUEST,
-                    "FST_ERR_CTP_EMPTY_JSON_BODY",
-                    "Body cannot be empty when content-type is set to 'application/json'",
-                );
-            }
-            match serde_json::from_slice::<Value>(&bytes) {
-                Ok(value) if defaults_to_empty_object && !js_truthy(&value) => {
-                    bytes = Bytes::from_static(b"{}");
-                }
-                Ok(_) => {}
-                Err(_) => {
-                    return fastify_body_error(
-                        StatusCode::BAD_REQUEST,
-                        "FST_ERR_CTP_INVALID_JSON_BODY",
-                        "Body is not valid JSON but content-type is set to 'application/json'",
-                    );
-                }
-            }
-        }
         Some(FastifyBodyMediaType::Text) => {
             let value = Value::String(String::from_utf8_lossy(&bytes).into_owned());
             let value = if defaults_to_empty_object && !js_truthy(&value) {
@@ -10359,26 +10627,6 @@ async fn fastify_body_parser(request: Request, next: Next) -> Response {
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static("application/json"),
             );
-            parts.headers.insert(
-                header::CONTENT_LENGTH,
-                header::HeaderValue::from_str(&bytes.len().to_string())
-                    .expect("body length header"),
-            );
-        }
-        Some(FastifyBodyMediaType::OctetStream) => {}
-        Some(FastifyBodyMediaType::Unsupported) => {
-            return fastify_body_error(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "FST_ERR_CTP_INVALID_MEDIA_TYPE",
-                "Unsupported Media Type",
-            );
-        }
-        None if !bytes.is_empty() => {
-            return fastify_body_error(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "FST_ERR_CTP_INVALID_MEDIA_TYPE",
-                "Unsupported Media Type",
-            );
         }
         None if defaults_to_empty_object => {
             bytes = Bytes::from_static(b"{}");
@@ -10386,22 +10634,32 @@ async fn fastify_body_parser(request: Request, next: Next) -> Response {
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static("application/json"),
             );
-            parts.headers.insert(
-                header::CONTENT_LENGTH,
-                header::HeaderValue::from_static("2"),
-            );
         }
-        None => {}
+        _ => {}
     }
+    parts.headers.insert(
+        header::CONTENT_LENGTH,
+        header::HeaderValue::from_str(&bytes.len().to_string()).expect("normalized body length"),
+    );
+    parts
+        .extensions
+        .insert(FastifyNormalizedBodySize(bytes.len()));
     next.run(Request::from_parts(parts, Body::from(bytes)))
         .await
 }
 
 async fn fastify_request_body(request: Request) -> Result<Option<Value>, Response> {
     let media_type = fastify_body_media_type(request.headers());
-    let bytes = match to_bytes(request.into_body(), DEFAULT_JSON_BODY_LIMIT).await {
+    // The transport parser already checked incoming bytes. Bound the internal
+    // JSON representation by its trusted size rather than reapplying wire limits.
+    let limit = request
+        .extensions()
+        .get::<FastifyNormalizedBodySize>()
+        .map(|size| size.0)
+        .unwrap_or(DEFAULT_JSON_BODY_LIMIT);
+    let bytes = match to_bytes(request.into_body(), limit).await {
         Ok(bytes) => bytes,
-        Err(_) => return Err(mcp_body_too_large_error()),
+        Err(_) => return Err(fastify_body_too_large_error()),
     };
     match media_type {
         Some(FastifyBodyMediaType::Json) => {
@@ -10454,7 +10712,7 @@ fn agent_tool_auth_error(state: &AppState, headers: &HeaderMap, _uri: &Uri) -> O
     })
 }
 
-fn mcp_fastify_body_error(code: &str, message: &str) -> Response {
+fn fastify_bad_request_body_error(code: &str, message: &str) -> Response {
     fastify_body_error(StatusCode::BAD_REQUEST, code, message)
 }
 
@@ -10472,25 +10730,25 @@ fn fastify_body_error(status: StatusCode, code: &str, message: &str) -> Response
         .into_response()
 }
 
-fn mcp_body_error(error: axum::Error) -> Response {
-    if mcp_body_is_too_large(error) {
-        mcp_body_too_large_error()
+fn fastify_body_read_error(error: axum::Error) -> Response {
+    if fastify_body_is_too_large(error) {
+        fastify_body_too_large_error()
     } else {
-        mcp_fastify_body_error(
+        fastify_bad_request_body_error(
             "FST_ERR_CTP_INVALID_JSON_BODY",
             "Body is not valid JSON but content-type is set to 'application/json'",
         )
     }
 }
 
-fn mcp_body_is_too_large(error: axum::Error) -> bool {
+fn fastify_body_is_too_large(error: axum::Error) -> bool {
     error
         .into_inner()
         .downcast::<http_body_util::LengthLimitError>()
         .is_ok()
 }
 
-fn mcp_body_too_large_error() -> Response {
+fn fastify_body_too_large_error() -> Response {
     let mut response = (
         StatusCode::PAYLOAD_TOO_LARGE,
         [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
@@ -10965,7 +11223,10 @@ fn ai_session_deserialize_error(error: serde_json::Error) -> Response {
 }
 
 fn trim_js_whitespace(value: &str) -> &str {
-    value.trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}')
+    // ECMAScript includes BOM, but excludes Unicode's NEXT LINE whitespace.
+    value.trim_matches(|character: char| {
+        (character.is_whitespace() && character != '\u{0085}') || character == '\u{feff}'
+    })
 }
 
 fn utf16_len(value: &str) -> usize {
@@ -11047,7 +11308,6 @@ pub fn ai_session_action_response(
             .and_then(Value::as_str)
     });
     let mut response = serde_json::Map::new();
-    response.insert("sessionId".to_string(), json!(result.session.id));
     response.insert("provider".to_string(), json!(result.provider));
     response.insert("action".to_string(), json!(result.action.action));
     if let Some(decision) = result.action.decision.as_deref() {
@@ -11062,6 +11322,9 @@ pub fn ai_session_action_response(
     if let Some(queue_id) = result.action.queue_id.as_deref() {
         response.insert("queueId".to_string(), json!(queue_id));
     }
+    // Match the public Zod response projection's key order. JSON object order
+    // is observable to wire-level differential tests and proxy clients.
+    response.insert("sessionId".to_string(), json!(result.session.id));
     if let Some(message_id) = message_id {
         response.insert("messageId".to_string(), json!(message_id));
     }
@@ -11817,31 +12080,19 @@ async fn close_ai_session(
     }
 }
 
-#[derive(Debug, serde::Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct AiSessionTurnsQuery {
-    after_turn_id: Option<String>,
-    after_revision: Option<String>,
-    projection: Option<String>,
-    revision: Option<String>,
-}
-
 async fn ai_session_turns(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<AiSessionTurnsQuery>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
-    let Some(session) = state.ai_sessions.get(&id) else {
-        return ai_session_not_found();
+    let session = match ai_session_conversation(&state, &id) {
+        Ok(session) => session,
+        Err(response) => return response,
     };
-    let turns = project_history_attachment_turns(
-        &session.id,
-        session.turns.as_deref().unwrap_or_default().to_vec(),
-        &state.ai_session_attachments,
-    );
-    if query.projection.as_deref() == Some("index") {
+    let turns = session.turns.as_deref().unwrap_or_default();
+    if fastify_query_string(&query, "projection") == Some("index") {
         let revision = session.turns_revision();
-        if query.revision.as_deref() == Some(revision.as_str()) {
+        if fastify_query_string(&query, "revision") == Some(revision.as_str()) {
             return Json(ApiEnvelope {
                 data: json!({ "kind": "not-modified", "revision": revision }),
             })
@@ -11879,15 +12130,16 @@ async fn ai_session_turns(
     }
 
     let after_turn_id = query
-        .after_turn_id
-        .as_deref()
-        .map(trim_js_whitespace)
-        .unwrap_or_default()
-        .to_string();
+        .get("afterTurnId")
+        .filter(|value| js_truthy(value))
+        .map(controlled_instance_core::text::js_string)
+        .unwrap_or_default();
+    let after_turn_id = trim_js_whitespace(&after_turn_id).to_string();
     let after_revision = query
-        .after_revision
-        .as_deref()
-        .and_then(parse_js_number)
+        .get("afterRevision")
+        .map(|value| {
+            parse_js_number(&controlled_instance_core::text::js_string(value)).unwrap_or(f64::NAN)
+        })
         .filter(|value| value.is_finite());
     let after_index = turns
         .iter()
@@ -11941,19 +12193,14 @@ async fn ai_session_turns(
     .into_response()
 }
 
-#[derive(Debug, serde::Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct AiSessionTurnQuery {
-    revision: Option<String>,
-}
-
 async fn ai_session_turn(
     State(state): State<AppState>,
     Path((id, turn_id)): Path<(String, String)>,
-    Query(query): Query<AiSessionTurnQuery>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
-    let Some(session) = state.ai_sessions.get(&id) else {
-        return ai_session_not_found();
+    let session = match ai_session_conversation(&state, &id) {
+        Ok(session) => session,
+        Err(response) => return response,
     };
     let Some(turn) = session
         .turns
@@ -11972,15 +12219,7 @@ async fn ai_session_turn(
         );
     };
     let revision = controlled_instance_ai_session::ai_session_turn_body_revision(turn);
-    let turn = project_history_attachment_turns(
-        &session.id,
-        vec![turn.clone()],
-        &state.ai_session_attachments,
-    )
-    .into_iter()
-    .next()
-    .unwrap_or_else(|| turn.clone());
-    if query.revision.as_deref() == Some(revision.as_str()) {
+    if fastify_query_string(&query, "revision") == Some(revision.as_str()) {
         return Json(ApiEnvelope {
             data: json!({ "kind": "not-modified", "revision": revision }),
         })
@@ -11998,30 +12237,33 @@ async fn ai_session_turn(
 
 #[allow(clippy::result_large_err)]
 fn parse_ai_session_timeline_query(
-    query: std::collections::HashMap<String, String>,
+    query: &serde_json::Map<String, Value>,
 ) -> Result<Option<String>, Response> {
     let mut issues = Vec::new();
-    zod_unknown_object_keys(
-        &query
-            .iter()
-            .map(|(key, value)| (key.clone(), Value::String(value.clone())))
-            .collect(),
-        &["revision"],
-        Vec::new(),
-        &mut issues,
-    );
-    let revision = query.get("revision").map(|value| {
-        let trimmed = trim_js_whitespace(value);
-        let path = vec![json!("revision")];
-        let length = trimmed.chars().count();
-        if length < 1 {
-            issues.push(zod_too_small("string", path.clone(), 1));
+    zod_unknown_object_keys(query, &["revision"], Vec::new(), &mut issues);
+    let revision = match query.get("revision") {
+        Some(Value::String(value)) => {
+            let trimmed = trim_js_whitespace(value);
+            let path = vec![json!("revision")];
+            let length = controlled_instance_core::text::utf16_len(trimmed);
+            if length < 1 {
+                issues.push(zod_too_small("string", path.clone(), 1));
+            }
+            if length > 64 {
+                issues.push(zod_too_big("string", path, 64));
+            }
+            Some(trimmed.to_string())
         }
-        if length > 64 {
-            issues.push(zod_too_big("string", path, 64));
+        Some(value) => {
+            issues.push(zod_invalid_type(
+                "string",
+                vec![json!("revision")],
+                zod_received_type(value),
+            ));
+            None
         }
-        trimmed.to_string()
-    });
+        None => None,
+    };
     if issues.is_empty() {
         Ok(revision)
     } else {
@@ -12032,9 +12274,9 @@ fn parse_ai_session_timeline_query(
 async fn ai_session_timeline(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
-    let revision_query = match parse_ai_session_timeline_query(query) {
+    let revision_query = match parse_ai_session_timeline_query(&query) {
         Ok(revision) => revision,
         Err(response) => return response,
     };
@@ -12058,9 +12300,9 @@ async fn ai_session_timeline(
 async fn ai_session_turn_timeline(
     State(state): State<AppState>,
     Path((id, turn_id)): Path<(String, String)>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
-    let revision_query = match parse_ai_session_timeline_query(query) {
+    let revision_query = match parse_ai_session_timeline_query(&query) {
         Ok(revision) => revision,
         Err(response) => return response,
     };
@@ -12188,15 +12430,10 @@ async fn sync_ai_session_turn_timeline(
     .into_response()
 }
 
-#[derive(Debug, serde::Deserialize, Default)]
-struct AiSessionTranscriptQuery {
-    tail: Option<String>,
-}
-
 async fn ai_session_transcript(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<AiSessionTranscriptQuery>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     let Some(session) = state.ai_sessions.get(&id) else {
         return api_error(
@@ -12212,14 +12449,20 @@ async fn ai_session_transcript(
             "AI session transcript not found.",
         );
     };
-    let tail = transcript_tail_lines(query.tail.as_deref());
-    match std::fs::read_to_string(path) {
-        Ok(content) => {
-            let lines = content
-                .split('\n')
-                .map(|line| line.strip_suffix('\r').unwrap_or(line))
-                .collect::<Vec<_>>();
-            let selected = lines.len().saturating_sub(tail).min(lines.len());
+    let tail = query
+        .get("tail")
+        .map(controlled_instance_core::text::js_string);
+    let tail = transcript_tail_lines(tail.as_deref());
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let content = String::from_utf8_lossy(&bytes);
+            let mut lines = content.split('\n').collect::<Vec<_>>();
+            if let Some((_, terminated_lines)) = lines.split_last_mut() {
+                for line in terminated_lines {
+                    *line = line.strip_suffix('\r').unwrap_or(line);
+                }
+            }
+            let selected = lines.len().saturating_sub(tail);
             Json(ApiEnvelope {
                 data: json!({
                     "path": path,
@@ -12262,10 +12505,42 @@ struct AttachmentDraftUploadQuery {
     size: u64,
 }
 
+async fn attachment_body_stream(
+    request: Request,
+    contract: attachment_source::Contract,
+    declared_size: u64,
+) -> Result<attachment_source::SourceStream, Response> {
+    if fastify_body_media_type(request.headers()) != Some(FastifyBodyMediaType::Json) {
+        return Ok(request
+            .into_body()
+            .into_data_stream()
+            .map(|chunk| {
+                chunk.map_err(|error| attachment_source::SourceError {
+                    code: "AI_SESSION_CONTROL_FAILED",
+                    message: error.to_string(),
+                })
+            })
+            .boxed());
+    }
+    // The Fastify JSON parser supplies a source value rather than JSON wire
+    // bytes. Its consumer owns the source and chunk conversion contract.
+    let limit = fastify_body_limit(request.method(), request.uri().path())
+        .unwrap_or(DEFAULT_JSON_BODY_LIMIT);
+    let bytes = to_bytes(request.into_body(), limit)
+        .await
+        .map_err(fastify_body_read_error)?;
+    let value = parse_fastify_json_body(&bytes).map_err(IntoResponse::into_response)?;
+    attachment_source::from_json(value, contract, declared_size).map_err(attachment_source_error)
+}
+
+fn attachment_source_error(error: attachment_source::SourceError) -> Response {
+    api_error(StatusCode::BAD_REQUEST, error.code, &error.message)
+}
+
 async fn upload_ai_session_attachment_draft(
     State(state): State<AppState>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
-    body: Body,
+    FastifyQuery(query): FastifyQuery,
+    request: Request,
 ) -> Response {
     let query = match parse_attachment_upload_query(&query) {
         Ok(query) => query,
@@ -12281,21 +12556,34 @@ async fn upload_ai_session_attachment_draft(
     {
         return attachment_invalid_response("Unsupported image MIME type.");
     }
-    let content = match to_bytes(
-        body,
-        controlled_instance_protocol::AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT,
-    )
-    .await
+    if let Err(error) = state
+        .ai_session_attachments
+        .validate_upload(query.kind, query.size)
     {
-        Ok(content) => content,
-        Err(error) => {
+        return ai_session_attachment_error(error);
+    }
+    let mut stream =
+        match attachment_body_stream(request, attachment_source::Contract::Pipeline, query.size)
+            .await
+        {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
+    let mut content = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => return attachment_source_error(error),
+        };
+        if content.len().saturating_add(chunk.len()) as u64 > query.size {
             return api_error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "AI_SESSION_ATTACHMENT_INVALID",
-                &error.to_string(),
+                StatusCode::BAD_REQUEST,
+                "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+                "Attachment content exceeded its declared size.",
             );
         }
-    };
+        content.extend_from_slice(&chunk);
+    }
     match state.ai_session_attachments.create_draft(
         controlled_instance_ai_session::AiSessionAttachmentDraftInput {
             id: None,
@@ -12305,7 +12593,7 @@ async fn upload_ai_session_attachment_draft(
             name: query.name,
             mime: query.mime,
             size: query.size,
-            content: content.to_vec(),
+            content,
         },
     ) {
         Ok(draft) => (StatusCode::CREATED, Json(ApiEnvelope { data: draft })).into_response(),
@@ -12365,8 +12653,8 @@ struct AttachmentDraftStreamAppendQuery {
 async fn append_ai_session_attachment_draft_stream(
     State(state): State<AppState>,
     Path(attachment_id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
-    body: Body,
+    FastifyQuery(query): FastifyQuery,
+    request: Request,
 ) -> Response {
     if let Err(issue) = validate_attachment_stream_id(&attachment_id) {
         return ai_session_zod_error(vec![issue]);
@@ -12375,25 +12663,33 @@ async fn append_ai_session_attachment_draft_stream(
         Ok(query) => query,
         Err(issues) => return ai_session_zod_error(issues),
     };
-    let chunk = match to_bytes(
-        body,
-        controlled_instance_protocol::AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT,
+    let append = match state
+        .ai_session_attachment_streams
+        .begin_append(&attachment_id, query.offset)
+    {
+        Ok(append) => append,
+        Err(error) => return ai_session_attachment_error(error),
+    };
+    let mut stream = match attachment_body_stream(
+        request,
+        attachment_source::Contract::Append,
+        append.declared_size(),
     )
     .await
     {
-        Ok(chunk) => chunk,
-        Err(error) => {
-            return api_error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
-                &error.to_string(),
-            );
-        }
+        Ok(body) => body,
+        Err(response) => return response,
     };
-    match state
-        .ai_session_attachment_streams
-        .append(&attachment_id, query.offset, &chunk)
-    {
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => return attachment_source_error(error),
+        };
+        if let Err(error) = append.write(&chunk) {
+            return ai_session_attachment_error(error);
+        }
+    }
+    match append.finish() {
         Ok(data) => Json(ApiEnvelope { data }).into_response(),
         Err(error) => ai_session_attachment_error(error),
     }
@@ -12443,7 +12739,7 @@ struct AttachmentDraftCancelQuery {
 async fn cancel_ai_session_attachment_draft(
     State(state): State<AppState>,
     Path(attachment_id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    FastifyQuery(query): FastifyQuery,
 ) -> Response {
     let query = match parse_attachment_draft_cancel_query(&query) {
         Ok(query) => query,
@@ -12606,15 +12902,6 @@ fn is_ai_session_inline_image_mime(mime: &str) -> bool {
     )
 }
 
-fn attachment_query_object(
-    query: &std::collections::HashMap<String, String>,
-) -> serde_json::Map<String, Value> {
-    query
-        .iter()
-        .map(|(key, value)| (key.clone(), Value::String(value.clone())))
-        .collect()
-}
-
 fn parse_attachment_scope_type(
     value: String,
 ) -> controlled_instance_protocol::AiSessionAttachmentScopeType {
@@ -12645,23 +12932,22 @@ fn push_positive_number_issue(issues: &mut Vec<ZodIssue>, path: Vec<Value>) {
 }
 
 fn parse_attachment_upload_query(
-    query: &std::collections::HashMap<String, String>,
+    object: &serde_json::Map<String, Value>,
 ) -> Result<AttachmentDraftUploadQuery, Vec<ZodIssue>> {
-    let object = attachment_query_object(query);
     let mut issues = Vec::new();
     let scope_type = zod_required_enum_field_at(
-        &object,
+        object,
         "scopeType",
         &["session", "create-request"],
         &[],
         &mut issues,
     );
-    let scope_id = zod_required_string_field_at(&object, "scopeId", 1, 160, &[], &mut issues);
-    let kind = zod_required_enum_field_at(&object, "kind", &["image", "file"], &[], &mut issues);
-    let name = zod_required_string_field_at(&object, "name", 1, 240, &[], &mut issues);
-    let mime = zod_required_string_field_at(&object, "mime", 1, 120, &[], &mut issues);
+    let scope_id = zod_required_string_field_at(object, "scopeId", 1, 160, &[], &mut issues);
+    let kind = zod_required_enum_field_at(object, "kind", &["image", "file"], &[], &mut issues);
+    let name = zod_required_string_field_at(object, "name", 1, 240, &[], &mut issues);
+    let mime = zod_required_string_field_at(object, "mime", 1, 120, &[], &mut issues);
     let size = zod_required_coerced_integer_field_at(
-        &object,
+        object,
         "size",
         i64::MIN,
         controlled_instance_protocol::AI_SESSION_MAX_ATTACHMENT_BYTES as i64,
@@ -12672,7 +12958,7 @@ fn parse_attachment_upload_query(
         push_positive_number_issue(&mut issues, vec![json!("size")]);
     }
     zod_unknown_object_keys(
-        &object,
+        object,
         &["scopeType", "scopeId", "kind", "name", "mime", "size"],
         Vec::new(),
         &mut issues,
@@ -12761,13 +13047,12 @@ fn parse_attachment_stream_create_body(
 }
 
 fn parse_attachment_stream_append_query(
-    query: &std::collections::HashMap<String, String>,
+    object: &serde_json::Map<String, Value>,
 ) -> Result<AttachmentDraftStreamAppendQuery, Vec<ZodIssue>> {
-    let object = attachment_query_object(query);
     let mut issues = Vec::new();
     let offset =
-        zod_required_coerced_integer_field_at(&object, "offset", 0, i64::MAX, &[], &mut issues);
-    zod_unknown_object_keys(&object, &["offset"], Vec::new(), &mut issues);
+        zod_required_coerced_integer_field_at(object, "offset", 0, i64::MAX, &[], &mut issues);
+    zod_unknown_object_keys(object, &["offset"], Vec::new(), &mut issues);
     if !issues.is_empty() {
         return Err(issues);
     }
@@ -12777,19 +13062,18 @@ fn parse_attachment_stream_append_query(
 }
 
 fn parse_attachment_draft_cancel_query(
-    query: &std::collections::HashMap<String, String>,
+    object: &serde_json::Map<String, Value>,
 ) -> Result<AttachmentDraftCancelQuery, Vec<ZodIssue>> {
-    let object = attachment_query_object(query);
     let mut issues = Vec::new();
     let scope_type = zod_required_enum_field_at(
-        &object,
+        object,
         "scopeType",
         &["session", "create-request"],
         &[],
         &mut issues,
     );
-    let scope_id = zod_required_string_field_at(&object, "scopeId", 1, 160, &[], &mut issues);
-    zod_unknown_object_keys(&object, &["scopeType", "scopeId"], Vec::new(), &mut issues);
+    let scope_id = zod_required_string_field_at(object, "scopeId", 1, 160, &[], &mut issues);
+    zod_unknown_object_keys(object, &["scopeType", "scopeId"], Vec::new(), &mut issues);
     if !issues.is_empty() {
         return Err(issues);
     }
@@ -13030,15 +13314,22 @@ async fn edit_ai_session_queue_item(
             Some(queue_attachments),
         );
         if edited.is_err() {
-            state
+            if let Err(error) = state
                 .ai_session_attachments
-                .rollback_message(&id, &replacement_message_id);
+                .rollback_message(&id, &replacement_message_id)
+            {
+                return ai_session_attachment_error(error);
+            }
         }
         if let (Ok(_), Some(previous_message_id)) = (&edited, previous_message_id) {
             if previous_message_id != replacement_message_id {
-                state
+                if let Err(error) = state
                     .ai_session_attachments
-                    .rollback_message(&id, &previous_message_id);
+                    .rollback_message(&id, &previous_message_id)
+                {
+                    state.publish_ai_session_snapshot("control-action");
+                    return ai_session_attachment_error(error);
+                }
             }
         }
         edited
@@ -13181,13 +13472,16 @@ async fn remove_ai_session_queue_item(
                 .ai_session_attachments
                 .message_id_for_attachments(&id, &attachment_ids)
         });
+    if let Some(message_id) = message_id.as_deref() {
+        if let Err(error) = state
+            .ai_session_attachments
+            .rollback_message(&id, message_id)
+        {
+            return ai_session_attachment_error(error);
+        }
+    }
     match state.ai_sessions.remove_queue_item(&id, &queue_id) {
         Ok(session) => {
-            if let Some(message_id) = message_id.as_deref() {
-                state
-                    .ai_session_attachments
-                    .rollback_message(&id, message_id);
-            }
             state.publish_ai_session_snapshot("control-action");
             queue_mutation_response(&session, "remove", Some(&queue_id))
         }
@@ -13801,8 +14095,9 @@ async fn close_agent_run_member(
 }
 
 async fn story_ai_session_read(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let Some(session) = state.ai_sessions.get(&id) else {
-        return ai_session_not_found();
+    let session = match ai_session_conversation(&state, &id) {
+        Ok(session) => session,
+        Err(response) => return response,
     };
     let mut detail = session.detail();
     if let Some(detail) = detail.as_object_mut() {
@@ -13843,8 +14138,9 @@ async fn story_ai_session_turn_read(
     State(state): State<AppState>,
     Path((id, turn_id)): Path<(String, String)>,
 ) -> Response {
-    let Some(session) = state.ai_sessions.get(&id) else {
-        return ai_session_not_found();
+    let session = match ai_session_conversation(&state, &id) {
+        Ok(session) => session,
+        Err(response) => return response,
     };
     let Some(turn) = session
         .turns
@@ -14005,13 +14301,13 @@ async fn events(
     headers: HeaderMap,
     uri: Uri,
 ) -> impl IntoResponse {
-    let query = url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
-        .into_owned()
-        .collect::<std::collections::HashMap<_, _>>();
-    let expects_transient = query.get("aiSessionTransient").map(String::as_str) == Some("1");
+    let query = parse_query_object(uri.query().unwrap_or_default());
+    // Fastify exposes repeated keys as arrays. These flags only match one
+    // string value, so duplicate or empty parameters fall back to false.
+    let expects_transient = fastify_query_string(&query, "aiSessionTransient") == Some("1");
     let includes_authority_snapshot =
-        query.get("aiSessionAuthoritySnapshot").map(String::as_str) == Some("1");
-    let subagents = query.get("aiSessionHierarchy").map(String::as_str) == Some("subagents");
+        fastify_query_string(&query, "aiSessionAuthoritySnapshot") == Some("1");
+    let subagents = fastify_query_string(&query, "aiSessionHierarchy") == Some("subagents");
     websocket_upgrade_with_client_subprotocol(websocket, &headers).on_upgrade(move |socket| {
         handle_events_socket(
             socket,
@@ -14179,11 +14475,8 @@ async fn handle_events_socket(
     });
     let events = state.events.clone();
     let mut shutdown = state.shutdown_receiver();
-    let instance_id = state.config.instance_id.clone();
-    let (ai_stream_id, ai_revision, ai_earliest_retained_revision) = state.ai_session_stream_info();
-    let (app_stream_id, app_revision, app_earliest_retained_revision) =
-        state.app_session_stream_info();
-    let mut receiver = events.subscribe_client();
+    let (mut receiver, bootstrap) =
+        state.connect_event_stream(includes_authority_snapshot, subagents);
     let mut subscription = ClientSubscription {
         topics: std::collections::HashSet::from(["*".to_string()]),
         transient: expects_transient.then(AiSessionTransientSubscription::default),
@@ -14191,43 +14484,10 @@ async fn handle_events_socket(
         subagents,
     };
     let mut last_replayed_seq = 0;
-    let hello = events.new_event(
-        "streams.hello",
-        json!({
-            "protocolVersion": SESSION_STREAM_PROTOCOL_VERSION,
-            "streams": [
-                {
-                    "topic": "ai.sessions",
-                    "instanceId": instance_id,
-                    "streamId": ai_stream_id,
-                    "latestRevision": ai_revision,
-                    "earliestRetainedRevision": ai_earliest_retained_revision,
-                },
-                {
-                    "topic": "app.sessions",
-                    "instanceId": instance_id,
-                    "streamId": app_stream_id,
-                    "latestRevision": app_revision,
-                    "earliestRetainedRevision": app_earliest_retained_revision,
-                },
-            ],
-        }),
-    );
-    if !enqueue_wire_event(&wire, &hello, false, false) {
-        return;
-    }
-    if includes_authority_snapshot {
-        let snapshot = state.ai_session_startup_snapshot_event(subagents);
-        if !enqueue_wire_event(&wire, &snapshot, false, false) {
+    for event in bootstrap {
+        if !enqueue_wire_event(&wire, &event, false, false) {
             return;
         }
-    }
-    let management = events.new_event(
-        "app.management",
-        serde_json::to_value(state.app_management.snapshot_event()).unwrap_or(Value::Null),
-    );
-    if !enqueue_wire_event(&wire, &management, false, false) {
-        return;
     }
     // Match the Node connection bootstrap: refresh managed-app ownership after
     // the snapshot frame and publish the resulting sequence. The refresh is
@@ -14315,9 +14575,8 @@ async fn handle_events_socket(
                         }
                     },
                     Some(Ok(Message::Ping(payload))) => {
-                        if !wire.enqueue(Message::Pong(payload)) {
-                            break;
-                        }
+                        let queued = wire.enqueue(Message::Pong(payload));
+                        if !queued { break; }
                     },
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Err(_)) => break,
@@ -14928,6 +15187,53 @@ pub fn bind_addr(host: &str, port: u16) -> anyhow::Result<SocketAddr> {
 
 #[cfg(test)]
 mod tests {
+    mod session_http_parity {
+        include!("server/session_http_parity.rs");
+    }
+    mod authority_parity {
+        include!("server/authority_parity.rs");
+    }
+    mod history_retention_parity {
+        include!("server/history_retention_parity.rs");
+    }
+    mod event_slow_consumer_parity {
+        include!("server/event_slow_consumer_parity.rs");
+    }
+    mod event_socket_backpressure_parity {
+        include!("server/event_socket_backpressure_parity.rs");
+    }
+    mod event_query_parity {
+        include!("server/event_query_parity.rs");
+    }
+    mod event_transient_replay_parity {
+        include!("server/event_transient_replay_parity.rs");
+    }
+    #[cfg(unix)]
+    mod settings_apply_parity {
+        include!("server/settings_apply_parity.rs");
+    }
+    #[cfg(unix)]
+    mod attachment_control_http_parity {
+        include!("server/attachment_control_http_parity.rs");
+    }
+    #[cfg(unix)]
+    mod attachment_background_gc_parity {
+        include!("server/attachment_background_gc_parity.rs");
+    }
+
+    #[cfg(unix)]
+    mod attachment_authority_parity {
+        include!("server/attachment_authority_parity.rs");
+    }
+
+    #[cfg(unix)]
+    mod attachment_read_gc_parity {
+        include!("server/attachment_read_gc_parity.rs");
+    }
+    mod app_bootstrap_parity {
+        include!("server/app_bootstrap_parity.rs");
+    }
+
     use super::*;
     use crate::auth::WebAuthState;
     use axum::body::Body;
@@ -15690,6 +15996,204 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_body_parsing_matches_shared_node_transport_fixtures() {
+        let fixtures: Vec<Value> =
+            serde_json::from_str(include_str!("../tests/fixtures/mcp-body-parity.json"))
+                .expect("MCP body fixtures");
+        let (state, _root) = test_state();
+        let app = router(state.clone());
+        let mut failures = Vec::new();
+        for fixture in fixtures {
+            let payload = if let Some(hex) = fixture["hex"].as_str() {
+                hex::decode(hex).expect("hex payload")
+            } else {
+                format!(
+                    "{}{}",
+                    fixture["prefix"].as_str().unwrap_or_default(),
+                    fixture["unit"]
+                        .as_str()
+                        .expect("unit")
+                        .repeat(fixture["repeat"].as_u64().expect("repeat") as usize)
+                )
+                .into_bytes()
+            };
+            let mut request = Request::builder()
+                .method(fixture["method"].as_str().expect("method"))
+                .uri("/api/internal/agent-tools/mcp")
+                .header(header::ACCEPT, "application/json, text/event-stream")
+                .header(
+                    header::CONTENT_LENGTH,
+                    fixture["declaredLength"]
+                        .as_u64()
+                        .map_or(payload.len(), |length| length as usize),
+                );
+            if let Some(content_type) = fixture["type"].as_str() {
+                request = request.header(header::CONTENT_TYPE, content_type);
+            }
+            if fixture["auth"].as_bool().expect("auth") {
+                request = request.header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", state.story_tools.token()),
+                );
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from(payload)).expect("request"))
+                .await
+                .expect("response");
+            let status = response.status().as_u16();
+            let sse = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .is_some_and(|value| value == "text/event-stream");
+            let body = to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .expect("body");
+            let actual = if sse {
+                json!({"status": status, "events": mcp_sse_payloads(std::str::from_utf8(&body).expect("UTF-8 SSE"))})
+            } else {
+                let body: Value = if body.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&body).expect("JSON body")
+                };
+                json!({"status":status,"body":body})
+            };
+            if actual != fixture["expected"] {
+                failures.push(format!(
+                    "{}: actual={actual}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn agent_tool_invoke_auth_body_ordering_matches_node_fixtures() {
+        use base64::Engine as _;
+
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../tests/fixtures/agent-tool-invoke-parity.json"
+        ))
+        .expect("agent tool invoke fixtures");
+        let (state, _root) = test_state();
+        let token = state.story_tools.token().to_string();
+        let app = router(state);
+        let mut failures = Vec::new();
+        for fixture in fixtures {
+            let body = if let Some(text) = fixture["body"]["text"].as_str() {
+                text.as_bytes().to_vec()
+            } else if let Some(encoded) = fixture["body"]["base64"].as_str() {
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .expect("base64 body")
+            } else {
+                fixture["body"]["repeat"]["unit"]
+                    .as_str()
+                    .expect("repeat unit")
+                    .repeat(
+                        fixture["body"]["repeat"]["count"]
+                            .as_u64()
+                            .expect("repeat count") as usize,
+                    )
+                    .into_bytes()
+            };
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/api/internal/agent-tools/invoke")
+                .header(header::CONTENT_LENGTH, body.len());
+            if let Some(content_type) = fixture["type"].as_str() {
+                request = request.header(header::CONTENT_TYPE, content_type);
+            }
+            if fixture["auth"].as_bool().expect("auth") {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from(body)).expect("request"))
+                .await
+                .expect("response");
+            let actual = json!({
+                "status": response.status().as_u16(),
+                "body": body_json(response).await,
+            });
+            if actual != fixture["expected"] {
+                failures.push(format!(
+                    "{}: actual={actual}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn mcp_streams_are_only_read_by_the_selected_parser() {
+        let (state, _root) = test_state();
+        let app = router(state.clone());
+        for (media_type, authorized, expected) in [
+            (
+                "application/octet-stream",
+                true,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            ("application/octet-stream", false, StatusCode::FORBIDDEN),
+            ("application/yaml", true, StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            (
+                "application/yaml",
+                false,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+        ] {
+            let stream = futures_util::stream::poll_fn(
+                |_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> {
+                    panic!("MCP must not read a stream that its selected parser does not consume")
+                },
+            );
+            let response = mcp_request_with_authorization(
+                &app,
+                Method::POST,
+                &[
+                    ("accept", "application/json, text/event-stream"),
+                    ("content-type", media_type),
+                ],
+                Body::from_stream(stream),
+                authorized.then(|| format!("Bearer {}", state.story_tools.token())),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                expected,
+                "{media_type}, authorized={authorized}"
+            );
+        }
+
+        // Without a declared length, string parsers must still bound the stream
+        // before auth, including UTF-8 replacement expansion after decoding.
+        for (media_type, byte, chunk_size) in [
+            ("application/json", b' ', 150_000),
+            ("text/plain", b'x', 150_000),
+            ("text/plain", 0xff, 50_000),
+        ] {
+            let chunks =
+                (0..2).map(move |_| Ok::<_, io::Error>(Bytes::from(vec![byte; chunk_size])));
+            let response = mcp_request_without_authorization(
+                &app,
+                Method::POST,
+                &[("content-type", media_type)],
+                Body::from_stream(futures_util::stream::iter(chunks)),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+            assert_eq!(
+                body_json(response).await["code"],
+                "FST_ERR_CTP_BODY_TOO_LARGE"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn mcp_body_parse_errors_precede_agent_token_auth() {
         let (state, _root) = test_state();
         let app = router(state.clone());
@@ -16249,6 +16753,7 @@ mod tests {
                 provider_turn_id: Some("provider-trigger-turn".to_string()),
                 decision: None,
                 queue_id: None,
+                completion_text: None,
             })
         }
 
@@ -16266,6 +16771,7 @@ mod tests {
                 provider_turn_id: Some("provider-turn-2".to_string()),
                 decision: None,
                 queue_id: None,
+                completion_text: None,
             })
         }
     }
@@ -16292,6 +16798,82 @@ mod tests {
 
     fn test_state_standalone() -> (AppState, tempfile::TempDir) {
         test_state_with_control_mode(ControlMode::Standalone)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn opencode_availability_follows_launcher_without_restart() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (state, _root) = test_state_standalone();
+        let definition = controlled_instance_app_runtime::find_builtin_managed_app("opencode")
+            .expect("OpenCode definition");
+        let platform = controlled_instance_app_runtime::current_platform();
+        let command = controlled_instance_app_runtime::managed_app_launcher_path(
+            &state.config.storage_paths.data_dir.join("managed-apps"),
+            &definition,
+            platform,
+            controlled_instance_app_runtime::current_arch(),
+            controlled_instance_app_runtime::detect_managed_app_recipe_target(platform),
+        )
+        .expect("managed OpenCode launcher");
+        let app = router(state);
+        let mut observations = Vec::new();
+        for action in ["startup", "install", "remove"] {
+            if action == "install" {
+                std::fs::create_dir_all(command.parent().expect("launcher parent"))
+                    .expect("create launcher directory");
+                std::fs::write(&command, "#!/bin/sh\nexit 0\n").expect("create launcher");
+                std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755))
+                    .expect("make launcher executable");
+            } else if action == "remove" {
+                std::fs::remove_file(&command).expect("remove launcher");
+            }
+            let capabilities = get_json(&app, "/api/instance/capabilities").await;
+            let status = get_json(&app, "/api/instance/status").await;
+            assert_eq!(capabilities.status(), StatusCode::OK);
+            assert_eq!(status.status(), StatusCode::OK);
+            let capabilities = body_json(capabilities).await;
+            let status = body_json(status).await;
+            let features = &capabilities["data"]["features"];
+            let status_features = &status["data"]["capabilities"]["features"];
+            assert_eq!(
+                status_features["aiSessionProviders"],
+                features["aiSessionProviders"]
+            );
+            assert_eq!(
+                status_features["aiSessionTimeline"],
+                features["aiSessionTimeline"]
+            );
+            let item = status["data"]["appInventory"]["items"]
+                .as_array()
+                .expect("inventory")
+                .iter()
+                .find(|item| item["id"] == "opencode")
+                .expect("OpenCode inventory item");
+            let timeline = &features["aiSessionTimeline"];
+            let supports = |field: &str| {
+                timeline[field]
+                    .as_array()
+                    .expect("timeline agents")
+                    .iter()
+                    .any(|agent| agent == "opencode")
+            };
+            observations.push(json!({
+                "state": item["availability"],
+                "provider": features["aiSessionProviders"].as_array().expect("providers")
+                    .iter().any(|provider| provider["agent"] == "opencode"),
+                "sessionRead": supports("sessionReadAgents"),
+                "turnRead": supports("turnReadAgents"),
+                "liveItems": supports("liveItemAgents"),
+                "toolActivity": supports("toolActivityAgents"),
+            }));
+        }
+        let expected: Vec<Value> = serde_json::from_str(include_str!(
+            "../tests/fixtures/opencode-availability-parity.json"
+        ))
+        .expect("Node availability fixture");
+        assert_eq!(observations, expected);
     }
 
     fn test_state_with_control_mode(control_mode: ControlMode) -> (AppState, tempfile::TempDir) {
@@ -18657,11 +19239,10 @@ mod tests {
                 },
             )
             .expect("stage attachment");
-        state.ai_session_attachments.commit_message(
-            "ses_0000000000320",
-            "message-available",
-            Some("turn-1"),
-        );
+        state
+            .ai_session_attachments
+            .commit_message("ses_0000000000320", "message-available", Some("turn-1"))
+            .unwrap();
         let available = serde_json::to_value(&staged.attachments[0]).expect("attachment");
         let turns = vec![json!({
             "id": "turn-1",
@@ -18705,7 +19286,7 @@ mod tests {
         assert_eq!(messages[1]["attachments"][0]["contentState"], "missing");
         assert_eq!(messages[1]["attachments"][0]["id"], "att_history_missing");
 
-        state.ai_session_attachments.set_retention_days(0);
+        state.ai_session_attachments.set_retention_days(0).unwrap();
         let detail = get_json(&app, "/api/ai-sessions/history/ses_0000000000320").await;
         assert_eq!(detail.status(), StatusCode::OK);
         let detail = body_json(detail).await;
@@ -18927,14 +19508,22 @@ mod tests {
     #[test]
     fn javascript_number_query_helpers_match_node_clamping() {
         assert_eq!(app_logs_max_bytes(None), 64.0 * 1024.0);
-        assert_eq!(app_logs_max_bytes(Some("")), 64.0 * 1024.0);
-        assert_eq!(app_logs_max_bytes(Some("not-a-number")), 64.0 * 1024.0);
-        assert_eq!(app_logs_max_bytes(Some("-1")), 1024.0);
-        assert_eq!(app_logs_max_bytes(Some("1024.5")), 1024.5);
-        assert_eq!(app_logs_max_bytes(Some("1e3")), 1024.0);
-        assert_eq!(app_logs_max_bytes(Some("0x400")), 1024.0);
-        assert_eq!(app_logs_max_bytes(Some("524289")), 512.0 * 1024.0);
-        assert_eq!(app_logs_max_bytes(Some("inf")), 64.0 * 1024.0);
+        assert_eq!(app_logs_max_bytes(Some(&json!(""))), 64.0 * 1024.0);
+        assert_eq!(
+            app_logs_max_bytes(Some(&json!("not-a-number"))),
+            64.0 * 1024.0
+        );
+        assert_eq!(app_logs_max_bytes(Some(&json!("-1"))), 1024.0);
+        assert_eq!(app_logs_max_bytes(Some(&json!("1024.5"))), 1024.5);
+        assert_eq!(app_logs_max_bytes(Some(&json!("1e3"))), 1024.0);
+        assert_eq!(app_logs_max_bytes(Some(&json!("0x400"))), 1024.0);
+        assert_eq!(
+            app_logs_max_bytes(Some(&json!(["2048", "4096"]))),
+            64.0 * 1024.0
+        );
+        assert_eq!(app_logs_max_bytes(Some(&json!(["", ""]))), 64.0 * 1024.0);
+        assert_eq!(app_logs_max_bytes(Some(&json!("524289"))), 512.0 * 1024.0);
+        assert_eq!(app_logs_max_bytes(Some(&json!("inf"))), 64.0 * 1024.0);
         assert_eq!(json_js_number(2048.0), json!(2048));
         assert_eq!(json_js_number(1024.5), json!(1024.5));
 
@@ -18949,6 +19538,45 @@ mod tests {
         assert_eq!(transcript_tail_lines(Some("1e3")), 1000);
         assert_eq!(transcript_tail_lines(Some("1024.5")), 1000);
         assert_eq!(transcript_tail_lines(Some("Infinity")), 1000);
+    }
+
+    #[tokio::test]
+    async fn claude_transcript_reads_match_node_http_fixtures() {
+        let (state, root) = test_state();
+        let transcript = root.path().join("claude.jsonl");
+        let mut session = ai_session_record("ses_0000000000003", "aps_0000000000003");
+        session.agent = "claude".to_string();
+        session.transcript_path = Some(transcript.display().to_string());
+        state.ai_sessions.save(session).expect("save session");
+        let app = router(state);
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../tests/fixtures/claude-transcript-read-parity.json"
+        ))
+        .expect("transcript fixtures");
+        let mut mismatches = Vec::new();
+        for fixture in fixtures {
+            let bytes = if let Some(content) = fixture["content"].as_str() {
+                content.as_bytes().to_vec()
+            } else {
+                serde_json::from_value(fixture["bytes"].clone()).expect("fixture bytes")
+            };
+            std::fs::write(&transcript, bytes).expect("write transcript");
+            let uri = format!(
+                "/api/ai-sessions/ses_0000000000003/transcript?tail={}",
+                fixture["tail"]
+            );
+            let mut expected = fixture["expected"].clone();
+            expected["path"] = json!(transcript);
+            for _ in 0..2 {
+                let response = get_json(&app, &uri).await;
+                let status = response.status();
+                let body = body_json(response).await;
+                if status != StatusCode::OK || body != json!({ "data": expected }) {
+                    mismatches.push(format!("{}: {status} {body}", fixture["name"]));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     #[tokio::test]
@@ -19255,6 +19883,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attachment_routes_match_shared_node_request_and_streaming_fixtures() {
+        let fixtures = [
+            include_str!("../tests/fixtures/attachment-route-parity.json"),
+            include_str!("../tests/fixtures/attachment-source-parity.json"),
+        ]
+        .into_iter()
+        .flat_map(|source| serde_json::from_str::<Vec<Value>>(source).expect("fixtures"));
+        let (state, root) = test_state();
+        let app = router(state);
+        let mut failures = Vec::new();
+        for fixture in fixtures {
+            let payload = fixture["unit"]
+                .as_str()
+                .unwrap_or_default()
+                .repeat(fixture["repeat"].as_u64().unwrap_or(1) as usize);
+            let mut request = Request::builder()
+                .method(fixture["method"].as_str().expect("method"))
+                .uri(fixture["url"].as_str().expect("url"))
+                .header(header::CONTENT_LENGTH, payload.len());
+            if !fixture.get("type").is_some_and(Value::is_null) {
+                request = request.header(
+                    header::CONTENT_TYPE,
+                    fixture["type"]
+                        .as_str()
+                        .unwrap_or("application/octet-stream"),
+                );
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from(payload)).expect("request"))
+                .await
+                .expect("response");
+            let status = response.status().as_u16();
+            let mut body = body_json(response).await;
+            if body["data"].get("expiresAt").is_some() {
+                body["data"]["expiresAt"] = json!("<expiresAt>");
+                if fixture["generatedId"] == true {
+                    body["data"]["id"] = json!("<draft-id>");
+                }
+            }
+            let mut actual = json!({"status": status, "body": body});
+            if fixture["checkContent"] == true && status == 200 {
+                let attachment_root = root.path().join("data/ai-session-attachments");
+                let manifest: Value = serde_json::from_slice(
+                    &std::fs::read(attachment_root.join("drafts").join(format!(
+                        "{}.json",
+                        actual["body"]["data"]["id"].as_str().expect("draft ID")
+                    )))
+                    .expect("draft manifest"),
+                )
+                .expect("manifest JSON");
+                actual["contentHex"] = json!(hex::encode(
+                    std::fs::read(
+                        attachment_root
+                            .join("blobs")
+                            .join(manifest["blobHash"].as_str().expect("blob hash"))
+                    )
+                    .expect("content")
+                ));
+            }
+            if actual != fixture["expected"] {
+                failures.push(format!(
+                    "{}: actual={actual}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn upload_streams_are_not_polled_before_scope_size_and_offset_admission() {
+        let (state, _root) = test_state();
+        let app = router(state);
+        for (method, url, expected) in [
+            ("POST", "/api/ai-session-attachments/drafts?scopeType=session&scopeId=missing&kind=file&name=f&mime=text%2Fplain&size=1", "AI_SESSION_NOT_FOUND"),
+            ("POST", "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=x&kind=file&name=f&mime=text%2Fplain&size=600000", "AI_SESSION_ATTACHMENTS_TOO_LARGE"),
+            ("PUT", "/api/ai-session-attachments/draft-streams/cia_ffffffffffffffffffffffff?offset=0", "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND"),
+            ("PUT", "/api/ai-session-attachments/draft-streams/bad-id?offset=0", "AI_SESSION_CONTROL_INVALID"),
+            ("PUT", "/api/ai-session-attachments/draft-streams/cia_ffffffffffffffffffffffff?offset=0&offset=0", "AI_SESSION_CONTROL_INVALID"),
+        ] {
+            let stream = futures_util::stream::poll_fn(|_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> {
+                panic!("an upload rejected by admission must not consume its stream")
+            });
+            let response = app.clone().oneshot(Request::builder().method(method).uri(url)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from_stream(stream)).expect("request")).await.expect("response");
+            assert_eq!(body_json(response).await["error"]["code"], expected, "{url}");
+        }
+    }
+
+    #[tokio::test]
     async fn ai_session_attachment_drafts_and_streams_match_the_upload_contract() {
         let (state, _root) = test_state();
         state
@@ -19460,11 +20180,10 @@ mod tests {
                 },
             )
             .expect("stage");
-        state.ai_session_attachments.commit_message(
-            "ses_0000000000007",
-            "msg_0000000000007",
-            Some("turn-1"),
-        );
+        state
+            .ai_session_attachments
+            .commit_message("ses_0000000000007", "msg_0000000000007", Some("turn-1"))
+            .unwrap();
         let app = router(state);
         let uri = format!(
             "/api/ai-sessions/ses_0000000000007/messages/msg_0000000000007/attachments/{}/content",
@@ -19590,11 +20309,10 @@ mod tests {
                 },
             )
             .expect("stage");
-        state.ai_session_attachments.commit_message(
-            "ses_0000000000006",
-            "msg_0000000000006",
-            Some("turn-1"),
-        );
+        state
+            .ai_session_attachments
+            .commit_message("ses_0000000000006", "msg_0000000000006", Some("turn-1"))
+            .unwrap();
         let app = router(state.clone());
         let uri = format!(
             "/api/ai-sessions/ses_0000000000006/messages/msg_0000000000006/attachments/{}/content",
@@ -19901,7 +20619,7 @@ mod tests {
         let item = &queue["data"]["items"][0];
         assert_eq!(item["message"], "Edited with attachment");
         assert_eq!(item["attachments"][0]["id"], draft.id);
-        assert_eq!(item["attachments"][0]["sourceType"], "inline");
+        assert_eq!(item["attachments"][0]["sourceType"], "runtime-path");
         let message_id = item["messageId"].as_str().expect("message id").to_string();
         assert!(message_id.starts_with("msg_"));
 
@@ -19925,6 +20643,126 @@ mod tests {
             .expect("body")
             .to_bytes();
         assert_eq!(&bytes[..], b"hello");
+    }
+
+    #[tokio::test]
+    async fn ai_session_queue_removal_preserves_ownership_when_draft_recovery_fails() {
+        use controlled_instance_ai_session::{
+            AiSessionAttachmentDraftInput, StageMessageAttachmentsInput,
+        };
+        use controlled_instance_protocol::{AiSessionAttachmentKind, AiSessionAttachmentScopeType};
+
+        let (state, root) = test_state();
+        let session_id = "ses_0000000000008";
+        let message_id = "msg_retry";
+        state
+            .ai_sessions
+            .save(ai_session_record(session_id, "aps_0000000000008"))
+            .expect("save");
+        let draft = state
+            .ai_session_attachments
+            .create_draft(AiSessionAttachmentDraftInput {
+                id: Some("att_0123456789abcdef01234567".to_string()),
+                scope_type: AiSessionAttachmentScopeType::Session,
+                scope_id: session_id.to_string(),
+                kind: AiSessionAttachmentKind::File,
+                name: "retry.txt".to_string(),
+                mime: "text/plain".to_string(),
+                size: 5,
+                content: b"retry".to_vec(),
+            })
+            .expect("draft");
+        state
+            .ai_session_attachments
+            .stage_message(StageMessageAttachmentsInput {
+                session_id: session_id.to_string(),
+                message_id: message_id.to_string(),
+                attachments: Vec::new(),
+                retained_attachment_ids: Vec::new(),
+                runtime_path_root: None,
+                draft_scope_type: Some(AiSessionAttachmentScopeType::Session),
+                draft_scope_id: Some(session_id.to_string()),
+                draft_attachment_ids: vec![draft.id.clone()],
+            })
+            .expect("stage");
+        let metas = state
+            .ai_session_attachments
+            .message_attachment_metas(session_id, message_id)
+            .into_iter()
+            .map(|meta| serde_json::to_value(meta).expect("meta"))
+            .collect();
+        let queued = state
+            .ai_sessions
+            .enqueue_message(
+                session_id,
+                "retry",
+                metas,
+                Vec::new(),
+                None,
+                Some(message_id),
+            )
+            .expect("enqueue")
+            .expect("queued");
+        let before = serde_json::to_value(state.ai_sessions.queue(session_id).expect("queue"))
+            .expect("queue JSON");
+        let attachments_dir = root.path().join("data/ai-session-attachments");
+        let draft_dir = attachments_dir.join("drafts");
+        std::fs::remove_dir(&draft_dir).expect("empty draft directory");
+        std::fs::write(&draft_dir, b"blocked").expect("block writes");
+        let app = router(state.clone());
+        let uri = format!("/api/ai-sessions/{session_id}/queue/{}", queued.queue_id);
+        let failed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("failed removal");
+        assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body_json(failed).await["error"]["code"],
+            "AI_SESSION_ATTACHMENT_IO_FAILED"
+        );
+        assert_eq!(
+            serde_json::to_value(state.ai_sessions.queue(session_id).expect("queue"))
+                .expect("queue JSON"),
+            before
+        );
+        assert!(attachments_dir
+            .join("manifests")
+            .join(format!("{}.json", draft.id))
+            .exists());
+        assert!(state
+            .ai_session_attachments
+            .content(session_id, message_id, &draft.id)
+            .is_ok());
+        std::fs::remove_file(&draft_dir).expect("unblock drafts");
+        std::fs::create_dir(&draft_dir).expect("restore drafts");
+        let retried = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("retry removal");
+        assert_eq!(retried.status(), StatusCode::OK);
+        let after = state.ai_sessions.queue(session_id).expect("queue");
+        assert!(after.items.is_empty());
+        assert_eq!(
+            after.revision,
+            before["revision"].as_u64().expect("revision") + 1
+        );
+        assert!(state
+            .ai_session_attachments
+            .cancel_draft(AiSessionAttachmentScopeType::Session, session_id, &draft.id)
+            .expect("cancel recovered draft"));
     }
 
     #[tokio::test]
@@ -20896,6 +21734,238 @@ mod tests {
             .expect("operations")
             .iter()
             .any(|operation| operation["clientRequestId"] == "fork-snapshot-cleanup"));
+    }
+
+    #[tokio::test]
+    async fn repository_query_http_errors_match_shared_node_coercion_fixtures() {
+        let fixtures = [
+            include_str!("../tests/fixtures/repository-query-parity.json"),
+            include_str!("../tests/fixtures/repository-query-structure-parity.json"),
+        ]
+        .into_iter()
+        .flat_map(|source| serde_json::from_str::<Vec<Value>>(source).expect("query fixtures"));
+        let (state, _root) = test_state();
+        let app = router(state);
+        let mut failures = Vec::new();
+        for fixture in fixtures {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/api/ai-sessions/missing/repository/{}",
+                            fixture["suffix"].as_str().expect("suffix")
+                        ))
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            let status = response.status().as_u16();
+            let body = body_json(response).await;
+            let actual = json!({"status": status, "error": body["error"]});
+            if actual != fixture["expected"] {
+                failures.push(format!(
+                    "{}: actual={actual}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn normalized_body_readers_accept_expansion_and_reject_oversized_streams() {
+        let app = Router::new()
+            .route(
+                "/api/test-body",
+                post(|request: Request| async {
+                    match fastify_request_body(request).await {
+                        Ok(Some(Value::String(value))) => {
+                            Json(json!({"length": value.len()})).into_response()
+                        }
+                        Ok(_) => StatusCode::BAD_REQUEST.into_response(),
+                        Err(response) => response,
+                    }
+                }),
+            )
+            .layer(middleware::from_fn(fastify_body_parser));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/test-body")
+                    .header(header::CONTENT_TYPE, "text/plain")
+                    .body(Body::from("\"".repeat(600_000)))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await, json!({"length":600_000}));
+
+        let chunks = (0..2).map(|_| Ok::<_, io::Error>(Bytes::from(vec![b'x'; 600_000])));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/test-body")
+                    .header(header::CONTENT_TYPE, "text/plain")
+                    .body(Body::from_stream(futures_util::stream::iter(chunks)))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            body_json(response).await["code"],
+            "FST_ERR_CTP_BODY_TOO_LARGE"
+        );
+    }
+
+    #[tokio::test]
+    async fn repository_transport_honors_raw_byte_limits_and_media_type_errors() {
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../tests/fixtures/repository-transport-parity.json"
+        ))
+        .expect("transport fixtures");
+        let (state, _root) = test_state();
+        let app = router(state);
+        let mut failures = Vec::new();
+        for fixture in fixtures {
+            let payload = if let Some(hex) = fixture["hex"].as_str() {
+                hex::decode(hex).expect("hex payload")
+            } else {
+                format!(
+                    "{}{}",
+                    fixture["prefix"].as_str().unwrap_or_default(),
+                    fixture["unit"]
+                        .as_str()
+                        .expect("unit")
+                        .repeat(fixture["repeat"].as_u64().expect("repeat") as usize)
+                )
+                .into_bytes()
+            };
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(fixture["method"].as_str().expect("method"))
+                        .uri(format!(
+                            "/api/ai-sessions/missing/repository/{}",
+                            fixture["suffix"].as_str().expect("suffix")
+                        ))
+                        .header(
+                            header::CONTENT_TYPE,
+                            fixture["type"].as_str().expect("type"),
+                        )
+                        .header(
+                            header::CONTENT_LENGTH,
+                            fixture["declaredLength"]
+                                .as_u64()
+                                .unwrap_or(payload.len() as u64),
+                        )
+                        .body(Body::from(payload))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            let status = response.status().as_u16();
+            let actual = json!({"status":status,"body":body_json(response).await});
+            if actual != fixture["expected"] {
+                failures.push(format!(
+                    "{}: actual={actual}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn repository_request_bodies_match_shared_node_fixtures() {
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../tests/fixtures/repository-body-parity.json"
+        ))
+        .expect("body fixtures");
+        let (state, _root) = test_state();
+        let app = router(state);
+        let mut failures = Vec::new();
+        for fixture in fixtures {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(fixture["method"].as_str().expect("method"))
+                        .uri(format!(
+                            "/api/ai-sessions/missing/repository/{}",
+                            fixture["suffix"].as_str().expect("suffix")
+                        ))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&fixture["body"]).expect("body"),
+                        ))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            let status = response.status().as_u16();
+            let body = body_json(response).await;
+            let actual = json!({"status":status,"error":body["error"]});
+            if actual != fixture["expected"] {
+                failures.push(format!(
+                    "{}: actual={actual}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[tokio::test]
+    async fn repository_file_queries_preserve_node_path_decoding_and_file_identity() {
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../tests/fixtures/repository-file-query-parity.json"
+        ))
+        .expect("file query fixtures");
+        let (state, _root) = test_state();
+        let repository = git_repository();
+        let mut session = ai_session_record("query-files", "query-files-app");
+        session.cwd = Some(repository.path().display().to_string());
+        session.status = "idle".to_string();
+        state.ai_sessions.save(session).expect("save session");
+        let app = router(state);
+        let mut failures = Vec::new();
+        for fixture in fixtures {
+            if let Some(file_name) = fixture["fileName"].as_str() {
+                std::fs::write(repository.path().join(file_name), "file query fixture\n")
+                    .expect("file");
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/api/ai-sessions/query-files/repository/{}",
+                            fixture["suffix"].as_str().expect("suffix")
+                        ))
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            let status = response.status().as_u16();
+            let mut actual = body_json(response).await;
+            actual["status"] = json!(status);
+            if actual != fixture["expected"] {
+                failures.push(format!(
+                    "{}: actual={actual}, expected={}",
+                    fixture["name"], fixture["expected"]
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[tokio::test]
@@ -22164,6 +23234,39 @@ mod tests {
         assert!(response.get("decision").is_none());
         assert!(response.get("queueId").is_none());
         assert!(response.get("messageId").is_none());
+    }
+
+    #[test]
+    fn action_response_matches_node_public_field_order() {
+        let result = controlled_instance_ai_session::AiSessionActionResult {
+            session: ai_session_record("ses_0000000000009", "aps_0000000000009"),
+            provider: "codex".to_string(),
+            action: controlled_instance_ai_session::ProviderAction {
+                action: "send".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                provider_turn_id: Some("provider-turn-1".to_string()),
+                decision: None,
+                queue_id: Some("queue-1".to_string()),
+                completion_text: None,
+            },
+        };
+        let response = ai_session_action_response(&result);
+        assert_eq!(
+            response
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "provider",
+                "action",
+                "turnId",
+                "providerTurnId",
+                "queueId",
+                "sessionId",
+            ]
+        );
     }
 
     #[tokio::test]

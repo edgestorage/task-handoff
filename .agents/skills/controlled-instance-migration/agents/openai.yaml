@@ -1,0 +1,4 @@
+interface:
+  display_name: "Controlled Instance Rust Migration"
+  short_description: "按验收看板推进 Node 到 Rust 迁移，复现差异、修复并验证"
+  default_prompt: "使用 $controlled-instance-migration 接续项目验收看板，选择下一工作单元，建立 Node/Rust 差分证据并修复验证。"

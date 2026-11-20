@@ -1,0 +1,480 @@
+{
+  "scenarios": [
+    {
+      "name": "message-delta-all-instances",
+      "publish": [
+        {
+          "type": "ai-session.message-delta",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "turnId": "turn-session-query",
+            "itemId": "item-a",
+            "delta": "alpha",
+            "generatedAt": "2026-11-20T00:00:02.000Z"
+          }
+        },
+        {
+          "type": "ai-session.message-delta",
+          "payload": {
+            "instanceId": "instance-other",
+            "sessionId": "session-other",
+            "providerSessionId": "provider-session-other",
+            "turnId": "turn-session-other",
+            "itemId": "item-b",
+            "delta": "beta",
+            "generatedAt": "2026-11-20T00:00:02.000Z"
+          }
+        }
+      ],
+      "subscribe": {
+        "topics": [
+          "ai.sessions"
+        ],
+        "aiSessionTransient": {
+          "messageDeltas": {
+            "allInstances": true,
+            "instanceIds": []
+          },
+          "timelineAllSessions": false,
+          "timelineSessions": [],
+          "replaySince": "2026-11-20T00:00:00.000Z"
+        }
+      },
+      "expected": {
+        "replayed": [
+          {
+            "type": "ai-session.message-delta",
+            "replay": true,
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "itemId": "item-a",
+            "turnId": "turn-session-query",
+            "status": null,
+            "summary": null,
+            "delta": "alpha",
+            "field": null
+          },
+          {
+            "type": "ai-session.message-delta",
+            "replay": true,
+            "instanceId": "instance-other",
+            "sessionId": "session-other",
+            "itemId": "item-b",
+            "turnId": "turn-session-other",
+            "status": null,
+            "summary": null,
+            "delta": "beta",
+            "field": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "message-delta-scoped-instance",
+      "publish": [
+        {
+          "type": "ai-session.message-delta",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "turnId": "turn-session-query",
+            "itemId": "item-a",
+            "delta": "alpha",
+            "generatedAt": "2026-11-20T00:00:02.000Z"
+          }
+        },
+        {
+          "type": "ai-session.message-delta",
+          "payload": {
+            "instanceId": "instance-other",
+            "sessionId": "session-other",
+            "providerSessionId": "provider-session-other",
+            "turnId": "turn-session-other",
+            "itemId": "item-b",
+            "delta": "beta",
+            "generatedAt": "2026-11-20T00:00:02.000Z"
+          }
+        }
+      ],
+      "subscribe": {
+        "topics": [
+          "ai.sessions"
+        ],
+        "aiSessionTransient": {
+          "messageDeltas": {
+            "allInstances": false,
+            "instanceIds": [
+              "instance-query"
+            ]
+          },
+          "timelineAllSessions": false,
+          "timelineSessions": [],
+          "replaySince": "2026-11-20T00:00:00.000Z"
+        }
+      },
+      "expected": {
+        "replayed": [
+          {
+            "type": "ai-session.message-delta",
+            "replay": true,
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "itemId": "item-a",
+            "turnId": "turn-session-query",
+            "status": null,
+            "summary": null,
+            "delta": "alpha",
+            "field": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "message-delta-without-cursor",
+      "publish": [
+        {
+          "type": "ai-session.message-delta",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "turnId": "turn-session-query",
+            "itemId": "item-a",
+            "delta": "alpha",
+            "generatedAt": "2026-11-20T00:00:02.000Z"
+          }
+        }
+      ],
+      "subscribe": {
+        "topics": [
+          "ai.sessions"
+        ],
+        "aiSessionTransient": {
+          "messageDeltas": {
+            "allInstances": true,
+            "instanceIds": []
+          },
+          "timelineAllSessions": false,
+          "timelineSessions": []
+        }
+      },
+      "expected": {
+        "replayed": []
+      }
+    },
+    {
+      "name": "timeline-delta-and-item",
+      "publish": [
+        {
+          "type": "ai-session.timeline-item-delta",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "turnId": "turn-session-query",
+            "itemId": "item-a",
+            "field": "output",
+            "delta": "chunk"
+          }
+        },
+        {
+          "type": "ai-session.timeline-item",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "item": {
+              "id": "item-a",
+              "turnId": "turn-session-query",
+              "kind": "assistant",
+              "status": "running",
+              "summary": "live"
+            }
+          }
+        }
+      ],
+      "subscribe": {
+        "topics": [
+          "ai.sessions"
+        ],
+        "aiSessionTransient": {
+          "messageDeltas": {
+            "allInstances": false,
+            "instanceIds": []
+          },
+          "timelineAllSessions": true,
+          "timelineSessions": [],
+          "replaySince": "2026-11-20T00:00:00.000Z"
+        }
+      },
+      "expected": {
+        "replayed": [
+          {
+            "type": "ai-session.timeline-item-delta",
+            "replay": true,
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "itemId": "item-a",
+            "turnId": "turn-session-query",
+            "status": null,
+            "summary": null,
+            "delta": "chunk",
+            "field": "output"
+          },
+          {
+            "type": "ai-session.timeline-item",
+            "replay": true,
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "itemId": "item-a",
+            "turnId": "turn-session-query",
+            "status": "running",
+            "summary": "live",
+            "delta": null,
+            "field": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeline-item-superseded",
+      "publish": [
+        {
+          "type": "ai-session.timeline-item",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "item": {
+              "id": "item-a",
+              "turnId": "turn-session-query",
+              "kind": "assistant",
+              "status": "running",
+              "summary": "one"
+            }
+          }
+        },
+        {
+          "type": "ai-session.timeline-item",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "item": {
+              "id": "item-a",
+              "turnId": "turn-session-query",
+              "kind": "assistant",
+              "status": "running",
+              "summary": "two"
+            }
+          }
+        }
+      ],
+      "subscribe": {
+        "topics": [
+          "ai.sessions"
+        ],
+        "aiSessionTransient": {
+          "messageDeltas": {
+            "allInstances": false,
+            "instanceIds": []
+          },
+          "timelineAllSessions": true,
+          "timelineSessions": [],
+          "replaySince": "2026-11-20T00:00:00.000Z"
+        }
+      },
+      "expected": {
+        "replayed": [
+          {
+            "type": "ai-session.timeline-item",
+            "replay": true,
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "itemId": "item-a",
+            "turnId": "turn-session-query",
+            "status": "running",
+            "summary": "two",
+            "delta": null,
+            "field": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "settled-item-clears-replay",
+      "publish": [
+        {
+          "type": "ai-session.timeline-item-delta",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "turnId": "turn-session-query",
+            "itemId": "item-a",
+            "field": "output",
+            "delta": "chunk"
+          }
+        },
+        {
+          "type": "ai-session.timeline-item",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "item": {
+              "id": "item-a",
+              "turnId": "turn-session-query",
+              "kind": "assistant",
+              "status": "completed",
+              "summary": "done"
+            }
+          }
+        }
+      ],
+      "subscribe": {
+        "topics": [
+          "ai.sessions"
+        ],
+        "aiSessionTransient": {
+          "messageDeltas": {
+            "allInstances": false,
+            "instanceIds": []
+          },
+          "timelineAllSessions": true,
+          "timelineSessions": [],
+          "replaySince": "2026-11-20T00:00:00.000Z"
+        }
+      },
+      "expected": {
+        "replayed": []
+      }
+    },
+    {
+      "name": "timeline-scoped-session",
+      "publish": [
+        {
+          "type": "ai-session.timeline-item-delta",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "turnId": "turn-session-query",
+            "itemId": "item-a",
+            "field": "output",
+            "delta": "alpha"
+          }
+        },
+        {
+          "type": "ai-session.timeline-item-delta",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-other",
+            "providerSessionId": "provider-session-other",
+            "turnId": "turn-session-other",
+            "itemId": "item-b",
+            "field": "output",
+            "delta": "beta"
+          }
+        }
+      ],
+      "subscribe": {
+        "topics": [
+          "ai.sessions"
+        ],
+        "aiSessionTransient": {
+          "messageDeltas": {
+            "allInstances": false,
+            "instanceIds": []
+          },
+          "timelineAllSessions": false,
+          "timelineSessions": [
+            {
+              "instanceId": "instance-query",
+              "sessionId": "session-query"
+            }
+          ],
+          "replaySince": "2026-11-20T00:00:00.000Z"
+        }
+      },
+      "expected": {
+        "replayed": [
+          {
+            "type": "ai-session.timeline-item-delta",
+            "replay": true,
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "itemId": "item-a",
+            "turnId": "turn-session-query",
+            "status": null,
+            "summary": null,
+            "delta": "alpha",
+            "field": "output"
+          }
+        ]
+      }
+    },
+    {
+      "name": "future-cursor-replays-message-delta-only",
+      "publish": [
+        {
+          "type": "ai-session.message-delta",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "turnId": "turn-session-query",
+            "itemId": "item-a",
+            "delta": "alpha",
+            "generatedAt": "2026-11-20T00:00:02.000Z"
+          }
+        },
+        {
+          "type": "ai-session.timeline-item-delta",
+          "payload": {
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "providerSessionId": "provider-session-query",
+            "turnId": "turn-session-query",
+            "itemId": "item-a",
+            "field": "output",
+            "delta": "chunk"
+          }
+        }
+      ],
+      "subscribe": {
+        "topics": [
+          "ai.sessions"
+        ],
+        "aiSessionTransient": {
+          "messageDeltas": {
+            "allInstances": true,
+            "instanceIds": []
+          },
+          "timelineAllSessions": true,
+          "timelineSessions": [],
+          "replaySince": "2099-01-01T00:00:00.000Z"
+        }
+      },
+      "expected": {
+        "replayed": [
+          {
+            "type": "ai-session.message-delta",
+            "replay": true,
+            "instanceId": "instance-query",
+            "sessionId": "session-query",
+            "itemId": "item-a",
+            "turnId": "turn-session-query",
+            "status": null,
+            "summary": null,
+            "delta": "alpha",
+            "field": null
+          }
+        ]
+      }
+    }
+  ]
+}

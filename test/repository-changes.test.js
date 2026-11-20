@@ -36,6 +36,28 @@ function selected(state, scope, paths) {
   });
 }
 
+test("diff responses match shared Node/Rust byte and binary fixtures", async () => {
+  const fixtures = JSON.parse(fs.readFileSync(path.join(__dirname, "../controlled-instance-rs/crates/workspace/tests/fixtures/repository-diff-parity.json"), "utf8"));
+  for (const fixture of fixtures) {
+    const repository = createGitFixture();
+    try {
+      if (fixture.scope !== "untracked") {
+        repository.write("example.txt", "initial\n");
+        repository.commit();
+      }
+      repository.write("example.txt", Buffer.from(fixture.hex, "hex"));
+      const { changes } = services(repository);
+      const diff = await changes.diff(fixture.scope, "example.txt", fixture.byteLimit);
+      const { version, snapshotId, path: filePath, scope, oldPath, ...response } = diff;
+      assert.equal(filePath, "example.txt");
+      assert.equal(scope, fixture.scope);
+      assert.deepEqual(response, fixture.expected, fixture.name);
+    } finally {
+      fs.rmSync(repository.base, { recursive: true, force: true });
+    }
+  }
+});
+
 test("change entries and diffs keep staged and unstaged versions independent", async () => {
   const fixture = createGitFixture();
   fixture.write("tracked.txt", "staged content\n");

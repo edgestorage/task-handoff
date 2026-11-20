@@ -1,0 +1,557 @@
+{
+  "unit": "U02.1",
+  "source": {
+    "head": "9b2d6e17cce4a6a65d00f2ed4504f45546256edf",
+    "compatibilityBaseline": "v0.0.47",
+    "owner": "packages/controlled-instance/src/web/server.ts",
+    "dirty": "pre-existing migration changes preserved; Node authority owner unchanged",
+    "harness": "test/fixtures/ai-session-authority-parity.js"
+  },
+  "cases": [
+    "C01 live HTTP/WS story mutation",
+    "C02 already-read no-op",
+    "C03 disconnected mutation and HTTP/WS reconnect",
+    "C04 delta current/wrong stream/future revision",
+    "C05 delta retention without subsequent publish"
+  ],
+  "expected": {
+    "initial": {
+      "streamId": "<stream>",
+      "revision": 1,
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "providerSessionId": "provider-authority",
+            "title": "Initial title",
+            "status": "idle",
+            "unread": false
+          }
+        ]
+      }
+    },
+    "bootstrap": {
+      "type": "ai-session.snapshot",
+      "payload": {
+        "meta": {
+          "streamId": "<stream>",
+          "revision": 1,
+          "previousRevision": 0,
+          "reason": "startup"
+        },
+        "snapshot": {
+          "runningCount": 0,
+          "waitingCount": 0,
+          "staleCount": 0,
+          "sessions": [
+            {
+              "id": "<session>",
+              "providerSessionId": "provider-authority",
+              "title": "Initial title",
+              "status": "idle",
+              "unread": false
+            }
+          ]
+        }
+      }
+    },
+    "patch": {
+      "type": "ai-session.patch",
+      "payload": {
+        "meta": {
+          "streamId": "<stream>",
+          "revision": 2,
+          "previousRevision": 1,
+          "reason": "control-action"
+        },
+        "upserted": [
+          {
+            "id": "<session>",
+            "providerSessionId": "provider-authority",
+            "title": "Initial title",
+            "status": "idle",
+            "unread": false,
+            "storyId": "story-one"
+          }
+        ],
+        "removed": []
+      }
+    },
+    "after": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "providerSessionId": "provider-authority",
+            "title": "Initial title",
+            "status": "idle",
+            "unread": false,
+            "storyId": "story-one"
+          }
+        ]
+      }
+    },
+    "unchanged": {
+      "streamId": "<stream>",
+      "revision": 2,
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "providerSessionId": "provider-authority",
+            "title": "Initial title",
+            "status": "idle",
+            "unread": false,
+            "storyId": "story-one"
+          }
+        ]
+      }
+    },
+    "recovered": {
+      "streamId": "<stream>",
+      "revision": 3,
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "providerSessionId": "provider-authority",
+            "title": "Initial title",
+            "status": "idle",
+            "unread": false,
+            "storyId": "story-offline"
+          }
+        ]
+      }
+    },
+    "reconnect": {
+      "type": "ai-session.snapshot",
+      "payload": {
+        "meta": {
+          "streamId": "<stream>",
+          "revision": 3,
+          "previousRevision": 2,
+          "reason": "startup"
+        },
+        "snapshot": {
+          "runningCount": 0,
+          "waitingCount": 0,
+          "staleCount": 0,
+          "sessions": [
+            {
+              "id": "<session>",
+              "providerSessionId": "provider-authority",
+              "title": "Initial title",
+              "status": "idle",
+              "unread": false,
+              "storyId": "story-offline"
+            }
+          ]
+        }
+      }
+    },
+    "next": {
+      "type": "ai-session.patch",
+      "payload": {
+        "meta": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "previousRevision": 3,
+          "reason": "control-action"
+        },
+        "upserted": [
+          {
+            "id": "<session>",
+            "providerSessionId": "provider-authority",
+            "title": "Initial title",
+            "status": "idle",
+            "unread": false,
+            "storyId": "story-after-reconnect"
+          }
+        ],
+        "removed": []
+      }
+    },
+    "latest": {
+      "streamId": "<stream>",
+      "revision": 4,
+      "snapshot": {
+        "runningCount": 0,
+        "waitingCount": 0,
+        "staleCount": 0,
+        "sessions": [
+          {
+            "id": "<session>",
+            "providerSessionId": "provider-authority",
+            "title": "Initial title",
+            "status": "idle",
+            "unread": false,
+            "storyId": "story-after-reconnect"
+          }
+        ]
+      }
+    },
+    "missed": {
+      "streamId": "<stream>",
+      "sinceRevision": 2,
+      "latestRevision": 4,
+      "earliestRetainedRevision": 1,
+      "syncRequired": false,
+      "events": [
+        {
+          "type": "ai-session.patch",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "revision": 3,
+              "previousRevision": 2,
+              "reason": "control-action"
+            },
+            "upserted": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-offline"
+              }
+            ],
+            "removed": []
+          }
+        },
+        {
+          "type": "ai-session.patch",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "revision": 4,
+              "previousRevision": 3,
+              "reason": "control-action"
+            },
+            "upserted": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ],
+            "removed": []
+          }
+        }
+      ]
+    },
+    "current": {
+      "streamId": "<stream>",
+      "sinceRevision": 4,
+      "latestRevision": 4,
+      "earliestRetainedRevision": 1,
+      "syncRequired": false,
+      "events": []
+    },
+    "wrongStream": {
+      "streamId": "<stream>",
+      "sinceRevision": 2,
+      "latestRevision": 4,
+      "earliestRetainedRevision": 1,
+      "syncRequired": true,
+      "events": []
+    },
+    "future": {
+      "streamId": "<stream>",
+      "sinceRevision": 5,
+      "latestRevision": 4,
+      "earliestRetainedRevision": 1,
+      "syncRequired": true,
+      "events": []
+    },
+    "resyncQueries": {
+      "duplicateStream": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "sinceRevision": 1,
+          "latestRevision": 4,
+          "earliestRetainedRevision": 1,
+          "syncRequired": true,
+          "events": []
+        }
+      },
+      "duplicateSince": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ]
+          }
+        }
+      },
+      "fractional": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ]
+          }
+        }
+      },
+      "negative": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ]
+          }
+        }
+      },
+      "nan": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ]
+          }
+        }
+      },
+      "infinity": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ]
+          }
+        }
+      },
+      "emptySince": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "sinceRevision": 0,
+          "latestRevision": 4,
+          "earliestRetainedRevision": 1,
+          "syncRequired": true,
+          "events": []
+        }
+      },
+      "missingStream": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": "AI_SESSION_DELTA_INVALID",
+            "message": "streamId is required with sinceRevision."
+          }
+        }
+      },
+      "emptyStream": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": "AI_SESSION_DELTA_INVALID",
+            "message": "streamId is required with sinceRevision."
+          }
+        }
+      },
+      "duplicateActual": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "sinceRevision": 1,
+          "latestRevision": 4,
+          "earliestRetainedRevision": 1,
+          "syncRequired": true,
+          "events": []
+        }
+      },
+      "hex": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "sinceRevision": 16,
+          "latestRevision": 4,
+          "earliestRetainedRevision": 1,
+          "syncRequired": true,
+          "events": []
+        }
+      }
+    },
+    "stateQueries": {
+      "current": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ]
+          }
+        }
+      },
+      "subagents": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ]
+          }
+        }
+      },
+      "duplicateHierarchy": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ]
+          }
+        }
+      },
+      "caseSensitive": {
+        "status": 200,
+        "body": {
+          "streamId": "<stream>",
+          "revision": 4,
+          "snapshot": {
+            "runningCount": 0,
+            "waitingCount": 0,
+            "staleCount": 0,
+            "sessions": [
+              {
+                "id": "<session>",
+                "providerSessionId": "provider-authority",
+                "title": "Initial title",
+                "status": "idle",
+                "unread": false,
+                "storyId": "story-after-reconnect"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expired": {
+      "streamId": "<stream>",
+      "sinceRevision": 2,
+      "latestRevision": 4,
+      "earliestRetainedRevision": 5,
+      "syncRequired": true,
+      "events": []
+    }
+  }
+}

@@ -1,0 +1,1233 @@
+{
+  "source": "U03.7 actual Node owner/public controller plus CodexAppServerSessionControl; fake accepted transport; fixed attachment clock 2026-11-06T00:00:00.000Z; bijective IDs; full disk/live owner and bounded session plus authoritative change projection",
+  "expected": {
+    "C01": {
+      "before": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      },
+      "result": {
+        "ok": true,
+        "count": 1
+      },
+      "after": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      },
+      "repeated": {
+        "ok": true,
+        "count": 1
+      },
+      "reopened": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      }
+    },
+    "C02": {
+      "before": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      },
+      "failure": {
+        "ok": false,
+        "kind": "permission-denied"
+      },
+      "afterFailure": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      },
+      "retry": {
+        "ok": true,
+        "count": 1
+      },
+      "after": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      },
+      "repeated": {
+        "ok": true,
+        "count": 1
+      },
+      "reopened": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      }
+    },
+    "C03": {
+      "before": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      },
+      "failure": {
+        "ok": false,
+        "kind": "permission-denied"
+      },
+      "afterFailure": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "staged",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      },
+      "reopenedFailure": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "draft",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "draft",
+            "createdAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      },
+      "retry": {
+        "ok": true,
+        "count": 1
+      },
+      "after": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      },
+      "repeated": {
+        "ok": true,
+        "count": 1
+      },
+      "reopened": {
+        "files": {
+          "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+          "ai-session-attachments/manifests/<attachment>.json": {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        },
+        "manifests": [
+          {
+            "schemaVersion": 1,
+            "id": "<attachment>",
+            "inputId": "input-commit",
+            "sessionId": "session-commit",
+            "messageId": "message-commit",
+            "turnId": "turn-commit",
+            "kind": "image",
+            "name": "input.png",
+            "mime": "image/png",
+            "size": 12,
+            "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "2026-11-06T00:00:00.000Z",
+            "committedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "drafts": []
+      }
+    },
+    "C04": {
+      "success": {
+        "outcome": {
+          "ok": true,
+          "action": "send"
+        },
+        "calls": [
+          {
+            "action": "start",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "lastChange": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        },
+        "reopened": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        }
+      },
+      "failure": {
+        "outcome": {
+          "ok": false,
+          "kind": "permission-denied"
+        },
+        "calls": [
+          {
+            "action": "start",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "lastChange": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        },
+        "retry": {
+          "ok": true,
+          "count": 1
+        },
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        },
+        "sessionAfterRetry": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "reopened": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        }
+      }
+    },
+    "C05": {
+      "success": {
+        "outcome": {
+          "ok": true,
+          "action": "steer"
+        },
+        "calls": [
+          {
+            "action": "steer",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "lastChange": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        },
+        "reopened": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        }
+      },
+      "failure": {
+        "outcome": {
+          "ok": false,
+          "kind": "permission-denied"
+        },
+        "calls": [
+          {
+            "action": "steer",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "lastChange": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        },
+        "retry": {
+          "ok": true,
+          "count": 1
+        },
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        },
+        "sessionAfterRetry": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "reopened": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          },
+          "manifests": [
+            {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "2026-11-06T00:00:00.000Z",
+              "committedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "drafts": []
+        }
+      }
+    }
+  }
+}

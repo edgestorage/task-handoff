@@ -1,11 +1,12 @@
 # Controlled Instance HTTP and WebSocket Route Matrix
 
-This matrix separates the frozen `v0.0.46` compatibility baseline from the target-current Node route surface. Target-current extensions added after `v0.0.46` are tracked separately so they cannot silently expand the compatibility baseline. Both sections are frozen from Node route registrations and are the source checklist for Rust registration and differential tests.
+This matrix separates the frozen 202-route `v0.0.47` release snapshot from 20 target-current Node additions. The snapshot includes the instance-shell WebSocket route introduced in `v0.0.47`. This is static registration evidence, not per-route behavioral parity; the earlier release comparison remains tracked in `baseline-v0.0.47.md`.
 
 ## Authority and scope
 
-- Baseline source: Node `v0.0.46` under `packages/controlled-instance/src`.
-- Target-current source: the working tree's `packages/controlled-instance/src/web/server.ts`, `repository/routes.ts`, `web/instance-shell.ts`, and `web/story-agent-tool-bridge.ts`.
+- Baseline source: Node `v0.0.47`, commit `f968aecb5c8c0ec00f37f21e3a022c6aa3cfeb9a`, under `packages/controlled-instance/src`.
+- Frozen source evidence: `fixtures/node-routes-v0.0.47.json`; regenerate with `node scripts/controlled-instance-route-baseline.mjs --ref v0.0.47` from the repository root. The snapshot records the Git tree, normalized method/path, upgrade marker and source origin.
+- Target-current source: the working tree's `packages/controlled-instance/src`, including `web/server.ts` and the repository, remote-desktop, instance-shell, and story-agent-tool route modules.
 - Scope: the controlled-instance runtime only. Control Plane, Node Agent public APIs, desktop clients, and the frozen Vue UI are outside this matrix.
 - Static UI fallback (`/` and non-`/api` paths) is part of the runtime but is not an API route.
 - `ui/**` remains the frozen web asset exception. No route in this matrix may call a Node business fallback.
@@ -31,9 +32,9 @@ When web auth is disabled, web routes remain reachable without a token. Node Age
 - `WebSocket` means a `GET` upgrade with `101`; `HTTP/WS proxy` means `GET` can upgrade while other listed methods remain HTTP; `HTTP proxy` never upgrades.
 - WebSocket upgrades require the standard web or Node Agent auth domain shown in the table.
 
-## `v0.0.46` compatibility baseline
+## `v0.0.47` compatibility baseline
 
-This section freezes 201 explicit Node registrations at tag `v0.0.46`, including five WebSocket upgrade registrations. The baseline is authoritative for migration compatibility checks; target-current Node has 206 registrations, with `GET /api/internal/instance-shell` and the four App install-environment routes added after the baseline.
+This section freezes 202 explicit Node registrations at tag `v0.0.47`, including six WebSocket upgrade registrations. The instance-shell route belongs to this release baseline. The `v0.0.46` route set had 201 registrations and five upgrades; none were removed or changed their upgrade marker in `v0.0.47`.
 
 ### Route matrix
 
@@ -197,6 +198,7 @@ This section freezes 201 explicit Node registrations at tag `v0.0.46`, including
 | `POST` | `/api/internal/agent-tools/mcp` | Agent tool | MCP JSON/SSE | 200 |
 | `PUT` | `/api/internal/ai-session-persistence-settings` | Node Agent | JSON | 200 |
 | `PUT` | `/api/internal/codex-settings` | Node Agent | JSON | 200 |
+| `GET` | `/api/internal/instance-shell` | Node Agent | WebSocket | 101 then framed; included in `v0.0.47` |
 | `GET` | `/api/internal/model-catalog` | Node Agent | JSON | 200 |
 | `PUT` | `/api/internal/model-catalog` | Node Agent | JSON | 200 |
 | `PUT` | `/api/internal/model-environment` | Node Agent | JSON | 200 |
@@ -241,33 +243,32 @@ This section freezes 201 explicit Node registrations at tag `v0.0.46`, including
 | `GET` | `/api/triggers/runs` | Web | JSON | 200 |
 | `GET` | `/api/workspace/status` | Web | JSON | 200 |
 
-## Target-current Node extensions after `v0.0.46`
+## Target-current Node extensions after `v0.0.47`
 
-This section contains target-current routes that are not part of the `v0.0.46` compatibility baseline. It currently has twenty-one routes.
+These 20 registrations are outside the pinned `v0.0.47` release snapshot.
 
 | Method | Path | Auth | Transport | Success / notes |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/internal/instance-shell` | Node Agent | WebSocket | 101 then framed; post-`v0.0.46` only |
-| `GET` | `/api/apps/install-environment` | Web | JSON | 200; post-`v0.0.46` only |
-| `PUT` | `/api/apps/install-environment` | Web | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/apps/install-environment/test` | Web | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/apps/install-environment/prepare` | Web | JSON | 200; post-`v0.0.46` only |
-| `GET` | `/api/ai-sessions/:id/repository/files/content` | Web | JSON | 200; post-`v0.0.46` only |
-| `GET` | `/api/apps/sessions/:id/repository/files/content` | Web | JSON | 200; post-`v0.0.46` only |
-| `GET` | `/api/ai-sessions/:id/turns/:turnId/tool-activity` | Web | JSON | 200; post-`v0.0.46` only |
-| `GET` | `/api/internal/remote-desktop/attach` | Node Agent | WebSocket | 101 then framed; post-`v0.0.46` only |
-| `GET` | `/api/internal/remote-desktop/fallback/:role` | Node Agent | WebSocket | 101 then binary fallback stream; post-`v0.0.46` only |
-| `GET` | `/api/internal/remote-desktop/permissions` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `GET` | `/api/internal/remote-desktop/settings` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/internal/remote-desktop/force-stop` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/internal/remote-desktop/permissions/request` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/internal/remote-desktop/preflight` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/internal/remote-desktop/reserve` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/internal/remote-desktop/snapshot` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/internal/remote-desktop/sources` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/internal/remote-desktop/stop` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `POST` | `/api/internal/remote-desktop/takeover` | Node Agent | JSON | 200; post-`v0.0.46` only |
-| `PUT` | `/api/internal/remote-desktop/settings` | Node Agent | JSON | 200; post-`v0.0.46` only |
+| `GET` | `/api/apps/install-environment` | Web | JSON | 200 |
+| `PUT` | `/api/apps/install-environment` | Web | JSON | 200 |
+| `POST` | `/api/apps/install-environment/test` | Web | JSON | 200 |
+| `POST` | `/api/apps/install-environment/prepare` | Web | JSON | 200 |
+| `GET` | `/api/ai-sessions/:id/repository/files/content` | Web | File | 200 or 206 |
+| `GET` | `/api/apps/sessions/:id/repository/files/content` | Web | File | 200 or 206 |
+| `GET` | `/api/ai-sessions/:id/turns/:turnId/tool-activity` | Web | JSON | 200 |
+| `GET` | `/api/internal/remote-desktop/attach` | Node Agent | WebSocket | 101 then framed |
+| `GET` | `/api/internal/remote-desktop/fallback/:role` | Node Agent | WebSocket | 101 then binary fallback stream |
+| `GET` | `/api/internal/remote-desktop/permissions` | Node Agent | JSON | 200 |
+| `GET` | `/api/internal/remote-desktop/settings` | Node Agent | JSON | 200 |
+| `POST` | `/api/internal/remote-desktop/force-stop` | Node Agent | JSON | 200 |
+| `POST` | `/api/internal/remote-desktop/permissions/request` | Node Agent | JSON | 200 |
+| `POST` | `/api/internal/remote-desktop/preflight` | Node Agent | JSON | 200 |
+| `POST` | `/api/internal/remote-desktop/reserve` | Node Agent | JSON | 200 |
+| `POST` | `/api/internal/remote-desktop/snapshot` | Node Agent | JSON | 200 |
+| `POST` | `/api/internal/remote-desktop/sources` | Node Agent | JSON | 200 |
+| `POST` | `/api/internal/remote-desktop/stop` | Node Agent | JSON | 200 |
+| `POST` | `/api/internal/remote-desktop/takeover` | Node Agent | JSON | 200 |
+| `PUT` | `/api/internal/remote-desktop/settings` | Node Agent | JSON | 200 |
 
 ## Additional contract families
 
@@ -286,7 +287,7 @@ This section contains target-current routes that are not part of the `v0.0.46` c
 - HTTP, WebSocket, Node Agent, private model/config, agent-tool, App Runtime, repository, Trigger, Config Sync, Story and Git credential domains have Rust handlers and contract tests in their owning crates.
 - AI Session message and Timeline deltas use the same 20-50ms coalescing window (32ms default), insertion order, authoritative-event flush and `event-source-close` behavior as Node. Diagnostics expose the live coalescer counters instead of placeholders.
 - Non-`/api` paths use the frozen UI's `index.html` with HTTP `200` for SPA route refreshes; unmatched `/api/*` paths remain structured `404` responses.
-- The route matrix now records both the 201-route `v0.0.46` baseline and the 222-route target-current Node surface. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
+- Tests compare the pinned release snapshot, the 222-route target-current matrix, and the Node/Rust registrations. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
 
 ## Remaining fixture work
 

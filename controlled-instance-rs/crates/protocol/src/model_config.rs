@@ -255,17 +255,35 @@ impl From<&InstancePrivateModelCatalog> for PrivateModelCatalogSummary {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrivateModelCatalogParseError {
+    Invalid(String),
+    InstanceIdentityMismatch,
+}
+
+impl std::fmt::Display for PrivateModelCatalogParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(message) => formatter.write_str(message),
+            Self::InstanceIdentityMismatch => formatter
+                .write_str("Private model catalog instance identity does not match this runtime."),
+        }
+    }
+}
+
 pub fn parse_instance_private_model_catalog(
     value: Value,
     expected_instance_id: Option<&str>,
-) -> Result<InstancePrivateModelCatalog, String> {
-    let mut catalog = serde_json::from_value::<InstancePrivateModelCatalog>(value)
-        .map_err(|error| format!("Private model catalog is invalid: {error}"))?;
-    normalize_catalog(&mut catalog)?;
+) -> Result<InstancePrivateModelCatalog, PrivateModelCatalogParseError> {
+    let mut catalog =
+        serde_json::from_value::<InstancePrivateModelCatalog>(value).map_err(|error| {
+            PrivateModelCatalogParseError::Invalid(format!(
+                "Private model catalog is invalid: {error}"
+            ))
+        })?;
+    normalize_catalog(&mut catalog).map_err(PrivateModelCatalogParseError::Invalid)?;
     if expected_instance_id.is_some_and(|expected| catalog.instance_id() != expected) {
-        return Err(
-            "Private model catalog instance identity does not match this runtime.".to_string(),
-        );
+        return Err(PrivateModelCatalogParseError::InstanceIdentityMismatch);
     }
     Ok(catalog)
 }

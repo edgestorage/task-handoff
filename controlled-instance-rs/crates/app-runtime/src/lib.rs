@@ -55,7 +55,7 @@ pub use pty::{
 };
 pub use recipe::{
     run_app_recipe_command, AppRecipeCommand, AppRecipeCommandResult, AppRecipeExecutionContext,
-    AppRecipeExecutionError, AppRecipeExecutor, AppRecipeHooks,
+    AppRecipeExecutionError, AppRecipeExecutor, AppRecipeHooks, AppRecipeRunner,
 };
 pub use registry_native_package::{resolve_registry_native_package, RegistryNativePackageError};
 pub use runtime::{

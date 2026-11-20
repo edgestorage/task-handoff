@@ -1,0 +1,571 @@
+{
+  "source": {
+    "head": "9b2d6e17cce4a6a65d00f2ed4504f45546256edf",
+    "baseline": "v0.0.47",
+    "owner": "packages/ai-session-runtime/src/ai-session-control.ts",
+    "dirtyProductionSource": false
+  },
+  "scenarios": [
+    {
+      "name": "U01.3-C01-drop-success",
+      "failFirst": false,
+      "expected": {
+        "finishedWithoutWaiter": true,
+        "beforeRetry": {
+          "sessions": [
+            {
+              "id": "$session1",
+              "providerSessionId": "thread-send-parity",
+              "creationSource": "ai-session",
+              "cwdFolderId": "folder-create-parity",
+              "status": "running",
+              "phase": "thinking",
+              "reasoningEffort": null,
+              "userPrompt": "Start",
+              "activeTurnId": "turn-send-1",
+              "messages": [
+                {
+                  "id": "$message1",
+                  "text": "Start"
+                }
+              ]
+            }
+          ],
+          "restored": [
+            {
+              "id": "$session1",
+              "providerSessionId": "thread-send-parity",
+              "creationSource": "ai-session",
+              "cwdFolderId": "folder-create-parity",
+              "status": "running",
+              "phase": "thinking",
+              "reasoningEffort": null,
+              "userPrompt": "Start",
+              "activeTurnId": "turn-send-1",
+              "messages": [
+                {
+                  "id": "$message1",
+                  "text": "Start"
+                }
+              ]
+            }
+          ]
+        },
+        "retry": {
+          "result": {
+            "action": "send",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "turnId": "turn-send-1"
+          },
+          "error": null
+        },
+        "followUp": {
+          "result": {
+            "action": "send",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "turnId": "turn-send-2"
+          },
+          "error": null
+        },
+        "calls": [
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "messageId": "$message1",
+            "message": "Start"
+          },
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "messageId": "$message2",
+            "message": "Follow up"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-2",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              },
+              {
+                "id": "$message2",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ],
+        "restored": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-2",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              },
+              {
+                "id": "$message2",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ],
+        "lastChange": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-2",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              },
+              {
+                "id": "$message2",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "U01.3-C02-drop-rejection",
+      "failFirst": true,
+      "expected": {
+        "finishedWithoutWaiter": true,
+        "beforeRetry": {
+          "sessions": [
+            {
+              "id": "$session1",
+              "providerSessionId": "thread-send-parity",
+              "creationSource": "ai-session",
+              "cwdFolderId": "folder-create-parity",
+              "status": "idle",
+              "phase": "unknown",
+              "reasoningEffort": null,
+              "userPrompt": null,
+              "activeTurnId": null,
+              "messages": []
+            }
+          ],
+          "restored": [
+            {
+              "id": "$session1",
+              "providerSessionId": "thread-send-parity",
+              "creationSource": "ai-session",
+              "cwdFolderId": "folder-create-parity",
+              "status": "idle",
+              "phase": "unknown",
+              "reasoningEffort": null,
+              "userPrompt": null,
+              "activeTurnId": null,
+              "messages": []
+            }
+          ]
+        },
+        "retry": {
+          "result": {
+            "action": "send",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "turnId": "turn-send-2"
+          },
+          "error": null
+        },
+        "followUp": {
+          "result": {
+            "action": "send",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "turnId": "turn-send-3"
+          },
+          "error": null
+        },
+        "calls": [
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "messageId": "$message1",
+            "message": "Start"
+          },
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "messageId": "$message2",
+            "message": "Start"
+          },
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "messageId": "$message3",
+            "message": "Follow up"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-3",
+            "messages": [
+              {
+                "id": "$message2",
+                "text": "Start"
+              },
+              {
+                "id": "$message3",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ],
+        "restored": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-3",
+            "messages": [
+              {
+                "id": "$message2",
+                "text": "Start"
+              },
+              {
+                "id": "$message3",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ],
+        "lastChange": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-3",
+            "messages": [
+              {
+                "id": "$message2",
+                "text": "Start"
+              },
+              {
+                "id": "$message3",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "U01.3-C03-no-key-drop-success",
+      "noKey": true,
+      "failFirst": false,
+      "expected": {
+        "finishedWithoutWaiter": true,
+        "beforeRetry": {
+          "sessions": [
+            {
+              "id": "$session1",
+              "providerSessionId": "thread-send-parity",
+              "creationSource": "ai-session",
+              "cwdFolderId": "folder-create-parity",
+              "status": "running",
+              "phase": "thinking",
+              "reasoningEffort": null,
+              "userPrompt": "Start",
+              "activeTurnId": "turn-send-1",
+              "messages": [
+                {
+                  "id": "$message1",
+                  "text": "Start"
+                }
+              ]
+            }
+          ],
+          "restored": [
+            {
+              "id": "$session1",
+              "providerSessionId": "thread-send-parity",
+              "creationSource": "ai-session",
+              "cwdFolderId": "folder-create-parity",
+              "status": "running",
+              "phase": "thinking",
+              "reasoningEffort": null,
+              "userPrompt": "Start",
+              "activeTurnId": "turn-send-1",
+              "messages": [
+                {
+                  "id": "$message1",
+                  "text": "Start"
+                }
+              ]
+            }
+          ]
+        },
+        "retry": null,
+        "followUp": {
+          "result": {
+            "action": "send",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "turnId": "turn-send-2"
+          },
+          "error": null
+        },
+        "calls": [
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "messageId": "$message1",
+            "message": "Start"
+          },
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "messageId": "$message2",
+            "message": "Follow up"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-2",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              },
+              {
+                "id": "$message2",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ],
+        "restored": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-2",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              },
+              {
+                "id": "$message2",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ],
+        "lastChange": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-2",
+            "messages": [
+              {
+                "id": "$message1",
+                "text": "Start"
+              },
+              {
+                "id": "$message2",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "U01.3-C04-no-key-drop-rejection",
+      "noKey": true,
+      "failFirst": true,
+      "expected": {
+        "finishedWithoutWaiter": true,
+        "beforeRetry": {
+          "sessions": [
+            {
+              "id": "$session1",
+              "providerSessionId": "thread-send-parity",
+              "creationSource": "ai-session",
+              "cwdFolderId": "folder-create-parity",
+              "status": "idle",
+              "phase": "unknown",
+              "reasoningEffort": null,
+              "userPrompt": null,
+              "activeTurnId": null,
+              "messages": []
+            }
+          ],
+          "restored": [
+            {
+              "id": "$session1",
+              "providerSessionId": "thread-send-parity",
+              "creationSource": "ai-session",
+              "cwdFolderId": "folder-create-parity",
+              "status": "idle",
+              "phase": "unknown",
+              "reasoningEffort": null,
+              "userPrompt": null,
+              "activeTurnId": null,
+              "messages": []
+            }
+          ]
+        },
+        "retry": null,
+        "followUp": {
+          "result": {
+            "action": "send",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "turnId": "turn-send-2"
+          },
+          "error": null
+        },
+        "calls": [
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "messageId": "$message1",
+            "message": "Start"
+          },
+          {
+            "action": "start",
+            "sessionId": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "messageId": "$message2",
+            "message": "Follow up"
+          }
+        ],
+        "sessions": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-2",
+            "messages": [
+              {
+                "id": "$message2",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ],
+        "restored": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-2",
+            "messages": [
+              {
+                "id": "$message2",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ],
+        "lastChange": [
+          {
+            "id": "$session1",
+            "providerSessionId": "thread-send-parity",
+            "creationSource": "ai-session",
+            "cwdFolderId": "folder-create-parity",
+            "status": "running",
+            "phase": "thinking",
+            "reasoningEffort": null,
+            "userPrompt": "Follow up",
+            "activeTurnId": "turn-send-2",
+            "messages": [
+              {
+                "id": "$message2",
+                "text": "Follow up"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

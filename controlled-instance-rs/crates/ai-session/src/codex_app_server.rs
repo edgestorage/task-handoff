@@ -702,6 +702,7 @@ struct Connection {
     writer: mpsc::Sender<String>,
     child: Option<Arc<Mutex<Option<Child>>>>,
     shutdown: Option<oneshot::Sender<()>>,
+    reader: Option<tokio::task::JoinHandle<()>>,
 }
 
 struct ClientInner {
@@ -873,6 +874,7 @@ impl CodexAppServerClient {
         } else {
             resolver.resolve_codex_app_server_target().await?
         };
+        let _guard = self.inner.connect_lock.lock().await;
         if self.update_external_target(target) {
             self.disconnect().await;
         }
@@ -1069,7 +1071,7 @@ impl CodexAppServerClient {
 
     async fn connect_locked(&self) -> Result<(), ProviderError> {
         self.disconnect().await;
-        let generation = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let generation = self.inner.generation.load(Ordering::SeqCst);
         self.spawn_connection(generation).await?;
         match self.initialize_connection().await {
             Ok(()) => {
@@ -1171,22 +1173,24 @@ impl CodexAppServerClient {
                 let _ = child.start_kill();
             }
         });
-        *self.inner.connection.lock().await = Some(Connection {
-            writer: writer.clone(),
-            child: Some(child),
-            shutdown: None,
-        });
         let inner = self.inner.clone();
-        tokio::spawn(async move {
+        let reader_writer = writer.clone();
+        let reader = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
                 }
-                handle_line(&inner, generation, &writer, line).await;
+                handle_line(&inner, generation, &reader_writer, line).await;
             }
-            connection_lost(&inner, generation).await;
+            connection_lost(&inner, generation, "Codex app-server exited.").await;
+        });
+        *self.inner.connection.lock().await = Some(Connection {
+            writer,
+            child: Some(child),
+            shutdown: None,
+            reader: Some(reader),
         });
         Ok(())
     }
@@ -1315,23 +1319,25 @@ impl CodexAppServerClient {
             }
             let _ = sink.close().await;
         });
-        *self.inner.connection.lock().await = Some(Connection {
-            writer: writer.clone(),
-            child: None,
-            shutdown: Some(shutdown),
-        });
         let inner = self.inner.clone();
-        tokio::spawn(async move {
+        let reader_writer = writer.clone();
+        let reader = tokio::spawn(async move {
             while let Some(message) = stream.next().await {
                 match message {
                     Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
-                        handle_line(&inner, generation, &writer, text.as_str()).await;
+                        handle_line(&inner, generation, &reader_writer, text.as_str()).await;
                     }
                     Ok(tokio_tungstenite::tungstenite::Message::Close(_)) | Err(_) => break,
                     _ => {}
                 }
             }
-            connection_lost(&inner, generation).await;
+            connection_lost(&inner, generation, "Codex app-server disconnected.").await;
+        });
+        *self.inner.connection.lock().await = Some(Connection {
+            writer,
+            child: None,
+            shutdown: Some(shutdown),
+            reader: Some(reader),
         });
     }
 
@@ -1392,15 +1398,18 @@ impl CodexAppServerClient {
     }
 
     async fn disconnect(&self) {
+        // Invalidate before retiring the transport. A peer may keep sending
+        // while our WebSocket close handshake is in flight. Own and join the
+        // reader so even a handler suspended at an await cannot resume against
+        // the next connection's approvals, pending RPCs or projection state.
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
         self.inner.connected.store(false, Ordering::SeqCst);
-        self.inner
-            .title_generation
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .reset();
-        self.inner.subscribed_threads.lock().await.clear();
         let connection = self.inner.connection.lock().await.take();
         if let Some(connection) = connection {
+            if let Some(reader) = connection.reader {
+                reader.abort();
+                let _ = reader.await;
+            }
             if let Some(shutdown) = connection.shutdown {
                 let _ = shutdown.send(());
             }
@@ -1410,12 +1419,11 @@ impl CodexAppServerClient {
                 }
             }
         }
-        fail_pending(&self.inner.pending, "Codex app-server is not connected.").await;
-        self.inner.approvals.lock().await.clear();
+        reset_connection_state(&self.inner, "Codex app-server is not connected.").await;
     }
 
     pub async fn stop(&self) {
-        self.inner.generation.fetch_add(1, Ordering::SeqCst);
+        let _guard = self.inner.connect_lock.lock().await;
         self.disconnect().await;
     }
 
@@ -1972,6 +1980,7 @@ impl CodexAppServerClient {
             provider_turn_id: turn_id,
             decision: None,
             queue_id: None,
+            completion_text: None,
         })
     }
 
@@ -2026,6 +2035,7 @@ impl CodexAppServerClient {
             provider_turn_id: turn_id,
             decision: None,
             queue_id: None,
+            completion_text: None,
         })
     }
 
@@ -2054,6 +2064,7 @@ impl CodexAppServerClient {
                 provider_turn_id: Some(turn_id.to_string()),
                 decision: None,
                 queue_id: None,
+                completion_text: None,
             }),
             Err(error) => {
                 if let Some(found_turn_id) = active_turn_mismatch_found_id(&error) {
@@ -2068,6 +2079,7 @@ impl CodexAppServerClient {
                         provider_turn_id: Some(found_turn_id),
                         decision: None,
                         queue_id: None,
+                        completion_text: None,
                     });
                 }
                 if !is_no_active_turn_error(&error) {
@@ -2079,6 +2091,7 @@ impl CodexAppServerClient {
                     provider_turn_id: Some(turn_id.to_string()),
                     decision: None,
                     queue_id: None,
+                    completion_text: Some("Codex turn is no longer active.".to_string()),
                 })
             }
         }
@@ -2123,6 +2136,7 @@ impl CodexAppServerClient {
             provider_turn_id: approval.turn_id,
             decision: Some(decision.to_string()),
             queue_id: None,
+            completion_text: None,
         })
     }
 
@@ -3037,9 +3051,12 @@ impl AiSessionControlProvider for CodexAppServerProvider {
         &self,
         session: &AiSession,
         decision: &str,
+        observe: &crate::provider::ProviderApprovalObserver<'_>,
     ) -> Result<ProviderAction, ProviderError> {
         self.ensure_session_thread_ready(session).await?;
-        self.client.resolve_approval(session, decision).await
+        let action = self.client.resolve_approval(session, decision).await?;
+        observe(crate::provider::ProviderApprovalUpdate::Resolved).await?;
+        Ok(action)
     }
 
     async fn rename_session(&self, session: &AiSession, _title: &str) -> Result<(), ProviderError> {
@@ -4081,21 +4098,14 @@ fn project_thread_turns(turns: &Value) -> Vec<AiSessionTimelineItem> {
         .flatten()
         .enumerate()
         .flat_map(|(turn_index, turn)| {
-            let turn_id = turn
-                .get("id")
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("turn_{turn_index}"));
+            let turn_id = string_field(turn, "id").unwrap_or_else(|| format!("turn_{turn_index}"));
             turn.get("items")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
                 .enumerate()
                 .filter_map(move |(item_index, item)| {
-                    let item_id = item
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string)
+                    let item_id = string_field(item, "id")
                         .unwrap_or_else(|| format!("{turn_id}:item_{item_index}"));
                     project_codex_timeline_item(&item_id, &turn_id, item)
                 })
@@ -4104,8 +4114,8 @@ fn project_thread_turns(turns: &Value) -> Vec<AiSessionTimelineItem> {
 }
 
 fn project_thread_item_value(turn_id: &str, item: &Value) -> Option<AiSessionTimelineItem> {
-    let item_id = item.get("id").and_then(Value::as_str)?;
-    project_codex_timeline_item(item_id, turn_id, item)
+    let item_id = string_field(item, "id")?;
+    project_codex_timeline_item(&item_id, turn_id, item)
 }
 
 fn project_codex_notification_timeline_item(
@@ -4197,18 +4207,26 @@ fn project_codex_timeline_activity(
             let changes = item
                 .get("changes")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+                .into_iter()
+                .flatten()
+                .map(|change| {
+                    change
+                        .as_object()
+                        .cloned()
+                        .map(Value::Object)
+                        .unwrap_or_else(|| json!({}))
+                })
+                .collect::<Vec<_>>();
             let mut item_paths = Vec::new();
             for change in &changes {
-                if let Some(path) = change.get("path").and_then(Value::as_str) {
-                    if !path.is_empty() && !item_paths.iter().any(|known| known == path) {
-                        item_paths.push(path.to_string());
+                if let Some(path) = string_field(change, "path") {
+                    if !item_paths.contains(&path) {
+                        item_paths.push(path);
                     }
                 }
             }
             summary = (!item_paths.is_empty()).then(|| item_paths.join(", "));
-            paths = (!item_paths.is_empty()).then_some(item_paths);
+            paths = Some(item_paths);
             output = safe_json(Some(&Value::Array(changes)));
         }
         "mcpToolCall" => {
@@ -4549,9 +4567,7 @@ fn hook_prompt_text(item: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|fragment| fragment.get("text").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter_map(|fragment| string_field(fragment, "text"))
         .collect::<Vec<_>>()
         .join("\n")
         .trim()
@@ -4588,10 +4604,13 @@ impl OptionStringExt for String {
 
 async fn handle_line(
     inner: &Arc<ClientInner>,
-    _generation: u64,
+    generation: u64,
     writer: &mpsc::Sender<String>,
     line: &str,
 ) {
+    if inner.generation.load(Ordering::SeqCst) != generation {
+        return;
+    }
     let Ok(message) = serde_json::from_str::<Value>(line) else {
         return;
     };
@@ -5124,24 +5143,29 @@ async fn emit_notification(inner: &Arc<ClientInner>, method: &str, params: &Valu
     }
 }
 
-async fn connection_lost(inner: &Arc<ClientInner>, generation: u64) {
+async fn connection_lost(inner: &Arc<ClientInner>, generation: u64, message: &str) {
     if inner.generation.load(Ordering::SeqCst) != generation {
         return;
     }
     inner.connected.store(false, Ordering::SeqCst);
+    reset_connection_state(inner, message).await;
+    let _ = inner
+        .events
+        .send(ProviderEvent::ConnectionChanged { connected: false });
+}
+
+async fn reset_connection_state(inner: &Arc<ClientInner>, message: &str) {
     inner
         .title_generation
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .reset();
-    fail_pending(&inner.pending, "Codex app-server exited.").await;
+    inner.subscribed_threads.lock().await.clear();
+    fail_pending(&inner.pending, message).await;
     inner.approvals.lock().await.clear();
     inner.turn_errors.lock().await.clear();
     inner.retry_warnings.lock().await.clear();
     inner.live_items.lock().await.clear();
-    let _ = inner
-        .events
-        .send(ProviderEvent::ConnectionChanged { connected: false });
 }
 
 async fn fail_pending(pending: &PendingRequests, message: &str) {
@@ -5767,12 +5791,7 @@ fn codex_tool_descriptor(item: &Value, started_at: Option<&str>) -> Option<Value
         return None;
     }
     let item_type = item.get("type").and_then(Value::as_str)?;
-    let id = item
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(ToString::to_string)?;
+    let id = string_field(item, "id")?;
     let (name, input_preview) = match item_type {
         "commandExecution" => (
             "Command".to_string(),
@@ -5786,10 +5805,10 @@ fn codex_tool_descriptor(item: &Value, started_at: Option<&str>) -> Option<Value
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|change| change.get("path").and_then(Value::as_str))
+                .filter_map(|change| string_field(change, "path"))
                 .fold(Vec::new(), |mut paths, path| {
-                    if !path.is_empty() && !paths.iter().any(|known| known == path) {
-                        paths.push(path.to_string());
+                    if !paths.contains(&path) {
+                        paths.push(path);
                     }
                     paths
                 });
@@ -5799,32 +5818,22 @@ fn codex_tool_descriptor(item: &Value, started_at: Option<&str>) -> Option<Value
             )
         }
         "mcpToolCall" => {
-            let server = item
-                .get("server")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let tool = item.get("tool").and_then(Value::as_str).unwrap_or("Tool");
+            let server = string_field(item, "server");
+            let tool = string_field(item, "tool").unwrap_or_else(|| "Tool".to_string());
             (
-                if server.is_empty() {
-                    tool.to_string()
-                } else {
-                    format!("{server} · {tool}")
-                },
+                server
+                    .map(|server| format!("{server} · {tool}"))
+                    .unwrap_or(tool),
                 compact_json(item.get("arguments")),
             )
         }
         "dynamicToolCall" => {
-            let namespace = item
-                .get("namespace")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let tool = item.get("tool").and_then(Value::as_str).unwrap_or("Tool");
+            let namespace = string_field(item, "namespace");
+            let tool = string_field(item, "tool").unwrap_or_else(|| "Tool".to_string());
             (
-                if namespace.is_empty() {
-                    tool.to_string()
-                } else {
-                    format!("{namespace} · {tool}")
-                },
+                namespace
+                    .map(|namespace| format!("{namespace} · {tool}"))
+                    .unwrap_or(tool),
                 compact_json(item.get("arguments")),
             )
         }
@@ -5853,17 +5862,15 @@ fn codex_tool_descriptor(item: &Value, started_at: Option<&str>) -> Option<Value
                 .map(|duration| format!("{duration} ms")),
         ),
         "collabAgentToolCall" => {
-            let tool = item
-                .get("tool")
-                .and_then(Value::as_str)
-                .unwrap_or("collabAgentToolCall");
-            let name = match tool {
+            let tool =
+                string_field(item, "tool").unwrap_or_else(|| "collabAgentToolCall".to_string());
+            let name = match tool.as_str() {
                 "spawnAgent" => "Spawn agent",
                 "sendInput" => "Send agent input",
                 "resumeAgent" => "Resume agent",
                 "wait" => "Wait for agents",
                 "closeAgent" => "Close agent",
-                _ => tool,
+                _ => &tool,
             };
             (
                 name.to_string(),
@@ -5890,9 +5897,7 @@ fn codex_tool_descriptor(item: &Value, started_at: Option<&str>) -> Option<Value
 }
 
 fn compact_json(value: Option<&Value>) -> Option<String> {
-    value
-        .filter(|value| !value.is_null())
-        .map(|value| serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()))
+    value.map(Value::to_string)
 }
 
 fn activity_title(kind: &str) -> String {
@@ -6148,7 +6153,55 @@ fn build_websocket_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    mod reconnect_parity {
+        include!("codex_reconnect_parity.rs");
+    }
     use controlled_instance_protocol::{AiSessionCounters, AiSessionQueue};
+
+    #[test]
+    fn codex_items_match_shared_node_projection_fixtures() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/codex-projection-parity.json"
+        ))
+        .expect("fixtures");
+        let mut mismatches = Vec::new();
+        for fixture in fixtures["items"].as_array().expect("items") {
+            let item = &fixture["item"];
+            let timeline = serde_json::to_value(project_codex_timeline_item(
+                item["id"].as_str().expect("id"),
+                "t1",
+                item,
+            ))
+            .expect("timeline");
+            let tool = codex_tool_descriptor(item, None).unwrap_or(Value::Null);
+            for (kind, actual, expected) in [
+                ("timeline", timeline, &fixture["expectedTimeline"]),
+                ("tool", tool, &fixture["expectedTool"]),
+            ] {
+                if actual != *expected {
+                    mismatches.push(format!(
+                        "{} {kind}: actual={actual}, expected={expected}",
+                        fixture["name"]
+                    ));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn codex_thread_history_matches_shared_node_projection_fixtures() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/codex-projection-parity.json"
+        ))
+        .expect("fixtures");
+        for fixture in fixtures["threadCases"].as_array().expect("threads") {
+            let actual = serde_json::to_value(project_thread_turns(&fixture["thread"]["turns"]))
+                .expect("timeline");
+            assert_eq!(actual, fixture["expected"], "{}", fixture["name"]);
+        }
+    }
 
     fn test_client() -> CodexAppServerClient {
         CodexAppServerClient::with_command("missing-codex-for-notification-tests")
@@ -6160,6 +6213,7 @@ mod tests {
             writer,
             child: None,
             shutdown: None,
+            reader: None,
         });
         client.inner.connected.store(true, Ordering::SeqCst);
         written
@@ -6264,7 +6318,7 @@ mod tests {
         let newer = provider.take_armed_title_generation("thread-1").unwrap();
         assert_ne!(newer, request);
         provider.arm_title_generation("thread-2");
-        connection_lost(&client.inner, 0).await;
+        connection_lost(&client.inner, 0, "Codex app-server exited.").await;
         client.inner.connected.store(true, Ordering::SeqCst);
         assert!(!provider.title_generation_is_current("thread-1", newer));
         assert!(provider.take_armed_title_generation("thread-2").is_none());
@@ -7338,6 +7392,7 @@ mod tests {
             writer,
             child: None,
             shutdown: None,
+            reader: None,
         });
         client
             .resolve_approval(&session, "allow")

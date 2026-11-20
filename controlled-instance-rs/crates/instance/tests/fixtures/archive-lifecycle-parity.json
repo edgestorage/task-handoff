@@ -1,0 +1,263 @@
+{
+  "scenario": "archive-install-update-failure-uninstall-reinstall",
+  "artifacts": {
+    "v1": "H4sIAAAAAAAA/0vKzNMvyc/PYaAhMDAwMDc1VcAmDgZGQDkDOACxzY3MQWK0dBQMlBaXJBYBraTUHITjIfQQAcqK+knAJFCcwZWanJGvYKhnoGfANdCOGgV0A8UZiUWp+mWGeiUVJbSyA5gfzExMFLCJQ4AJWv43NACi0fxPD5Cflzqa3UfBKBgFo2AEAgAwspTqAAwAAA==",
+    "v2": "H4sIAAAAAAAA/0vKzNMvyc/PYaAhMDAwMDc1VcAmDgZGQDkDOACxzY3MQWK0dBQMlBaXJBYBraTUHITjIfQQAcqK+knAJFCcwZWanJGvYKRnoGfANdCOGgV0A8UZiUWp+mVGeiUVJbSyA5gfzExMFLCJQ4AJWv43NDAwNBzN//QAJeX5o9l9FIyCUTAKRiAAALOhXq4ADAAA"
+  },
+  "steps": [
+    {
+      "name": "install-v1",
+      "job": {
+        "operation": "install",
+        "state": "succeeded",
+        "phase": "verify",
+        "hasStartedAt": true,
+        "hasFinishedAt": true,
+        "error": null
+      },
+      "app": {
+        "state": "installed",
+        "managementSource": "recipe",
+        "canInstall": false,
+        "canUninstall": true,
+        "canUpdate": true,
+        "installReason": "ALREADY_INSTALLED",
+        "uninstallReason": null,
+        "updateReason": null
+      },
+      "tree": [
+        {
+          "path": "bin/tool",
+          "contents": "#!/bin/sh\necho 1.0.0\n",
+          "executable": true
+        },
+        {
+          "path": "share/v1.txt",
+          "contents": "one\n",
+          "executable": false
+        }
+      ],
+      "manifest": {
+        "schemaVersion": 1,
+        "appId": "tool",
+        "files": [
+          "bin/tool",
+          "share/v1.txt"
+        ]
+      }
+    },
+    {
+      "name": "failed-update-to-v2",
+      "job": {
+        "operation": "update",
+        "state": "failed",
+        "phase": "download",
+        "hasStartedAt": true,
+        "hasFinishedAt": true,
+        "error": {
+          "code": "checksum_mismatch",
+          "message": "Artifact checksum does not match the built-in recipe.",
+          "retryable": false
+        }
+      },
+      "app": {
+        "state": "installed",
+        "managementSource": "recipe",
+        "canInstall": false,
+        "canUninstall": true,
+        "canUpdate": true,
+        "installReason": "ALREADY_INSTALLED",
+        "uninstallReason": null,
+        "updateReason": null
+      },
+      "tree": [
+        {
+          "path": "bin/tool",
+          "contents": "#!/bin/sh\necho 1.0.0\n",
+          "executable": true
+        },
+        {
+          "path": "share/v1.txt",
+          "contents": "one\n",
+          "executable": false
+        },
+        {
+          "path": "user-config.json",
+          "contents": "{}\n",
+          "executable": false
+        }
+      ],
+      "manifest": {
+        "schemaVersion": 1,
+        "appId": "tool",
+        "files": [
+          "bin/tool",
+          "share/v1.txt"
+        ]
+      }
+    },
+    {
+      "name": "uninstall-v1",
+      "job": {
+        "operation": "uninstall",
+        "state": "succeeded",
+        "phase": "verify",
+        "hasStartedAt": true,
+        "hasFinishedAt": true,
+        "error": null
+      },
+      "app": {
+        "state": "not-installed",
+        "managementSource": "none",
+        "canInstall": true,
+        "canUninstall": false,
+        "canUpdate": false,
+        "installReason": null,
+        "uninstallReason": "NOT_INSTALLED",
+        "updateReason": "NOT_INSTALLED"
+      },
+      "tree": [
+        {
+          "path": "user-config.json",
+          "contents": "{}\n",
+          "executable": false
+        }
+      ],
+      "manifest": null
+    },
+    {
+      "name": "reinstall-v2",
+      "job": {
+        "operation": "install",
+        "state": "succeeded",
+        "phase": "verify",
+        "hasStartedAt": true,
+        "hasFinishedAt": true,
+        "error": null
+      },
+      "app": {
+        "state": "installed",
+        "managementSource": "recipe",
+        "canInstall": false,
+        "canUninstall": true,
+        "canUpdate": true,
+        "installReason": "ALREADY_INSTALLED",
+        "uninstallReason": null,
+        "updateReason": null
+      },
+      "tree": [
+        {
+          "path": "bin/tool",
+          "contents": "#!/bin/sh\necho 2.0.0\n",
+          "executable": true
+        },
+        {
+          "path": "share/v2.txt",
+          "contents": "two\n",
+          "executable": false
+        },
+        {
+          "path": "user-config.json",
+          "contents": "{}\n",
+          "executable": false
+        }
+      ],
+      "manifest": {
+        "schemaVersion": 1,
+        "appId": "tool",
+        "files": [
+          "bin/tool",
+          "share/v2.txt"
+        ]
+      }
+    }
+  ],
+  "jobIdsDistinct": true,
+  "eventStates": [
+    "queued",
+    "running",
+    "running",
+    "running",
+    "running",
+    "running",
+    "succeeded",
+    "queued",
+    "running",
+    "running",
+    "running",
+    "failed",
+    "queued",
+    "running",
+    "succeeded",
+    "queued",
+    "running",
+    "running",
+    "running",
+    "running",
+    "running",
+    "succeeded"
+  ],
+  "restart": {
+    "app": {
+      "state": "installed",
+      "managementSource": "recipe",
+      "canInstall": false,
+      "canUninstall": true,
+      "canUpdate": true,
+      "installReason": "ALREADY_INSTALLED",
+      "uninstallReason": null,
+      "updateReason": null
+    },
+    "tree": [
+      {
+        "path": "bin/tool",
+        "contents": "#!/bin/sh\necho 2.0.0\n",
+        "executable": true
+      },
+      {
+        "path": "share/v2.txt",
+        "contents": "two\n",
+        "executable": false
+      },
+      {
+        "path": "user-config.json",
+        "contents": "{}\n",
+        "executable": false
+      }
+    ],
+    "manifest": {
+      "schemaVersion": 1,
+      "appId": "tool",
+      "files": [
+        "bin/tool",
+        "share/v2.txt"
+      ]
+    },
+    "recentJobs": [
+      {
+        "operation": "install",
+        "state": "succeeded",
+        "phase": "verify",
+        "error": null
+      },
+      {
+        "operation": "install",
+        "state": "succeeded",
+        "phase": "verify",
+        "error": null
+      },
+      {
+        "operation": "uninstall",
+        "state": "succeeded",
+        "phase": "verify",
+        "error": null
+      },
+      {
+        "operation": "update",
+        "state": "failed",
+        "phase": "download",
+        "error": "checksum_mismatch"
+      }
+    ]
+  }
+}

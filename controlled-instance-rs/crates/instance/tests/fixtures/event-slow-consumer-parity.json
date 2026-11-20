@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "within-limit-delivers",
+      "frameBytes": 4096,
+      "expected": {
+        "delivered": 1,
+        "deliveredBytes": 4096,
+        "close": null,
+        "afterCloseDelivered": 0
+      }
+    },
+    {
+      "name": "exact-limit-delivers",
+      "frameBytes": 16777216,
+      "expected": {
+        "delivered": 1,
+        "deliveredBytes": 16777216,
+        "close": null,
+        "afterCloseDelivered": 0
+      }
+    },
+    {
+      "name": "over-limit-closes-and-removes-consumer",
+      "frameBytes": 16777217,
+      "expected": {
+        "delivered": 0,
+        "deliveredBytes": 0,
+        "close": {
+          "code": 1013,
+          "reason": "Event consumer is too slow."
+        },
+        "afterCloseDelivered": 0
+      }
+    }
+  ]
+}

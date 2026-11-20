@@ -43,6 +43,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber.workspace = true
 hex.workspace = true
 sha2.workspace = true
 tempfile.workspace = true

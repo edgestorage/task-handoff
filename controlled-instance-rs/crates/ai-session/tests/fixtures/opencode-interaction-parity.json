@@ -1,0 +1,2068 @@
+{
+  "scenarios": [
+    {
+      "id": "C01-main",
+      "steps": [
+        {
+          "name": "stream",
+          "messages": [
+            {
+              "info": {
+                "id": "$user",
+                "sessionID": "s-u045",
+                "role": "user",
+                "time": {
+                  "created": 1793923201000
+                }
+              },
+              "parts": [
+                {
+                  "id": "u-text",
+                  "sessionID": "s-u045",
+                  "messageID": "$user",
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            },
+            {
+              "info": {
+                "id": "a-u045",
+                "sessionID": "s-u045",
+                "role": "assistant",
+                "time": {
+                  "created": 1793923202000
+                },
+                "parentID": "$user"
+              },
+              "parts": [
+                {
+                  "id": "reason",
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "type": "reasoning",
+                  "text": "Inspect repository",
+                  "time": {
+                    "start": 1793923202000,
+                    "end": 1793923203000
+                  }
+                },
+                {
+                  "id": "answer",
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "type": "text",
+                  "text": ""
+                },
+                {
+                  "id": "tool",
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "type": "tool",
+                  "tool": "bash",
+                  "callID": "call-u045",
+                  "state": {
+                    "status": "running",
+                    "input": {
+                      "command": "pwd"
+                    },
+                    "time": {
+                      "start": 1793923204000
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "status": "busy",
+          "events": [
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.updated",
+                "properties": {
+                  "info": {
+                    "id": "$user",
+                    "sessionID": "s-u045",
+                    "role": "user",
+                    "time": {
+                      "created": 1793923201000
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.updated",
+                "properties": {
+                  "info": {
+                    "id": "a-u045",
+                    "sessionID": "s-u045",
+                    "role": "assistant",
+                    "time": {
+                      "created": 1793923202000
+                    },
+                    "parentID": "$user"
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.updated",
+                "properties": {
+                  "part": {
+                    "id": "reason",
+                    "sessionID": "s-u045",
+                    "messageID": "a-u045",
+                    "type": "reasoning",
+                    "text": ""
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.delta",
+                "properties": {
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "partID": "reason",
+                  "field": "text",
+                  "delta": "Inspect "
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.delta",
+                "properties": {
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "partID": "reason",
+                  "field": "text",
+                  "delta": "repository"
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.updated",
+                "properties": {
+                  "part": {
+                    "id": "reason",
+                    "sessionID": "s-u045",
+                    "messageID": "a-u045",
+                    "type": "reasoning",
+                    "text": "Inspect repository",
+                    "time": {
+                      "start": 1793923202000,
+                      "end": 1793923203000
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.updated",
+                "properties": {
+                  "part": {
+                    "id": "answer",
+                    "sessionID": "s-u045",
+                    "messageID": "a-u045",
+                    "type": "text",
+                    "text": ""
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.delta",
+                "properties": {
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "partID": "answer",
+                  "field": "text",
+                  "delta": "Hello "
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.delta",
+                "properties": {
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "partID": "answer",
+                  "field": "text",
+                  "delta": "世界"
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.updated",
+                "properties": {
+                  "part": {
+                    "id": "tool",
+                    "sessionID": "s-u045",
+                    "messageID": "a-u045",
+                    "type": "tool",
+                    "tool": "bash",
+                    "callID": "call-u045",
+                    "state": {
+                      "status": "running",
+                      "input": {
+                        "command": "pwd"
+                      },
+                      "time": {
+                        "start": 1793923204000
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "wait": {
+            "status": "running",
+            "phase": "tool"
+          },
+          "timeline": 3,
+          "deltas": 2,
+          "timelineDeltas": 2
+        },
+        {
+          "name": "completed",
+          "messages": [
+            {
+              "info": {
+                "id": "$user",
+                "sessionID": "s-u045",
+                "role": "user",
+                "time": {
+                  "created": 1793923201000
+                }
+              },
+              "parts": [
+                {
+                  "id": "u-text",
+                  "sessionID": "s-u045",
+                  "messageID": "$user",
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            },
+            {
+              "info": {
+                "id": "a-u045",
+                "sessionID": "s-u045",
+                "role": "assistant",
+                "time": {
+                  "created": 1793923202000,
+                  "completed": 1793923206000
+                },
+                "parentID": "$user"
+              },
+              "parts": [
+                {
+                  "id": "reason",
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "type": "reasoning",
+                  "text": "Inspect repository",
+                  "time": {
+                    "start": 1793923202000,
+                    "end": 1793923203000
+                  }
+                },
+                {
+                  "id": "tool",
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "type": "tool",
+                  "tool": "bash",
+                  "callID": "call-u045",
+                  "state": {
+                    "status": "completed",
+                    "input": {
+                      "command": "pwd"
+                    },
+                    "output": "/workspace",
+                    "time": {
+                      "start": 1793923204000,
+                      "end": 1793923205000
+                    }
+                  }
+                },
+                {
+                  "id": "answer",
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            }
+          ],
+          "status": "idle",
+          "events": [
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.updated",
+                "properties": {
+                  "part": {
+                    "id": "tool",
+                    "sessionID": "s-u045",
+                    "messageID": "a-u045",
+                    "type": "tool",
+                    "tool": "bash",
+                    "callID": "call-u045",
+                    "state": {
+                      "status": "completed",
+                      "input": {
+                        "command": "pwd"
+                      },
+                      "output": "/workspace",
+                      "time": {
+                        "start": 1793923204000,
+                        "end": 1793923205000
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.updated",
+                "properties": {
+                  "part": {
+                    "id": "answer",
+                    "sessionID": "s-u045",
+                    "messageID": "a-u045",
+                    "type": "text",
+                    "text": "Hello 世界"
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.updated",
+                "properties": {
+                  "info": {
+                    "id": "a-u045",
+                    "sessionID": "s-u045",
+                    "role": "assistant",
+                    "time": {
+                      "created": 1793923202000,
+                      "completed": 1793923206000
+                    },
+                    "parentID": "$user"
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "session.status",
+                "properties": {
+                  "sessionID": "s-u045",
+                  "status": {
+                    "type": "idle"
+                  }
+                }
+              }
+            }
+          ],
+          "wait": {
+            "status": "idle",
+            "lastMessage": "Hello 世界"
+          },
+          "timeline": 5,
+          "deltas": 2,
+          "timelineDeltas": 2
+        }
+      ],
+      "expected": {
+        "action": {
+          "provider": "opencode",
+          "action": "send",
+          "turnId": "$user",
+          "providerTurnId": "$user"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/session/s-u045/prompt_async",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "messageID": "$user",
+              "parts": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            }
+          }
+        ],
+        "transport": [
+          {
+            "path": "/global/event",
+            "authorized": true
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$user",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "empty-snapshot",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$user",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "stream",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "tool",
+              "activeTurnId": "$user",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": {
+                "id": "tool",
+                "kind": "commandExecution",
+                "name": "Command",
+                "inputPreview": "pwd"
+              },
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "running",
+                  "phase": "tool",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": "answer",
+                  "revision": 2,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "answer",
+                "delta": "Hello "
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "answer",
+                "delta": "世界"
+              }
+            ],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "reason",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "reasoning",
+                  "title": "Reasoning",
+                  "status": "running"
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "reason",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "reasoning",
+                  "title": "Reasoning",
+                  "status": "completed",
+                  "output": "Inspect repository"
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "tool",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "pwd"
+                }
+              }
+            ],
+            "timelineDeltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "reason",
+                "field": "output",
+                "delta": "Inspect "
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "reason",
+                "field": "output",
+                "delta": "repository"
+              }
+            ]
+          },
+          {
+            "name": "completed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": "Hello 世界",
+                  "lastMessageItemId": "answer",
+                  "revision": 2,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "answer",
+                "delta": "Hello "
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "answer",
+                "delta": "世界"
+              }
+            ],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "reason",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "reasoning",
+                  "title": "Reasoning",
+                  "status": "running"
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "reason",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "reasoning",
+                  "title": "Reasoning",
+                  "status": "completed",
+                  "output": "Inspect repository"
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "tool",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "pwd"
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "tool",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "completed",
+                  "input": "pwd",
+                  "output": "/workspace",
+                  "durationMs": 1000
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "answer",
+                  "turnId": "$user",
+                  "type": "ai-message",
+                  "text": "Hello 世界"
+                }
+              }
+            ],
+            "timelineDeltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "reason",
+                "field": "output",
+                "delta": "Inspect "
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "reason",
+                "field": "output",
+                "delta": "repository"
+              }
+            ]
+          },
+          {
+            "name": "reread",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": "Hello 世界",
+                  "lastMessageItemId": "answer",
+                  "revision": 2,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "answer",
+                "delta": "Hello "
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "answer",
+                "delta": "世界"
+              }
+            ],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "reason",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "reasoning",
+                  "title": "Reasoning",
+                  "status": "running"
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "reason",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "reasoning",
+                  "title": "Reasoning",
+                  "status": "completed",
+                  "output": "Inspect repository"
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "tool",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "pwd"
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "tool",
+                  "turnId": "$user",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "completed",
+                  "input": "pwd",
+                  "output": "/workspace",
+                  "durationMs": 1000
+                }
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "answer",
+                  "turnId": "$user",
+                  "type": "ai-message",
+                  "text": "Hello 世界"
+                }
+              }
+            ],
+            "timelineDeltas": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "reason",
+                "field": "output",
+                "delta": "Inspect "
+              },
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "turnId": "$user",
+                "itemId": "reason",
+                "field": "output",
+                "delta": "repository"
+              }
+            ]
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "s-u045",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": "Hello 世界",
+          "lastMessageItemId": "answer",
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "$user",
+              "providerTurnId": "$user",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer",
+              "revision": 2,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "$user",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "clocks": {
+          "startedAt": "2026-11-06T00:00:01.000Z",
+          "completedAt": "2026-11-06T00:00:06.000Z"
+        }
+      }
+    },
+    {
+      "id": "C02-rejected",
+      "rejectFirst": true,
+      "steps": [
+        {
+          "name": "completed",
+          "messages": [
+            {
+              "info": {
+                "id": "$user",
+                "sessionID": "s-u045",
+                "role": "user",
+                "time": {
+                  "created": 1793923201000
+                }
+              },
+              "parts": [
+                {
+                  "id": "u-text",
+                  "sessionID": "s-u045",
+                  "messageID": "$user",
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            },
+            {
+              "info": {
+                "id": "a-u045",
+                "sessionID": "s-u045",
+                "role": "assistant",
+                "time": {
+                  "created": 1793923202000,
+                  "completed": 1793923206000
+                },
+                "parentID": "$user"
+              },
+              "parts": [
+                {
+                  "id": "answer",
+                  "sessionID": "s-u045",
+                  "messageID": "a-u045",
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            }
+          ],
+          "status": "idle",
+          "events": [
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.updated",
+                "properties": {
+                  "info": {
+                    "id": "$user",
+                    "sessionID": "s-u045",
+                    "role": "user",
+                    "time": {
+                      "created": 1793923201000
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.updated",
+                "properties": {
+                  "info": {
+                    "id": "a-u045",
+                    "sessionID": "s-u045",
+                    "role": "assistant",
+                    "time": {
+                      "created": 1793923202000
+                    },
+                    "parentID": "$user"
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.part.updated",
+                "properties": {
+                  "part": {
+                    "id": "answer",
+                    "sessionID": "s-u045",
+                    "messageID": "a-u045",
+                    "type": "text",
+                    "text": "Hello 世界"
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.updated",
+                "properties": {
+                  "info": {
+                    "id": "a-u045",
+                    "sessionID": "s-u045",
+                    "role": "assistant",
+                    "time": {
+                      "created": 1793923202000,
+                      "completed": 1793923206000
+                    },
+                    "parentID": "$user"
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "session.status",
+                "properties": {
+                  "sessionID": "s-u045",
+                  "status": {
+                    "type": "idle"
+                  }
+                }
+              }
+            }
+          ],
+          "wait": {
+            "status": "idle",
+            "lastMessage": "Hello 世界"
+          },
+          "timeline": 1,
+          "deltas": 0,
+          "timelineDeltas": 0
+        }
+      ],
+      "expected": {
+        "action": {
+          "provider": "opencode",
+          "action": "send",
+          "turnId": "$user",
+          "providerTurnId": "$user"
+        },
+        "rejection": {
+          "message": "fixture prompt rejected",
+          "statusCode": 503
+        },
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/session/s-u045/prompt_async",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "messageID": "$rejectedUser",
+              "parts": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            }
+          },
+          {
+            "method": "POST",
+            "path": "/session/s-u045/prompt_async",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "messageID": "$user",
+              "parts": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            }
+          }
+        ],
+        "transport": [
+          {
+            "path": "/global/event",
+            "authorized": true
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "rejected",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$user",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "empty-snapshot",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$user",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "completed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": "Hello 世界",
+                  "lastMessageItemId": "answer",
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "answer",
+                  "turnId": "$user",
+                  "type": "ai-message",
+                  "text": "Hello 世界"
+                }
+              }
+            ],
+            "timelineDeltas": []
+          },
+          {
+            "name": "reread",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": "Hello 世界",
+                  "lastMessageItemId": "answer",
+                  "revision": 1,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "s-u045",
+                "item": {
+                  "id": "answer",
+                  "turnId": "$user",
+                  "type": "ai-message",
+                  "text": "Hello 世界"
+                }
+              }
+            ],
+            "timelineDeltas": []
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "s-u045",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": "Hello 世界",
+          "lastMessageItemId": "answer",
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "$user",
+              "providerTurnId": "$user",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": "Hello 世界",
+              "lastMessageItemId": "answer",
+              "revision": 1,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "$user",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "clocks": {
+          "startedAt": "2026-11-06T00:00:01.000Z",
+          "completedAt": "2026-11-06T00:00:06.000Z"
+        }
+      }
+    },
+    {
+      "id": "C03-failed",
+      "steps": [
+        {
+          "name": "running",
+          "messages": [
+            {
+              "info": {
+                "id": "$user",
+                "sessionID": "s-u045",
+                "role": "user",
+                "time": {
+                  "created": 1793923201000
+                }
+              },
+              "parts": [
+                {
+                  "id": "u-text",
+                  "sessionID": "s-u045",
+                  "messageID": "$user",
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            },
+            {
+              "info": {
+                "id": "a-u045",
+                "sessionID": "s-u045",
+                "role": "assistant",
+                "time": {
+                  "created": 1793923202000
+                },
+                "parentID": "$user"
+              },
+              "parts": []
+            }
+          ],
+          "status": "busy",
+          "events": [
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.updated",
+                "properties": {
+                  "info": {
+                    "id": "$user",
+                    "sessionID": "s-u045",
+                    "role": "user",
+                    "time": {
+                      "created": 1793923201000
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "message.updated",
+                "properties": {
+                  "info": {
+                    "id": "a-u045",
+                    "sessionID": "s-u045",
+                    "role": "assistant",
+                    "time": {
+                      "created": 1793923202000
+                    },
+                    "parentID": "$user"
+                  }
+                }
+              }
+            },
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "session.status",
+                "properties": {
+                  "sessionID": "s-u045",
+                  "status": {
+                    "type": "busy"
+                  }
+                }
+              }
+            }
+          ],
+          "wait": {
+            "status": "running",
+            "phase": "responding"
+          },
+          "timeline": 0,
+          "deltas": 0,
+          "timelineDeltas": 0
+        },
+        {
+          "name": "failed",
+          "messages": [
+            {
+              "info": {
+                "id": "$user",
+                "sessionID": "s-u045",
+                "role": "user",
+                "time": {
+                  "created": 1793923201000
+                }
+              },
+              "parts": [
+                {
+                  "id": "u-text",
+                  "sessionID": "s-u045",
+                  "messageID": "$user",
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            },
+            {
+              "info": {
+                "id": "a-u045",
+                "sessionID": "s-u045",
+                "role": "assistant",
+                "time": {
+                  "created": 1793923202000,
+                  "completed": 1793923206000
+                },
+                "parentID": "$user",
+                "error": {
+                  "name": "APIError",
+                  "data": {
+                    "message": "Provider rejected the request"
+                  }
+                }
+              },
+              "parts": []
+            }
+          ],
+          "status": "idle",
+          "events": [
+            {
+              "directory": "/workspace",
+              "payload": {
+                "type": "session.error",
+                "properties": {
+                  "sessionID": "s-u045",
+                  "error": {
+                    "name": "APIError",
+                    "data": {
+                      "message": "Provider rejected the request"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "wait": {
+            "status": "failed",
+            "error": "Provider rejected the request"
+          },
+          "timeline": 0,
+          "deltas": 0,
+          "timelineDeltas": 0
+        }
+      ],
+      "expected": {
+        "action": {
+          "provider": "opencode",
+          "action": "send",
+          "turnId": "$user",
+          "providerTurnId": "$user"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "POST",
+            "path": "/session/s-u045/prompt_async",
+            "query": [
+              [
+                "directory",
+                "/workspace"
+              ]
+            ],
+            "body": {
+              "messageID": "$user",
+              "parts": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界"
+                }
+              ]
+            }
+          }
+        ],
+        "transport": [
+          {
+            "path": "/global/event",
+            "authorized": true
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$user",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "empty-snapshot",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "$user",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "realtime",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "running",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "running",
+              "phase": "responding",
+              "activeTurnId": "$user",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "running",
+                  "phase": "responding",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "failed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "failed",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": "Provider rejected the request",
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "failed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 3,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          },
+          {
+            "name": "reread",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "s-u045",
+              "status": "failed",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": "Provider rejected the request",
+              "turns": [
+                {
+                  "id": "$user",
+                  "providerTurnId": "$user",
+                  "status": "failed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 3,
+                  "source": "adapter-snapshot",
+                  "toolCallsSinceLastMessage": null,
+                  "currentTool": null,
+                  "userMessages": [
+                    {
+                      "id": "$user",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [],
+            "timelineDeltas": []
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "s-u045",
+          "status": "failed",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": "Provider rejected the request",
+          "turns": [
+            {
+              "id": "$user",
+              "providerTurnId": "$user",
+              "status": "failed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 3,
+              "source": "adapter-snapshot",
+              "toolCallsSinceLastMessage": null,
+              "currentTool": null,
+              "userMessages": [
+                {
+                  "id": "$user",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "clocks": null
+      }
+    }
+  ]
+}

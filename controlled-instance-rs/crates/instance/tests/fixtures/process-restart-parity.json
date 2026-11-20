@@ -1,0 +1,487 @@
+{
+  "input": {
+    "session": {
+      "id": "ses_restart_process",
+      "agent": "codex",
+      "creationSource": "ai-session",
+      "providerSessionId": "provider-restart-process",
+      "title": "Persistence session",
+      "cwd": "",
+      "turns": [],
+      "status": "idle",
+      "phase": "unknown",
+      "toolCallsSinceLastMessage": 0,
+      "subAgents": [],
+      "startedAt": "2026-11-02T00:00:00.000Z",
+      "updatedAt": "2026-11-02T00:00:00.000Z",
+      "counters": {
+        "toolCalls": 2,
+        "edits": 1,
+        "approvals": 0
+      },
+      "queue": {
+        "revision": 7,
+        "pendingCount": 1,
+        "items": [
+          {
+            "id": "queue-restart-existing",
+            "messageId": "message-restart-existing",
+            "message": "persisted prompt",
+            "attachments": [],
+            "references": [],
+            "permissionMode": "ask",
+            "status": "queued",
+            "createdAt": "2026-11-02T00:00:00.000Z",
+            "updatedAt": "2026-11-02T00:00:00.000Z"
+          }
+        ]
+      },
+      "unread": false
+    },
+    "editedMessage": "persisted prompt after restart",
+    "customCatalog": {
+      "items": [
+        {
+          "id": "restart-shell",
+          "name": "Restart Shell",
+          "kind": "tty",
+          "description": "Process restart persistence fixture.",
+          "command": "/bin/sh"
+        }
+      ]
+    },
+    "persistenceSettings": {
+      "historyLimit": 23,
+      "attachmentRetentionDays": 11,
+      "maxFileAttachmentBytes": 4096
+    },
+    "appSession": {
+      "title": "Restart shell",
+      "renamedTitle": "Restart shell renamed",
+      "args": [
+        "-c",
+        "sleep 30"
+      ]
+    }
+  },
+  "expected": {
+    "operations": {
+      "edit": {
+        "status": 200,
+        "body": {
+          "data": {
+            "sessionId": "ses_restart_process",
+            "queueRevision": 8,
+            "action": "edit",
+            "queueId": "queue-restart-existing"
+          }
+        }
+      },
+      "customCatalogWrite": {
+        "status": 200,
+        "body": {
+          "data": {
+            "path": "<root>/data/app-catalog/custom.json",
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "restart-shell",
+                "name": "Restart Shell",
+                "kind": "tty",
+                "description": "Process restart persistence fixture.",
+                "command": "/bin/sh",
+                "args": []
+              }
+            ]
+          }
+        }
+      },
+      "persistenceSettings": {
+        "status": 200,
+        "body": {
+          "data": {
+            "applied": true,
+            "historyLimit": 23,
+            "attachmentRetentionDays": 11,
+            "maxFileAttachmentBytes": 4096,
+            "removedHistoryCount": 0
+          }
+        }
+      },
+      "launchedApp": {
+        "status": 200,
+        "body": {
+          "data": {
+            "id": "<appSession>",
+            "appId": "restart-shell",
+            "title": "Restart shell",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "<timestamp>",
+            "updatedAt": "<timestamp>",
+            "workspace": {
+              "cwd": "<root>/workspace"
+            },
+            "launch": {
+              "title": "Restart shell",
+              "args": [
+                "-c",
+                "sleep 30"
+              ],
+              "cwd": "<root>/workspace"
+            },
+            "tty": {
+              "webPath": "/api/apps/sessions/<appSession>/tty",
+              "shell": "/bin/sh",
+              "cwd": "<root>/workspace",
+              "mode": "pty"
+            },
+            "process": {
+              "command": "/bin/sh"
+            },
+            "paths": {
+              "sessionDir": "<root>/data/app-sessions/<appSession>",
+              "logDir": "<root>/data/logs/app-sessions/<appSession>"
+            }
+          }
+        }
+      },
+      "renamedApp": {
+        "status": 200,
+        "title": "Restart shell renamed"
+      }
+    },
+    "before": {
+      "detail": {
+        "status": 200,
+        "body": {
+          "data": {
+            "kind": "updated",
+            "revision": "<hash>",
+            "detail": {
+              "id": "ses_restart_process",
+              "cwd": "<root>/workspace",
+              "queue": {
+                "revision": 8,
+                "pendingCount": 1,
+                "paused": true,
+                "items": [
+                  {
+                    "id": "queue-restart-existing",
+                    "messageId": "message-restart-existing",
+                    "message": "persisted prompt after restart",
+                    "attachments": [],
+                    "references": [],
+                    "permissionMode": "ask",
+                    "status": "queued",
+                    "createdAt": "<timestamp>",
+                    "updatedAt": "<timestamp>"
+                  }
+                ]
+              },
+              "subAgents": []
+            }
+          }
+        }
+      },
+      "queue": {
+        "status": 200,
+        "body": {
+          "data": {
+            "revision": 8,
+            "pendingCount": 1,
+            "paused": true,
+            "items": [
+              {
+                "id": "queue-restart-existing",
+                "messageId": "message-restart-existing",
+                "message": "persisted prompt after restart",
+                "attachments": [],
+                "references": [],
+                "permissionMode": "ask",
+                "status": "queued",
+                "createdAt": "<timestamp>",
+                "updatedAt": "<timestamp>"
+              }
+            ]
+          }
+        }
+      },
+      "state": {
+        "id": "ses_restart_process",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-restart-process",
+        "actions": {
+          "send": true,
+          "interrupt": false,
+          "approval": false,
+          "fork": false,
+          "rename": false,
+          "openApp": true,
+          "close": true
+        },
+        "title": "Persistence session",
+        "cwd": "<root>/workspace",
+        "detailRevision": "<hash>",
+        "turnsRevision": "<hash>",
+        "unread": false,
+        "turnCount": 0,
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgentCount": 0,
+        "subAgents": [],
+        "queue": {
+          "revision": 8,
+          "pendingCount": 1,
+          "paused": true,
+          "items": []
+        },
+        "startedAt": "<timestamp>",
+        "updatedAt": "<timestamp>"
+      },
+      "customCatalog": {
+        "status": 200,
+        "body": {
+          "data": {
+            "path": "<root>/data/app-catalog/custom.json",
+            "schemaVersion": 1,
+            "items": [
+              {
+                "id": "restart-shell",
+                "name": "Restart Shell",
+                "kind": "tty",
+                "description": "Process restart persistence fixture.",
+                "command": "/bin/sh",
+                "args": []
+              }
+            ]
+          }
+        }
+      },
+      "catalogItem": {
+        "id": "restart-shell",
+        "name": "Restart Shell",
+        "kind": "tty",
+        "description": "Process restart persistence fixture.",
+        "command": "/bin/sh",
+        "args": [],
+        "env": {}
+      }
+    },
+    "beforeApp": {
+      "detail": {
+        "status": 200,
+        "body": {
+          "data": {
+            "id": "<appSession>",
+            "appId": "restart-shell",
+            "title": "Restart shell renamed",
+            "kind": "tty",
+            "status": "running",
+            "createdAt": "<timestamp>",
+            "updatedAt": "<timestamp>",
+            "workspace": {
+              "cwd": "<root>/workspace"
+            },
+            "launch": {
+              "title": "Restart shell renamed",
+              "args": [
+                "-c",
+                "sleep 30"
+              ],
+              "cwd": "<root>/workspace"
+            },
+            "tty": {
+              "webPath": "/api/apps/sessions/<appSession>/tty",
+              "shell": "/bin/sh",
+              "cwd": "<root>/workspace",
+              "mode": "pty"
+            },
+            "process": {
+              "command": "/bin/sh"
+            },
+            "paths": {
+              "sessionDir": "<root>/data/app-sessions/<appSession>",
+              "logDir": "<root>/data/logs/app-sessions/<appSession>"
+            }
+          }
+        }
+      },
+      "state": {
+        "id": "<appSession>",
+        "appId": "restart-shell",
+        "title": "Restart shell renamed",
+        "kind": "tty",
+        "status": "running",
+        "createdAt": "<timestamp>",
+        "updatedAt": "<timestamp>",
+        "launch": {
+          "title": "Restart shell renamed",
+          "args": [
+            "-c",
+            "sleep 30"
+          ],
+          "cwd": "<root>/workspace"
+        },
+        "tty": {
+          "webPath": "/api/apps/sessions/<appSession>/tty",
+          "shell": "/bin/sh",
+          "cwd": "<root>/workspace",
+          "mode": "pty"
+        },
+        "process": {
+          "command": "/bin/sh"
+        },
+        "paths": {
+          "sessionDir": "<root>/data/app-sessions/<appSession>",
+          "logDir": "<root>/data/logs/app-sessions/<appSession>"
+        },
+        "bindings": [
+          {
+            "type": "app-session",
+            "id": "<appSession>"
+          }
+        ],
+        "workspace": {
+          "cwd": "<root>/workspace"
+        }
+      }
+    },
+    "afterApp": {
+      "detail": {
+        "status": 200,
+        "body": {
+          "data": {
+            "id": "<appSession>",
+            "appId": "restart-shell",
+            "title": "Restart shell renamed",
+            "kind": "tty",
+            "status": "stopped",
+            "createdAt": "<timestamp>",
+            "updatedAt": "<timestamp>",
+            "workspace": {
+              "cwd": "<root>/workspace"
+            },
+            "launch": {
+              "title": "Restart shell renamed",
+              "args": [
+                "-c",
+                "sleep 30"
+              ],
+              "cwd": "<root>/workspace"
+            },
+            "tty": {
+              "webPath": "/api/apps/sessions/<appSession>/tty",
+              "shell": "/bin/sh",
+              "cwd": "<root>/workspace",
+              "mode": "pty"
+            },
+            "process": {
+              "command": "/bin/sh"
+            },
+            "paths": {
+              "sessionDir": "<root>/data/app-sessions/<appSession>",
+              "logDir": "<root>/data/logs/app-sessions/<appSession>"
+            }
+          }
+        }
+      }
+    },
+    "disk": {
+      "session": {
+        "id": "ses_restart_process",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-restart-process",
+        "title": "Persistence session",
+        "cwd": "<root>/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "<timestamp>",
+        "updatedAt": "<timestamp>",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 8,
+          "pendingCount": 1,
+          "paused": true,
+          "items": [
+            {
+              "id": "queue-restart-existing",
+              "messageId": "message-restart-existing",
+              "message": "persisted prompt after restart",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "<timestamp>",
+              "updatedAt": "<timestamp>"
+            }
+          ]
+        },
+        "unread": false
+      },
+      "customCatalog": {
+        "schemaVersion": 1,
+        "items": [
+          {
+            "id": "restart-shell",
+            "name": "Restart Shell",
+            "kind": "tty",
+            "description": "Process restart persistence fixture.",
+            "command": "/bin/sh",
+            "args": []
+          }
+        ]
+      },
+      "persistenceSettings": {
+        "schemaVersion": 3,
+        "historyLimit": 23,
+        "attachmentRetentionDays": 11,
+        "maxFileAttachmentBytes": 4096
+      },
+      "appSession": {
+        "id": "<appSession>",
+        "appId": "restart-shell",
+        "title": "Restart shell renamed",
+        "kind": "tty",
+        "status": "running",
+        "createdAt": "<timestamp>",
+        "updatedAt": "<timestamp>",
+        "workspace": {
+          "cwd": "<root>/workspace"
+        },
+        "launch": {
+          "title": "Restart shell renamed",
+          "args": [
+            "-c",
+            "sleep 30"
+          ],
+          "cwd": "<root>/workspace"
+        },
+        "tty": {
+          "webPath": "/api/apps/sessions/<appSession>/tty",
+          "shell": "/bin/sh",
+          "cwd": "<root>/workspace",
+          "mode": "pty"
+        },
+        "process": {
+          "command": "/bin/sh"
+        },
+        "paths": {
+          "sessionDir": "<root>/data/app-sessions/<appSession>",
+          "logDir": "<root>/data/logs/app-sessions/<appSession>"
+        }
+      }
+    },
+    "restartStable": true
+  }
+}

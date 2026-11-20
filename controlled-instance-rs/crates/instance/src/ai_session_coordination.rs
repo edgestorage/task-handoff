@@ -859,6 +859,9 @@ fn fork_fingerprint(
     if let Some(through_turn_id) = through_turn_id {
         value["throughTurnId"] = Value::String(through_turn_id.to_string());
     }
+    // Compatibility for v0.0.47: persisted fork fingerprints use Node's
+    // canonical JSON, independent of the provider JSON insertion order.
+    value.sort_all_objects();
     hex::encode(Sha256::digest(
         serde_json::to_vec(&value).unwrap_or_default(),
     ))
@@ -1289,10 +1292,14 @@ mod tests {
     }
 
     #[test]
-    fn fork_fingerprint_matches_node_canonical_json() {
+    fn fork_fingerprint_matches_v0_0_47_node_canonical_json() {
         assert_eq!(
             fork_fingerprint("ses_1", "req-1", None, "current"),
             "9a465ccfc08fe3c34af7cc054b092080673dd2e51666453365981223348b76ea"
+        );
+        assert_eq!(
+            fork_fingerprint("ses_1", "req-1", Some("turn-1"), "current"),
+            "ca6444e3fdcb00a7e47248c7f933e49620f90cecda463a8c31b52751fa61ef77"
         );
     }
 

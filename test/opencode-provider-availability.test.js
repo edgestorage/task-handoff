@@ -18,6 +18,7 @@ require.extensions[".ts"] = (module, filename) => {
 const { createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
 const { builtinManagedAppDefinitions } = require("../packages/app-runtime/src/catalog.ts");
 const { managedAppLauncherPath } = require("../packages/app-runtime/src/managed-node-apps.ts");
+const fixtures = require("../controlled-instance-rs/crates/instance/tests/fixtures/opencode-availability-parity.json");
 
 const environmentKeys = [
   "TASK_HANDOFF_DATA_DIR",
@@ -28,7 +29,7 @@ const environmentKeys = [
   "TASK_HANDOFF_NODE_AGENT_URL",
 ];
 
-test("OpenCode capability follows installation without restarting the instance", { timeout: 15_000 }, async (t) => {
+test("OpenCode capabilities and inventory follow launcher installation and removal without restarting", { timeout: 15_000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-provider-"));
   const previousEnvironment = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
   t.after(() => {
@@ -50,17 +51,36 @@ test("OpenCode capability follows installation without restarting the instance",
 
   const web = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false });
   try {
-    const readProviders = async () => {
-      const response = await web.inject({ method: "GET", url: "/api/instance/capabilities" });
+    const readData = async (url) => {
+      const response = await web.inject({ method: "GET", url });
       assert.equal(response.statusCode, 200);
-      return JSON.parse(response.payload).data.features.aiSessionProviders.map((provider) => provider.agent);
+      return response.json().data;
     };
-
-    assert.deepEqual(await readProviders(), []);
-    fs.mkdirSync(path.dirname(command), { recursive: true });
-    fs.writeFileSync(command, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-
-    assert.deepEqual(await readProviders(), ["opencode"]);
+    const observations = [];
+    for (const action of ["startup", "install", "remove"]) {
+      if (action === "install") {
+        fs.mkdirSync(path.dirname(command), { recursive: true });
+        fs.writeFileSync(command, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      } else if (action === "remove") {
+        fs.unlinkSync(command);
+      }
+      const { features } = await readData("/api/instance/capabilities");
+      const status = await readData("/api/instance/status");
+      assert.deepEqual(status.capabilities.features.aiSessionProviders, features.aiSessionProviders);
+      assert.deepEqual(status.capabilities.features.aiSessionTimeline, features.aiSessionTimeline);
+      const item = status.appInventory.items.find((item) => item.id === "opencode");
+      assert.ok(item);
+      const timeline = features.aiSessionTimeline;
+      observations.push({
+        state: item.availability,
+        provider: features.aiSessionProviders.some((provider) => provider.agent === "opencode"),
+        sessionRead: timeline.sessionReadAgents.includes("opencode"),
+        turnRead: timeline.turnReadAgents.includes("opencode"),
+        liveItems: timeline.liveItemAgents.includes("opencode"),
+        toolActivity: timeline.toolActivityAgents.includes("opencode"),
+      });
+    }
+    assert.deepEqual(observations, fixtures);
   } finally {
     await web.close();
   }

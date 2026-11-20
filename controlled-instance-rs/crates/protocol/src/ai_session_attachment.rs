@@ -34,6 +34,7 @@ impl AiSessionAttachmentScopeType {
 #[serde(rename_all = "lowercase")]
 pub enum AiSessionMessageAttachmentSourceType {
     Inline,
+    #[serde(rename = "runtime-path")]
     RuntimePath,
 }
 
@@ -62,6 +63,15 @@ pub struct AiSessionMessageAttachmentMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_path_source_uses_node_wire_spelling() {
+        let source: AiSessionMessageAttachmentSourceType =
+            serde_json::from_value(serde_json::json!("runtime-path"))
+                .expect("read Node wire model");
+        assert_eq!(source, AiSessionMessageAttachmentSourceType::RuntimePath);
+        assert_eq!(serde_json::to_value(source).unwrap(), "runtime-path");
+    }
 
     #[test]
     fn draft_uses_the_existing_public_wire_fields() {

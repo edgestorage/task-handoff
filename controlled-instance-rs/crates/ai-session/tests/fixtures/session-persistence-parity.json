@@ -1,0 +1,727 @@
+{
+  "source": {
+    "head": "9b2d6e17cce4a6a65d00f2ed4504f45546256edf",
+    "compatibility": "v0.0.47",
+    "n1Writer": "The seed is actual file-store.save output from the v0.0.47 writer whose hashes are recorded below; later current-runtime changes are tracked under revalidated.",
+    "beforeSha256": {
+      "ai-session/file-store.ts": "65f80956c89fa755b882fdd180ea433a4a9cec9b69da9ae8154004cebec910fd",
+      "ai-session/persistence.ts": "887b1465bf7670b8129a94d2da33e08c337a47289f292b0f8ba304ef99ae2642",
+      "ai-session-persistence-settings.ts": "3b5a329c49383a5b324575caa56b6f6fac1e252c3ff77da7d2441c0e9fcb9906"
+    },
+    "normalization": "Only newly minted queue ID and schema-valid operation timestamps. Persisted input times, revisions, order and full records kept; raw live/disk/reopen equality asserted first.",
+    "afterSettingsSha256": "657d609ad85e52de42b0d0f50c99cb9fe7edfa105090f7c5422009982e453b34",
+    "sourceFix": "Settings disk readers ignore unknown fields in schemas v1/v2/v3 before validation; required fields and strict PUT input unchanged. Before source/Rust C03 reset historyLimit17 to defaults50.",
+    "revalidated": {
+      "head": "368abbbc",
+      "main": "9294e287",
+      "compatibilityBaseline": "v0.0.58",
+      "sha256": {
+        "ai-session/file-store.ts": "bdcd0f1231fd4d4c5f1d2a233a7a7696bc0f7db889b79258b48b62614c0765ff",
+        "ai-session/persistence.ts": "0d2411a54192d3fb82bdcd90a6c9ea012242fde2d895a462dd30f5e472e0d59d",
+        "ai-session-persistence-settings.ts": "657d609ad85e52de42b0d0f50c99cb9fe7edfa105090f7c5422009982e453b34"
+      },
+      "result": "C01-C05 expected observations replay against current Node. File-store now wraps atomic write failures in AiSessionPersistenceError (500/AI_SESSION_PERSISTENCE_FAILED/storageCode EISDIR|EPERM); C04 asserts that structured owner error. Memory, durable state, notifications and retry semantics are unchanged; error text and HTTP presentation remain outside this owner-boundary fixture."
+    }
+  },
+  "input": {
+    "session": {
+      "id": "ais_persistence",
+      "agent": "codex",
+      "creationSource": "ai-session",
+      "providerSessionId": "provider-persistence",
+      "modelSelection": {
+        "modelEntityId": "model-persistence",
+        "modelName": "Migration model",
+        "modelUpstreamName": "provider-model"
+      },
+      "reasoningEffort": "high",
+      "title": "Persistence session",
+      "cwd": "/workspace",
+      "turns": [],
+      "status": "idle",
+      "phase": "unknown",
+      "toolCallsSinceLastMessage": 0,
+      "subAgents": [],
+      "startedAt": "2026-11-02T00:00:00.000Z",
+      "updatedAt": "2026-11-02T00:00:00.000Z",
+      "counters": {
+        "toolCalls": 2,
+        "edits": 1,
+        "approvals": 0
+      },
+      "queue": {
+        "revision": 7,
+        "pendingCount": 1,
+        "items": [
+          {
+            "id": "queue-existing",
+            "messageId": "message-existing",
+            "message": "persisted prompt",
+            "attachments": [],
+            "references": [],
+            "permissionMode": "ask",
+            "status": "queued",
+            "createdAt": "2026-11-02T00:00:00.000Z",
+            "updatedAt": "2026-11-02T00:00:00.000Z"
+          }
+        ]
+      },
+      "unread": false
+    },
+    "selection": {
+      "modelEntityId": "model-persistence",
+      "modelName": "Migration model",
+      "modelUpstreamName": "provider-model"
+    },
+    "references": [
+      {
+        "kind": "skill",
+        "name": "Migration skill",
+        "path": "/workspace/skill/SKILL.md"
+      }
+    ],
+    "settings": {
+      "historyLimit": 17,
+      "attachmentRetentionDays": 9,
+      "maxFileAttachmentBytes": 2048
+    },
+    "settingsVersions": [
+      {
+        "schemaVersion": 1,
+        "historyLimit": 17
+      },
+      {
+        "schemaVersion": 2,
+        "historyLimit": 18,
+        "attachmentRetentionDays": 9
+      },
+      {
+        "schemaVersion": 3,
+        "historyLimit": 19,
+        "attachmentRetentionDays": 7,
+        "maxFileAttachmentBytes": 2048
+      }
+    ]
+  },
+  "expected": {
+    "C01": {
+      "live": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "<operation-time>",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 8,
+          "pendingCount": 2,
+          "paused": true,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            },
+            {
+              "id": "<new-queue>",
+              "messageId": "message-new",
+              "message": "queued after restart",
+              "attachments": [],
+              "references": [
+                {
+                  "name": "Migration skill",
+                  "path": "/workspace/skill/SKILL.md",
+                  "kind": "skill"
+                }
+              ],
+              "permissionMode": "auto-review",
+              "status": "queued",
+              "createdAt": "<operation-time>",
+              "updatedAt": "<operation-time>"
+            }
+          ]
+        },
+        "unread": false
+      },
+      "persisted": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "<operation-time>",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 8,
+          "pendingCount": 2,
+          "paused": true,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            },
+            {
+              "id": "<new-queue>",
+              "messageId": "message-new",
+              "message": "queued after restart",
+              "attachments": [],
+              "references": [
+                {
+                  "name": "Migration skill",
+                  "path": "/workspace/skill/SKILL.md",
+                  "kind": "skill"
+                }
+              ],
+              "permissionMode": "auto-review",
+              "status": "queued",
+              "createdAt": "<operation-time>",
+              "updatedAt": "<operation-time>"
+            }
+          ]
+        },
+        "unread": false
+      },
+      "reopened": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "<operation-time>",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 8,
+          "pendingCount": 2,
+          "paused": true,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            },
+            {
+              "id": "<new-queue>",
+              "messageId": "message-new",
+              "message": "queued after restart",
+              "attachments": [],
+              "references": [
+                {
+                  "name": "Migration skill",
+                  "path": "/workspace/skill/SKILL.md",
+                  "kind": "skill"
+                }
+              ],
+              "permissionMode": "auto-review",
+              "status": "queued",
+              "createdAt": "<operation-time>",
+              "updatedAt": "<operation-time>"
+            }
+          ]
+        },
+        "unread": false
+      },
+      "settings": {
+        "schemaVersion": 3,
+        "historyLimit": 17,
+        "attachmentRetentionDays": 9,
+        "maxFileAttachmentBytes": 2048
+      }
+    },
+    "C02": {
+      "loaded": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "2026-11-02T00:00:00.000Z",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 7,
+          "pendingCount": 1,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            }
+          ]
+        },
+        "unread": false
+      },
+      "persisted": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "<operation-time>",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 7,
+          "pendingCount": 1,
+          "paused": true,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            }
+          ]
+        },
+        "unread": false
+      },
+      "reopened": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "<operation-time>",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 7,
+          "pendingCount": 1,
+          "paused": true,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            }
+          ]
+        },
+        "unread": false
+      }
+    },
+    "C03": [
+      {
+        "loaded": {
+          "schemaVersion": 3,
+          "historyLimit": 17,
+          "attachmentRetentionDays": 30,
+          "maxFileAttachmentBytes": 512000
+        },
+        "updated": {
+          "schemaVersion": 3,
+          "historyLimit": 18,
+          "attachmentRetentionDays": 30,
+          "maxFileAttachmentBytes": 512000
+        },
+        "reopened": {
+          "schemaVersion": 3,
+          "historyLimit": 18,
+          "attachmentRetentionDays": 30,
+          "maxFileAttachmentBytes": 512000
+        },
+        "persisted": {
+          "schemaVersion": 3,
+          "historyLimit": 18,
+          "attachmentRetentionDays": 30,
+          "maxFileAttachmentBytes": 512000
+        }
+      },
+      {
+        "loaded": {
+          "schemaVersion": 3,
+          "historyLimit": 18,
+          "attachmentRetentionDays": 9,
+          "maxFileAttachmentBytes": 512000
+        },
+        "updated": {
+          "schemaVersion": 3,
+          "historyLimit": 19,
+          "attachmentRetentionDays": 9,
+          "maxFileAttachmentBytes": 512000
+        },
+        "reopened": {
+          "schemaVersion": 3,
+          "historyLimit": 19,
+          "attachmentRetentionDays": 9,
+          "maxFileAttachmentBytes": 512000
+        },
+        "persisted": {
+          "schemaVersion": 3,
+          "historyLimit": 19,
+          "attachmentRetentionDays": 9,
+          "maxFileAttachmentBytes": 512000
+        }
+      },
+      {
+        "loaded": {
+          "schemaVersion": 3,
+          "historyLimit": 19,
+          "attachmentRetentionDays": 7,
+          "maxFileAttachmentBytes": 2048
+        },
+        "updated": {
+          "schemaVersion": 3,
+          "historyLimit": 20,
+          "attachmentRetentionDays": 7,
+          "maxFileAttachmentBytes": 2048
+        },
+        "reopened": {
+          "schemaVersion": 3,
+          "historyLimit": 20,
+          "attachmentRetentionDays": 7,
+          "maxFileAttachmentBytes": 2048
+        },
+        "persisted": {
+          "schemaVersion": 3,
+          "historyLimit": 20,
+          "attachmentRetentionDays": 7,
+          "maxFileAttachmentBytes": 2048
+        }
+      }
+    ],
+    "C04": {
+      "failed": true,
+      "changes": [],
+      "before": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "2026-11-02T00:00:00.000Z",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 7,
+          "pendingCount": 1,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            }
+          ]
+        },
+        "unread": false
+      },
+      "reopenedBeforeRetry": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "2026-11-02T00:00:00.000Z",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 7,
+          "pendingCount": 1,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            }
+          ]
+        },
+        "unread": false
+      },
+      "retried": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "<operation-time>",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 7,
+          "pendingCount": 1,
+          "paused": true,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            }
+          ]
+        },
+        "unread": false
+      },
+      "persisted": {
+        "id": "ais_persistence",
+        "agent": "codex",
+        "creationSource": "ai-session",
+        "providerSessionId": "provider-persistence",
+        "modelSelection": {
+          "modelEntityId": "model-persistence",
+          "modelName": "Migration model",
+          "modelUpstreamName": "provider-model"
+        },
+        "reasoningEffort": "high",
+        "title": "Persistence session",
+        "cwd": "/workspace",
+        "turns": [],
+        "status": "idle",
+        "phase": "unknown",
+        "toolCallsSinceLastMessage": 0,
+        "subAgents": [],
+        "startedAt": "2026-11-02T00:00:00.000Z",
+        "updatedAt": "<operation-time>",
+        "counters": {
+          "toolCalls": 2,
+          "edits": 1,
+          "approvals": 0
+        },
+        "queue": {
+          "revision": 7,
+          "pendingCount": 1,
+          "paused": true,
+          "items": [
+            {
+              "id": "queue-existing",
+              "messageId": "message-existing",
+              "message": "persisted prompt",
+              "attachments": [],
+              "references": [],
+              "permissionMode": "ask",
+              "status": "queued",
+              "createdAt": "2026-11-02T00:00:00.000Z",
+              "updatedAt": "2026-11-02T00:00:00.000Z"
+            }
+          ]
+        },
+        "unread": false
+      }
+    },
+    "C05": {
+      "failed": true,
+      "before": {
+        "schemaVersion": 3,
+        "historyLimit": 17,
+        "attachmentRetentionDays": 9,
+        "maxFileAttachmentBytes": 2048
+      },
+      "reopened": {
+        "schemaVersion": 3,
+        "historyLimit": 17,
+        "attachmentRetentionDays": 9,
+        "maxFileAttachmentBytes": 2048
+      },
+      "retried": {
+        "schemaVersion": 3,
+        "historyLimit": 23,
+        "attachmentRetentionDays": 9,
+        "maxFileAttachmentBytes": 2048
+      },
+      "persisted": {
+        "schemaVersion": 3,
+        "historyLimit": 23,
+        "attachmentRetentionDays": 9,
+        "maxFileAttachmentBytes": 2048
+      }
+    }
+  }
+}

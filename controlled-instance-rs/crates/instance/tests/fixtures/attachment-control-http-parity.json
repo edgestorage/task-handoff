@@ -1,0 +1,825 @@
+{
+  "source": "U03.9 actual Node createWebApp HTTP/controller/Codex session control; real manifest EACCES; source bug fixed at writer; bijective IDs and bounded consistent attachment clocks only",
+  "expected": {
+    "C01": {
+      "start": {
+        "response": {
+          "status": 503,
+          "contentType": "application/json",
+          "body": {
+            "error": {
+              "code": "PROVIDER_REJECTED",
+              "message": "provider rejected"
+            }
+          },
+          "traceId": "u039-trace",
+          "timed": true
+        },
+        "calls": [
+          {
+            "action": "start",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": null,
+          "messages": []
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "draft",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        },
+        "queue": [],
+        "retry": 0,
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "draft",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        }
+      },
+      "steer": {
+        "response": {
+          "status": 503,
+          "contentType": "application/json",
+          "body": {
+            "error": {
+              "code": "PROVIDER_REJECTED",
+              "message": "provider rejected"
+            }
+          },
+          "traceId": "u039-trace",
+          "timed": true
+        },
+        "calls": [
+          {
+            "action": "steer",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": null,
+          "messages": []
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "draft",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        },
+        "queue": [],
+        "retry": 0,
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "draft",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        }
+      }
+    },
+    "C02": {
+      "start": {
+        "response": {
+          "status": 500,
+          "contentType": "application/json",
+          "body": {
+            "error": {
+              "code": "AI_SESSION_ATTACHMENT_IO_FAILED",
+              "message": "AI session attachment manifest could not be persisted."
+            }
+          },
+          "traceId": "u039-trace",
+          "timed": true
+        },
+        "calls": [
+          {
+            "action": "start",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        },
+        "queue": [],
+        "retry": 1,
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "<createdAt>",
+              "committedAt": "<committedAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        }
+      },
+      "steer": {
+        "response": {
+          "status": 500,
+          "contentType": "application/json",
+          "body": {
+            "error": {
+              "code": "AI_SESSION_ATTACHMENT_IO_FAILED",
+              "message": "AI session attachment manifest could not be persisted."
+            }
+          },
+          "traceId": "u039-trace",
+          "timed": true
+        },
+        "calls": [
+          {
+            "action": "steer",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        },
+        "queue": [],
+        "retry": 1,
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "<createdAt>",
+              "committedAt": "<committedAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        }
+      }
+    },
+    "C03": {
+      "start": {
+        "response": {
+          "status": 500,
+          "contentType": "application/json",
+          "body": {
+            "error": {
+              "code": "AI_SESSION_ATTACHMENT_IO_FAILED",
+              "message": "AI session attachment manifest could not be persisted."
+            }
+          },
+          "traceId": "u039-trace",
+          "timed": true
+        },
+        "calls": [
+          {
+            "action": "start",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": null,
+          "messages": []
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        },
+        "queue": [],
+        "retry": 1,
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "draft",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        }
+      },
+      "steer": {
+        "response": {
+          "status": 500,
+          "contentType": "application/json",
+          "body": {
+            "error": {
+              "code": "AI_SESSION_ATTACHMENT_IO_FAILED",
+              "message": "AI session attachment manifest could not be persisted."
+            }
+          },
+          "traceId": "u039-trace",
+          "timed": true
+        },
+        "calls": [
+          {
+            "action": "steer",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": null,
+          "messages": []
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        },
+        "queue": [],
+        "retry": 1,
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "draft",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        }
+      }
+    },
+    "C04": {
+      "reject": {
+        "response": {
+          "status": 503,
+          "contentType": "application/json",
+          "body": {
+            "error": {
+              "code": "PROVIDER_REJECTED",
+              "message": "provider rejected"
+            }
+          },
+          "traceId": null,
+          "timed": false
+        },
+        "calls": [
+          {
+            "action": "steer",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": null,
+          "messages": []
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        },
+        "queue": [
+          {
+            "status": "queued",
+            "attachments": [
+              {
+                "id": "<attachment>",
+                "kind": "image",
+                "name": "input.png",
+                "mime": "image/png",
+                "size": 12,
+                "sourceType": "runtime-path"
+              }
+            ],
+            "error": null
+          }
+        ],
+        "retry": 1,
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "draft",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        }
+      },
+      "accept": {
+        "response": {
+          "status": 500,
+          "contentType": "application/json",
+          "body": {
+            "error": {
+              "code": "AI_SESSION_ATTACHMENT_IO_FAILED",
+              "message": "AI session attachment manifest could not be persisted."
+            }
+          },
+          "traceId": null,
+          "timed": false
+        },
+        "calls": [
+          {
+            "action": "steer",
+            "providerSessionId": "thread-commit",
+            "message": "Commit",
+            "contentHex": "636f6d6d6974206279746573"
+          }
+        ],
+        "session": {
+          "status": "running",
+          "phase": "thinking",
+          "activeTurnId": "turn-commit",
+          "userPrompt": "Commit",
+          "messages": [
+            {
+              "turnId": "turn-commit",
+              "id": "<message>",
+              "text": "Commit",
+              "attachments": [
+                {
+                  "id": "<attachment>",
+                  "kind": "image",
+                  "name": "input.png",
+                  "mime": "image/png",
+                  "size": 12,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "staged",
+              "createdAt": "<createdAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        },
+        "queue": [
+          {
+            "status": "queued",
+            "attachments": [
+              {
+                "id": "<attachment>",
+                "kind": "image",
+                "name": "input.png",
+                "mime": "image/png",
+                "size": 12,
+                "sourceType": "runtime-path"
+              }
+            ],
+            "error": null
+          }
+        ],
+        "retry": 1,
+        "afterRetry": {
+          "files": {
+            "ai-session-attachments/blobs/e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51": "636f6d6d6974206279746573",
+            "ai-session-attachments/manifests/<attachment>.json": {
+              "schemaVersion": 1,
+              "id": "<attachment>",
+              "inputId": "input-commit",
+              "sessionId": "<session>",
+              "messageId": "<message>",
+              "turnId": "turn-commit",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "blobHash": "e3aeb3b32db8dfc209f969d9887fe1dbae6931a6963737d7333c542b40eb5e51",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "<createdAt>",
+              "committedAt": "<committedAt>"
+            }
+          },
+          "attachments": [
+            {
+              "id": "<attachment>",
+              "kind": "image",
+              "name": "input.png",
+              "mime": "image/png",
+              "size": 12,
+              "contentState": "available"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

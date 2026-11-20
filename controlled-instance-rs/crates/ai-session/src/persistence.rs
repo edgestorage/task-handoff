@@ -1,5 +1,6 @@
 use crate::AiSession;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use controlled_instance_core::text::js_string;
 use controlled_instance_protocol::{
     AiSessionCounters, AiSessionGoal, AiSessionGoalStatus, AiSessionQueue,
 };
@@ -372,9 +373,13 @@ fn normalize_turns(value: Option<&Value>) -> Vec<Value> {
         else {
             continue;
         };
-        let meaningful = user_prompt
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
+        // An explicit identity plus lifecycle is authoritative before content
+        // arrives; dropping it loses completions received before send-ack.
+        let meaningful = (record.get("id").is_some_and(json_truthy)
+            && record.get("status").is_some_and(json_truthy))
+            || user_prompt
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
             || user_messages
                 .as_ref()
                 .is_some_and(|items| !items.is_empty())
@@ -1289,42 +1294,12 @@ fn json_truthy(value: &Value) -> bool {
     }
 }
 
-fn js_string(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => js_number_string(value.as_f64().unwrap_or_default()),
-        Value::String(value) => value.clone(),
-        Value::Array(values) => js_array_string(values),
-        Value::Object(_) => "[object Object]".to_string(),
-    }
-}
-
 fn js_compact_string(value: &Value) -> String {
     if value.is_null() {
         String::new()
     } else {
         js_string(value)
     }
-}
-
-fn js_array_string(values: &[Value]) -> String {
-    values
-        .iter()
-        .map(|value| match value {
-            Value::Null => String::new(),
-            Value::Array(values) => js_array_string(values),
-            _ => js_string(value),
-        })
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn js_number_string(value: f64) -> String {
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    value.to_string()
 }
 
 fn queue_status_rank(item: &Value) -> u8 {
@@ -1485,7 +1460,10 @@ mod tests {
             .get("future")
             .is_none());
         let turns = session.turns.as_ref().expect("turns");
-        assert_eq!(turns.len(), 1);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1]["id"], "empty-turn");
+        assert_eq!(turns[1]["status"], "completed");
+        assert!(turns[1].get("userPrompt").is_none());
         assert_eq!(turns[0]["id"], "turn-1");
         assert_eq!(turns[0].get("future"), None);
         assert_eq!(turns[0]["userMessages"][0]["attachments"][0]["id"], "att-1");
@@ -1801,16 +1779,20 @@ mod tests {
     }
 
     #[test]
-    fn runtime_sanitizer_drops_empty_turns_before_persisting() {
+    fn runtime_sanitizer_keeps_identified_lifecycle_without_body() {
         let mut session = minimal_session();
         session["turns"] = json!([
+            {},
+            { "id": "no-state" },
             { "id": "empty", "status": "running", "phase": "thinking" },
             { "id": "kept", "userPrompt": "hello" }
         ]);
         let session = sanitize_runtime_session(&session).expect("session");
         let turns = session.turns.expect("turns");
-        assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0]["id"], "kept");
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0]["id"], "empty");
+        assert_eq!(turns[0]["status"], "running");
+        assert_eq!(turns[1]["id"], "kept");
     }
 
     #[test]

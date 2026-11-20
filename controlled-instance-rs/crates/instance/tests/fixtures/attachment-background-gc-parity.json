@@ -1,0 +1,1870 @@
+{
+  "input": {
+    "session": {
+      "id": "ses_0000000000310",
+      "agent": "codex",
+      "creationSource": "ai-session",
+      "providerSessionId": "thread-read",
+      "title": "Read",
+      "cwd": "/workspace",
+      "turns": [
+        {
+          "id": "turn-read",
+          "providerTurnId": "turn-read",
+          "userPrompt": "Read",
+          "userMessages": [
+            {
+              "id": "message-read",
+              "text": "Read",
+              "attachments": [
+                {
+                  "id": "att_0123456789abcdef01234567",
+                  "kind": "image",
+                  "name": "read.png",
+                  "mime": "image/png",
+                  "size": 10,
+                  "contentState": "available"
+                }
+              ]
+            }
+          ],
+          "status": "completed",
+          "phase": "responding",
+          "revision": 1,
+          "startedAt": "2026-11-06T00:00:00.000Z",
+          "updatedAt": "2026-11-06T00:00:00.000Z",
+          "completedAt": "2026-11-06T00:00:00.000Z"
+        }
+      ],
+      "status": "idle",
+      "phase": "unknown",
+      "startedAt": "2026-11-06T00:00:00.000Z",
+      "updatedAt": "2026-11-06T00:00:00.000Z",
+      "counters": {
+        "toolCalls": 0,
+        "edits": 0,
+        "approvals": 0
+      },
+      "toolCallsSinceLastMessage": 0,
+      "subAgents": [],
+      "queue": {
+        "revision": 0,
+        "pendingCount": 0,
+        "items": []
+      },
+      "unread": false
+    },
+    "item": {
+      "id": "ses_0000000000310",
+      "agent": "codex",
+      "creationSource": "ai-session",
+      "providerSessionId": "thread-read",
+      "title": "Read",
+      "cwd": "/workspace",
+      "lastActiveAt": "2026-11-06T00:00:00.000Z",
+      "archivedAt": "2026-11-06T00:00:00.000Z"
+    },
+    "turn": {
+      "id": "turn-read",
+      "providerTurnId": "turn-read",
+      "userPrompt": "Read",
+      "userMessages": [
+        {
+          "id": "message-read",
+          "text": "Read",
+          "attachments": [
+            {
+              "id": "att_0123456789abcdef01234567",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "contentState": "available"
+            }
+          ]
+        }
+      ],
+      "status": "completed",
+      "phase": "responding",
+      "revision": 1,
+      "startedAt": "2026-11-06T00:00:00.000Z",
+      "updatedAt": "2026-11-06T00:00:00.000Z",
+      "completedAt": "2026-11-06T00:00:00.000Z"
+    },
+    "historyTurn": {
+      "id": "turn-read",
+      "providerTurnId": "turn-read",
+      "userPrompt": "Read",
+      "userMessages": [
+        {
+          "id": "message-read",
+          "text": "Read",
+          "attachments": [
+            {
+              "id": "att_0123456789abcdef01234567",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "contentState": "available"
+            }
+          ]
+        }
+      ],
+      "status": "completed",
+      "phase": "responding",
+      "startedAt": "2026-11-06T00:00:00.000Z",
+      "updatedAt": "2026-11-06T00:00:00.000Z",
+      "completedAt": "2026-11-06T00:00:00.000Z"
+    },
+    "attachment": {
+      "id": "att_0123456789abcdef01234567",
+      "kind": "image",
+      "name": "read.png",
+      "mime": "image/png",
+      "size": 10,
+      "contentState": "available"
+    },
+    "contentHex": "72656164206279746573"
+  },
+  "expected": {
+    "C01": {
+      "intervalMs": 3600000,
+      "initial": {
+        "status": 200,
+        "body": {
+          "data": {
+            "streamId": "<stream>",
+            "revision": 1,
+            "lastEventAt": "<event-1>",
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "ses_0000000000310",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "thread-read",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Read",
+                  "cwd": "/workspace",
+                  "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                  "turnsRevision": "70W9dfTviEdX5grRN7rvX1",
+                  "unread": false,
+                  "latestTurnRef": {
+                    "id": "turn-read",
+                    "bodyRevision": "IrUod86r0Ztqs0_3undKrK"
+                  },
+                  "turnCount": 1,
+                  "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-06T00:00:00.000Z",
+                  "updatedAt": "2026-11-06T00:00:00.000Z"
+                }
+              ],
+              "updatedAt": "<snapshot-time>"
+            }
+          }
+        }
+      },
+      "before": {
+        "files": {
+          "ai-session-attachments/blobs/a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535": "72656164206279746573",
+          "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+            "schemaVersion": 1,
+            "id": "att_0123456789abcdef01234567",
+            "inputId": "input-read",
+            "sessionId": "ses_0000000000310",
+            "messageId": "message-read",
+            "turnId": "turn-read",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "<seed-time>",
+            "committedAt": "<seed-time>"
+          }
+        },
+        "rawTurns": [
+          {
+            "id": "turn-read",
+            "providerTurnId": "turn-read",
+            "userPrompt": "Read",
+            "userMessages": [
+              {
+                "id": "message-read",
+                "text": "Read",
+                "attachments": [
+                  {
+                    "id": "att_0123456789abcdef01234567",
+                    "kind": "image",
+                    "name": "read.png",
+                    "mime": "image/png",
+                    "size": 10,
+                    "contentState": "available"
+                  }
+                ]
+              }
+            ],
+            "status": "completed",
+            "phase": "responding",
+            "revision": 1,
+            "startedAt": "2026-11-06T00:00:00.000Z",
+            "updatedAt": "2026-11-06T00:00:00.000Z",
+            "completedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "attachments": [
+          {
+            "id": "att_0123456789abcdef01234567",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "contentState": "available"
+          }
+        ]
+      },
+      "retained": {
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream>",
+              "revision": 1,
+              "lastEventAt": "<event-1>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "sessions": [
+                  {
+                    "id": "ses_0000000000310",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "thread-read",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Read",
+                    "cwd": "/workspace",
+                    "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                    "turnsRevision": "70W9dfTviEdX5grRN7rvX1",
+                    "unread": false,
+                    "latestTurnRef": {
+                      "id": "turn-read",
+                      "bodyRevision": "IrUod86r0Ztqs0_3undKrK"
+                    },
+                    "turnCount": 1,
+                    "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-06T00:00:00.000Z",
+                    "updatedAt": "2026-11-06T00:00:00.000Z"
+                  }
+                ],
+                "updatedAt": "<snapshot-time>"
+              }
+            }
+          }
+        },
+        "disk": {
+          "files": {
+            "ai-session-attachments/blobs/a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535": "72656164206279746573",
+            "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+              "schemaVersion": 1,
+              "id": "att_0123456789abcdef01234567",
+              "inputId": "input-read",
+              "sessionId": "ses_0000000000310",
+              "messageId": "message-read",
+              "turnId": "turn-read",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "<seed-time>",
+              "committedAt": "<seed-time>"
+            }
+          },
+          "rawTurns": [
+            {
+              "id": "turn-read",
+              "providerTurnId": "turn-read",
+              "userPrompt": "Read",
+              "userMessages": [
+                {
+                  "id": "message-read",
+                  "text": "Read",
+                  "attachments": [
+                    {
+                      "id": "att_0123456789abcdef01234567",
+                      "kind": "image",
+                      "name": "read.png",
+                      "mime": "image/png",
+                      "size": 10,
+                      "contentState": "available"
+                    }
+                  ]
+                }
+              ],
+              "status": "completed",
+              "phase": "responding",
+              "revision": 1,
+              "startedAt": "2026-11-06T00:00:00.000Z",
+              "updatedAt": "2026-11-06T00:00:00.000Z",
+              "completedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "attachments": [
+            {
+              "id": "att_0123456789abcdef01234567",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "contentState": "available"
+            }
+          ]
+        }
+      },
+      "expired": {
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream>",
+              "revision": 2,
+              "lastEventAt": "<event-2>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "sessions": [
+                  {
+                    "id": "ses_0000000000310",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "thread-read",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Read",
+                    "cwd": "/workspace",
+                    "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                    "turnsRevision": "MdaPcQb-tk447vAhnMt8kK",
+                    "unread": false,
+                    "latestTurnRef": {
+                      "id": "turn-read",
+                      "bodyRevision": "ZVCm3KKYDbHv_-QDQe2AHP"
+                    },
+                    "turnCount": 1,
+                    "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-06T00:00:00.000Z",
+                    "updatedAt": "2026-11-06T00:00:00.000Z"
+                  }
+                ],
+                "updatedAt": "<snapshot-time>"
+              }
+            }
+          }
+        },
+        "disk": {
+          "files": {
+            "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+              "schemaVersion": 1,
+              "id": "att_0123456789abcdef01234567",
+              "inputId": "input-read",
+              "sessionId": "ses_0000000000310",
+              "messageId": "message-read",
+              "turnId": "turn-read",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "<seed-time>",
+              "committedAt": "<seed-time>",
+              "contentDeletedAt": "<gc-time>",
+              "contentDeletionReason": "expired"
+            }
+          },
+          "rawTurns": [
+            {
+              "id": "turn-read",
+              "providerTurnId": "turn-read",
+              "userPrompt": "Read",
+              "userMessages": [
+                {
+                  "id": "message-read",
+                  "text": "Read",
+                  "attachments": [
+                    {
+                      "id": "att_0123456789abcdef01234567",
+                      "kind": "image",
+                      "name": "read.png",
+                      "mime": "image/png",
+                      "size": 10,
+                      "contentState": "available"
+                    }
+                  ]
+                }
+              ],
+              "status": "completed",
+              "phase": "responding",
+              "revision": 1,
+              "startedAt": "2026-11-06T00:00:00.000Z",
+              "updatedAt": "2026-11-06T00:00:00.000Z",
+              "completedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "attachments": [
+            {
+              "id": "att_0123456789abcdef01234567",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "contentState": "expired"
+            }
+          ]
+        }
+      },
+      "repeated": {
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream>",
+              "revision": 2,
+              "lastEventAt": "<event-2>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "sessions": [
+                  {
+                    "id": "ses_0000000000310",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "thread-read",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Read",
+                    "cwd": "/workspace",
+                    "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                    "turnsRevision": "MdaPcQb-tk447vAhnMt8kK",
+                    "unread": false,
+                    "latestTurnRef": {
+                      "id": "turn-read",
+                      "bodyRevision": "ZVCm3KKYDbHv_-QDQe2AHP"
+                    },
+                    "turnCount": 1,
+                    "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-06T00:00:00.000Z",
+                    "updatedAt": "2026-11-06T00:00:00.000Z"
+                  }
+                ],
+                "updatedAt": "<snapshot-time>"
+              }
+            }
+          }
+        },
+        "disk": {
+          "files": {
+            "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+              "schemaVersion": 1,
+              "id": "att_0123456789abcdef01234567",
+              "inputId": "input-read",
+              "sessionId": "ses_0000000000310",
+              "messageId": "message-read",
+              "turnId": "turn-read",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "<seed-time>",
+              "committedAt": "<seed-time>",
+              "contentDeletedAt": "<gc-time>",
+              "contentDeletionReason": "expired"
+            }
+          },
+          "rawTurns": [
+            {
+              "id": "turn-read",
+              "providerTurnId": "turn-read",
+              "userPrompt": "Read",
+              "userMessages": [
+                {
+                  "id": "message-read",
+                  "text": "Read",
+                  "attachments": [
+                    {
+                      "id": "att_0123456789abcdef01234567",
+                      "kind": "image",
+                      "name": "read.png",
+                      "mime": "image/png",
+                      "size": 10,
+                      "contentState": "available"
+                    }
+                  ]
+                }
+              ],
+              "status": "completed",
+              "phase": "responding",
+              "revision": 1,
+              "startedAt": "2026-11-06T00:00:00.000Z",
+              "updatedAt": "2026-11-06T00:00:00.000Z",
+              "completedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "attachments": [
+            {
+              "id": "att_0123456789abcdef01234567",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "contentState": "expired"
+            }
+          ]
+        }
+      },
+      "delta": {
+        "status": 200,
+        "body": {
+          "data": {
+            "streamId": "<stream>",
+            "instanceId": "<instance>",
+            "sinceRevision": 1,
+            "latestRevision": 2,
+            "earliestRetainedRevision": 1,
+            "syncRequired": false,
+            "events": [
+              {
+                "type": "ai-session.patch",
+                "payload": {
+                  "meta": {
+                    "streamId": "<stream>",
+                    "instanceId": "<instance>",
+                    "revision": 2,
+                    "previousRevision": 1,
+                    "traceId": "<trace-2>",
+                    "generatedAt": "<event-2>",
+                    "reason": "provider-event"
+                  },
+                  "upserted": [
+                    {
+                      "id": "ses_0000000000310",
+                      "agent": "codex",
+                      "creationSource": "ai-session",
+                      "providerSessionId": "thread-read",
+                      "actions": {
+                        "send": true,
+                        "interrupt": false,
+                        "approval": false,
+                        "fork": false,
+                        "rename": false,
+                        "openApp": true,
+                        "close": true
+                      },
+                      "title": "Read",
+                      "cwd": "/workspace",
+                      "status": "idle",
+                      "phase": "unknown",
+                      "toolCallsSinceLastMessage": 0,
+                      "subAgents": [],
+                      "queue": {
+                        "revision": 0,
+                        "pendingCount": 0,
+                        "items": []
+                      },
+                      "startedAt": "2026-11-06T00:00:00.000Z",
+                      "updatedAt": "2026-11-06T00:00:00.000Z",
+                      "unread": false,
+                      "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                      "turnsRevision": "MdaPcQb-tk447vAhnMt8kK",
+                      "latestTurnRef": {
+                        "id": "turn-read",
+                        "bodyRevision": "ZVCm3KKYDbHv_-QDQe2AHP"
+                      },
+                      "turnCount": 1,
+                      "subAgentCount": 0,
+                      "lastUserMessageAt": "2026-11-06T00:00:00.000Z"
+                    }
+                  ],
+                  "removed": []
+                }
+              }
+            ]
+          }
+        }
+      },
+      "timerStopped": true,
+      "reopened": {
+        "files": {
+          "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+            "schemaVersion": 1,
+            "id": "att_0123456789abcdef01234567",
+            "inputId": "input-read",
+            "sessionId": "ses_0000000000310",
+            "messageId": "message-read",
+            "turnId": "turn-read",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "<seed-time>",
+            "committedAt": "<seed-time>",
+            "contentDeletedAt": "<gc-time>",
+            "contentDeletionReason": "expired"
+          }
+        },
+        "attachments": [
+          {
+            "id": "att_0123456789abcdef01234567",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "contentState": "expired"
+          }
+        ]
+      },
+      "events": [
+        {
+          "type": "ai-session.snapshot",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "instanceId": "<instance>",
+              "revision": 1,
+              "previousRevision": 0,
+              "traceId": "<trace-1>",
+              "generatedAt": "<event-1>",
+              "reason": "startup"
+            },
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "ses_0000000000310",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "thread-read",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Read",
+                  "cwd": "/workspace",
+                  "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                  "turnsRevision": "70W9dfTviEdX5grRN7rvX1",
+                  "unread": false,
+                  "latestTurnRef": {
+                    "id": "turn-read",
+                    "bodyRevision": "IrUod86r0Ztqs0_3undKrK"
+                  },
+                  "turnCount": 1,
+                  "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-06T00:00:00.000Z",
+                  "updatedAt": "2026-11-06T00:00:00.000Z"
+                }
+              ],
+              "updatedAt": "<snapshot-time>"
+            }
+          }
+        },
+        {
+          "type": "ai-session.patch",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "instanceId": "<instance>",
+              "revision": 2,
+              "previousRevision": 1,
+              "traceId": "<trace-2>",
+              "generatedAt": "<event-2>",
+              "reason": "provider-event"
+            },
+            "upserted": [
+              {
+                "id": "ses_0000000000310",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "thread-read",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "Read",
+                "cwd": "/workspace",
+                "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                "turnsRevision": "MdaPcQb-tk447vAhnMt8kK",
+                "unread": false,
+                "latestTurnRef": {
+                  "id": "turn-read",
+                  "bodyRevision": "ZVCm3KKYDbHv_-QDQe2AHP"
+                },
+                "turnCount": 1,
+                "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgentCount": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-06T00:00:00.000Z",
+                "updatedAt": "2026-11-06T00:00:00.000Z"
+              }
+            ],
+            "removed": []
+          }
+        }
+      ]
+    },
+    "C02": {
+      "intervalMs": 3600000,
+      "initial": {
+        "status": 200,
+        "body": {
+          "data": {
+            "streamId": "<stream>",
+            "revision": 1,
+            "lastEventAt": "<event-1>",
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "ses_0000000000310",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "thread-read",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Read",
+                  "cwd": "/workspace",
+                  "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                  "turnsRevision": "70W9dfTviEdX5grRN7rvX1",
+                  "unread": false,
+                  "latestTurnRef": {
+                    "id": "turn-read",
+                    "bodyRevision": "IrUod86r0Ztqs0_3undKrK"
+                  },
+                  "turnCount": 1,
+                  "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-06T00:00:00.000Z",
+                  "updatedAt": "2026-11-06T00:00:00.000Z"
+                }
+              ],
+              "updatedAt": "<snapshot-time>"
+            }
+          }
+        }
+      },
+      "before": {
+        "files": {
+          "ai-session-attachments/blobs/a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535": "72656164206279746573",
+          "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+            "schemaVersion": 1,
+            "id": "att_0123456789abcdef01234567",
+            "inputId": "input-read",
+            "sessionId": "ses_0000000000310",
+            "messageId": "message-read",
+            "turnId": "turn-read",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "<seed-time>",
+            "committedAt": "<seed-time>"
+          }
+        },
+        "rawTurns": [
+          {
+            "id": "turn-read",
+            "providerTurnId": "turn-read",
+            "userPrompt": "Read",
+            "userMessages": [
+              {
+                "id": "message-read",
+                "text": "Read",
+                "attachments": [
+                  {
+                    "id": "att_0123456789abcdef01234567",
+                    "kind": "image",
+                    "name": "read.png",
+                    "mime": "image/png",
+                    "size": 10,
+                    "contentState": "available"
+                  }
+                ]
+              }
+            ],
+            "status": "completed",
+            "phase": "responding",
+            "revision": 1,
+            "startedAt": "2026-11-06T00:00:00.000Z",
+            "updatedAt": "2026-11-06T00:00:00.000Z",
+            "completedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "attachments": [
+          {
+            "id": "att_0123456789abcdef01234567",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "contentState": "available"
+          }
+        ]
+      },
+      "failure": {
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream>",
+              "revision": 1,
+              "lastEventAt": "<event-1>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "sessions": [
+                  {
+                    "id": "ses_0000000000310",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "thread-read",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Read",
+                    "cwd": "/workspace",
+                    "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                    "turnsRevision": "70W9dfTviEdX5grRN7rvX1",
+                    "unread": false,
+                    "latestTurnRef": {
+                      "id": "turn-read",
+                      "bodyRevision": "IrUod86r0Ztqs0_3undKrK"
+                    },
+                    "turnCount": 1,
+                    "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-06T00:00:00.000Z",
+                    "updatedAt": "2026-11-06T00:00:00.000Z"
+                  }
+                ],
+                "updatedAt": "<snapshot-time>"
+              }
+            }
+          }
+        },
+        "disk": {
+          "files": {
+            "ai-session-attachments/blobs/a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535": "72656164206279746573",
+            "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+              "schemaVersion": 1,
+              "id": "att_0123456789abcdef01234567",
+              "inputId": "input-read",
+              "sessionId": "ses_0000000000310",
+              "messageId": "message-read",
+              "turnId": "turn-read",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "<seed-time>",
+              "committedAt": "<seed-time>"
+            }
+          },
+          "rawTurns": [
+            {
+              "id": "turn-read",
+              "providerTurnId": "turn-read",
+              "userPrompt": "Read",
+              "userMessages": [
+                {
+                  "id": "message-read",
+                  "text": "Read",
+                  "attachments": [
+                    {
+                      "id": "att_0123456789abcdef01234567",
+                      "kind": "image",
+                      "name": "read.png",
+                      "mime": "image/png",
+                      "size": 10,
+                      "contentState": "available"
+                    }
+                  ]
+                }
+              ],
+              "status": "completed",
+              "phase": "responding",
+              "revision": 1,
+              "startedAt": "2026-11-06T00:00:00.000Z",
+              "updatedAt": "2026-11-06T00:00:00.000Z",
+              "completedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "attachments": [
+            {
+              "id": "att_0123456789abcdef01234567",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "contentState": "available"
+            }
+          ]
+        }
+      },
+      "failureWarningCount": 1,
+      "expired": {
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream>",
+              "revision": 2,
+              "lastEventAt": "<event-2>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "sessions": [
+                  {
+                    "id": "ses_0000000000310",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "thread-read",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Read",
+                    "cwd": "/workspace",
+                    "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                    "turnsRevision": "MdaPcQb-tk447vAhnMt8kK",
+                    "unread": false,
+                    "latestTurnRef": {
+                      "id": "turn-read",
+                      "bodyRevision": "ZVCm3KKYDbHv_-QDQe2AHP"
+                    },
+                    "turnCount": 1,
+                    "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-06T00:00:00.000Z",
+                    "updatedAt": "2026-11-06T00:00:00.000Z"
+                  }
+                ],
+                "updatedAt": "<snapshot-time>"
+              }
+            }
+          }
+        },
+        "disk": {
+          "files": {
+            "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+              "schemaVersion": 1,
+              "id": "att_0123456789abcdef01234567",
+              "inputId": "input-read",
+              "sessionId": "ses_0000000000310",
+              "messageId": "message-read",
+              "turnId": "turn-read",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "<seed-time>",
+              "committedAt": "<seed-time>",
+              "contentDeletedAt": "<gc-time>",
+              "contentDeletionReason": "expired"
+            }
+          },
+          "rawTurns": [
+            {
+              "id": "turn-read",
+              "providerTurnId": "turn-read",
+              "userPrompt": "Read",
+              "userMessages": [
+                {
+                  "id": "message-read",
+                  "text": "Read",
+                  "attachments": [
+                    {
+                      "id": "att_0123456789abcdef01234567",
+                      "kind": "image",
+                      "name": "read.png",
+                      "mime": "image/png",
+                      "size": 10,
+                      "contentState": "available"
+                    }
+                  ]
+                }
+              ],
+              "status": "completed",
+              "phase": "responding",
+              "revision": 1,
+              "startedAt": "2026-11-06T00:00:00.000Z",
+              "updatedAt": "2026-11-06T00:00:00.000Z",
+              "completedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "attachments": [
+            {
+              "id": "att_0123456789abcdef01234567",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "contentState": "expired"
+            }
+          ]
+        }
+      },
+      "repeated": {
+        "state": {
+          "status": 200,
+          "body": {
+            "data": {
+              "streamId": "<stream>",
+              "revision": 2,
+              "lastEventAt": "<event-2>",
+              "snapshot": {
+                "runningCount": 0,
+                "waitingCount": 0,
+                "staleCount": 0,
+                "sessions": [
+                  {
+                    "id": "ses_0000000000310",
+                    "agent": "codex",
+                    "creationSource": "ai-session",
+                    "providerSessionId": "thread-read",
+                    "actions": {
+                      "send": true,
+                      "interrupt": false,
+                      "approval": false,
+                      "fork": false,
+                      "rename": false,
+                      "openApp": true,
+                      "close": true
+                    },
+                    "title": "Read",
+                    "cwd": "/workspace",
+                    "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                    "turnsRevision": "MdaPcQb-tk447vAhnMt8kK",
+                    "unread": false,
+                    "latestTurnRef": {
+                      "id": "turn-read",
+                      "bodyRevision": "ZVCm3KKYDbHv_-QDQe2AHP"
+                    },
+                    "turnCount": 1,
+                    "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                    "status": "idle",
+                    "phase": "unknown",
+                    "toolCallsSinceLastMessage": 0,
+                    "subAgentCount": 0,
+                    "subAgents": [],
+                    "queue": {
+                      "revision": 0,
+                      "pendingCount": 0,
+                      "items": []
+                    },
+                    "startedAt": "2026-11-06T00:00:00.000Z",
+                    "updatedAt": "2026-11-06T00:00:00.000Z"
+                  }
+                ],
+                "updatedAt": "<snapshot-time>"
+              }
+            }
+          }
+        },
+        "disk": {
+          "files": {
+            "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+              "schemaVersion": 1,
+              "id": "att_0123456789abcdef01234567",
+              "inputId": "input-read",
+              "sessionId": "ses_0000000000310",
+              "messageId": "message-read",
+              "turnId": "turn-read",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+              "sourceType": "inline",
+              "state": "committed",
+              "createdAt": "<seed-time>",
+              "committedAt": "<seed-time>",
+              "contentDeletedAt": "<gc-time>",
+              "contentDeletionReason": "expired"
+            }
+          },
+          "rawTurns": [
+            {
+              "id": "turn-read",
+              "providerTurnId": "turn-read",
+              "userPrompt": "Read",
+              "userMessages": [
+                {
+                  "id": "message-read",
+                  "text": "Read",
+                  "attachments": [
+                    {
+                      "id": "att_0123456789abcdef01234567",
+                      "kind": "image",
+                      "name": "read.png",
+                      "mime": "image/png",
+                      "size": 10,
+                      "contentState": "available"
+                    }
+                  ]
+                }
+              ],
+              "status": "completed",
+              "phase": "responding",
+              "revision": 1,
+              "startedAt": "2026-11-06T00:00:00.000Z",
+              "updatedAt": "2026-11-06T00:00:00.000Z",
+              "completedAt": "2026-11-06T00:00:00.000Z"
+            }
+          ],
+          "attachments": [
+            {
+              "id": "att_0123456789abcdef01234567",
+              "kind": "image",
+              "name": "read.png",
+              "mime": "image/png",
+              "size": 10,
+              "contentState": "expired"
+            }
+          ]
+        }
+      },
+      "delta": {
+        "status": 200,
+        "body": {
+          "data": {
+            "streamId": "<stream>",
+            "instanceId": "<instance>",
+            "sinceRevision": 1,
+            "latestRevision": 2,
+            "earliestRetainedRevision": 1,
+            "syncRequired": false,
+            "events": [
+              {
+                "type": "ai-session.patch",
+                "payload": {
+                  "meta": {
+                    "streamId": "<stream>",
+                    "instanceId": "<instance>",
+                    "revision": 2,
+                    "previousRevision": 1,
+                    "traceId": "<trace-2>",
+                    "generatedAt": "<event-2>",
+                    "reason": "provider-event"
+                  },
+                  "upserted": [
+                    {
+                      "id": "ses_0000000000310",
+                      "agent": "codex",
+                      "creationSource": "ai-session",
+                      "providerSessionId": "thread-read",
+                      "actions": {
+                        "send": true,
+                        "interrupt": false,
+                        "approval": false,
+                        "fork": false,
+                        "rename": false,
+                        "openApp": true,
+                        "close": true
+                      },
+                      "title": "Read",
+                      "cwd": "/workspace",
+                      "status": "idle",
+                      "phase": "unknown",
+                      "toolCallsSinceLastMessage": 0,
+                      "subAgents": [],
+                      "queue": {
+                        "revision": 0,
+                        "pendingCount": 0,
+                        "items": []
+                      },
+                      "startedAt": "2026-11-06T00:00:00.000Z",
+                      "updatedAt": "2026-11-06T00:00:00.000Z",
+                      "unread": false,
+                      "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                      "turnsRevision": "MdaPcQb-tk447vAhnMt8kK",
+                      "latestTurnRef": {
+                        "id": "turn-read",
+                        "bodyRevision": "ZVCm3KKYDbHv_-QDQe2AHP"
+                      },
+                      "turnCount": 1,
+                      "subAgentCount": 0,
+                      "lastUserMessageAt": "2026-11-06T00:00:00.000Z"
+                    }
+                  ],
+                  "removed": []
+                }
+              }
+            ]
+          }
+        }
+      },
+      "timerStopped": true,
+      "reopened": {
+        "files": {
+          "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+            "schemaVersion": 1,
+            "id": "att_0123456789abcdef01234567",
+            "inputId": "input-read",
+            "sessionId": "ses_0000000000310",
+            "messageId": "message-read",
+            "turnId": "turn-read",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "<seed-time>",
+            "committedAt": "<seed-time>",
+            "contentDeletedAt": "<gc-time>",
+            "contentDeletionReason": "expired"
+          }
+        },
+        "attachments": [
+          {
+            "id": "att_0123456789abcdef01234567",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "contentState": "expired"
+          }
+        ]
+      },
+      "events": [
+        {
+          "type": "ai-session.snapshot",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "instanceId": "<instance>",
+              "revision": 1,
+              "previousRevision": 0,
+              "traceId": "<trace-1>",
+              "generatedAt": "<event-1>",
+              "reason": "startup"
+            },
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "ses_0000000000310",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "thread-read",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Read",
+                  "cwd": "/workspace",
+                  "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                  "turnsRevision": "70W9dfTviEdX5grRN7rvX1",
+                  "unread": false,
+                  "latestTurnRef": {
+                    "id": "turn-read",
+                    "bodyRevision": "IrUod86r0Ztqs0_3undKrK"
+                  },
+                  "turnCount": 1,
+                  "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-06T00:00:00.000Z",
+                  "updatedAt": "2026-11-06T00:00:00.000Z"
+                }
+              ],
+              "updatedAt": "<snapshot-time>"
+            }
+          }
+        },
+        {
+          "type": "ai-session.patch",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "instanceId": "<instance>",
+              "revision": 2,
+              "previousRevision": 1,
+              "traceId": "<trace-2>",
+              "generatedAt": "<event-2>",
+              "reason": "provider-event"
+            },
+            "upserted": [
+              {
+                "id": "ses_0000000000310",
+                "agent": "codex",
+                "creationSource": "ai-session",
+                "providerSessionId": "thread-read",
+                "actions": {
+                  "send": true,
+                  "interrupt": false,
+                  "approval": false,
+                  "fork": false,
+                  "rename": false,
+                  "openApp": true,
+                  "close": true
+                },
+                "title": "Read",
+                "cwd": "/workspace",
+                "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                "turnsRevision": "MdaPcQb-tk447vAhnMt8kK",
+                "unread": false,
+                "latestTurnRef": {
+                  "id": "turn-read",
+                  "bodyRevision": "ZVCm3KKYDbHv_-QDQe2AHP"
+                },
+                "turnCount": 1,
+                "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                "status": "idle",
+                "phase": "unknown",
+                "toolCallsSinceLastMessage": 0,
+                "subAgentCount": 0,
+                "subAgents": [],
+                "queue": {
+                  "revision": 0,
+                  "pendingCount": 0,
+                  "items": []
+                },
+                "startedAt": "2026-11-06T00:00:00.000Z",
+                "updatedAt": "2026-11-06T00:00:00.000Z"
+              }
+            ],
+            "removed": []
+          }
+        }
+      ]
+    },
+    "C03": {
+      "intervalMs": 3600000,
+      "initial": {
+        "status": 200,
+        "body": {
+          "data": {
+            "streamId": "<stream>",
+            "revision": 1,
+            "lastEventAt": "<event-1>",
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "ses_0000000000310",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "thread-read",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Read",
+                  "cwd": "/workspace",
+                  "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                  "turnsRevision": "70W9dfTviEdX5grRN7rvX1",
+                  "unread": false,
+                  "latestTurnRef": {
+                    "id": "turn-read",
+                    "bodyRevision": "IrUod86r0Ztqs0_3undKrK"
+                  },
+                  "turnCount": 1,
+                  "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-06T00:00:00.000Z",
+                  "updatedAt": "2026-11-06T00:00:00.000Z"
+                }
+              ],
+              "updatedAt": "<snapshot-time>"
+            }
+          }
+        }
+      },
+      "before": {
+        "files": {
+          "ai-session-attachments/blobs/a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535": "72656164206279746573",
+          "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+            "schemaVersion": 1,
+            "id": "att_0123456789abcdef01234567",
+            "inputId": "input-read",
+            "sessionId": "ses_0000000000310",
+            "messageId": "message-read",
+            "turnId": "turn-read",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "<seed-time>",
+            "committedAt": "<seed-time>"
+          }
+        },
+        "rawTurns": [
+          {
+            "id": "turn-read",
+            "providerTurnId": "turn-read",
+            "userPrompt": "Read",
+            "userMessages": [
+              {
+                "id": "message-read",
+                "text": "Read",
+                "attachments": [
+                  {
+                    "id": "att_0123456789abcdef01234567",
+                    "kind": "image",
+                    "name": "read.png",
+                    "mime": "image/png",
+                    "size": 10,
+                    "contentState": "available"
+                  }
+                ]
+              }
+            ],
+            "status": "completed",
+            "phase": "responding",
+            "revision": 1,
+            "startedAt": "2026-11-06T00:00:00.000Z",
+            "updatedAt": "2026-11-06T00:00:00.000Z",
+            "completedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "attachments": [
+          {
+            "id": "att_0123456789abcdef01234567",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "contentState": "available"
+          }
+        ]
+      },
+      "timerStopped": true,
+      "closed": {
+        "files": {
+          "ai-session-attachments/blobs/a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535": "72656164206279746573",
+          "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+            "schemaVersion": 1,
+            "id": "att_0123456789abcdef01234567",
+            "inputId": "input-read",
+            "sessionId": "ses_0000000000310",
+            "messageId": "message-read",
+            "turnId": "turn-read",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "<seed-time>",
+            "committedAt": "<seed-time>"
+          }
+        },
+        "rawTurns": [
+          {
+            "id": "turn-read",
+            "providerTurnId": "turn-read",
+            "userPrompt": "Read",
+            "userMessages": [
+              {
+                "id": "message-read",
+                "text": "Read",
+                "attachments": [
+                  {
+                    "id": "att_0123456789abcdef01234567",
+                    "kind": "image",
+                    "name": "read.png",
+                    "mime": "image/png",
+                    "size": 10,
+                    "contentState": "available"
+                  }
+                ]
+              }
+            ],
+            "status": "completed",
+            "phase": "responding",
+            "revision": 1,
+            "startedAt": "2026-11-06T00:00:00.000Z",
+            "updatedAt": "2026-11-06T00:00:00.000Z",
+            "completedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "attachments": [
+          {
+            "id": "att_0123456789abcdef01234567",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "contentState": "available"
+          }
+        ]
+      },
+      "afterQueued": {
+        "files": {
+          "ai-session-attachments/blobs/a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535": "72656164206279746573",
+          "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+            "schemaVersion": 1,
+            "id": "att_0123456789abcdef01234567",
+            "inputId": "input-read",
+            "sessionId": "ses_0000000000310",
+            "messageId": "message-read",
+            "turnId": "turn-read",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "<seed-time>",
+            "committedAt": "<seed-time>"
+          }
+        },
+        "rawTurns": [
+          {
+            "id": "turn-read",
+            "providerTurnId": "turn-read",
+            "userPrompt": "Read",
+            "userMessages": [
+              {
+                "id": "message-read",
+                "text": "Read",
+                "attachments": [
+                  {
+                    "id": "att_0123456789abcdef01234567",
+                    "kind": "image",
+                    "name": "read.png",
+                    "mime": "image/png",
+                    "size": 10,
+                    "contentState": "available"
+                  }
+                ]
+              }
+            ],
+            "status": "completed",
+            "phase": "responding",
+            "revision": 1,
+            "startedAt": "2026-11-06T00:00:00.000Z",
+            "updatedAt": "2026-11-06T00:00:00.000Z",
+            "completedAt": "2026-11-06T00:00:00.000Z"
+          }
+        ],
+        "attachments": [
+          {
+            "id": "att_0123456789abcdef01234567",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "contentState": "available"
+          }
+        ]
+      },
+      "reopened": {
+        "files": {
+          "ai-session-attachments/blobs/a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535": "72656164206279746573",
+          "ai-session-attachments/manifests/att_0123456789abcdef01234567.json": {
+            "schemaVersion": 1,
+            "id": "att_0123456789abcdef01234567",
+            "inputId": "input-read",
+            "sessionId": "ses_0000000000310",
+            "messageId": "message-read",
+            "turnId": "turn-read",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "blobHash": "a18243782f2db9942271a2caa518a810bc689907066ad0990c0ef4aaf99a8535",
+            "sourceType": "inline",
+            "state": "committed",
+            "createdAt": "<seed-time>",
+            "committedAt": "<seed-time>"
+          }
+        },
+        "attachments": [
+          {
+            "id": "att_0123456789abcdef01234567",
+            "kind": "image",
+            "name": "read.png",
+            "mime": "image/png",
+            "size": 10,
+            "contentState": "available"
+          }
+        ]
+      },
+      "events": [
+        {
+          "type": "ai-session.snapshot",
+          "payload": {
+            "meta": {
+              "streamId": "<stream>",
+              "instanceId": "<instance>",
+              "revision": 1,
+              "previousRevision": 0,
+              "traceId": "<trace-1>",
+              "generatedAt": "<event-1>",
+              "reason": "startup"
+            },
+            "snapshot": {
+              "runningCount": 0,
+              "waitingCount": 0,
+              "staleCount": 0,
+              "sessions": [
+                {
+                  "id": "ses_0000000000310",
+                  "agent": "codex",
+                  "creationSource": "ai-session",
+                  "providerSessionId": "thread-read",
+                  "actions": {
+                    "send": true,
+                    "interrupt": false,
+                    "approval": false,
+                    "fork": false,
+                    "rename": false,
+                    "openApp": true,
+                    "close": true
+                  },
+                  "title": "Read",
+                  "cwd": "/workspace",
+                  "detailRevision": "_LwfnR6GXJXoZbMNw-DDRS",
+                  "turnsRevision": "70W9dfTviEdX5grRN7rvX1",
+                  "unread": false,
+                  "latestTurnRef": {
+                    "id": "turn-read",
+                    "bodyRevision": "IrUod86r0Ztqs0_3undKrK"
+                  },
+                  "turnCount": 1,
+                  "lastUserMessageAt": "2026-11-06T00:00:00.000Z",
+                  "status": "idle",
+                  "phase": "unknown",
+                  "toolCallsSinceLastMessage": 0,
+                  "subAgentCount": 0,
+                  "subAgents": [],
+                  "queue": {
+                    "revision": 0,
+                    "pendingCount": 0,
+                    "items": []
+                  },
+                  "startedAt": "2026-11-06T00:00:00.000Z",
+                  "updatedAt": "2026-11-06T00:00:00.000Z"
+                }
+              ],
+              "updatedAt": "<snapshot-time>"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

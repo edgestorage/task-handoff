@@ -1,0 +1,127 @@
+{
+  "scenarios": [
+    {
+      "name": "missing",
+      "query": "",
+      "expected": {
+        "snapshotPresent": false,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "authority-single",
+      "query": "aiSessionAuthoritySnapshot=1",
+      "expected": {
+        "snapshotPresent": true,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "authority-duplicate",
+      "query": "aiSessionAuthoritySnapshot=1&aiSessionAuthoritySnapshot=1",
+      "expected": {
+        "snapshotPresent": false,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "authority-non-exact",
+      "query": "aiSessionAuthoritySnapshot=true",
+      "expected": {
+        "snapshotPresent": false,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "hierarchy-single",
+      "query": "aiSessionAuthoritySnapshot=1&aiSessionHierarchy=subagents",
+      "expected": {
+        "snapshotPresent": true,
+        "rootLineage": null,
+        "childLineage": {
+          "kind": "subagent",
+          "parentProviderSessionId": "provider-root"
+        },
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "hierarchy-duplicate",
+      "query": "aiSessionAuthoritySnapshot=1&aiSessionHierarchy=subagents&aiSessionHierarchy=subagents",
+      "expected": {
+        "snapshotPresent": true,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "hierarchy-non-exact",
+      "query": "aiSessionAuthoritySnapshot=1&aiSessionHierarchy=Subagents",
+      "expected": {
+        "snapshotPresent": true,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "hierarchy-empty",
+      "query": "aiSessionAuthoritySnapshot=1&aiSessionHierarchy=",
+      "expected": {
+        "snapshotPresent": true,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "transient-single",
+      "query": "aiSessionTransient=1",
+      "expected": {
+        "snapshotPresent": false,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": false
+      }
+    },
+    {
+      "name": "transient-duplicate",
+      "query": "aiSessionTransient=1&aiSessionTransient=1",
+      "expected": {
+        "snapshotPresent": false,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "transient-non-exact",
+      "query": "aiSessionTransient=01",
+      "expected": {
+        "snapshotPresent": false,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    },
+    {
+      "name": "transient-empty",
+      "query": "aiSessionTransient=",
+      "expected": {
+        "snapshotPresent": false,
+        "rootLineage": null,
+        "childLineage": null,
+        "transientDeltaDelivered": true
+      }
+    }
+  ]
+}

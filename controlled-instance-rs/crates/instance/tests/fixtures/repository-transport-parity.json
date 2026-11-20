@@ -1,0 +1,464 @@
+[
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "empty json",
+    "type": "application/json",
+    "unit": "",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_EMPTY_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body cannot be empty when content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "invalid json",
+    "type": "application/json",
+    "unit": "{",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "BOM json",
+    "type": "application/json",
+    "unit": "﻿{}",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected true; Invalid input: expected string, received undefined",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "unsupported media",
+    "type": "application/yaml",
+    "unit": "x",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "unsupported json suffix",
+    "type": "application/problem+json",
+    "unit": "{}",
+    "repeat": 1,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "oversized unsupported media",
+    "type": "application/yaml",
+    "unit": "x",
+    "repeat": 1048577,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "plain text object",
+    "type": "text/plain",
+    "unit": "{}",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected object, received string",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "expanded quote text",
+    "type": "text/plain",
+    "unit": "\"",
+    "repeat": 600000,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected object, received string",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "expanded NUL text",
+    "type": "text/plain",
+    "unit": "\u0000",
+    "repeat": 200000,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected object, received string",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files/rename",
+    "name": "rename above raw limit",
+    "type": "application/json",
+    "unit": " ",
+    "repeat": 1048576,
+    "prefix": "{}",
+    "expected": {
+      "status": 413,
+      "body": {
+        "statusCode": 413,
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "error": "Payload Too Large",
+        "message": "Request body is too large"
+      }
+    }
+  },
+  {
+    "method": "DELETE",
+    "suffix": "files",
+    "name": "delete above raw limit",
+    "type": "application/json",
+    "unit": " ",
+    "repeat": 1048576,
+    "prefix": "{}",
+    "expected": {
+      "status": 413,
+      "body": {
+        "statusCode": 413,
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "error": "Payload Too Large",
+        "message": "Request body is too large"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "file create within 5MB",
+    "type": "application/json",
+    "unit": " ",
+    "repeat": 2097152,
+    "prefix": "{}",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected true; Invalid input: expected string, received undefined",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "PUT",
+    "suffix": "files",
+    "name": "file update within 5MB",
+    "type": "application/json",
+    "unit": " ",
+    "repeat": 2097152,
+    "prefix": "{}",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected string, received undefined",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "file create above 5MB",
+    "type": "application/json",
+    "unit": " ",
+    "repeat": 5242880,
+    "prefix": "{}",
+    "expected": {
+      "status": 413,
+      "body": {
+        "statusCode": 413,
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "error": "Payload Too Large",
+        "message": "Request body is too large"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "file expanded quote text",
+    "type": "text/plain",
+    "unit": "\"",
+    "repeat": 3145728,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected object, received string",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "index/stage",
+    "name": "expanded default-limit text",
+    "type": "text/plain",
+    "unit": "\"",
+    "repeat": 600000,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected object, received string",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "oversized unsupported media before buffering",
+    "type": "application/yaml",
+    "unit": "x",
+    "repeat": 6291456,
+    "expected": {
+      "status": 415,
+      "body": {
+        "statusCode": 415,
+        "code": "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        "error": "Unsupported Media Type",
+        "message": "Unsupported Media Type"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "single BOM null",
+    "type": "application/json",
+    "unit": "﻿null",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected true; Invalid input: expected string, received undefined",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "double BOM rejected",
+    "type": "application/json",
+    "unit": "﻿﻿{}",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "lossy UTF8 JSON string",
+    "type": "application/json",
+    "unit": "",
+    "repeat": 1,
+    "hex": "22ff22",
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+        "error": "Bad Request",
+        "message": "Request body size did not match Content-Length"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "BOM only is invalid JSON",
+    "type": "application/json",
+    "unit": "﻿",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "error": "Bad Request",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "BOM empty string",
+    "type": "application/json",
+    "unit": "﻿\"\"",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected string, received undefined; Invalid input: expected string, received undefined; Invalid input: expected true; Invalid input: expected string, received undefined",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "plain text preserves BOM",
+    "type": "text/plain",
+    "unit": "﻿{}",
+    "repeat": 1,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "REPOSITORY_REQUEST_INVALID",
+          "message": "Invalid input: expected object, received string",
+          "retryable": false
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "lossy UTF8 text with content length",
+    "type": "text/plain",
+    "unit": "",
+    "repeat": 1,
+    "hex": "ff",
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+        "error": "Bad Request",
+        "message": "Request body size did not match Content-Length"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "declared length mismatch",
+    "type": "text/plain",
+    "unit": "abc",
+    "repeat": 1,
+    "declaredLength": 5,
+    "expected": {
+      "status": 400,
+      "body": {
+        "statusCode": 400,
+        "code": "FST_ERR_CTP_INVALID_CONTENT_LENGTH",
+        "error": "Bad Request",
+        "message": "Request body size did not match Content-Length"
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "suffix": "files",
+    "name": "declared oversize checked first",
+    "type": "application/json",
+    "unit": "{}",
+    "repeat": 1,
+    "declaredLength": 6291456,
+    "expected": {
+      "status": 413,
+      "body": {
+        "statusCode": 413,
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "error": "Payload Too Large",
+        "message": "Request body is too large"
+      }
+    }
+  }
+]

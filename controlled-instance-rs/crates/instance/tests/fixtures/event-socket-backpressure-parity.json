@@ -1,0 +1,18 @@
+{
+  "scenario": {
+    "name": "paused-client-closes-after-multi-frame-backpressure",
+    "payloadBytes": 2097152,
+    "frameCount": 32,
+    "pauseMs": 100,
+    "expected": {
+      "close": {
+        "code": 1013,
+        "reason": "Event consumer is too slow."
+      },
+      "deliveredFramesAtLeast": 0,
+      "deliveredFramesBelowFrameCount": true,
+      "deliveredPayloadBytesAtMost": 16777216,
+      "afterCloseDelivered": 0
+    }
+  }
+}

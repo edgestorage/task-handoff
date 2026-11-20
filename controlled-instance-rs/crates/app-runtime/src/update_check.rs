@@ -494,26 +494,42 @@ impl AppUpdateChecker {
             privilege: recipe_privilege,
             managed_context,
         } = options;
+        if packages.is_empty()
+            || packages
+                .iter()
+                .any(|package| !node_package_name_valid(package))
+        {
+            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
+                .reason("The built-in Node package recipe contains an invalid package name.");
+        }
+        if managed && version.is_some_and(|value| !crate::recipe::valid_node_version(value)) {
+            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
+                .reason("The built-in Node package recipe contains an invalid package version.");
+        }
+        if !capabilities.installers.contains(&installer) {
+            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown).reason(format!(
+                "The {} installer is unavailable.",
+                installer.as_str()
+            ));
+        }
         if managed {
-            let Some(version) = version else {
+            let Some(pinned_version) = version else {
                 return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
                     .reason("The managed Node package recipe has no pinned version.");
             };
-            let Some((app_id, install_base_dir)) = managed_context else {
-                return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
-                    .reason("The managed app install root is unavailable.");
-            };
-            let manifest_path = install_base_dir
-                .join("node-package")
-                .join(app_id)
-                .join("managed-app.json");
+            let manifest_path = managed_context.map(|(app_id, install_base_dir)| {
+                install_base_dir
+                    .join("node-package")
+                    .join(app_id)
+                    .join("managed-app.json")
+            });
             let mut installed = BTreeMap::<String, String>::new();
-            if let Ok(raw) = std::fs::read_to_string(manifest_path) {
+            if let Some(Ok(raw)) = manifest_path.map(std::fs::read_to_string) {
                 if let Ok(Value::Object(record)) = serde_json::from_str::<Value>(&raw) {
                     if let Some(Value::Object(packages)) = record.get("packages") {
                         for (package, value) in packages {
-                            if let Some(value) = value.as_str() {
-                                installed.insert(package.clone(), value.to_string());
+                            if let Some(value) = self::version(value.as_str()) {
+                                installed.insert(package.clone(), value);
                             }
                         }
                     }
@@ -525,29 +541,15 @@ impl AppUpdateChecker {
                 .collect::<Vec<_>>();
             if versions
                 .iter()
-                .all(|value| value.as_deref() == Some(version))
+                .all(|value| value.as_deref() == Some(pinned_version))
             {
                 return AppUpdateCheckResult::new(ManagedAppUpdateStatus::UpToDate)
-                    .installed(Some(version))
-                    .latest(Some(version));
+                    .installed(Some(pinned_version))
+                    .latest(Some(pinned_version));
             }
             return AppUpdateCheckResult::new(ManagedAppUpdateStatus::UpdateAvailable)
                 .installed(versions.iter().find_map(|value| value.as_deref()))
-                .latest(Some(version));
-        }
-        if packages.is_empty()
-            || packages
-                .iter()
-                .any(|package| !node_package_name_valid(package))
-        {
-            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown)
-                .reason("The built-in Node package recipe contains an invalid package name.");
-        }
-        if !capabilities.installers.contains(&installer) {
-            return AppUpdateCheckResult::new(ManagedAppUpdateStatus::Unknown).reason(format!(
-                "The {} installer is unavailable.",
-                installer.as_str()
-            ));
+                .latest(Some(pinned_version));
         }
         let elevate = capabilities.privilege == AppInstallPrivilege::PasswordlessSudo
             && recipe_privilege != AppInstallPrivilege::User;
@@ -619,10 +621,12 @@ impl AppUpdateChecker {
             env: resolver_env,
             ..defaults
         };
-        let resolution_path =
-            crate::executable_resolver::resolve_executable(executable, &resolver_options)
-                .map(|resolution| resolution.executable)
-                .unwrap_or_else(|| PathBuf::from(executable));
+        let resolution =
+            crate::executable_resolver::resolve_executable(executable, &resolver_options);
+        let resolution_path = resolution
+            .as_ref()
+            .map(|resolution| resolution.executable.clone())
+            .unwrap_or_else(|| PathBuf::from(executable));
         let args = prefix_args
             .iter()
             .map(|value| value.as_ref().to_string())
@@ -655,6 +659,10 @@ impl AppUpdateChecker {
                 termination_grace: Duration::from_secs(5),
             }
         } else {
+            let mut env = self.env.clone();
+            if let Some(resolution) = resolution {
+                env.extend(resolution.env);
+            }
             AppRecipeCommand {
                 executable: resolution_path.display().to_string(),
                 args,
@@ -690,6 +698,171 @@ mod tests {
         );
         assert_eq!(brew.status, ManagedAppUpdateStatus::UpdateAvailable);
         assert_eq!(brew.latest_version.as_deref(), Some("1.1.0"));
+    }
+
+    #[tokio::test]
+    async fn managed_node_update_checks_validate_before_reading_the_manifest() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let mut capabilities = FinalComputerCapabilities {
+            platform: FinalComputerPlatform::Linux,
+            arch: FinalComputerArch::X64,
+            installers: vec![AppInstaller::Npm],
+            privilege: AppInstallPrivilege::User,
+            installer_access: None,
+        };
+        let checker = AppUpdateChecker::new();
+        for (packages, pinned, installers, reason) in [
+            (
+                vec![],
+                Some("1.0.0"),
+                vec![AppInstaller::Npm],
+                "The built-in Node package recipe contains an invalid package name.",
+            ),
+            (
+                vec!["bad package"],
+                Some("1.0.0"),
+                vec![AppInstaller::Npm],
+                "The built-in Node package recipe contains an invalid package name.",
+            ),
+            (
+                vec!["codex"],
+                Some("../bad"),
+                vec![AppInstaller::Npm],
+                "The built-in Node package recipe contains an invalid package version.",
+            ),
+            (
+                vec!["codex"],
+                Some(""),
+                vec![AppInstaller::Npm],
+                "The built-in Node package recipe contains an invalid package version.",
+            ),
+            (
+                vec!["codex"],
+                Some("1.0.0"),
+                vec![],
+                "The npm installer is unavailable.",
+            ),
+            (
+                vec!["codex"],
+                None,
+                vec![AppInstaller::Npm],
+                "The managed Node package recipe has no pinned version.",
+            ),
+        ] {
+            capabilities.installers = installers;
+            let result = checker
+                .check_node(
+                    AppInstaller::Npm,
+                    &packages.into_iter().map(str::to_string).collect::<Vec<_>>(),
+                    NodeUpdateCheckOptions {
+                        managed: true,
+                        version: pinned,
+                        privilege: AppInstallPrivilege::User,
+                        managed_context: Some(("codex", temporary.path())),
+                    },
+                    &capabilities,
+                    None,
+                )
+                .await;
+            assert_eq!(result.status, ManagedAppUpdateStatus::Unknown);
+            assert_eq!(result.reason.as_deref(), Some(reason));
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_node_update_checks_normalize_manifest_versions_and_missing_roots() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let manifest_dir = temporary.path().join("node-package/codex");
+        std::fs::create_dir_all(&manifest_dir).expect("manifest directory");
+        std::fs::write(
+            manifest_dir.join("managed-app.json"),
+            r#"{"packages":{"codex":" 1.0.0 \n"}}"#,
+        )
+        .expect("manifest");
+        let checker = AppUpdateChecker::new();
+        let capabilities = FinalComputerCapabilities {
+            platform: FinalComputerPlatform::Linux,
+            arch: FinalComputerArch::X64,
+            installers: vec![AppInstaller::Npm],
+            privilege: AppInstallPrivilege::User,
+            installer_access: None,
+        };
+        for (root, expected_status) in [
+            (
+                Some(("codex", temporary.path())),
+                ManagedAppUpdateStatus::UpToDate,
+            ),
+            (None, ManagedAppUpdateStatus::UpdateAvailable),
+        ] {
+            let result = checker
+                .check_node(
+                    AppInstaller::Npm,
+                    &["codex".to_string()],
+                    NodeUpdateCheckOptions {
+                        managed: true,
+                        version: Some("1.0.0"),
+                        privilege: AppInstallPrivilege::User,
+                        managed_context: root,
+                    },
+                    &capabilities,
+                    None,
+                )
+                .await;
+            assert_eq!(result.status, expected_status);
+            assert_eq!(result.latest_version.as_deref(), Some("1.0.0"));
+            assert_eq!(result.installed_version.as_deref(), root.map(|_| "1.0.0"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn update_check_commands_keep_the_resolvers_launch_environment() {
+        use std::os::unix::fs::PermissionsExt;
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let nvm_bin = temporary.path().join("nvm/versions/node/v24.0.0/bin");
+        std::fs::create_dir_all(&nvm_bin).expect("NVM bin");
+        for (name, script) in [
+            ("npm", "#!/bin/sh\nexec parity-node\n"),
+            (
+                "parity-node",
+                "#!/bin/sh\nprintf '%s' '{\"codex\":{\"current\":\"1.0\",\"latest\":\"2.0\"}}'\n",
+            ),
+        ] {
+            let path = nvm_bin.join(name);
+            std::fs::write(&path, script).expect("script");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+        }
+        let checker = AppUpdateChecker {
+            env: BTreeMap::from([
+                (
+                    "PATH".to_string(),
+                    temporary.path().join("empty-path").display().to_string(),
+                ),
+                ("NVM_BIN".to_string(), nvm_bin.display().to_string()),
+                (
+                    "NVM_DIR".to_string(),
+                    temporary.path().join("nvm").display().to_string(),
+                ),
+            ]),
+            timeout: Duration::from_secs(5),
+            ..AppUpdateChecker::new()
+        };
+        let response = checker
+            .run(
+                "npm",
+                &["outdated", "--global", "--json"],
+                &[],
+                false,
+                FinalComputerPlatform::Linux,
+                &checker.env,
+            )
+            .await;
+        assert_eq!(response.exit_code, 0, "{}", response.stderr);
+        let result = parse_npm_outdated(&response.stdout);
+        assert_eq!(result.status, ManagedAppUpdateStatus::UpdateAvailable);
+        assert_eq!(result.installed_version.as_deref(), Some("1.0"));
+        assert_eq!(result.latest_version.as_deref(), Some("2.0"));
     }
 
     #[tokio::test]

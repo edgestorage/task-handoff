@@ -1,0 +1,2548 @@
+{
+  "scenarios": [
+    {
+      "id": "C01-allow-steer-interrupt",
+      "controls": true,
+      "steps": [
+        {
+          "name": "approval-request",
+          "notification": {
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "itemId": "approve-item",
+              "reason": "Check fixture",
+              "command": "printf hello"
+            },
+            "id": 701
+          },
+          "wait": {
+            "status": "waiting",
+            "phase": "approval"
+          }
+        },
+        {
+          "name": "allow",
+          "action": "approval",
+          "decision": "allow",
+          "responses": 1
+        },
+        {
+          "name": "steer",
+          "action": "steer"
+        },
+        {
+          "name": "tool-start",
+          "notification": {
+            "method": "item/started",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "item": {
+                "id": "tool-control",
+                "type": "commandExecution",
+                "command": "printf hello",
+                "status": "inProgress"
+              }
+            }
+          },
+          "wait": {
+            "toolCallsSinceLastMessage": 1
+          },
+          "timeline": 1
+        },
+        {
+          "name": "interrupt",
+          "action": "interrupt"
+        },
+        {
+          "name": "provider-interrupted",
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "status": "interrupted",
+                "completedAt": 1793923203
+              }
+            }
+          },
+          "wait": {
+            "status": "idle",
+            "activeTurnId": null
+          }
+        },
+        {
+          "name": "idle-interrupt",
+          "action": "interrupt",
+          "error": "typed",
+          "errorCode": "AI_SESSION_NOT_ACTIVE"
+        },
+        {
+          "name": "unattached",
+          "action": "approval",
+          "decision": "allow",
+          "error": "typed",
+          "errorCode": "AI_SESSION_APPROVAL_NOT_ATTACHED"
+        }
+      ],
+      "expected": {
+        "action": {
+          "provider": "codex",
+          "action": "send",
+          "turnId": "turn-u041",
+          "providerTurnId": "turn-u041"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          },
+          {
+            "method": "turn/steer",
+            "params": {
+              "threadId": "thread-u041",
+              "expectedTurnId": "turn-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Follow up",
+                  "text_elements": []
+                }
+              ]
+            }
+          },
+          {
+            "method": "turn/interrupt",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041"
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "approval-request",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": "Check fixture · Command: printf hello",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "allow",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": "Check fixture · Command: printf hello",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 3,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "steer",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Follow up",
+              "summary": "Check fixture · Command: printf hello",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Follow up",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 5,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    },
+                    {
+                      "id": "$message2",
+                      "text": "Follow up",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "tool-start",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Follow up",
+              "summary": "Check fixture · Command: printf hello",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": {
+                "id": "tool-control",
+                "kind": "commandExecution",
+                "name": "Command",
+                "inputPreview": "printf hello"
+              },
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Follow up",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 5,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    },
+                    {
+                      "id": "$message2",
+                      "text": "Follow up",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "tool-control",
+                  "turnId": "turn-u041",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "printf hello"
+                }
+              }
+            ]
+          },
+          {
+            "name": "interrupt",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Follow up",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Follow up",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 6,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    },
+                    {
+                      "id": "$message2",
+                      "text": "Follow up",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "tool-control",
+                  "turnId": "turn-u041",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "printf hello"
+                }
+              }
+            ]
+          },
+          {
+            "name": "provider-interrupted",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Follow up",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Follow up",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 6,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    },
+                    {
+                      "id": "$message2",
+                      "text": "Follow up",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "tool-control",
+                  "turnId": "turn-u041",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "printf hello"
+                }
+              }
+            ]
+          },
+          {
+            "name": "idle-interrupt",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Follow up",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Follow up",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 6,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    },
+                    {
+                      "id": "$message2",
+                      "text": "Follow up",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "tool-control",
+                  "turnId": "turn-u041",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "printf hello"
+                }
+              }
+            ]
+          },
+          {
+            "name": "unattached",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Follow up",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Follow up",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 6,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    },
+                    {
+                      "id": "$message2",
+                      "text": "Follow up",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "tool-control",
+                  "turnId": "turn-u041",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "printf hello"
+                }
+              }
+            ]
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Follow up",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 1,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 1
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Follow up",
+              "summary": "Check fixture · Command: printf hello",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 6,
+              "source": "control",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                },
+                {
+                  "id": "$message2",
+                  "text": "Follow up",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [
+          {
+            "id": 701,
+            "result": {
+              "decision": "accept"
+            }
+          }
+        ],
+        "outcomes": [
+          {
+            "name": "allow",
+            "result": {
+              "provider": "codex",
+              "action": "approval",
+              "decision": "allow"
+            }
+          },
+          {
+            "name": "steer",
+            "result": {
+              "provider": "codex",
+              "action": "steer",
+              "providerTurnId": "turn-u041"
+            }
+          },
+          {
+            "name": "interrupt",
+            "result": {
+              "provider": "codex",
+              "action": "interrupt",
+              "providerTurnId": "turn-u041"
+            }
+          },
+          {
+            "name": "idle-interrupt",
+            "error": {
+              "message": "AI session is not active.",
+              "code": "AI_SESSION_NOT_ACTIVE",
+              "statusCode": 400
+            }
+          },
+          {
+            "name": "unattached",
+            "error": {
+              "message": "Codex approval request is not attached to this control connection. The app-server did not replay a pending approval request for this session.",
+              "code": "AI_SESSION_APPROVAL_NOT_ATTACHED",
+              "statusCode": 409
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "C02-deny-failure",
+      "controls": true,
+      "steps": [
+        {
+          "name": "approval-request",
+          "notification": {
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "itemId": "approve-item",
+              "reason": "Check fixture",
+              "command": "printf hello"
+            },
+            "id": 701
+          },
+          "wait": {
+            "status": "waiting",
+            "phase": "approval"
+          }
+        },
+        {
+          "name": "deny",
+          "action": "approval",
+          "decision": "deny",
+          "responses": 1
+        },
+        {
+          "name": "provider-failed",
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "status": "failed",
+                "error": {
+                  "message": "approval denied"
+                }
+              }
+            }
+          },
+          "wait": {
+            "status": "failed",
+            "activeTurnId": null
+          }
+        }
+      ],
+      "expected": {
+        "action": {
+          "provider": "codex",
+          "action": "send",
+          "turnId": "turn-u041",
+          "providerTurnId": "turn-u041"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "approval-request",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": "Check fixture · Command: printf hello",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "deny",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": "Check fixture · Command: printf hello",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 3,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "provider-failed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "failed",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": true,
+              "error": "approval denied",
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "failed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Check fixture · Command: printf hello",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 4,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "failed",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 1
+          },
+          "unread": true,
+          "error": "approval denied",
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "failed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": "Check fixture · Command: printf hello",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 4,
+              "source": "realtime",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [
+          {
+            "id": 701,
+            "result": {
+              "decision": "decline"
+            }
+          }
+        ],
+        "outcomes": [
+          {
+            "name": "deny",
+            "result": {
+              "provider": "codex",
+              "action": "approval",
+              "decision": "deny"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "C03-skip-file",
+      "controls": true,
+      "steps": [
+        {
+          "name": "approval-request",
+          "notification": {
+            "method": "item/fileChange/requestApproval",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "itemId": "approve-item",
+              "reason": "Check fixture",
+              "grantRoot": "/workspace"
+            },
+            "id": 701
+          },
+          "wait": {
+            "status": "waiting",
+            "phase": "approval"
+          }
+        },
+        {
+          "name": "skip",
+          "action": "approval",
+          "decision": "skip",
+          "responses": 1
+        },
+        {
+          "name": "provider-completed",
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread-u041",
+              "turn": {
+                "id": "turn-u041",
+                "status": "completed",
+                "completedAt": 1793923203
+              }
+            }
+          },
+          "wait": {
+            "status": "idle",
+            "activeTurnId": null
+          }
+        }
+      ],
+      "expected": {
+        "action": {
+          "provider": "codex",
+          "action": "send",
+          "turnId": "turn-u041",
+          "providerTurnId": "turn-u041"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "approval-request",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "waiting",
+              "phase": "approval",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": "Check fixture",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "waiting",
+                  "phase": "approval",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Check fixture",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "realtime",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "skip",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": "Check fixture",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Check fixture",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 3,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "provider-completed",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": "Check fixture",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 1
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Check fixture",
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 3,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": "Check fixture",
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 1
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": "Check fixture",
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 3,
+              "source": "control",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [
+          {
+            "id": 701,
+            "result": {
+              "decision": "cancel"
+            }
+          }
+        ],
+        "outcomes": [
+          {
+            "name": "skip",
+            "result": {
+              "provider": "codex",
+              "action": "approval",
+              "decision": "skip"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "C04-mismatch-recovery",
+      "controls": true,
+      "rpcReplies": {
+        "turn/steer": [
+          {
+            "error": {
+              "code": -32000,
+              "message": "fixture control rejected"
+            }
+          },
+          {
+            "error": {
+              "code": -32000,
+              "message": "expected active turn id `turn-u041` but found `turn-steer-found`"
+            }
+          },
+          {
+            "result": {
+              "turnId": "turn-steer-found"
+            }
+          }
+        ],
+        "turn/interrupt": [
+          {
+            "error": {
+              "code": -32000,
+              "message": "expected active turn id `turn-steer-found` but found `turn-interrupt-found`"
+            }
+          },
+          {
+            "result": {}
+          }
+        ]
+      },
+      "steps": [
+        {
+          "name": "steer-rejected",
+          "action": "steer",
+          "error": "rpc"
+        },
+        {
+          "name": "steer-recovered",
+          "action": "steer"
+        },
+        {
+          "name": "interrupt-recovered",
+          "action": "interrupt"
+        }
+      ],
+      "expected": {
+        "action": {
+          "provider": "codex",
+          "action": "send",
+          "turnId": "turn-u041",
+          "providerTurnId": "turn-u041"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          },
+          {
+            "method": "turn/steer",
+            "params": {
+              "threadId": "thread-u041",
+              "expectedTurnId": "turn-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Follow up",
+                  "text_elements": []
+                }
+              ]
+            }
+          },
+          {
+            "method": "turn/steer",
+            "params": {
+              "threadId": "thread-u041",
+              "expectedTurnId": "turn-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Follow up",
+                  "text_elements": []
+                }
+              ]
+            }
+          },
+          {
+            "method": "turn/steer",
+            "params": {
+              "threadId": "thread-u041",
+              "expectedTurnId": "turn-steer-found",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Follow up",
+                  "text_elements": []
+                }
+              ]
+            }
+          },
+          {
+            "method": "turn/interrupt",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-steer-found"
+            }
+          },
+          {
+            "method": "turn/interrupt",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-interrupt-found"
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "steer-rejected",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "steer-recovered",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-steer-found",
+              "userPrompt": "Follow up",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                },
+                {
+                  "id": "turn-steer-found",
+                  "providerTurnId": "turn-steer-found",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Follow up",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message2",
+                      "text": "Follow up",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "interrupt-recovered",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Follow up",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                },
+                {
+                  "id": "turn-steer-found",
+                  "providerTurnId": "turn-interrupt-found",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Follow up",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message2",
+                      "text": "Follow up",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Follow up",
+          "summary": null,
+          "lastMessage": null,
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 0,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "running",
+              "phase": "thinking",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 1,
+              "source": "control",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            },
+            {
+              "id": "turn-steer-found",
+              "providerTurnId": "turn-interrupt-found",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Follow up",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "revision": 2,
+              "source": "control",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message2",
+                  "text": "Follow up",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [],
+        "outcomes": [
+          {
+            "name": "steer-rejected",
+            "error": {
+              "message": "fixture control rejected"
+            }
+          },
+          {
+            "name": "steer-recovered",
+            "result": {
+              "provider": "codex",
+              "action": "steer",
+              "providerTurnId": "turn-steer-found"
+            }
+          },
+          {
+            "name": "interrupt-recovered",
+            "result": {
+              "provider": "codex",
+              "action": "interrupt",
+              "providerTurnId": "turn-interrupt-found"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "C05-interrupt-retry",
+      "controls": true,
+      "rpcReplies": {
+        "turn/interrupt": [
+          {
+            "error": {
+              "code": -32000,
+              "message": "fixture control rejected"
+            }
+          },
+          {
+            "error": {
+              "code": -32000,
+              "message": "no active turn to interrupt"
+            }
+          }
+        ]
+      },
+      "steps": [
+        {
+          "name": "tool-start",
+          "notification": {
+            "method": "item/started",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041",
+              "item": {
+                "id": "tool-control",
+                "type": "commandExecution",
+                "command": "printf hello",
+                "status": "inProgress"
+              }
+            }
+          },
+          "wait": {
+            "toolCallsSinceLastMessage": 1
+          },
+          "timeline": 1
+        },
+        {
+          "name": "interrupt-rejected",
+          "action": "interrupt",
+          "error": "rpc"
+        },
+        {
+          "name": "interrupt-no-active",
+          "action": "interrupt"
+        },
+        {
+          "name": "idle-steer",
+          "action": "steer",
+          "error": "typed",
+          "errorCode": "AI_SESSION_NO_ACTIVE_TURN"
+        }
+      ],
+      "expected": {
+        "action": {
+          "provider": "codex",
+          "action": "send",
+          "turnId": "turn-u041",
+          "providerTurnId": "turn-u041"
+        },
+        "rejection": null,
+        "requests": [
+          {
+            "method": "turn/start",
+            "params": {
+              "threadId": "thread-u041",
+              "input": [
+                {
+                  "type": "text",
+                  "text": "Hello 世界",
+                  "text_elements": []
+                }
+              ]
+            }
+          },
+          {
+            "method": "turn/interrupt",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041"
+            }
+          },
+          {
+            "method": "turn/interrupt",
+            "params": {
+              "threadId": "thread-u041",
+              "turnId": "turn-u041"
+            }
+          }
+        ],
+        "checkpoints": [
+          {
+            "name": "initial",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": null,
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": []
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "ack",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 0,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": []
+          },
+          {
+            "name": "tool-start",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": {
+                "id": "tool-control",
+                "kind": "commandExecution",
+                "name": "Command",
+                "inputPreview": "printf hello"
+              },
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "tool-control",
+                  "turnId": "turn-u041",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "printf hello"
+                }
+              }
+            ]
+          },
+          {
+            "name": "interrupt-rejected",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "running",
+              "phase": "thinking",
+              "activeTurnId": "turn-u041",
+              "userPrompt": "Hello 世界",
+              "summary": null,
+              "lastMessage": null,
+              "lastMessageItemId": null,
+              "currentTool": {
+                "id": "tool-control",
+                "kind": "commandExecution",
+                "name": "Command",
+                "inputPreview": "printf hello"
+              },
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": false,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "running",
+                  "phase": "thinking",
+                  "userPrompt": "Hello 世界",
+                  "summary": null,
+                  "lastMessage": null,
+                  "lastMessageItemId": null,
+                  "revision": 1,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "tool-control",
+                  "turnId": "turn-u041",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "printf hello"
+                }
+              }
+            ]
+          },
+          {
+            "name": "interrupt-no-active",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": "Codex turn is no longer active.",
+              "lastMessage": "Codex turn is no longer active.",
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Codex turn is no longer active.",
+                  "lastMessage": "Codex turn is no longer active.",
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "tool-control",
+                  "turnId": "turn-u041",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "printf hello"
+                }
+              }
+            ]
+          },
+          {
+            "name": "idle-steer",
+            "session": {
+              "id": "ses_0000000000001",
+              "providerSessionId": "thread-u041",
+              "status": "idle",
+              "phase": "unknown",
+              "activeTurnId": null,
+              "userPrompt": "Hello 世界",
+              "summary": "Codex turn is no longer active.",
+              "lastMessage": "Codex turn is no longer active.",
+              "lastMessageItemId": null,
+              "currentTool": null,
+              "toolCallsSinceLastMessage": 1,
+              "counters": {
+                "toolCalls": 0,
+                "edits": 0,
+                "approvals": 0
+              },
+              "unread": true,
+              "error": null,
+              "turns": [
+                {
+                  "id": "turn-u041",
+                  "providerTurnId": "turn-u041",
+                  "status": "completed",
+                  "phase": "unknown",
+                  "userPrompt": "Hello 世界",
+                  "summary": "Codex turn is no longer active.",
+                  "lastMessage": "Codex turn is no longer active.",
+                  "lastMessageItemId": null,
+                  "revision": 2,
+                  "source": "control",
+                  "currentTool": null,
+                  "toolCallsSinceLastMessage": null,
+                  "userMessages": [
+                    {
+                      "id": "$message1",
+                      "text": "Hello 世界",
+                      "attachments": []
+                    }
+                  ]
+                }
+              ]
+            },
+            "deltas": [],
+            "timeline": [
+              {
+                "sessionId": "ses_0000000000001",
+                "providerSessionId": "thread-u041",
+                "item": {
+                  "id": "tool-control",
+                  "turnId": "turn-u041",
+                  "type": "activity",
+                  "activityKind": "commandExecution",
+                  "title": "Command",
+                  "status": "running",
+                  "input": "printf hello"
+                }
+              }
+            ]
+          }
+        ],
+        "restored": {
+          "id": "ses_0000000000001",
+          "providerSessionId": "thread-u041",
+          "status": "idle",
+          "phase": "unknown",
+          "activeTurnId": null,
+          "userPrompt": "Hello 世界",
+          "summary": "Codex turn is no longer active.",
+          "lastMessage": "Codex turn is no longer active.",
+          "lastMessageItemId": null,
+          "currentTool": null,
+          "toolCallsSinceLastMessage": 1,
+          "counters": {
+            "toolCalls": 0,
+            "edits": 0,
+            "approvals": 0
+          },
+          "unread": true,
+          "error": null,
+          "turns": [
+            {
+              "id": "turn-u041",
+              "providerTurnId": "turn-u041",
+              "status": "completed",
+              "phase": "unknown",
+              "userPrompt": "Hello 世界",
+              "summary": "Codex turn is no longer active.",
+              "lastMessage": "Codex turn is no longer active.",
+              "lastMessageItemId": null,
+              "revision": 2,
+              "source": "control",
+              "currentTool": null,
+              "toolCallsSinceLastMessage": null,
+              "userMessages": [
+                {
+                  "id": "$message1",
+                  "text": "Hello 世界",
+                  "attachments": []
+                }
+              ]
+            }
+          ]
+        },
+        "transport": [
+          {
+            "path": "/rpc",
+            "authorized": true
+          },
+          {
+            "method": "thread/loaded/list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        "responses": [],
+        "outcomes": [
+          {
+            "name": "interrupt-rejected",
+            "error": {
+              "message": "fixture control rejected"
+            }
+          },
+          {
+            "name": "interrupt-no-active",
+            "result": {
+              "provider": "codex",
+              "action": "interrupt",
+              "providerTurnId": "turn-u041"
+            }
+          },
+          {
+            "name": "idle-steer",
+            "error": {
+              "message": "AI session has no active turn to steer.",
+              "code": "AI_SESSION_NO_ACTIVE_TURN",
+              "statusCode": 409
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

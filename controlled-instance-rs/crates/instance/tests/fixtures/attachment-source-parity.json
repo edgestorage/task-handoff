@@ -1,0 +1,2203 @@
+[
+  {
+    "name": "direct null",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "null",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"body\" argument must be of type function or an instance of Blob, ReadableStream, WritableStream, Stream, Iterable, AsyncIterable, or Promise or { readable, writable } pair. Received null"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin null",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000000\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000000",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append null",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000000?offset=0",
+    "type": "application/json",
+    "unit": "null",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_FAILED",
+          "message": "Cannot read properties of null (reading 'Symbol(Symbol.asyncIterator)')"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume null",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000000?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000000",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete null",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000000/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000000",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct boolean",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "true",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"body\" argument must be of type function or an instance of Blob, ReadableStream, WritableStream, Stream, Iterable, AsyncIterable, or Promise or { readable, writable } pair. Received type boolean (true)"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin boolean",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000001\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000001",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append boolean",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000001?offset=0",
+    "type": "application/json",
+    "unit": "true",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_FAILED",
+          "message": "body is not async iterable"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume boolean",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000001?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000001",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete boolean",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000001/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000001",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct number",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "3",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"body\" argument must be of type function or an instance of Blob, ReadableStream, WritableStream, Stream, Iterable, AsyncIterable, or Promise or { readable, writable } pair. Received type number (3)"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin number",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000002\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000002",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append number",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000002?offset=0",
+    "type": "application/json",
+    "unit": "3",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_FAILED",
+          "message": "body is not async iterable"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume number",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000002?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000002",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete number",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000002/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000002",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct object",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "{}",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"body\" argument must be of type function or an instance of Blob, ReadableStream, WritableStream, Stream, Iterable, AsyncIterable, or Promise or { readable, writable } pair. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin object",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000003\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000003",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append object",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000003?offset=0",
+    "type": "application/json",
+    "unit": "{}",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_FAILED",
+          "message": "body is not async iterable"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume object",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000003?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000003",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete object",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000003/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000003",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct number chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[1]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (1)"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin number chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000004\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000004",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append number chunk",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000004?offset=0",
+    "type": "application/json",
+    "unit": "[1]",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received type number (1)"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume number chunk",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000004?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000004",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete number chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000004/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000004",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct boolean chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[false]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type boolean (false)"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin boolean chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000005\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000005",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append boolean chunk",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000005?offset=0",
+    "type": "application/json",
+    "unit": "[false]",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received type boolean (false)"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume boolean chunk",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000005?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000005",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete boolean chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000005/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000005",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct null chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[null]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_STREAM_NULL_VALUES",
+          "message": "May not write null values to stream"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin null chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000006\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000006",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append null chunk",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000006?offset=0",
+    "type": "application/json",
+    "unit": "[null]",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received null"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume null chunk",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000006?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000006",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete null chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000006/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000006",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct object chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[{}]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin object chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000007\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000007",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append object chunk",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000007?offset=0",
+    "type": "application/json",
+    "unit": "[{}]",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume object chunk",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000007?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000007",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete object chunk",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000007/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000007",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct nested string array",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[[\"a\"]]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Array"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin nested string array",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000008\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000008",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append nested string array",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000008?offset=0",
+    "type": "application/json",
+    "unit": "[[\"a\"]]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000008",
+          "offset": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "resume nested string array",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000008?offset=1",
+    "unit": "xxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000008",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete nested string array",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000008/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000008",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "007878787878787878787878"
+    }
+  },
+  {
+    "name": "direct serialized buffer",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[{\"type\":\"Buffer\",\"data\":[65,66]}]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin serialized buffer",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000009\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000009",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append serialized buffer",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000009?offset=0",
+    "type": "application/json",
+    "unit": "[{\"type\":\"Buffer\",\"data\":[65,66]}]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000009",
+          "offset": 2
+        }
+      }
+    }
+  },
+  {
+    "name": "resume serialized buffer",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000009?offset=2",
+    "unit": "xxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000009",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete serialized buffer",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000009/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000009",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "414278787878787878787878"
+    }
+  },
+  {
+    "name": "direct byte arrays",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[[65,66],[67]]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Array"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin byte arrays",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_00000000000000000000000a\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000a",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append byte arrays",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000a?offset=0",
+    "type": "application/json",
+    "unit": "[[65,66],[67]]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000a",
+          "offset": 3
+        }
+      }
+    }
+  },
+  {
+    "name": "resume byte arrays",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000a?offset=3",
+    "unit": "xxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000a",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete byte arrays",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000a/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_00000000000000000000000a",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "414243787878787878787878"
+    }
+  },
+  {
+    "name": "direct numeric byte coercion",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[[256,-1,\"0x41\",true,null,{},[\"66\"]]]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Array"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin numeric byte coercion",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_00000000000000000000000b\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000b",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append numeric byte coercion",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000b?offset=0",
+    "type": "application/json",
+    "unit": "[[256,-1,\"0x41\",true,null,{},[\"66\"]]]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000b",
+          "offset": 7
+        }
+      }
+    }
+  },
+  {
+    "name": "resume numeric byte coercion",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000b?offset=7",
+    "unit": "xxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000b",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete numeric byte coercion",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000b/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_00000000000000000000000b",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "00ff41010000427878787878"
+    }
+  },
+  {
+    "name": "direct partial number",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[\"ab\",3]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (3)"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin partial number",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_00000000000000000000000c\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000c",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append partial number",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000c?offset=0",
+    "type": "application/json",
+    "unit": "[\"ab\",3]",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received type number (3)"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume partial number",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000c?offset=2",
+    "unit": "xxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000c",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete partial number",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000c/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_00000000000000000000000c",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "616278787878787878787878"
+    }
+  },
+  {
+    "name": "direct partial null",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[\"ab\",null]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_STREAM_NULL_VALUES",
+          "message": "May not write null values to stream"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin partial null",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_00000000000000000000000d\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000d",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append partial null",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000d?offset=0",
+    "type": "application/json",
+    "unit": "[\"ab\",null]",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received null"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume partial null",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000d?offset=2",
+    "unit": "xxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000d",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete partial null",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000d/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_00000000000000000000000d",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "616278787878787878787878"
+    }
+  },
+  {
+    "name": "direct partial object",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[\"ab\",{}]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin partial object",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_00000000000000000000000e\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000e",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append partial object",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000e?offset=0",
+    "type": "application/json",
+    "unit": "[\"ab\",{}]",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume partial object",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000e?offset=2",
+    "unit": "xxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000e",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete partial object",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000e/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_00000000000000000000000e",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "616278787878787878787878"
+    }
+  },
+  {
+    "name": "direct partial byte array",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[\"ab\",[67]]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Array"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin partial byte array",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_00000000000000000000000f\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000f",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append partial byte array",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000f?offset=0",
+    "type": "application/json",
+    "unit": "[\"ab\",[67]]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000f",
+          "offset": 3
+        }
+      }
+    }
+  },
+  {
+    "name": "resume partial byte array",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000f?offset=3",
+    "unit": "xxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_00000000000000000000000f",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete partial byte array",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_00000000000000000000000f/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_00000000000000000000000f",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "616243787878787878787878"
+    }
+  },
+  {
+    "name": "direct array-like object",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[\"ab\",{\"0\":67,\"length\":1}]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin array-like object",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000010\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000010",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append array-like object",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000010?offset=0",
+    "type": "application/json",
+    "unit": "[\"ab\",{\"0\":67,\"length\":1}]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000010",
+          "offset": 3
+        }
+      }
+    }
+  },
+  {
+    "name": "resume array-like object",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000010?offset=3",
+    "unit": "xxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000010",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete array-like object",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000010/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000010",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "616243787878787878787878"
+    }
+  },
+  {
+    "name": "direct fractional length",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[{\"0\":65,\"1\":66,\"length\":1.9}]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin fractional length",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000011\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000011",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append fractional length",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000011?offset=0",
+    "type": "application/json",
+    "unit": "[{\"0\":65,\"1\":66,\"length\":1.9}]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000011",
+          "offset": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "resume fractional length",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000011?offset=1",
+    "unit": "xxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000011",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete fractional length",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000011/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000011",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "417878787878787878787878"
+    }
+  },
+  {
+    "name": "direct string length",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[{\"0\":65,\"length\":\"2\"}]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin string length",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000012\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000012",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append string length",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000012?offset=0",
+    "type": "application/json",
+    "unit": "[{\"0\":65,\"length\":\"2\"}]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000012",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "resume string length",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000012?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000012",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete string length",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000012/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000012",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct null length",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[{\"length\":null}]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin null length",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000013\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000013",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append null length",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000013?offset=0",
+    "type": "application/json",
+    "unit": "[{\"length\":null}]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000013",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "resume null length",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000013?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000013",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete null length",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000013/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000013",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct valueOf hook",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[{\"valueOf\":true}]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "ERR_INVALID_ARG_TYPE",
+          "message": "The \"chunk\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin valueOf hook",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000014\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000014",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append valueOf hook",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000014?offset=0",
+    "type": "application/json",
+    "unit": "[{\"valueOf\":true}]",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_CONTROL_FAILED",
+          "message": "value.valueOf is not a function"
+        }
+      }
+    }
+  },
+  {
+    "name": "resume valueOf hook",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000014?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000014",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete valueOf hook",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000014/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000014",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct empty array",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[]",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content did not match its declared size."
+        }
+      }
+    }
+  },
+  {
+    "name": "begin empty array",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000015\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000015",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append empty array",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000015?offset=0",
+    "type": "application/json",
+    "unit": "[]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000015",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "resume empty array",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000015?offset=0",
+    "unit": "xxxxxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000015",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete empty array",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000015/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000015",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "787878787878787878787878"
+    }
+  },
+  {
+    "name": "direct valid strings",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "[\"ab\",\"c\"]",
+    "generatedId": true,
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "id": "<draft-id>",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 3,
+          "expiresAt": "<expiresAt>"
+        }
+      }
+    }
+  },
+  {
+    "name": "begin valid strings",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000016\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000016",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append valid strings",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000016?offset=0",
+    "type": "application/json",
+    "unit": "[\"ab\",\"c\"]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000016",
+          "offset": 3
+        }
+      }
+    }
+  },
+  {
+    "name": "resume valid strings",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000016?offset=3",
+    "unit": "xxxxxxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000016",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete valid strings",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000016/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000016",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "616263787878787878787878"
+    }
+  },
+  {
+    "name": "direct unicode string",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=source-test&kind=file&name=notes.txt&mime=text%2Fplain&size=3",
+    "type": "application/json",
+    "unit": "\"中😀\"",
+    "generatedId": true,
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content exceeded its declared size."
+        }
+      }
+    }
+  },
+  {
+    "name": "begin unicode string",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_000000000000000000000017\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":12}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000017",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "append unicode string",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000017?offset=0",
+    "type": "application/json",
+    "unit": "\"中😀\"",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000017",
+          "offset": 7
+        }
+      }
+    }
+  },
+  {
+    "name": "resume unicode string",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000017?offset=7",
+    "unit": "xxxxx",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_000000000000000000000017",
+          "offset": 12
+        }
+      }
+    }
+  },
+  {
+    "name": "complete unicode string",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_000000000000000000000017/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_000000000000000000000017",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 12,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "e4b8adf09f98807878787878"
+    }
+  },
+  {
+    "name": "begin bounded array-like",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_ffffffffffffffffffffffff\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":3}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_ffffffffffffffffffffffff",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "array-like exceeds declared size",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_ffffffffffffffffffffffff?offset=0",
+    "type": "application/json",
+    "unit": "[{\"length\":4096}]",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content exceeded its declared size."
+        }
+      }
+    }
+  },
+  {
+    "name": "failed append keeps its size error",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_ffffffffffffffffffffffff?offset=0",
+    "unit": "x",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content exceeded its declared size."
+        }
+      }
+    }
+  },
+  {
+    "name": "complete removes failed upload",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_ffffffffffffffffffffffff/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "expected": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_SIZE_MISMATCH",
+          "message": "Attachment content exceeded its declared size."
+        }
+      }
+    }
+  },
+  {
+    "name": "failed complete cannot be repeated",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_ffffffffffffffffffffffff/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "expected": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND",
+          "message": "AI session attachment upload not found."
+        }
+      }
+    }
+  },
+  {
+    "name": "begin bounded array-like",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams",
+    "type": "application/json",
+    "unit": "{\"attachmentId\":\"cia_ffffffffffffffffffffffff\",\"scopeType\":\"create-request\",\"scopeId\":\"source-test\",\"kind\":\"file\",\"name\":\"notes.txt\",\"mime\":\"text/plain\",\"size\":3}",
+    "expected": {
+      "status": 201,
+      "body": {
+        "data": {
+          "attachmentId": "cia_ffffffffffffffffffffffff",
+          "offset": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "same ID can restart after failed completion",
+    "method": "PUT",
+    "url": "/api/ai-session-attachments/draft-streams/cia_ffffffffffffffffffffffff?offset=0",
+    "type": "application/json",
+    "unit": "[{\"length\":3,\"0\":65,\"1\":66,\"2\":67}]",
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "attachmentId": "cia_ffffffffffffffffffffffff",
+          "offset": 3
+        }
+      }
+    }
+  },
+  {
+    "name": "replacement completes with its own content",
+    "method": "POST",
+    "url": "/api/ai-session-attachments/draft-streams/cia_ffffffffffffffffffffffff/complete",
+    "type": "application/json",
+    "unit": "{}",
+    "checkContent": true,
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "cia_ffffffffffffffffffffffff",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 3,
+          "expiresAt": "<expiresAt>"
+        }
+      },
+      "contentHex": "414243"
+    }
+  }
+]

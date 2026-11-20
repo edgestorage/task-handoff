@@ -1,0 +1,362 @@
+[
+  {
+    "name": "files?path=a&path=b",
+    "suffix": "files?path=a&path=b",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received array",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?path=a&path=a",
+    "suffix": "files?path=a&path=a",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received array",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "directories?path=&path=a",
+    "suffix": "directories?path=&path=a",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received array",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files/search?query=a&query=b",
+    "suffix": "files/search?query=a&query=b",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received array",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files/search?query=a&limit=1&limit=2",
+    "suffix": "files/search?query=a&limit=1&limit=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files/search?query=a&limit=&limit=",
+    "suffix": "files/search?query=a&limit=&limit=",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "diff?path=a&scope=staged&scope=unstaged",
+    "suffix": "diff?path=a&scope=staged&scope=unstaged",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid option: expected one of \"conflict\"|\"staged\"|\"unstaged\"|\"untracked\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "diff?path=a&scope=unstaged&includeContext=true&includeContext=false",
+    "suffix": "diff?path=a&scope=unstaged&includeContext=true&includeContext=false",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid option: expected one of \"true\"|\"false\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "diff?path=a&scope=unstaged&byteLimit=1&byteLimit=2",
+    "suffix": "diff?path=a&scope=unstaged&byteLimit=1&byteLimit=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "diff?path=a&scope=unstaged&contextLines=1&contextLines=2",
+    "suffix": "diff?path=a&scope=unstaged&contextLines=1&contextLines=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected number, received NaN",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "context?z=1&a=2",
+    "suffix": "context?z=1&a=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "context?z=1&z=2&a=3",
+    "suffix": "context?z=1&z=2&a=3",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "context?2=a&1=b&z=c",
+    "suffix": "context?2=a&1=b&z=c",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"1\", \"2\", \"z\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "changes?z=1&a=2",
+    "suffix": "changes?z=1&a=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "branches?z=1&a=2",
+    "suffix": "branches?z=1&a=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "worktrees?z=1&a=2",
+    "suffix": "worktrees?z=1&a=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "remotes?z=1&a=2",
+    "suffix": "remotes?z=1&a=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?z=1&a=2",
+    "suffix": "files?z=1&a=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received undefined; Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?path=a&z=1&a=2",
+    "suffix": "files?path=a&z=1&a=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files/search?query=a&z=1&a=2",
+    "suffix": "files/search?query=a&z=1&a=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "diff?path=a&scope=unstaged&z=1&a=2",
+    "suffix": "diff?path=a&scope=unstaged&z=1&a=2",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"z\", \"a\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?path",
+    "suffix": "files?path",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Too small: expected string to have >=1 characters",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?path=a+b",
+    "suffix": "files?path=a+b",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?path=%FF",
+    "suffix": "files?path=%FF",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?path=%E0%A4%A",
+    "suffix": "files?path=%E0%A4%A",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?path=%",
+    "suffix": "files?path=%",
+    "expected": {
+      "status": 404,
+      "error": {
+        "code": "REPOSITORY_SESSION_NOT_FOUND",
+        "message": "Workspace is unavailable for this session.",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?path=a&%70ath=b",
+    "suffix": "files?path=a&%70ath=b",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Invalid input: expected string, received array",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "context?__proto__=a&constructor=b",
+    "suffix": "context?__proto__=a&constructor=b",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized keys: \"__proto__\", \"constructor\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "context?toString=a",
+    "suffix": "context?toString=a",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized key: \"toString\"",
+        "retryable": false
+      }
+    }
+  },
+  {
+    "name": "files?path=a&path%5B%5D=b",
+    "suffix": "files?path=a&path%5B%5D=b",
+    "expected": {
+      "status": 400,
+      "error": {
+        "code": "REPOSITORY_REQUEST_INVALID",
+        "message": "Unrecognized key: \"path[]\"",
+        "retryable": false
+      }
+    }
+  }
+]

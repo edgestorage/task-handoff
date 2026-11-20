@@ -40,7 +40,7 @@ pub struct AiSessionAuthority {
     instance_id: String,
     stream_id: String,
     revision: u64,
-    last_event_at: String,
+    started_at: String,
     last_snapshot: Option<AiSessionsSnapshot>,
     history: VecDeque<RetainedAiSessionEvent>,
 }
@@ -60,7 +60,7 @@ impl AiSessionAuthority {
             instance_id: instance_id.into(),
             stream_id: stream_id.into(),
             revision: 0,
-            last_event_at: started_at,
+            started_at,
             last_snapshot: None,
             history: VecDeque::new(),
         }
@@ -70,7 +70,15 @@ impl AiSessionAuthority {
         AiSessionsState {
             stream_id: self.stream_id.clone(),
             revision: self.revision,
-            last_event_at: self.last_event_at.clone(),
+            // State reads do not prune. Match the source owner by deriving
+            // this observation time from retained history, falling back to
+            // process start after delta pruning. Revision orders the stream.
+            last_event_at: self
+                .history
+                .back()
+                .and_then(|event| event.payload["meta"]["generatedAt"].as_str())
+                .unwrap_or(&self.started_at)
+                .to_string(),
             snapshot,
         }
     }
@@ -103,9 +111,19 @@ impl AiSessionAuthority {
         snapshot: AiSessionsSnapshot,
         reason: &str,
     ) -> Option<AiSessionAuthorityEvent> {
+        self.prepare_with_clocks(snapshot, reason, now_iso, || Utc::now().timestamp_millis())
+    }
+
+    fn prepare_with_clocks(
+        &mut self,
+        snapshot: AiSessionsSnapshot,
+        reason: &str,
+        generated_at: impl FnOnce() -> String,
+        now_ms: impl FnOnce() -> i64,
+    ) -> Option<AiSessionAuthorityEvent> {
         let change = project_authority_change(self.last_snapshot.as_ref(), &snapshot)?;
         self.revision = self.revision.saturating_add(1);
-        let (meta, generated_at) = self.event_meta(reason);
+        let meta = self.event_meta_at(reason, generated_at());
         let (event_type, payload) = match change {
             AuthorityChange::Snapshot => (
                 "ai-session.snapshot",
@@ -117,8 +135,7 @@ impl AiSessionAuthority {
             ),
         };
         self.last_snapshot = Some(snapshot);
-        self.last_event_at = generated_at;
-        self.remember(event_type, &payload);
+        self.remember(event_type, &payload, now_ms());
         Some(AiSessionAuthorityEvent {
             event_type: event_type.to_string(),
             payload,
@@ -126,12 +143,15 @@ impl AiSessionAuthority {
     }
 
     pub fn snapshot_payload(&self, snapshot: AiSessionsSnapshot, reason: &str) -> Value {
-        let (meta, _) = self.event_meta(reason);
+        let meta = self.event_meta(reason);
         json!({ "meta": meta, "snapshot": snapshot })
     }
 
-    fn event_meta(&self, reason: &str) -> (Value, String) {
-        let generated_at = now_iso();
+    fn event_meta(&self, reason: &str) -> Value {
+        self.event_meta_at(reason, now_iso())
+    }
+
+    fn event_meta_at(&self, reason: &str, generated_at: String) -> Value {
         let mut meta = json!({
             "streamId": self.stream_id,
             "instanceId": self.instance_id,
@@ -154,10 +174,17 @@ impl AiSessionAuthority {
                 json!(self.revision.saturating_sub(1)),
             );
         }
-        (meta, generated_at)
+        meta
     }
 
-    pub fn delta(&self, stream_id: &str, since_revision: f64) -> Value {
+    pub fn delta(&mut self, stream_id: &str, since_revision: f64) -> Value {
+        self.delta_at(stream_id, since_revision, Utc::now().timestamp_millis())
+    }
+
+    fn delta_at(&mut self, stream_id: &str, since_revision: f64, now_ms: i64) -> Value {
+        // Retention also expires while the stream is idle. Match the Node
+        // delta owner: prune before evaluating continuity or stream identity.
+        self.prune_history(now_ms);
         let latest_revision = self.revision;
         let earliest_retained_revision = self
             .history
@@ -213,8 +240,17 @@ impl AiSessionAuthority {
         )
     }
 
-    fn remember(&mut self, event_type: &str, payload: &Value) {
-        let now = Utc::now().timestamp_millis();
+    fn remember(&mut self, event_type: &str, payload: &Value, now: i64) {
+        self.prune_history(now);
+        self.history.push_back(RetainedAiSessionEvent {
+            event_type: event_type.to_string(),
+            payload: payload.clone(),
+            revision: self.revision,
+            created_at_ms: now,
+        });
+    }
+
+    fn prune_history(&mut self, now: i64) {
         while self
             .history
             .front()
@@ -222,12 +258,6 @@ impl AiSessionAuthority {
         {
             self.history.pop_front();
         }
-        self.history.push_back(RetainedAiSessionEvent {
-            event_type: event_type.to_string(),
-            payload: payload.clone(),
-            revision: self.revision,
-            created_at_ms: now,
-        });
     }
 }
 
@@ -314,6 +344,38 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod removal_parity {
+        use super::*;
+        type Authority = AiSessionAuthority;
+        type Snapshot = AiSessionsSnapshot;
+        const TOPIC: &str = "ai";
+        fn publish(authority: &mut Authority, snapshot: Snapshot, revision: u64) -> Option<Value> {
+            let offset = (revision as i64 - 1) * 1000;
+            authority
+                .prepare_with_clocks(
+                    snapshot,
+                    if revision == 1 {
+                        "startup"
+                    } else {
+                        "control-action"
+                    },
+                    || at(offset),
+                    || START_MS + offset,
+                )
+                .map(|event| json!({"type":event.event_type,"payload":event.payload}))
+        }
+        include!("session_removal_parity.rs");
+    }
+    mod epoch_parity {
+        use super::*;
+        type Authority = AiSessionAuthority;
+        type Snapshot = AiSessionsSnapshot;
+        const TOPIC: &str = "ai";
+        include!("session_epoch_parity.rs");
+    }
+    mod clock_parity {
+        include!("ai_session_clock_parity.rs");
+    }
     use controlled_instance_protocol::AiSessionsSnapshot;
 
     fn snapshot(updated_at: &str, sessions: Vec<AiSessionSummary>) -> AiSessionsSnapshot {
@@ -358,6 +420,56 @@ mod tests {
             .all(|value| value.is_ascii_alphanumeric() && !value.is_ascii_uppercase()));
         assert_eq!(parts[3].len(), 8);
         assert!(parts[3].chars().all(|value| value.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn expired_delta_without_another_publish_matches_node_golden() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/ai-session-authority-parity.json"
+        ))
+        .expect("Node golden");
+        let mut authority = AiSessionAuthority::new(
+            "inst_authority",
+            "<stream>",
+            "2026-11-02T00:00:00.000Z".to_string(),
+        );
+        for (index, story) in [
+            None,
+            Some("story-one"),
+            Some("story-offline"),
+            Some("story-after-reconnect"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut session = summary("ses_authority", "Initial title");
+            session.status = "idle".to_string();
+            session.phase = "unknown".to_string();
+            session.provider_session_id = Some("provider-authority".to_string());
+            session.story_id = story.map(str::to_string);
+            authority
+                .prepare(
+                    snapshot("2026-11-02T00:00:00.000Z", vec![session]),
+                    if index == 0 {
+                        "startup"
+                    } else {
+                        "control-action"
+                    },
+                )
+                .expect("publish");
+        }
+        // Advance the retention age without sleeping or publishing a new event.
+        // This is owner-level time control; transport is covered separately.
+        for event in &mut authority.history {
+            event.created_at_ms -= EVENT_RETENTION_MS + 1;
+        }
+        let mut expected = fixture["expected"]["expired"].clone();
+        expected["instanceId"] = json!("inst_authority");
+        let actual = authority.delta("<stream>", 2.0);
+        assert_eq!(
+            actual, expected,
+            "C05: expired history must require a snapshot"
+        );
     }
 
     #[test]

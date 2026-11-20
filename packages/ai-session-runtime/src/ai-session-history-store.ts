@@ -189,13 +189,15 @@ export class AiSessionHistoryStore {
     const nextLimit = historyLimit(limit);
     if (nextLimit !== limit) throw new Error(`AI session history limit must be an integer between 1 and ${AI_SESSION_HISTORY_MAX_LIMIT}.`);
     const current = this.list();
-    this.limit = nextLimit;
-    const retained = sortAndLimitAiSessionHistory(current, this.limit);
+    const retained = sortAndLimitAiSessionHistory(current, nextLimit);
     const removed = current.filter((item) => !retained.some((candidate) => candidate.id === item.id));
     if (removed.length) {
       this.saveIndex({ schemaVersion: 1, items: retained });
-      this.removeEntries(removed.map((item) => item.id));
     }
+    // A failed index commit must not publish a destructive policy that a
+    // later list() could apply implicitly. Cleanup follows the durable index.
+    this.limit = nextLimit;
+    this.removeEntries(removed.map((item) => item.id));
     return { limit: this.limit, removed };
   }
 
@@ -231,14 +233,53 @@ export class AiSessionHistoryStore {
   upsert(item: AiSessionHistoryItem, turns?: readonly AiSessionHistoryTurn[]) {
     const parsed = AiSessionHistoryItemSchema.parse(item);
     const current = this.list();
-    if (turns) this.saveDetail(AiSessionHistoryDetailSchema.parse({ item: parsed, turns: [...turns].slice(-50) }));
     const items = sortAndLimitAiSessionHistory([
       parsed,
       ...current.filter((entry) => entry.id !== parsed.id && providerIdentity(entry) !== providerIdentity(parsed)),
     ], this.limit);
-    if (JSON.stringify(items) !== JSON.stringify(current)) this.saveIndex({ schemaVersion: 1, items });
+    const indexChanged = JSON.stringify(items) !== JSON.stringify(current);
+    const previousIndex = turns && indexChanged ? this.readOptionalFile(this.filePath) : undefined;
+    const detailPath = this.detailPath(parsed.id);
+    const previousDetail = turns && indexChanged ? this.readOptionalFile(detailPath) : undefined;
+    try {
+      if (turns) this.saveDetail(AiSessionHistoryDetailSchema.parse({ item: parsed, turns: [...turns].slice(-50) }));
+      if (indexChanged) this.saveIndex({ schemaVersion: 1, items });
+    } catch (error) {
+      // Either atomic writer can report an error after replacing its file.
+      // Restore the old body only while the old index is confirmed; otherwise
+      // retain the body paired with the committed/uncertain index.
+      if (turns && indexChanged && this.fileStillMatches(this.filePath, previousIndex)) {
+        try {
+          if (previousDetail) writeFileAtomic.sync(detailPath, previousDetail, { mode: 0o600 });
+          else fs.rmSync(detailPath, { force: true });
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], "AI session history commit and detail rollback failed", { cause: error });
+        }
+      }
+      throw error;
+    }
     this.removeEntries(current.filter((entry) => !items.some((next) => next.id === entry.id)).map((entry) => entry.id));
     return parsed;
+  }
+
+  private readOptionalFile(filePath: string): Buffer | undefined {
+    try { return fs.readFileSync(filePath); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
+  private fileStillMatches(filePath: string, previous: Buffer | undefined) {
+    try {
+      const current = this.readOptionalFile(filePath);
+      return previous ? Boolean(current?.equals(previous)) : current === undefined;
+    } catch {
+      // The commit already failed. Preserve the new body if its authority
+      // cannot be verified, and propagate that original failure to the caller.
+      this.onWarning?.({ kind: "index", id: "index", reason: "failed commit state could not be verified; detail retained" });
+      return false;
+    }
   }
 
   remove(id: string) {
