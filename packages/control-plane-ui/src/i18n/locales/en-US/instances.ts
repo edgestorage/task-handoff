@@ -96,7 +96,7 @@ export const instances = {
     windowResizeRetry: "Retry",
     windowResizePresetDetail: "Remote logical size",
     windowResizeFit: "Fit page area",
-    windowResizeFitDetail: "Fill the current remote desktop page area",
+    windowResizeFitDetail: "Follow page-area size changes",
     windowResizeApplyingShort: "Resizing",
     windowResizeApplying: "Resizing the remote window…",
     windowResizeApplied: "Remote window resized to {width} × {height}",

@@ -271,15 +271,22 @@
                         <span>{{ preset.width }} × {{ preset.height }}</span>
                         <small>{{ t("instances.remoteDesktop.windowResizePresetDetail") }}</small>
                       </span>
-                      <Check v-if="windowResizeActual?.width === preset.width && windowResizeActual?.height === preset.height" :size="14" class="ml-auto" aria-hidden="true" />
+                      <Check v-if="!windowResizeFitActive && windowResizeActual?.width === preset.width && windowResizeActual?.height === preset.height" :size="14" class="ml-auto" aria-hidden="true" />
                     </DropdownMenuItem>
-                    <DropdownMenuItem v-if="windowResizeViewportFitSupported" :disabled="!windowResizeAvailable" @select="resizeRemoteWindowFit">
+                    <DropdownMenuCheckboxItem
+                      v-if="windowResizeViewportFitSupported"
+                      class="remote-desktop-window-resize-fit-item gap-2 px-2 pr-8 [&>svg]:size-4 [&>svg]:shrink-0"
+                      :model-value="windowResizeFitActive"
+                      :disabled="!windowResizeFitActive && !windowResizeAvailable"
+                      @update:model-value="setWindowResizeFit(Boolean($event))"
+                      @select.prevent
+                    >
                       <Maximize2 :size="14" aria-hidden="true" />
-                      <span class="remote-desktop-resolution-option">
+                      <span class="remote-desktop-window-resize-fit-option">
                         <span>{{ t("instances.remoteDesktop.windowResizeFit") }}</span>
                         <small>{{ t("instances.remoteDesktop.windowResizeFitDetail") }}</small>
                       </span>
-                    </DropdownMenuItem>
+                    </DropdownMenuCheckboxItem>
                     <p v-if="windowResizeStatusText" class="remote-desktop-window-resize-status" role="status">{{ windowResizeStatusText }}</p>
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
@@ -834,6 +841,7 @@ const fallbackEncodingDetail = ref("");
 const fallbackDiagnostics = ref<RemoteDesktopFallbackDiagnostics>();
 const documentVisible = ref(typeof document === "undefined" ? true : document.visibilityState !== "hidden");
 const windowResizePending = ref(false);
+const windowResizeFitActive = ref(false);
 const windowResizeStatus = ref<"idle" | "pending" | "success" | "failed">("idle");
 const windowResizeRequestId = ref("");
 const windowResizeRequest = ref<WindowResizeSelection>();
@@ -842,6 +850,10 @@ const windowResizeErrorCode = ref("");
 const windowResizeTimedOut = ref(false);
 const WINDOW_RESIZE_RESPONSE_TIMEOUT_MS = 6_000;
 let windowResizeTimer: ReturnType<typeof setTimeout> | undefined;
+let windowResizeFitObserver: ResizeObserver | undefined;
+let windowResizeFitFrame: number | undefined;
+let windowResizeFitPendingTarget: { width: number; height: number } | undefined;
+let windowResizeFitLastAttempt: { width: number; height: number } | undefined;
 
 function persistViewerPreferences() {
   if (props.preview || typeof window === "undefined") return;
@@ -3604,8 +3616,83 @@ function clearWindowResizeTimer() {
   windowResizeTimer = undefined;
 }
 
+function windowResizeViewportTarget() {
+  const rect = viewer.value?.getBoundingClientRect();
+  if (!rect) return undefined;
+  const width = Math.round(rect.width);
+  const height = Math.round(rect.height);
+  if (width <= 0 || height <= 0) return undefined;
+  return { width, height };
+}
+
+function sameWindowResizeSize(a?: { width: number; height: number }, b?: { width: number; height: number }) {
+  return Boolean(a && b && a.width === b.width && a.height === b.height);
+}
+
+function stopWindowResizeFitScheduling() {
+  windowResizeFitObserver?.disconnect();
+  windowResizeFitObserver = undefined;
+  if (typeof window !== "undefined") {
+    if (windowResizeFitFrame !== undefined) window.cancelAnimationFrame(windowResizeFitFrame);
+    window.removeEventListener("resize", scheduleWindowResizeFit);
+  }
+  windowResizeFitFrame = undefined;
+  windowResizeFitPendingTarget = undefined;
+}
+
+function flushWindowResizeFit() {
+  if (!windowResizeFitActive.value || !windowResizeMenuVisible.value || windowResizePending.value) return;
+  const target = windowResizeFitPendingTarget ?? windowResizeViewportTarget();
+  if (!target) return;
+  windowResizeFitPendingTarget = undefined;
+  if (sameWindowResizeSize(target, windowResizeFitLastAttempt)) return;
+  windowResizeFitLastAttempt = { ...target };
+  requestWindowResize({ mode: "viewport", width: target.width, height: target.height });
+}
+
+function queueWindowResizeFitFlush() {
+  if (!windowResizeFitActive.value || typeof window === "undefined" || windowResizeFitFrame !== undefined) return;
+  windowResizeFitFrame = window.requestAnimationFrame(() => {
+    windowResizeFitFrame = undefined;
+    flushWindowResizeFit();
+  });
+}
+
+function scheduleWindowResizeFit() {
+  if (!windowResizeFitActive.value) return;
+  const target = windowResizeViewportTarget();
+  if (!target || sameWindowResizeSize(target, windowResizeFitPendingTarget)) return;
+  windowResizeFitPendingTarget = target;
+  queueWindowResizeFitFlush();
+}
+
+function ensureWindowResizeFitObserver() {
+  if (typeof window === "undefined") return;
+  window.addEventListener("resize", scheduleWindowResizeFit);
+  if (windowResizeFitObserver || typeof ResizeObserver === "undefined") return;
+  const element = viewer.value;
+  if (!element) return;
+  windowResizeFitObserver = new ResizeObserver(() => scheduleWindowResizeFit());
+  windowResizeFitObserver.observe(element);
+}
+
+function setWindowResizeFit(active: boolean) {
+  if (active && !windowResizeViewportFitSupported.value) return;
+  windowResizeFitActive.value = active;
+  if (!active) {
+    stopWindowResizeFitScheduling();
+    return;
+  }
+  windowResizeFitLastAttempt = undefined;
+  ensureWindowResizeFitObserver();
+  scheduleWindowResizeFit();
+}
+
 function resetWindowResizeState() {
   clearWindowResizeTimer();
+  windowResizeFitActive.value = false;
+  windowResizeFitLastAttempt = undefined;
+  stopWindowResizeFitScheduling();
   windowResizePending.value = false;
   windowResizeStatus.value = "idle";
   windowResizeRequestId.value = "";
@@ -3627,6 +3714,7 @@ function failWindowResize(code: string, timedOut = false, reason = "response") {
     requestId: windowResizeRequestId.value,
     mode: windowResizeRequest.value?.mode,
   });
+  queueWindowResizeFitFlush();
 }
 
 function requestWindowResize(target: WindowResizeSelection) {
@@ -3671,21 +3759,8 @@ function requestWindowResize(target: WindowResizeSelection) {
 
 function resizeRemoteWindowPreset(preset: { width: number; height: number }) {
   if (!windowResizePresets.value.some((candidate) => candidate.width === preset.width && candidate.height === preset.height)) return;
+  setWindowResizeFit(false);
   requestWindowResize({ mode: "preset", width: preset.width, height: preset.height });
-}
-
-function resizeRemoteWindowFit() {
-  if (!windowResizeViewportFitSupported.value) return;
-  const rect = viewer.value?.getBoundingClientRect();
-  if (!rect) {
-    failWindowResize("REMOTE_DESKTOP_WINDOW_RESIZE_FAILED", false, "viewport-unavailable");
-    return;
-  }
-  requestWindowResize({
-    mode: "viewport",
-    width: Math.round(rect.width),
-    height: Math.round(rect.height),
-  });
 }
 
 function handleWindowResizedValue(value: any) {
@@ -3714,6 +3789,7 @@ function handleWindowResizedValue(value: any) {
     width: parsed.data.width,
     height: parsed.data.height,
   });
+  queueWindowResizeFitFlush();
 }
 
 function handleWindowResizeFailedValue(value: any) {
@@ -3851,6 +3927,15 @@ function cleanup() {
 
 watch([inputEnabled, isController], ([enabled, controller]) => {
   if (enabled || controller) controlHintVisible.value = false;
+});
+watch(windowResizeMenuVisible, (visible, previous) => {
+  if (!visible || !windowResizeFitActive.value) return;
+  if (!previous) windowResizeFitLastAttempt = undefined;
+  ensureWindowResizeFitObserver();
+  queueWindowResizeFitFlush();
+});
+watch(windowResizeViewportFitSupported, supported => {
+  if (!supported && windowResizeFitActive.value) setWindowResizeFit(false);
 });
 watch(clipboardSupported, supported => {
   if (supported) enableClipboardByDefault();
@@ -4286,6 +4371,37 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   text-align: right;
   white-space: nowrap;
+}
+
+:global(.remote-desktop-window-resize-fit-option) {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+:global(.remote-desktop-window-resize-fit-item > span:first-child) {
+  right: 8px;
+  left: auto;
+}
+
+:global(.remote-desktop-window-resize-fit-option > span) {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+:global(.remote-desktop-window-resize-fit-option small) {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 :global(.remote-desktop-connection-option) {

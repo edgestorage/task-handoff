@@ -99,7 +99,7 @@ export const instances = {
     windowResizeRetry: "重试",
     windowResizePresetDetail: "远端逻辑尺寸",
     windowResizeFit: "适应页面区域",
-    windowResizeFitDetail: "铺满当前远程桌面页面区域",
+    windowResizeFitDetail: "随页面区域尺寸实时调整",
     windowResizeApplyingShort: "调整中",
     windowResizeApplying: "正在调整远端窗口…",
     windowResizeApplied: "远端窗口已调整为 {width} × {height}",

@@ -453,18 +453,43 @@ test('remote desktop window resize sends preset or viewport wire payloads withou
   assert.match(request, /wire\(control, "window\.resize", parsed\.data\)/);
   assert.doesNotMatch(request, /stream\.resolution|applyTransportResolution|transportResolution|transportFrameRate|transportCapturePrecision/);
   assert.match(viewer, /@select="resizeRemoteWindowPreset\(preset\)"/);
-  assert.match(viewer, /@select="resizeRemoteWindowFit"/);
+  assert.match(viewer, /:model-value="windowResizeFitActive"/);
+  assert.match(viewer, /class="remote-desktop-window-resize-fit-item gap-2 px-2 pr-8 \[&>svg\]:size-4 \[&>svg\]:shrink-0"/);
+  assert.match(viewer, /class="remote-desktop-window-resize-fit-option"/);
+  assert.match(viewer, /\.remote-desktop-window-resize-fit-item > span:first-child[\s\S]*?right: 8px;[\s\S]*?left: auto;/);
+  assert.match(viewer, /@update:model-value="setWindowResizeFit\(Boolean\(\$event\)\)"/);
+  assert.match(viewer, /@select\.prevent/);
   assert.match(viewer, /windowResizePresets\.value\.some\(\(candidate\) => candidate\.width === preset\.width && candidate\.height === preset\.height\)/);
 });
 
-test('remote desktop fit measures the entire viewer page area and resends fresh dimensions', () => {
-  const fit = viewer.slice(viewer.indexOf('function resizeRemoteWindowFit'), viewer.indexOf('function handleWindowResizedValue'));
+test('remote desktop fit measures the entire viewer page area', () => {
+  const fit = viewer.slice(viewer.indexOf('function windowResizeViewportTarget'), viewer.indexOf('function setWindowResizeFit'));
   assert.match(fit, /viewer\.value\?\.getBoundingClientRect\(\)/);
   assert.doesNotMatch(fit, /surface\.value/);
-  assert.match(fit, /width: Math\.round\(rect\.width\)/);
-  assert.match(fit, /height: Math\.round\(rect\.height\)/);
+  assert.match(fit, /const width = Math\.round\(rect\.width\)/);
+  assert.match(fit, /const height = Math\.round\(rect\.height\)/);
   assert.match(fit, /requestWindowResize\(\{\s+mode: "viewport"/);
   assert.doesNotMatch(fit, /screen|work.?area|window\.innerWidth|window\.innerHeight/);
+});
+
+test('remote desktop fit mode follows viewer size changes instead of fitting once', () => {
+  assert.match(viewer, /const windowResizeFitActive = ref\(false\)/);
+  assert.match(viewer, /new ResizeObserver\(\(\) => scheduleWindowResizeFit\(\)\)/);
+  assert.match(viewer, /windowResizeFitObserver\.observe\(element\)/);
+  assert.match(viewer, /window\.addEventListener\("resize", scheduleWindowResizeFit\)/);
+  assert.match(viewer, /window\.removeEventListener\("resize", scheduleWindowResizeFit\)/);
+  assert.match(viewer, /windowResizeFitPendingTarget = target/);
+  assert.match(viewer, /window\.requestAnimationFrame/);
+  assert.match(viewer, /window\.cancelAnimationFrame/);
+  assert.match(viewer, /function flushWindowResizeFit\(\)[\s\S]*?windowResizePending\.value\) return/);
+  assert.match(viewer, /function flushWindowResizeFit\(\)[\s\S]*?sameWindowResizeSize\(target, windowResizeFitLastAttempt\)/);
+  assert.match(viewer, /watch\(windowResizeMenuVisible, \(visible, previous\) => \{[\s\S]*?windowResizeFitLastAttempt = undefined/);
+
+  const resized = viewer.slice(viewer.indexOf('function handleWindowResizedValue'), viewer.indexOf('function handleWindowResizeFailedValue'));
+  assert.match(resized, /queueWindowResizeFitFlush\(\)/);
+
+  const preset = viewer.slice(viewer.indexOf('function resizeRemoteWindowPreset'), viewer.indexOf('function handleWindowResizedValue'));
+  assert.match(preset, /setWindowResizeFit\(false\)/);
 });
 
 test('remote desktop window resize prevents duplicate requests and correlates actual-size responses', () => {
@@ -504,6 +529,8 @@ test('remote desktop window resize reports actual, constrained, fit, and structu
 test('remote desktop window resize state is cleared with the viewer lifecycle', () => {
   assert.match(viewer, /function cleanup\(\) \{\n\s+usedTransportKeys\.value = new Set\(\);\n\s+resetWindowResizeState\(\);/);
   assert.match(viewer, /function resetWindowResizeState\(\)[\s\S]*?clearWindowResizeTimer\(\)/);
+  assert.match(viewer, /function resetWindowResizeState\(\)[\s\S]*?windowResizeFitActive\.value = false/);
+  assert.match(viewer, /function resetWindowResizeState\(\)[\s\S]*?stopWindowResizeFitScheduling\(\)/);
   assert.match(viewer, /windowResizeStatus\.value = "idle"/);
   assert.match(viewer, /windowResizeRequestId\.value = ""/);
 });
