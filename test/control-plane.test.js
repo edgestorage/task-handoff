@@ -742,7 +742,7 @@ test("app inventory protocol is strict and stored legacy app capability is disca
       execTty: false,
     },
     remoteDesktop: {
-      protocolVersion: "2026-11-11",
+      protocolVersion: "2026-11-17",
       available: false,
       status: "unavailable",
       reason: "REMOTE_DESKTOP_UNSUPPORTED",
@@ -756,7 +756,12 @@ test("app inventory protocol is strict and stored legacy app capability is disca
       encoders: [],
       transport: [],
       viewerLimit: 0,
-      features: { clipboard: false, keyboard: false, mouse: false },
+      features: {
+        clipboard: false,
+        keyboard: false,
+        mouse: false,
+        windowResize: { available: false, presets: [], fitToViewport: false },
+      },
       fallback: {
         available: false,
         reason: "REMOTE_DESKTOP_UNSUPPORTED",
