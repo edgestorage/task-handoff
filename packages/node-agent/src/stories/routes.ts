@@ -13,6 +13,7 @@ import {
   StoryAutomationUpdateInputSchema,
   StoryAutomationWithActionInputSchema,
   StoryContentListSchema,
+  StoryContentDeleteInputSchema,
   StoryContentPageInputSchema,
   StoryContentPageResultSchema,
   StoryCreateInputSchema,
@@ -416,6 +417,10 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
     await options.toolPolicy?.assertEnabled(story.id, tool);
     const body = z.object({ input: z.unknown() }).strict().parse(request.body || {});
     const input = STORY_AGENT_TOOL_SCHEMAS[tool].input.parse(body.input ?? {});
+    if (tool === "story_delete_content") {
+      const { storyPath, expectedRevision } = StoryContentDeleteInputSchema.parse(input);
+      return { data: StoryAgentDeleteResultSchema.parse({ deleted: await store.deleteDocument(story.id, storyPath, expectedRevision) }) };
+    }
     if (tool === "story_list_actions") {
       const { page, pageSize } = StoryAgentActionListInputSchema.parse(input);
       const offset = (page - 1) * pageSize;

@@ -39,7 +39,7 @@ test("Story tool policy defaults, persists, resolves, and filters archived mutat
     assert.deepEqual(initial.policy, { content: true, actions: false, automations: false, aiSessions: false, decisions: true });
     assert.match(initial.revision, /^[a-f0-9]{64}$/);
     assert.deepEqual((await service.resolve(story.id)).enabledTools, [
-      "story_list_content", "story_get_content", "story_set_content", "story_request_decision",
+      "story_list_content", "story_get_content", "story_set_content", "story_delete_content", "story_request_decision",
     ]);
     assert.deepEqual((await service.resolve(story.id)).agentInvocation, {
       enabledTools: [],
@@ -49,7 +49,7 @@ test("Story tool policy defaults, persists, resolves, and filters archived mutat
     const updated = await service.update(story.id, { content: true, actions: true, automations: true, aiSessions: true, decisions: false });
     assert.notEqual(updated.revision, initial.revision);
     assert.deepEqual((await service.resolve(story.id)).enabledTools, [
-      "story_list_content", "story_get_content", "story_set_content",
+      "story_list_content", "story_get_content", "story_set_content", "story_delete_content",
       "story_list_actions", "story_run_action",
       "story_list_automations", "story_create_automation", "story_update_automation",
       "story_delete_automation", "story_run_automation", "story_list_automation_runs",

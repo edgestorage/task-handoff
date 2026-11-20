@@ -113,6 +113,7 @@ test("Codex MCP bridge uses trusted request metadata to resolve an existing AI S
     ]);
     assert.equal(listed.tools.find((tool) => tool.name === "story_get_content")?.annotations?.readOnlyHint, undefined);
     assert.equal(listed.tools.find((tool) => tool.name === "story_set_content")?.annotations?.readOnlyHint, undefined);
+    assert.equal(listed.tools.find((tool) => tool.name === "story_delete_content")?.annotations?.readOnlyHint, undefined);
     assert.equal(listed.tools.find((tool) => tool.name === "story_run_action")?.annotations?.readOnlyHint, undefined);
     for (const tool of listed.tools) {
       assert.ok(tool.outputSchema);

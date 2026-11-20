@@ -11,7 +11,7 @@ test("Story tool policy cache is runtime-only and revision-aware", () => {
     storyId: "story_one",
     policy: { content: true, actions: false, automations: false, aiSessions: false, decisions: false },
     revision: firstRevision,
-    enabledTools: ["story_list_content", "story_get_content", "story_set_content"],
+    enabledTools: ["story_list_content", "story_get_content", "story_set_content", "story_delete_content"],
     agentInvocation: { enabledTools: ["agent_run"], allowedTargets: [{ agentId: "agent_one", orchestrationId: "default:agent_one" }] },
   });
 

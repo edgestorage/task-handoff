@@ -77,7 +77,7 @@ test("Story Agent Tool policy tolerates v0.0.35 payloads and writers drop unsupp
 test("Story Agent Tool categories resolve deterministically and archive removes mutations", () => {
   const policy = { content: true, actions: true, automations: true, aiSessions: false, decisions: false };
   assert.deepEqual(resolveStoryAgentToolNames(policy), [
-    "story_list_content", "story_get_content", "story_set_content",
+    "story_list_content", "story_get_content", "story_set_content", "story_delete_content",
     "story_list_actions", "story_run_action",
     "story_list_automations", "story_create_automation", "story_update_automation",
     "story_delete_automation", "story_run_automation", "story_list_automation_runs",
@@ -88,7 +88,7 @@ test("Story Agent Tool categories resolve deterministically and archive removes 
   ]);
   assert.equal(storyAgentToolPolicyRevisionSource(policy), storyAgentToolPolicyRevisionSource({ ...policy }));
   assert.deepEqual(resolveStoryAgentToolNames({ ...policy, decisions: true }), [
-    "story_list_content", "story_get_content", "story_set_content",
+    "story_list_content", "story_get_content", "story_set_content", "story_delete_content",
     "story_list_actions", "story_run_action",
     "story_list_automations", "story_create_automation", "story_update_automation",
     "story_delete_automation", "story_run_automation", "story_list_automation_runs",

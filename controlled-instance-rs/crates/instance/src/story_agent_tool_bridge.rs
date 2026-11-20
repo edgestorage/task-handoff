@@ -289,4 +289,27 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn delete_content_tool_matches_the_provider_wire_schema() {
+        assert!(validate_tool_arguments(
+            "story_delete_content",
+            &json!({
+                "storyPath": "notes/release.md",
+                "expectedRevision": "a".repeat(64)
+            })
+        )
+        .is_ok());
+        assert!(validate_tool_arguments(
+            "story_delete_content",
+            &json!({ "storyPath": "notes/release.md" })
+        )
+        .is_ok());
+        assert!(validate_tool_output("story_delete_content", &json!({ "deleted": true })).is_ok());
+        assert!(validate_tool_arguments(
+            "story_delete_content",
+            &json!({ "storyPath": "notes/release.md", "storyId": "story_1" })
+        )
+        .is_err());
+    }
 }

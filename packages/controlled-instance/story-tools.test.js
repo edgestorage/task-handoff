@@ -36,11 +36,12 @@ function serviceWithDocuments(documents) {
 
 const session = { id: "session-1", storyId: "story-1" };
 
-test("Story tool descriptions explain the list-get-set workflow", () => {
+test("Story tool descriptions explain the list-get-set-delete workflow", () => {
   assert.match(STORY_TOOL_DESCRIPTIONS.story_list_content, /ordered newest to oldest/);
   assert.match(STORY_TOOL_DESCRIPTIONS.story_list_content, /page 1/);
   assert.match(STORY_TOOL_DESCRIPTIONS.story_get_content, /story_list_content/);
   assert.match(STORY_TOOL_DESCRIPTIONS.story_set_content, /expectedRevision/);
+  assert.match(STORY_TOOL_DESCRIPTIONS.story_delete_content, /expectedRevision/);
 });
 
 test("story_list_content keeps the empty input compatible and returns the newest documents first", async () => {
@@ -104,4 +105,27 @@ test("story_set_content returns the authoritative title and stored size", async 
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
+});
+
+test("story_delete_content forwards one document deletion through the node agent", async () => {
+  const calls = [];
+  const service = new StoryAgentToolService({
+    enabled: () => true,
+    invokeStoryAgentTool: async (...args) => {
+      calls.push(args);
+      return { deleted: true };
+    },
+  });
+
+  const result = await service.invoke(session, "story_delete_content", {
+    storyPath: "release.md",
+    expectedRevision: "a".repeat(64),
+  });
+
+  assert.deepEqual(result, { deleted: true });
+  assert.deepEqual(calls, [[
+    "session-1",
+    "story_delete_content",
+    { storyPath: "release.md", expectedRevision: "a".repeat(64) },
+  ]]);
 });

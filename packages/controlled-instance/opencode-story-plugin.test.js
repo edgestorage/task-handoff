@@ -38,6 +38,7 @@ test("OpenCode Story plugin does not expose session identity as a model argument
   const hooks = await createOpenCodeStoryPlugin()();
   assert.deepEqual(Object.keys(hooks.tool), [...STORY_AGENT_TOOL_NAMES, ...AGENT_INVOCATION_TOOL_NAMES]);
   assert.deepEqual(Object.keys(hooks.tool.story_get_content.args), ["storyPaths", "destinationPath"]);
+  assert.deepEqual(Object.keys(hooks.tool.story_delete_content.args), ["storyPath", "expectedRevision"]);
   assert.equal("sessionID" in hooks.tool.story_get_content.args, false);
   assert.equal("storyId" in hooks.tool.story_get_content.args, false);
   assert.deepEqual(Object.keys(hooks.tool.agent_run.args), ["agentId", "orchestrationId", "prompt", "budget"]);

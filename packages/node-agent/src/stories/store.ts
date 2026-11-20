@@ -10,6 +10,7 @@ import {
   StoryCreateInputSchema,
   StoryDocumentOrderInputSchema,
   StoryPathSchema,
+  StoryRevisionSchema,
   StorySchema,
   StorySessionRetentionSettingsSchema,
   StoryUpdateInputSchema,
@@ -379,12 +380,19 @@ export class NodeStoryStore {
     return projected;
   }
 
-  async deleteDocument(id: string, storyPath: string) {
+  async deleteDocument(id: string, storyPath: string, expectedRevision?: string) {
     return this.coordinator.run(id, async () => {
       const story = await this.require(id);
       if (story.archivedAt) throw storyError("STORY_ARCHIVED", "Archived Story content is read-only.", 409);
       const normalized = StoryPathSchema.parse(storyPath);
       if (!await this.repository.documents.get(id, normalized)) return false;
+      if (expectedRevision) {
+        const current = this.openRegularFileWithinRoot(id, normalized);
+        fs.closeSync(current.fd);
+        if (current.revision !== StoryRevisionSchema.parse(expectedRevision)) {
+          throw storyError("STORY_REVISION_CONFLICT", "Story content changed since it was read.", 409);
+        }
+      }
       const target = this.filePath(id, normalized);
       const backup = `${target}.${createId("story_file_mutation")}.deleted`;
       const mutationId = createId("story_file_mutation");

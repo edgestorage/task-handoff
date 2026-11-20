@@ -103,6 +103,18 @@ pub struct StoryContentSetResult {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoryContentDeleteInput {
+    pub story_path: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_option"
+    )]
+    pub expected_revision: Option<String>,
+}
+
 pub fn validate_story_path(path: &str) -> bool {
     let path = path.trim();
     !path.is_empty()
@@ -162,6 +174,37 @@ mod tests {
                 "storyPath": "notes/one.md",
                 "path": "/workspace/notes/one.md"
             })
+        );
+    }
+
+    #[test]
+    fn story_delete_input_keeps_the_revision_guard_optional() {
+        let value = serde_json::to_value(StoryContentDeleteInput {
+            story_path: "notes/one.md".to_string(),
+            expected_revision: Some("a".repeat(64)),
+        })
+        .expect("delete input");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "storyPath": "notes/one.md",
+                "expectedRevision": "a".repeat(64),
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<StoryContentDeleteInput>(serde_json::json!({
+                "storyPath": "notes/one.md"
+            }))
+            .expect("delete input without revision")
+            .expected_revision,
+            None
+        );
+        assert!(
+            serde_json::from_value::<StoryContentDeleteInput>(serde_json::json!({
+                "storyPath": "notes/one.md",
+                "expectedRevision": null
+            }))
+            .is_err()
         );
     }
 }

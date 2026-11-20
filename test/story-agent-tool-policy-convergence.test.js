@@ -30,7 +30,7 @@ test("policy updates configure provider sessions, reject stale calls, and refres
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const events = [];
   let enabledTools = [
-    "story_list_content", "story_get_content", "story_set_content", "story_list_actions", "story_run_action",
+    "story_list_content", "story_get_content", "story_set_content", "story_delete_content", "story_list_actions", "story_run_action",
   ];
   let allowedTargets = [{ agentId: "agent_reviewer", orchestrationId: "default:agent_reviewer" }];
   let policyRevision = revision("a");
@@ -110,6 +110,7 @@ test("policy updates configure provider sessions, reject stale calls, and refres
     "mcp_servers.task_handoff_story.enabled_tools": [...enabledTools, "agent_run"],
   });
   const openCodeCreate = events.find((event) => event.agent === "opencode" && event.phase === "create");
+  assert.equal(openCodeCreate.projection.findLast((rule) => rule.permission === "story_delete_content").action, "allow");
   assert.equal(openCodeCreate.projection.findLast((rule) => rule.permission === "story_run_action").action, "allow");
   assert.equal(openCodeCreate.projection.findLast((rule) => rule.permission === "agent_run").action, "allow");
 
@@ -139,5 +140,6 @@ test("policy updates configure provider sessions, reject stale calls, and refres
   assert.equal(codexTurn.projection, "session-config-unchanged");
   const openCodeTurn = events.findLast((event) => event.agent === "opencode" && event.phase === "turn");
   assert.equal(openCodeTurn.projection.findLast((rule) => rule.permission === "story_list_content").action, "deny");
+  assert.equal(openCodeTurn.projection.findLast((rule) => rule.permission === "story_delete_content").action, "deny");
   assert.equal(openCodeTurn.projection.findLast((rule) => rule.permission === "agent_run").action, "deny");
 });

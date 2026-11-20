@@ -120,6 +120,23 @@ test("content reads and deletes do not observe a staged write", async () => {
   } finally { await close(); }
 });
 
+test("document deletion honors an expected revision", async () => {
+  const { store, dataDir, close } = await createStore();
+  try {
+    const story = await store.create({ title: "Revision guarded delete", actions: [] });
+    const written = await store.writeContent(story.id, { storyPath: "content.txt", title: "Content", stream: Readable.from(["original"]) });
+    const target = path.join(dataDir, "stories", story.id, "content.txt");
+
+    await assert.rejects(
+      () => store.deleteDocument(story.id, "content.txt", "b".repeat(64)),
+      (error: any) => error.code === "STORY_REVISION_CONFLICT" && error.statusCode === 409,
+    );
+    assert.equal(fs.readFileSync(target, "utf8"), "original");
+    assert.equal(await store.deleteDocument(story.id, "content.txt", written.revision), true);
+    assert.equal(fs.existsSync(target), false);
+  } finally { await close(); }
+});
+
 test("Story operation coordinator quiesces new work and exposes pending drain diagnostics", async () => {
   const coordinator = new StoryOperationCoordinator();
   const release = await coordinator.acquire("story_pending");

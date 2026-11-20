@@ -21,6 +21,7 @@ import {
   StoryAutomationPolicySchema,
   StoryAutomationRunStatusSchema,
   StoryAutomationScheduleSchema,
+  StoryContentDeleteInputSchema,
   StoryContentGetInputSchema,
   StoryContentSetInputSchema,
   StoryDocumentSchema,
@@ -30,7 +31,7 @@ import {
   StoryDecisionStatusSchema,
 } from "./stories.ts";
 
-export const STORY_AGENT_TOOL_POLICY_VERSION = "2026-09-28";
+export const STORY_AGENT_TOOL_POLICY_VERSION = "2026-11-20";
 
 export const StoryAgentToolCategorySchema = z.enum(["content", "actions", "automations", "aiSessions", "decisions"]);
 export type StoryAgentToolCategory = z.infer<typeof StoryAgentToolCategorySchema>;
@@ -84,6 +85,7 @@ export const STORY_AGENT_TOOL_NAMES = [
   "story_list_content",
   "story_get_content",
   "story_set_content",
+  "story_delete_content",
   "story_list_actions",
   "story_run_action",
   "story_list_automations",
@@ -102,7 +104,7 @@ export const StoryAgentToolNameSchema = z.enum(STORY_AGENT_TOOL_NAMES);
 export type StoryAgentToolName = z.infer<typeof StoryAgentToolNameSchema>;
 
 export const STORY_AGENT_TOOL_NAMES_BY_CATEGORY = Object.freeze({
-  content: ["story_list_content", "story_get_content", "story_set_content"],
+  content: ["story_list_content", "story_get_content", "story_set_content", "story_delete_content"],
   actions: ["story_list_actions", "story_run_action"],
   automations: [
     "story_list_automations",
@@ -120,6 +122,7 @@ export const STORY_AGENT_TOOL_DESCRIPTIONS: Record<StoryAgentToolName, string> =
   story_list_content: "List indexed documents in the current Story, ordered newest to oldest. Start with page 1 and continue with pagination.nextPage when present.",
   story_get_content: "Copy documents selected from story_list_content into the current AI Session workspace.",
   story_set_content: "Create or replace one indexed Story document from a workspace file; use expectedRevision to prevent overwriting a newer version.",
+  story_delete_content: "Delete one indexed Story document; use expectedRevision to prevent deleting content that changed after it was read.",
   story_list_actions: "List preset Actions in the Story assigned to the current AI Session.",
   story_run_action: "Run one preset Story Action using its configured target instance and session preset.",
   story_list_automations: "List Automations and their effective status for the current Story.",
@@ -474,6 +477,7 @@ export const STORY_AGENT_TOOL_SCHEMAS = {
   story_list_content: { input: StoryAgentContentListInputSchema, output: StoryAgentContentListResultSchema },
   story_get_content: { input: StoryContentGetInputSchema, output: StoryAgentContentGetResultSchema },
   story_set_content: { input: StoryContentSetInputSchema, output: StoryAgentContentSetResultSchema },
+  story_delete_content: { input: StoryContentDeleteInputSchema, output: StoryAgentDeleteResultSchema },
   story_list_actions: { input: StoryAgentActionListInputSchema, output: StoryAgentActionListResultSchema },
   story_run_action: { input: StoryAgentActionRunInputSchema, output: StoryAgentActionRunResultSchema },
   story_list_automations: { input: StoryAgentAutomationListInputSchema, output: StoryAgentAutomationListResultSchema },

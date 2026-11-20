@@ -243,6 +243,45 @@
     }
   },
   {
+    "name": "story_delete_content",
+    "description": "Delete one indexed Story document; use expectedRevision to prevent deleting content that changed after it was read.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "storyPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "expectedRevision": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "storyPath"
+      ],
+      "additionalProperties": false
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "outputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "deleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "deleted"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "story_list_actions",
     "description": "List preset Actions in the Story assigned to the current AI Session.",
     "inputSchema": {

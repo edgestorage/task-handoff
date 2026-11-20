@@ -389,6 +389,11 @@ export const StoryContentSetInputSchema = z.object({
   expectedRevision: StoryRevisionSchema.optional(),
 }).strict();
 
+export const StoryContentDeleteInputSchema = z.object({
+  storyPath: StoryPathSchema,
+  expectedRevision: StoryRevisionSchema.optional(),
+}).strict();
+
 export const StoryContentTransferItemSchema = z.object({
   storyPath: StoryPathSchema,
   path: z.string().trim().min(1).max(4096).optional(),
