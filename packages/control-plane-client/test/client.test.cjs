@@ -11,6 +11,7 @@ const {
   classifyAiSessionPastedText,
   aiSessionElapsedSeconds,
   applyControlPlaneAiSessionStreamEvent,
+  aiSessionConversationBoundaryReady,
   AiSessionConversationCache,
   createControlPlaneClient,
   isAiSessionApprovalPending,
@@ -208,6 +209,56 @@ test("conversation cache projects terminal index state over a cached running Tur
   assert.equal(turn.completedAt, completedAt);
   assert.equal(turn.lastMessage, "Answer");
   assert.equal(cache.needsTurn("instance-1", summary.id, "turn-1"), undefined);
+});
+
+test("conversation boundary rejects the previous Turn when a new active Turn has not reached the index", () => {
+  const summary = {
+    id: "session-boundary",
+    activeTurnId: "turn-new",
+    latestTurnRef: { id: "turn-new", bodyRevision: "body-new" },
+  };
+  const previousIndex = {
+    sessionId: summary.id,
+    revision: "index-old",
+    turns: [
+      { id: "turn-old", providerTurnId: "provider-turn-old", status: "completed", revision: 1, bodyRevision: "body-old" },
+    ],
+  };
+
+  assert.equal(aiSessionConversationBoundaryReady(previousIndex, summary), false);
+  assert.equal(aiSessionConversationBoundaryReady({
+    ...previousIndex,
+    revision: "index-new",
+    turns: [
+      ...previousIndex.turns,
+      { id: "turn-new", providerTurnId: "provider-turn-new", status: "running", revision: 1, bodyRevision: "body-new" },
+    ],
+  }, summary), true);
+  assert.equal(aiSessionConversationBoundaryReady(previousIndex, { ...summary, activeTurnId: undefined }), false);
+  assert.equal(aiSessionConversationBoundaryReady(previousIndex, {
+    ...summary,
+    activeTurnId: undefined,
+    latestTurnRef: { id: "turn-old", bodyRevision: "body-old" },
+  }), true);
+  assert.equal(aiSessionConversationBoundaryReady({
+    ...previousIndex,
+    turns: [
+      previousIndex.turns[0],
+      { id: "turn-new", providerTurnId: "provider-turn-new", status: "running", revision: 1, bodyRevision: "body-new" },
+    ],
+  }, {
+    ...summary,
+    latestTurnRef: { id: "turn-old", bodyRevision: "body-old" },
+  }), false);
+  assert.equal(aiSessionConversationBoundaryReady({
+    ...previousIndex,
+    turns: [
+      { id: "turn-new", providerTurnId: "provider-turn-new", status: "running", revision: 1, bodyRevision: "body-new" },
+    ],
+  }, {
+    ...summary,
+    activeTurnId: "turn-old",
+  }), false);
 });
 
 test("shared AI Session client owns route encoding, request input, and response schema", async () => {

@@ -583,18 +583,22 @@ export function useActiveInstanceSessions({
     selectedAiSessionKeys[instanceId] = sessionId;
   }
 
+  function selectedAiSessionSnapshotKey(instanceId: string, sessionId: string) {
+    return JSON.stringify([instanceId, sessionId]);
+  }
+
   function selectedAiSession(instance: InstanceBoardItem, sessions?: AiSessionSummary[]) {
     const available = sessions || [];
     const selectedId = selectedAiSessionKeys[instance.id];
     const selected = available.find((session) => session.id === selectedId);
     if (selected) {
-      selectedAiSessionSnapshots[instance.id] = selected;
+      selectedAiSessionSnapshots[selectedAiSessionSnapshotKey(instance.id, selected.id)] = selected;
       return selected;
     }
     // Once a user has selected a session, do not silently replace it when a
     // completion patch temporarily omits it from the projection. This avoids
     // jumping to an unrelated session while the authoritative snapshot catches up.
-    if (selectedId) return selectedAiSessionSnapshots[instance.id];
+    if (selectedId) return selectedAiSessionSnapshots[selectedAiSessionSnapshotKey(instance.id, selectedId)];
     return undefined;
   }
 

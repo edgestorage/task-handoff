@@ -31,7 +31,7 @@ export function useAiSessionConversationProjection(options: {
   const consumerId = String(++consumerSequence);
   const streamingMessages = useStreamingMessagesStore();
   const cacheRevision = ref(0);
-  const state = ref<"loading" | "ready" | "error">("loading");
+  const loadState = ref<"loading" | "ready" | "error">("loading");
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryAttempt = 0;
   const currentKey = computed(() => {
@@ -39,6 +39,15 @@ export function useAiSessionConversationProjection(options: {
     const instanceId = toValue(options.instanceId);
     return summary && instanceId ? conversationKey(instanceId, summary.id) : "";
   });
+  const turnBoundaryReady = computed(() => {
+    cacheRevision.value;
+    const summary = toValue(options.summary);
+    const instanceId = toValue(options.instanceId);
+    return Boolean(summary && instanceId && conversations.hasTurnBoundary(instanceId, summary));
+  });
+  const state = computed<"loading" | "ready" | "error">(() => (
+    turnBoundaryReady.value ? loadState.value : "loading"
+  ));
   const projection = computed(() => {
     cacheRevision.value;
     const summary = toValue(options.summary);
@@ -187,13 +196,17 @@ export function useAiSessionConversationProjection(options: {
     const instanceId = toValue(options.instanceId);
     const key = currentKey.value;
     if (!summary || !instanceId || !key) {
-      state.value = "loading";
+      loadState.value = "loading";
       return;
     }
     // Revision changes refresh their own data domains in place. Only a session
     // with no cached projection enters the conversation-level loading state.
-    const hadRenderableContent = conversations.hasRenderableProjection(instanceId, summary.id);
-    if (!hadRenderableContent) state.value = "loading";
+    // A Turn boundary change is different from a same-Turn revision update: the
+    // previous Turn may still be renderable, but it is no longer the current
+    // session content while the new Turn index is converging.
+    const boundaryReady = conversations.hasTurnBoundary(instanceId, summary);
+    const hadRenderableContent = conversations.hasRenderableProjection(instanceId, summary.id) && boundaryReady;
+    if (!hadRenderableContent) loadState.value = "loading";
     const cachedDetailRevision = conversations.detailRevision(instanceId, summary.id);
     const cachedTurnsRevision = conversations.turnsRevision(instanceId, summary.id);
     recordAiSessionRead("projection.refresh", {
@@ -224,9 +237,10 @@ export function useAiSessionConversationProjection(options: {
     }
     if (updated) changed();
     const valid = conversations.hasProjection(instanceId, currentSummary);
-    const renderable = conversations.hasRenderableProjection(instanceId, currentSummary.id);
-    state.value = renderable ? "ready" : "error";
-    if (valid) {
+    const currentBoundaryReady = conversations.hasTurnBoundary(instanceId, currentSummary);
+    const renderable = conversations.hasRenderableProjection(instanceId, currentSummary.id) && currentBoundaryReady;
+    loadState.value = renderable ? "ready" : currentBoundaryReady ? "error" : "loading";
+    if (valid && currentBoundaryReady) {
       clearRetry();
       retryAttempt = 0;
     } else {
@@ -239,7 +253,14 @@ export function useAiSessionConversationProjection(options: {
   watch(
     () => {
       const summary = toValue(options.summary);
-      return [currentKey.value, summary?.detailRevision, summary?.turnsRevision, summary?.latestTurnRef?.id, summary?.latestTurnRef?.bodyRevision] as const;
+      return [
+        currentKey.value,
+        summary?.detailRevision,
+        summary?.turnsRevision,
+        summary?.latestTurnRef?.id,
+        summary?.latestTurnRef?.bodyRevision,
+        summary?.activeTurnId,
+      ] as const;
     },
     (next, previous) => {
       recordAiSessionRead("summary.changed", {
@@ -251,11 +272,20 @@ export function useAiSessionConversationProjection(options: {
       if (keyChanged) {
         clearRetry();
         retryAttempt = 0;
+        loadState.value = "loading";
         void refresh();
         return;
       }
       if (next[1] !== previous[1]) void refresh({ detail: true });
       if (next[2] !== previous[2]) void refresh({ index: true });
+      const boundaryTurnId = next[5] || next[3];
+      const boundaryChanged = next[5] !== previous[5] || next[3] !== previous[3];
+      const summary = toValue(options.summary);
+      const instanceId = toValue(options.instanceId);
+      if (boundaryChanged && boundaryTurnId && summary && instanceId
+        && !conversations.turnEntry(instanceId, summary.id, boundaryTurnId)) {
+        void refresh({ index: true });
+      }
       if (next[3] && (next[3] !== previous[3] || next[4] !== previous[4])) {
         void loadTurn(next[3], false, next[4], "summary-watcher");
       }
@@ -265,5 +295,17 @@ export function useAiSessionConversationProjection(options: {
 
   onScopeDispose(clearRetry);
 
-  return { allTurnsReady, conversation, hasCurrentTurn, hasRenderableTurn, loadAllTurns, loadTurn, refresh, state, turnIndexKey, turns };
+  return {
+    allTurnsReady,
+    conversation,
+    hasCurrentTurn,
+    hasRenderableTurn,
+    loadAllTurns,
+    loadTurn,
+    refresh,
+    state,
+    turnBoundaryReady,
+    turnIndexKey,
+    turns,
+  };
 }

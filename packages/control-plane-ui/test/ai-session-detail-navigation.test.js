@@ -120,7 +120,8 @@ test("details count retained turns while cards consume bounded summary counts", 
 test("compact Turn navigation loads the target body before committing selection", () => {
   assert.match(panel, /async function setPromptIndex[\s\S]*?await loadSelectedSessionTurn\(targetTurn\.id\)[\s\S]*?promptIndexes\.value =/);
   assert.match(board, /async function setPromptIndex[\s\S]*?await loadSelectedCardTurn\(targetTurn\.id\)[\s\S]*?promptIndexes\.value =/);
-  assert.match(panel, /watch\(selectedPromptCandidate, \(candidate\) => \{\s*if \(candidate\) selectedPromptSnapshot\.value = candidate;/);
+  assert.match(panel, /watch\(selectedPromptCandidate, \(candidate\) => \{\s*if \(candidate\) retainedPromptSnapshot\.value = candidate;/);
+  assert.match(panel, /const selectedPromptSnapshot = computed\(\(\) => \{[\s\S]*?snapshot\.turnId !== turn\.id/);
   assert.match(panel, /:content="selectedPromptSnapshot\.content"/);
   assert.match(floatingDock, /:content="detailState === 'ready' \? displayAiSessionTitle\(conversationSession, promptIndex, t\) : ''"/);
 });

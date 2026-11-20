@@ -1850,6 +1850,7 @@ const {
   loadTurn: loadSelectedSessionTurn,
   refresh: loadSelectedSessionDetail,
   state: selectedSessionDetailState,
+  turnBoundaryReady: selectedSessionTurnBoundaryReady,
   turnIndexKey: selectedSessionTurnIndexKey,
 } = useAiSessionConversationProjection({ instanceId: () => props.instance.id, summary: selectedSession, consumer: "instance-panel" });
 const { setViewMode: persistTimelineViewMode, viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
@@ -1879,12 +1880,14 @@ const selectedSessionContentState = computed(() => {
   const summary = selectedSession.value;
   const conversation = selectedConversationSession.value;
   if (!summary || !conversation) return "loading";
+  if (!selectedSessionTurnBoundaryReady.value) return "loading";
   const turn = aiSessionTurns(conversation)[promptIndexFor(summary)];
   return !turn || hasRenderableSelectedSessionTurn(turn.id) ? "ready" : "loading";
 });
 const selectedPromptCandidate = computed<{
   content: string;
   sessionId: string;
+  turnId: string;
   timestamp: string;
   userMessages: AiSessionUserMessageDetail[];
 } | undefined>(() => {
@@ -1897,6 +1900,7 @@ const selectedPromptCandidate = computed<{
   return {
     content: displayAiSessionTitle(session, promptIndex, t),
     sessionId: summary.id,
+    turnId: turn?.id || "",
     timestamp: turn?.startedAt || session.startedAt,
     userMessages: selectedSessionContentState.value === "ready"
       && turn
@@ -1906,10 +1910,20 @@ const selectedPromptCandidate = computed<{
       : [],
   };
 });
-const selectedPromptSnapshot = ref<NonNullable<typeof selectedPromptCandidate.value>>();
+const retainedPromptSnapshot = ref<NonNullable<typeof selectedPromptCandidate.value>>();
 watch(selectedPromptCandidate, (candidate) => {
-  if (candidate) selectedPromptSnapshot.value = candidate;
+  if (candidate) retainedPromptSnapshot.value = candidate;
 }, { immediate: true });
+const selectedPromptSnapshot = computed(() => {
+  const snapshot = retainedPromptSnapshot.value;
+  const summary = selectedSession.value;
+  if (!snapshot || !summary || snapshot.sessionId !== summary.id || !selectedSessionTurnBoundaryReady.value) return undefined;
+  const session = selectedConversationSession.value || summary;
+  const turn = aiSessionTurns(session)[promptIndexFor(summary)];
+  if (snapshot.turnId && (!turn || snapshot.turnId !== turn.id)) return undefined;
+  if (!snapshot.turnId && turn) return undefined;
+  return snapshot;
+});
 const selectedSessionFolderName = computed(() => {
   const session = selectedSession.value;
   if (!session) return t("sessions.board.unknownFolder");

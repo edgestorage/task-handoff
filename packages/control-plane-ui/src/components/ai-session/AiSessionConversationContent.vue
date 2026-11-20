@@ -273,7 +273,6 @@ function finishConversationTransition() {
 .ai-session-message-fade-leave-active {
   position: absolute;
   inset: 0 0 auto;
-  z-index: 1;
   width: 100%;
   pointer-events: none;
 }

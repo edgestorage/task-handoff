@@ -409,7 +409,7 @@ test("AI session context menus copy the authoritative session identity and displ
 test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /const showNewSession = computed\(\(\) => props\.creationOnly \|\| newSessionOpen\.value \|\| !selectedSession\.value\);/);
   assert.match(panel, /const selectedListSessionId = computed\(\(\) => showNewSession\.value \? undefined : selectedSession\.value\?\.id\);/);
-  assert.match(activeSessions, /if \(selectedId\) return selectedAiSessionSnapshots\[instance\.id\];\s*return undefined;/);
+  assert.match(activeSessions, /if \(selectedId\) return selectedAiSessionSnapshots\[selectedAiSessionSnapshotKey\(instance\.id, selectedId\)\];\s*return undefined;/);
   assert.doesNotMatch(activeSessions, /const initial = sortedAiSessionsByLastUserMessage\(available/);
   assert.match(panel, /:data-selected="selectedListSessionId === session\.id"/);
   assert.doesNotMatch(panel, /:data-selected="selectedSession\?\.id === session\.id"/);

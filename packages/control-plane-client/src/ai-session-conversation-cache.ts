@@ -28,6 +28,21 @@ function cacheKey(instanceId: string, sessionId: string) {
   return JSON.stringify([instanceId, sessionId]);
 }
 
+export function aiSessionConversationBoundaryReady(
+  index: Pick<AiSessionTurnIndex, "turns"> | undefined,
+  summary: Pick<AiSessionSummary, "activeTurnId" | "latestTurnRef">,
+) {
+  const isIndexed = (turnId: string) => Boolean(index?.turns.some((turn) => turn.id === turnId || turn.providerTurnId === turnId));
+  const activeTurnId = summary.activeTurnId?.trim();
+  if (activeTurnId && !isIndexed(activeTurnId)) return false;
+  const latestTurnId = summary.latestTurnRef?.id?.trim();
+  if (!latestTurnId) return true;
+  const latestIndexedTurn = index?.turns.at(-1);
+  return Boolean(latestIndexedTurn && (
+    latestIndexedTurn.id === latestTurnId || latestIndexedTurn.providerTurnId === latestTurnId
+  ));
+}
+
 function projectTurn(index: IndexedTurn, body: CachedTurn | undefined): AiSessionTurn {
   if (!body) return index;
   const terminal = index.status === "completed" || index.status === "failed";
@@ -80,6 +95,11 @@ export class AiSessionConversationCache {
   hasRenderableProjection(instanceId: string, sessionId: string) {
     const entry = this.entries.get(cacheKey(instanceId, sessionId));
     return Boolean(entry?.detail && entry.index);
+  }
+
+  hasTurnBoundary(instanceId: string, summary: AiSessionSummary) {
+    const entry = this.entries.get(cacheKey(instanceId, summary.id));
+    return aiSessionConversationBoundaryReady(entry?.index, summary);
   }
 
   detailRevision(instanceId: string, sessionId: string) {
