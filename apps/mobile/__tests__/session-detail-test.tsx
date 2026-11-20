@@ -2500,7 +2500,7 @@ test('running composer sends in auto mode so the authoritative runtime queues th
   await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Change direction');
   await waitFor(() => screen.getByRole('button', { name: 'Send' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
-  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Change direction', undefined, [], 'auto'));
+  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Change direction', undefined, [], 'auto', { idempotent: false }));
   await screen.unmount();
 });
 
@@ -2599,12 +2599,16 @@ test('composer stops loading and preserves the draft after a failed send', async
   await screen.unmount();
 });
 
-test('result-unknown stops loading but keeps send disabled and the draft intact', async () => {
+test('result-unknown keeps the draft retryable with the same request on idempotent instances', async () => {
   let rejectRequest!: (cause: unknown) => void;
   const request = new Promise((_resolve, reject) => { rejectRequest = reject; });
-  const actions = new MobileAiSessionActionCoordinator('cp', actionClient(jest.fn().mockReturnValue(request)), new MobileAiSessionStore());
+  const sendMessage = jest.fn()
+    .mockReturnValueOnce(request)
+    .mockResolvedValueOnce({});
+  const actions = new MobileAiSessionActionCoordinator('cp', actionClient(sendMessage), new MobileAiSessionStore(), () => 'send-request-1');
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true }, subAgents: [] });
-  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><MobileToastProvider><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></MobileToastProvider></SafeAreaProvider>);
+  const capabilities = ControlPlaneInstanceDirectoryCapabilitiesSchema.parse({ ...codexPermissionCapabilities, aiSessionSendIdempotency: true });
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><MobileToastProvider><SessionWorkspace actions={actions} controlPlaneId="cp" instanceCapabilities={capabilities} instanceId="instance" messages={[]} session={actionable} /></MobileToastProvider></SafeAreaProvider>);
 
   await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Uncertain draft');
   await fireEvent.press(await waitFor(() => screen.getByRole('button', { name: 'Send' })));
@@ -2612,11 +2616,17 @@ test('result-unknown stops loading but keeps send disabled and the draft intact'
   await act(async () => { rejectRequest(Object.assign(new Error('Connection lost'), { code: 'DIRECT_NETWORK_FAILED', retryable: true })); await request.catch(() => undefined); });
 
   const sendButton = await waitFor(() => screen.getByRole('button', { name: 'Send' }));
-  expect(sendButton.props.accessibilityState).toEqual(expect.objectContaining({ busy: false, disabled: true }));
+  expect(sendButton.props.accessibilityState).toEqual(expect.objectContaining({ busy: false, disabled: false }));
   expect(screen.getByTestId('session-message-input').props.value).toBe('Uncertain draft');
   expect(screen.queryByTestId('session-composer-action-loading')).toBeNull();
   await waitFor(() => screen.getByText('Send failed'));
-  screen.getByText(/result is unknown/i);
+  screen.getByText(/retry to confirm/i);
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+  expect(sendMessage.mock.calls[0][2].clientRequestId).toBe('send-request-1');
+  expect(sendMessage.mock.calls[1][2].clientRequestId).toBe(sendMessage.mock.calls[0][2].clientRequestId);
+  await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe(''));
   await screen.unmount();
 });
 
@@ -2651,7 +2661,7 @@ test('session composer lets the server apply its authoritative permission defaul
   await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Use the instance default');
   await waitFor(() => screen.getByRole('button', { name: 'Send' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
-  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Use the instance default', undefined, [], 'auto'));
+  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Use the instance default', undefined, [], 'auto', { idempotent: false }));
   await screen.unmount();
 });
 
@@ -2668,7 +2678,7 @@ test('OpenCode composer sends the advertised full-access permission mode', async
   await waitFor(() => screen.getByRole('button', { name: 'Permission mode: Full access' }));
   await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Run without approval prompts');
   await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
-  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Run without approval prompts', 'full-access', [], 'auto'));
+  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Run without approval prompts', 'full-access', [], 'auto', { idempotent: false }));
   await screen.unmount();
 });
 

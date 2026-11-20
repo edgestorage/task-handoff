@@ -680,7 +680,12 @@ export function registerSessionRoutes({
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/messages", async (request, reply) => {
     const startedAt = performance.now();
-    const traceId = normalizedTraceId(request.headers[TRACE_ID_HEADER], String(request.id));
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const parsed = AiSessionMessageRefInputSchema.parse(request.body || {});
+    const traceId = normalizedTraceId(
+      request.headers[TRACE_ID_HEADER],
+      parsed.clientRequestId ? clientRequestTraceId(parsed.clientRequestId) : String(request.id),
+    );
     let upstreamTiming: RequestTimingDiagnostics | undefined;
     const finishTiming = (outcome: "completed" | "failed") => {
       const controlPlaneMs = performance.now() - startedAt;
@@ -700,8 +705,6 @@ export function registerSessionRoutes({
         serverTiming,
       }, "AI session message request timing");
     };
-    const params = InstanceSessionParamsSchema.parse(request.params);
-    const parsed = AiSessionMessageRefInputSchema.parse(request.body || {});
     const legacyRefs = parsed.attachments.filter((attachment) => attachment.source.type !== "upload-ref" || !attachment.id.startsWith("cia_"));
     const legacyAttachments = aiSessionAttachments.resolveRefs(legacyRefs, params.id, params.sessionId);
     const resolvedById = new Map(legacyAttachments.map((attachment) => [attachment.id, attachment]));
@@ -718,6 +721,7 @@ export function registerSessionRoutes({
         attachments,
         parsed.references,
         parsed.permissionMode,
+        parsed.clientRequestId,
         { traceId, onTiming: (timing) => { upstreamTiming = timing; } },
       );
     } catch (error) {

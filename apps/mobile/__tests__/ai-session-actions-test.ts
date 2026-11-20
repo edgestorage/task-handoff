@@ -114,6 +114,26 @@ test('does not replay an uncertain send and recovers from the authoritative snap
   expect(api.aiSessions.sendMessage).toHaveBeenCalledTimes(1);
 });
 
+test('retries an uncertain send with the same idempotency key when the instance supports it', async () => {
+  const error = Object.assign(new Error('connection lost'), { code: 'DIRECT_NETWORK_FAILED', retryable: true });
+  const sendMessage = jest.fn()
+    .mockRejectedValueOnce(error)
+    .mockResolvedValueOnce({});
+  const api = client({ sendMessage });
+  const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore(), () => 'send-request-1');
+
+  expect((await coordinator.send('instance', 'session', 'hello', undefined, [], 'auto', { idempotent: true })).disposition).toBe('result-unknown');
+  expect(coordinator.state(mobileAiSessionBusyKey('cp', 'instance', 'session', 'send')).phase).toBe('failed');
+
+  expect((await coordinator.send('instance', 'session', 'hello', undefined, [], 'auto', { idempotent: true })).disposition).toBe('accepted');
+  expect(coordinator.state(mobileAiSessionBusyKey('cp', 'instance', 'session', 'send')).phase).toBe('idle');
+  expect(sendMessage).toHaveBeenCalledTimes(2);
+  const first = sendMessage.mock.calls[0][2];
+  const second = sendMessage.mock.calls[1][2];
+  expect(first.clientRequestId).toBe('send-request-1');
+  expect(second.clientRequestId).toBe('send-request-1');
+});
+
 test('replays an uncertain fork only with the same idempotency key', async () => {
   const error = Object.assign(new Error('connection lost'), { code: 'DIRECT_NETWORK_FAILED', retryable: true });
   const fork = jest.fn()

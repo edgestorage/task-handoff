@@ -73,6 +73,7 @@ import {
   aiSessionTimelineCapabilityAgents,
   modelSelectionForInstance,
   supportsAiSessionQueuePause,
+  supportsAiSessionSendIdempotency,
   supportsAiSessionWorkspaceCheckout,
   supportsAiSessionWorkspaceSelection,
   type ControlledInstance,
@@ -545,6 +546,7 @@ export class AiSessionActionService {
     attachments: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef> = [],
     references: AiSessionReference[] = [],
     permissionMode?: AiSessionPermissionMode,
+    clientRequestId?: string,
     diagnostics?: { traceId: string; onTiming?: (timing: RequestTimingDiagnostics) => void },
   ): Promise<AiSessionActionResponse> {
     const materializedAttachments = attachments.filter((attachment): attachment is AiSessionMessageAttachment => attachment.source.type !== "upload-ref");
@@ -569,6 +571,9 @@ export class AiSessionActionService {
         ...(attachments.length ? { attachments } : {}),
         ...(references.length ? { references } : {}),
         ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
+        // Compatibility for v0.0.33: only instances that declare send idempotency
+        // receive the additive field; older instances keep the legacy body shape.
+        ...(clientRequestId && supportsAiSessionSendIdempotency(instance.capabilities) ? { clientRequestId } : {}),
       }),
     }, diagnostics?.onTiming));
   }

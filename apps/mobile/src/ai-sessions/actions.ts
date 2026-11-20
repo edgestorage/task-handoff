@@ -1,5 +1,6 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { AiSessionForkResult, AiSessionMessageAttachmentRef, AiSessionModelSelection, AiSessionPermissionMode, AiSessionQueueEditInput, AiSessionReasoningEffort, AiSessionRenameInput, AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
+import { randomUUID } from 'expo-crypto';
 
 import type { ValueStore } from '../platform/secure-storage';
 import type { MobileAiSessionStore } from './store';
@@ -8,6 +9,7 @@ import { mobileMetrics } from '../observability/mobile-metrics';
 export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'rename' | 'goal' | 'fork' | 'model-selection' | 'reasoning-effort' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder' | 'queue-pause';
 export type MobileAiSessionGoalCommand = 'pause' | 'resume' | 'clear';
 export type MobileAiSessionGoalEdit = `edit ${string}`;
+export type MobileAiSessionSendOptions = { idempotent?: boolean };
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
 export type MobileActionResult<T> =
   | { disposition: 'accepted'; result: T }
@@ -22,12 +24,14 @@ export class MobileAiSessionActionCoordinator {
   private readonly states = new Map<string, MobileActionState>();
   private readonly listeners = new Set<() => void>();
   private readonly forkRequestIds = new Map<string, string>();
+  private readonly sendRequestIds = new Map<string, { fingerprint: string; clientRequestId: string }>();
   private readonly storeGeneration: number;
 
   constructor(
     private readonly controlPlaneId: string,
     private readonly client: ControlPlaneClient,
     private readonly store: MobileAiSessionStore,
+    private readonly createClientRequestId: () => string = randomUUID,
   ) {
     this.storeGeneration = store.generation(controlPlaneId);
   }
@@ -35,10 +39,24 @@ export class MobileAiSessionActionCoordinator {
   state(key: string) { return this.states.get(key) ?? { phase: 'idle' as const }; }
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
 
-  send(instanceId: string, sessionId: string, message: string, permissionMode?: AiSessionPermissionMode, attachments: AiSessionMessageAttachmentRef[] = [], mode: AiSessionSendMode = 'auto') {
-    return this.run(instanceId, sessionId, 'send', undefined, () => this.client.aiSessions.sendMessage(instanceId, sessionId, {
-      message, mode, permissionMode, attachments,
-    }));
+  async send(instanceId: string, sessionId: string, message: string, permissionMode?: AiSessionPermissionMode, attachments: AiSessionMessageAttachmentRef[] = [], mode: AiSessionSendMode = 'auto', options: MobileAiSessionSendOptions = {}) {
+    const key = mobileAiSessionBusyKey(this.controlPlaneId, instanceId, sessionId, 'send');
+    const retryUncertain = options.idempotent === true;
+    let clientRequestId: string | undefined;
+    if (retryUncertain) {
+      const fingerprint = JSON.stringify([message, mode, permissionMode ?? null, attachments]);
+      const current = this.sendRequestIds.get(key);
+      if (current?.fingerprint === fingerprint) clientRequestId = current.clientRequestId;
+      else {
+        clientRequestId = this.createClientRequestId();
+        this.sendRequestIds.set(key, { fingerprint, clientRequestId });
+      }
+    }
+    const result = await this.run(instanceId, sessionId, 'send', undefined, () => this.client.aiSessions.sendMessage(instanceId, sessionId, {
+      message, mode, permissionMode, attachments, ...(clientRequestId ? { clientRequestId } : {}),
+    }), undefined, retryUncertain, retryUncertain);
+    if (result.disposition === 'accepted' || result.disposition === 'failed') this.sendRequestIds.delete(key);
+    return result;
   }
   approval(instanceId: string, sessionId: string, decision: 'allow' | 'deny' | 'skip') {
     return this.run(instanceId, sessionId, 'approval', undefined, () => this.client.aiSessions.approval(instanceId, sessionId, decision));
@@ -127,7 +145,7 @@ export class MobileAiSessionActionCoordinator {
     return this.run(instanceId, sessionId, 'queue-pause', undefined, () => this.client.aiSessions.pauseQueue(instanceId, sessionId, { paused }));
   }
 
-  private async run<T>(instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId: string | undefined, operation: () => Promise<T>, fingerprint?: () => string, allowResultUnknownRetry = false): Promise<MobileActionResult<T>> {
+  private async run<T>(instanceId: string, sessionId: string, action: MobileAiSessionAction, queueId: string | undefined, operation: () => Promise<T>, fingerprint?: () => string, allowResultUnknownRetry = false, retryUncertain = false): Promise<MobileActionResult<T>> {
     const key = mobileAiSessionBusyKey(this.controlPlaneId, instanceId, sessionId, action, queueId);
     const phase = this.state(key).phase;
     if (phase === 'busy' || (phase === 'result-unknown' && !allowResultUnknownRetry)) return { disposition: 'duplicate-blocked' as const };
@@ -140,17 +158,19 @@ export class MobileAiSessionActionCoordinator {
     } catch (cause) {
       const uncertain = isUncertainFailure(cause);
       const error = uncertain
-        ? 'The result is unknown. The request will not be sent again; refresh the authoritative session state.'
+        ? retryUncertain
+          ? 'The result is unknown. Retry to confirm; this send reuses the same request and will not create a duplicate.'
+          : 'The result is unknown. The request will not be sent again; refresh the authoritative session state.'
         : cause instanceof Error ? cause.message : 'The action failed.';
       this.set(key, {
-        phase: uncertain ? 'result-unknown' : 'failed',
+        phase: uncertain && !retryUncertain ? 'result-unknown' : 'failed',
         error,
       });
       mobileMetrics.record('action.error', { action, result: uncertain ? 'unknown' : 'failed' });
       if (uncertain) {
         await this.recover().then(() => {
           if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
-          if (authoritativeFingerprint() !== before) this.set(key, { phase: 'idle' });
+          if (!retryUncertain && authoritativeFingerprint() !== before) this.set(key, { phase: 'idle' });
         }).catch(() => undefined);
       }
       return { disposition: uncertain ? 'result-unknown' : 'failed', error };

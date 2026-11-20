@@ -249,6 +249,7 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       attachments?: AiSessionMessageAttachmentRef[];
       references?: AiSessionReference[];
       permissionMode?: AiSessionPermissionMode;
+      clientRequestId?: string;
     }) {
       const body = AiSessionMessageRefInputSchema.parse({
         ...input,

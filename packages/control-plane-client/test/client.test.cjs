@@ -296,6 +296,25 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared AI Session client sends the optional idempotency key on message send", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: { sessionId: "session-1", provider: "codex", action: "send" } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+
+  await api.aiSessions.sendMessage("instance-1", "session-1", {
+    message: "hello",
+    clientRequestId: "send-request-1",
+  });
+
+  assert.equal(requests[0].path, "/api/controlled-instances/instance-1/ai-sessions/session-1/messages");
+  assert.equal(JSON.parse(requests[0].init.body).clientRequestId, "send-request-1");
+});
+
 test("shared AI Session client reads the bounded tool activity route", async () => {
   const requests = [];
   const transport = {

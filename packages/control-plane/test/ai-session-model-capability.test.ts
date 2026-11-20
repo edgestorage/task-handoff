@@ -71,6 +71,36 @@ test("v0.0.31 controlled instance disables only rename and does not receive the 
   assert.equal(legacySessionInstance.aiSessions.sessions[0].actions?.close, true);
 });
 
+test("send forwards clientRequestId only to controlled instances that support idempotency", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const currentInstance = {
+    ...legacyInstance,
+    capabilities: { features: { aiSessionSendIdempotency: true } },
+  } as unknown as ControlledInstance;
+  const current = new AiSessionActionService({
+    requireInstance: async () => currentInstance,
+    requireRuntime: async () => ({} as NodeRuntime),
+    request: async (_instance, _route, init) => {
+      bodies.push(JSON.parse(String(init?.body || "{}")));
+      return { sessionId: "session_current", provider: "codex", action: "send" };
+    },
+  });
+  const legacy = new AiSessionActionService({
+    requireInstance: async () => legacyInstance,
+    requireRuntime: async () => ({} as NodeRuntime),
+    request: async (_instance, _route, init) => {
+      bodies.push(JSON.parse(String(init?.body || "{}")));
+      return { sessionId: "session_legacy", provider: "codex", action: "send" };
+    },
+  });
+
+  await current.sendMessage("inst_current", "session_current", "hello", "auto", [], [], undefined, "send_request_1", { traceId: "trace_1" });
+  await legacy.sendMessage("inst_legacy", "session_legacy", "hello", "auto", [], [], undefined, "send_request_2", { traceId: "trace_2" });
+
+  assert.equal(bodies[0].clientRequestId, "send_request_1");
+  assert.equal("clientRequestId" in bodies[1], false);
+});
+
 function instanceWithModelSelection(stableIdentity: boolean | undefined, sessions: unknown[] = []) {
   const modelSelection: Record<string, unknown> = {
     selectModelAtCreate: true,

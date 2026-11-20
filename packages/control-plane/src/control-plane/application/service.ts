@@ -2380,6 +2380,7 @@ export class ControlPlaneService {
     attachments: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef> = [],
     references: AiSessionReference[] = [],
     permissionMode?: AiSessionPermissionMode,
+    clientRequestId?: string,
     diagnostics?: { traceId: string; onTiming?: (timing: RequestTimingDiagnostics) => void },
   ) {
     return this.aiSessionActionService.sendMessage(
@@ -2390,6 +2391,7 @@ export class ControlPlaneService {
       attachments,
       references,
       permissionMode,
+      clientRequestId,
       diagnostics,
     );
   }

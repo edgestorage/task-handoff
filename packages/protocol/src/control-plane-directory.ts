@@ -43,6 +43,9 @@ export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
   // Compatibility for v0.0.35: older directory producers omit this additive
   // projection, so the AI Session queue pause control normalizes to unsupported.
   aiSessionQueuePause: z.boolean().optional(),
+  // Compatibility for v0.0.33: older directory producers omit this additive
+  // projection, so clients must not replay an uncertain send automatically.
+  aiSessionSendIdempotency: z.boolean().optional(),
   // Compatibility for v0.0.46: normalize a malformed additive sub-capability
   // to absent so it cannot disable unrelated directory feature queries.
   instanceShell: z.preprocess((value) => {
@@ -82,6 +85,11 @@ export function supportsDirectoryBrowserTunnel(capabilities: unknown) {
 export function supportsDirectoryAiSessionQueuePause(capabilities: unknown) {
   const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
   return parsed.success && parsed.data.aiSessionQueuePause === true;
+}
+
+export function supportsDirectoryAiSessionSendIdempotency(capabilities: unknown) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success && parsed.data.aiSessionSendIdempotency === true;
 }
 
 export function directoryAiSessionProviderCapability(capabilities: unknown, agent: string) {

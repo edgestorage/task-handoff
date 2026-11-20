@@ -123,6 +123,7 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
       aiSessionProviders: item.capabilities.features.aiSessionProviders,
       browserTunnel: item.capabilities.features.browserTunnel,
       aiSessionQueuePause: item.capabilities.features.aiSessionQueuePause,
+      aiSessionSendIdempotency: item.capabilities.features.aiSessionSendIdempotency,
       instanceShell: item.capabilities.features.instanceShell,
       remoteDesktop: item.capabilities.features.remoteDesktop,
     },

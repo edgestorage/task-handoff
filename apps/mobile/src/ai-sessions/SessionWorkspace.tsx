@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionGoal, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionQueuedMessage, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
-import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionQueuePause, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionQueuePause, supportsDirectoryAiSessionSendIdempotency, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 import { StoryDecisionChangedEventType, type StoryDecision } from '@task-handoff/protocol/stories';
 
@@ -598,6 +598,7 @@ export function SessionWorkspace({
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
   const canInterrupt = canInterruptAiSession(session);
   const canPauseQueue = supportsDirectoryAiSessionQueuePause(instanceCapabilities);
+  const supportsSendIdempotency = supportsDirectoryAiSessionSendIdempotency(instanceCapabilities);
   const queuePaused = session.queue.paused === true;
   const approvalPending = isAiSessionApprovalPending(session);
   const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(providerCapability);
@@ -859,14 +860,14 @@ export function SessionWorkspace({
     const selectedPermissionMode = requestedPermissionMode && permissionModes.includes(requestedPermissionMode)
       ? requestedPermissionMode
       : permissionModes[0];
-    const result = await performAction(t('composer.send'), () => actions.send(instanceId, session.id, aiSessionMessageText(draft.trim()), selectedPermissionMode, refs, 'auto'));
+    const result = await performAction(t('composer.send'), () => actions.send(instanceId, session.id, aiSessionMessageText(draft.trim()), selectedPermissionMode, refs, 'auto', { idempotent: supportsSendIdempotency }));
     if (result.disposition === 'accepted') {
       setDraft('');
       latestDraft.current = '';
       if (draftTimer.current) clearTimeout(draftTimer.current);
       setAttachments([]);
       await drafts?.write(controlPlaneId, instanceId, session.id, '');
-    } else if (result.disposition === 'result-unknown') setAttachments([]);
+    } else if (result.disposition === 'result-unknown' && !supportsSendIdempotency) setAttachments([]);
   };
   const selectLocal = async (kind: 'image' | 'file') => {
     if (!client) return;
