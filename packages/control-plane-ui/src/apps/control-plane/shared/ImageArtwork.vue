@@ -38,9 +38,9 @@ watch(remoteCover, () => { coverFailed.value = false; });
   border-radius: inherit;
   background:
     linear-gradient(145deg, color-mix(in srgb, var(--artwork-accent) 24%, transparent), transparent 58%),
-    linear-gradient(135deg, #172a30, #0b1519 72%);
+    linear-gradient(135deg, var(--surface-hover), var(--workspace-bg) 72%);
   color: color-mix(in srgb, var(--artwork-accent) 76%, white);
-  --artwork-accent: #55d7c8;
+  --artwork-accent: var(--brand-accent);
 }
 
 .image-artwork::before,
@@ -100,7 +100,7 @@ watch(remoteCover, () => { coverFailed.value = false; });
   transform: translateY(-50%);
   border: 1px solid color-mix(in srgb, var(--artwork-accent) 42%, transparent);
   border-radius: 14px;
-  background: color-mix(in srgb, #071014 70%, transparent);
+  background: color-mix(in srgb, var(--surface-inset) 70%, transparent);
   box-shadow: 0 12px 28px rgb(0 0 0 / 24%);
 }
 
