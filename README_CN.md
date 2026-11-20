@@ -40,6 +40,12 @@ TaskHandoff 主要沿三个方向演进：
 
 ## 产品界面
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/media/mobile/mobile-remote-desktop-zh.png" alt="TaskHandoff 移动端远程桌面预览" width="320">
+</p>
+
+移动端 AI 会话中的 iPhone 模拟器远程桌面预览。
+
 ### 工作台
 
 ![TaskHandoff 工作台](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-dark-en.png)

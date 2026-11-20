@@ -40,6 +40,12 @@ TaskHandoff is being developed around three directions:
 
 ## Interface
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/media/mobile/mobile-remote-desktop-en.png" alt="TaskHandoff Mobile remote desktop preview" width="320">
+</p>
+
+An iPhone Simulator remote desktop preview in a Mobile AI session.
+
 ### Workbench
 
 ![TaskHandoff workbench](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-dark-en.png)
