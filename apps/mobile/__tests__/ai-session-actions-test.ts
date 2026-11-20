@@ -11,6 +11,7 @@ function client(overrides: Partial<ControlPlaneClient['aiSessions']> = {}) {
     list: jest.fn().mockResolvedValue(snapshot),
     sendMessage: jest.fn().mockResolvedValue({}), approval: jest.fn().mockResolvedValue({}), interrupt: jest.fn().mockResolvedValue({}),
     close: jest.fn().mockResolvedValue({}),
+    executeCommand: jest.fn().mockResolvedValue({ command: 'goal' }),
     rename: jest.fn().mockResolvedValue({ disposition: 'renamed', aiSessionId: 'session', title: 'Renamed' }),
     updateModelSelection: jest.fn().mockResolvedValue({}),
     fork: jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'forked-session', providerSessionId: 'forked-provider', creationSource: 'ai-session' }),
@@ -179,6 +180,29 @@ test('pauses and resumes the queue through the shared client', async () => {
   expect((await coordinator.pauseQueue('instance', 'session', false)).disposition).toBe('accepted');
   expect(pauseQueue).toHaveBeenNthCalledWith(1, 'instance', 'session', { paused: true });
   expect(pauseQueue).toHaveBeenNthCalledWith(2, 'instance', 'session', { paused: false });
+});
+
+test('executes goal pause, resume, and clear through the shared command endpoint', async () => {
+  const executeCommand = jest.fn().mockResolvedValue({ command: 'goal' });
+  const coordinator = new MobileAiSessionActionCoordinator('cp', client({ executeCommand }), new MobileAiSessionStore());
+
+  expect((await coordinator.goal('instance', 'session', 'pause')).disposition).toBe('accepted');
+  expect((await coordinator.goal('instance', 'session', 'resume')).disposition).toBe('accepted');
+  expect((await coordinator.goal('instance', 'session', 'clear')).disposition).toBe('accepted');
+  expect(executeCommand).toHaveBeenNthCalledWith(1, 'instance', 'session', { command: 'goal', argument: 'pause' });
+  expect(executeCommand).toHaveBeenNthCalledWith(2, 'instance', 'session', { command: 'goal', argument: 'resume' });
+  expect(executeCommand).toHaveBeenNthCalledWith(3, 'instance', 'session', { command: 'goal', argument: 'clear' });
+});
+
+test('allows an idempotent goal command to be retried after an unknown result', async () => {
+  const executeCommand = jest.fn()
+    .mockRejectedValueOnce(Object.assign(new Error('connection lost'), { code: 'DIRECT_NETWORK_FAILED', retryable: true }))
+    .mockResolvedValueOnce({ command: 'goal' });
+  const coordinator = new MobileAiSessionActionCoordinator('cp', client({ executeCommand }), new MobileAiSessionStore());
+
+  expect((await coordinator.goal('instance', 'session', 'pause')).disposition).toBe('result-unknown');
+  expect((await coordinator.goal('instance', 'session', 'pause')).disposition).toBe('accepted');
+  expect(executeCommand).toHaveBeenCalledTimes(2);
 });
 
 test('drafts are versioned and isolated by complete session identity', async () => {

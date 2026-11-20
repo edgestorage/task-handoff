@@ -5,7 +5,8 @@ import type { ValueStore } from '../platform/secure-storage';
 import type { MobileAiSessionStore } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 
-export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'rename' | 'fork' | 'model-selection' | 'reasoning-effort' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder' | 'queue-pause';
+export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'rename' | 'goal' | 'fork' | 'model-selection' | 'reasoning-effort' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder' | 'queue-pause';
+export type MobileAiSessionGoalCommand = 'pause' | 'resume' | 'clear';
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
 export type MobileActionResult<T> =
   | { disposition: 'accepted'; result: T }
@@ -46,6 +47,12 @@ export class MobileAiSessionActionCoordinator {
   }
   close(instanceId: string, sessionId: string, clientRequestId: string) {
     return this.run(instanceId, sessionId, 'close', undefined, () => this.client.aiSessions.close(instanceId, sessionId, clientRequestId));
+  }
+  goal(instanceId: string, sessionId: string, argument: MobileAiSessionGoalCommand) {
+    return this.run(instanceId, sessionId, 'goal', undefined, () => this.client.aiSessions.executeCommand(instanceId, sessionId, {
+      command: 'goal',
+      argument,
+    }), undefined, true);
   }
   rename(instanceId: string, sessionId: string, input: AiSessionRenameInput) {
     return this.run(instanceId, sessionId, 'rename', undefined, () => this.client.aiSessions.rename(instanceId, sessionId, input));
@@ -165,7 +172,7 @@ export class MobileAiSessionActionCoordinator {
     const session = this.store.session(this.controlPlaneId, instanceId, sessionId);
     if (!session) return 'missing';
     if (queueId) return JSON.stringify(session.queue.items.find((item) => item.id === queueId) ?? null);
-    return JSON.stringify({ title: session.title, status: session.status, phase: session.phase, updatedAt: session.updatedAt, actions: session.actions, queue: session.queue, modelSelection: session.modelSelection });
+    return JSON.stringify({ title: session.title, status: session.status, phase: session.phase, updatedAt: session.updatedAt, actions: session.actions, queue: session.queue, modelSelection: session.modelSelection, goal: session.goal });
   }
 
   private matchingForks(instanceId: string, sessionId: string, throughTurnId: string) {

@@ -106,6 +106,27 @@ test('resumes a paused queue and reports the resume label', async () => {
   await screen.unmount();
 });
 
+test('executes goal commands against the selected session through the action coordinator', async () => {
+  const goalCommand = jest.fn().mockResolvedValue({ disposition: 'accepted', result: { command: 'goal' } });
+  const goalSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    goal: { objective: 'Finish the mobile goal controls', status: 'active', tokenBudget: 2_000, tokensUsed: 400, timeUsedSeconds: 65 },
+  });
+  const screen = await renderWorkspace({
+    actions: { ...actions(jest.fn()), goal: goalCommand } as unknown as MobileAiSessionActionCoordinator,
+    session: goalSession,
+  });
+
+  const actionsOverlay = screen.getByTestId('session-actions');
+  expect(within(actionsOverlay).getByTestId('session-goal')).toBeTruthy();
+  expect(within(actionsOverlay).getByText('Finish the mobile goal controls')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Pause goal' }));
+  await waitFor(() => expect(goalCommand).toHaveBeenCalledWith('instance', 'session-1', 'pause'));
+  await fireEvent.press(screen.getByRole('button', { name: 'Clear goal' }));
+  await waitFor(() => expect(goalCommand).toHaveBeenCalledWith('instance', 'session-1', 'clear'));
+  await screen.unmount();
+});
+
 test('shows this session pending decision above the queue and submits the authoritative response', async () => {
   const decision = StoryDecisionSchema.parse({
     id: 'decision-1',

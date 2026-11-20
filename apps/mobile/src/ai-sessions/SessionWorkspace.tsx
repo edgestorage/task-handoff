@@ -12,7 +12,7 @@ import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionQueuePa
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 import { StoryDecisionChangedEventType, type StoryDecision } from '@task-handoff/protocol/stories';
 
-import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
+import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult, type MobileAiSessionGoalCommand } from './actions';
 import { useToolActivityWindow } from './use-tool-activity-window';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
 import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
@@ -23,6 +23,7 @@ import { ADAPTIVE_READING_MAX_WIDTH, useAdaptiveContentLayout } from '../compone
 import { Icon, type IconName } from '../components/Icon';
 import { AttachmentImage } from './AttachmentImage';
 import { SessionComposer } from './SessionComposer';
+import { SessionGoalBar } from './SessionGoalBar';
 import {
   SESSION_COMPOSER_COLLAPSED_HEIGHT,
   SESSION_COMPOSER_COLLAPSE_DURATION_MS,
@@ -596,6 +597,7 @@ export function SessionWorkspace({
   const state = (action: Parameters<typeof mobileAiSessionBusyKey>[3], queueId?: string) => actions?.state(mobileAiSessionBusyKey(controlPlaneId, instanceId, session.id, action, queueId));
   const sendState = state('send');
   const modelSelectionState = state('model-selection');
+  const goalState = state('goal');
   const performAction = async <T,>(label: string, operation: () => Promise<MobileActionResult<T>>) => {
     const result = await operation();
     if (result.disposition === 'failed' || result.disposition === 'result-unknown') {
@@ -606,6 +608,11 @@ export function SessionWorkspace({
   const setQueuePaused = async (paused: boolean) => {
     if (!actions || !authoritativeActionsEnabled) return;
     await performAction(t(paused ? 'workspace.resumeQueue' : 'workspace.pauseQueue'), () => actions.pauseQueue(instanceId, session.id, paused));
+  };
+  const executeGoalCommand = async (command: MobileAiSessionGoalCommand) => {
+    if (!actions || !authoritativeActionsEnabled) return;
+    const label = t(command === 'pause' ? 'sessions.goal.pause' : command === 'resume' ? 'sessions.goal.resume' : 'sessions.goal.clear');
+    await performAction(label, () => actions.goal(instanceId, session.id, command));
   };
   // 决策答复只有一套提交/重试状态机：提交后把权威响应写回会话内的待决策列表。
   const submitStoryDecision = async (decision: StoryDecision, input: StoryDecisionAnswerInput, retry = false) => {
@@ -1142,6 +1149,11 @@ export function SessionWorkspace({
             setRuntimeCandidates([]);
           } catch { setRuntimeCandidates([]); }
         }}><Text style={[styles.runtimeFile, { color: colors.primary }]}>{candidate.name} · {candidate.path}</Text></Pressable>} /> : null}
+        {session.goal ? <SessionGoalBar
+          disabled={!authoritativeActionsEnabled || !actions || goalState?.phase === 'busy'}
+          goal={session.goal}
+          onCommand={(command) => { void executeGoalCommand(command); }}
+        /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surface }]}>
           {attachment.kind === 'image' && attachment.previewUri ? <AttachmentImage compact name={attachment.name} uri={attachment.previewUri} /> : <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />}
           <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size, locale)}` : attachment.name} style={styles.attachmentCopy}>
