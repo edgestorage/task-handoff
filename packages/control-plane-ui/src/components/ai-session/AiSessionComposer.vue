@@ -65,6 +65,7 @@ const props = defineProps<{
   defaultPermissionMode?: AiSessionPermissionMode;
   permissionModes?: AiSessionPermissionMode[];
   editingLabel?: string;
+  cancelEditLabel?: string;
   modelGroups?: AiSessionModelGroup[];
   modelSelection?: AiSessionModelSelection;
   modelSelectionPending?: boolean;
@@ -915,7 +916,7 @@ watch(() => props.busy, (busy) => {
       <div v-if="editingLabel" class="ai-session-composer__editing">
         <Pencil :size="15" />
         <span>{{ editingLabel }}</span>
-        <button type="button" :title="t('sessions.composer.cancelQueuedEdit')" :aria-label="t('sessions.composer.cancelQueuedEdit')" :disabled="busy" @click="emit('cancelEdit')">
+        <button type="button" :title="cancelEditLabel || t('sessions.composer.cancelQueuedEdit')" :aria-label="cancelEditLabel || t('sessions.composer.cancelQueuedEdit')" :disabled="busy" @click="emit('cancelEdit')">
           <X :size="15" />
         </button>
       </div>

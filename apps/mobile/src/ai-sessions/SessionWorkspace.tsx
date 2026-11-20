@@ -7,7 +7,7 @@ import Animated, { Easing, interpolate, ReduceMotion, useAnimatedStyle, useShare
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
-import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionQueuedMessage, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionGoal, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionQueuedMessage, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionQueuePause, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 import { StoryDecisionChangedEventType, type StoryDecision } from '@task-handoff/protocol/stories';
@@ -187,17 +187,26 @@ export function SessionWorkspace({
     previousAttachments: MobilePendingAttachment[];
     previousRuntimeCandidates: AiSessionMentionCandidate[];
   }>();
+  const [goalEdit, setGoalEdit] = useState<{
+    sessionId: string;
+    originalObjective: string;
+    previousDraft: string;
+    previousAttachments: MobilePendingAttachment[];
+    previousRuntimeCandidates: AiSessionMentionCandidate[];
+  }>();
   useEffect(() => {
-    const visibleUris = new Set([...attachments, ...(queueEdit?.previousAttachments ?? [])]
+    const visibleUris = new Set([...attachments, ...(queueEdit?.previousAttachments ?? []), ...(goalEdit?.previousAttachments ?? [])]
       .map((attachment) => attachment.previewUri ?? attachment.retryLocal?.uri).filter(Boolean));
     for (const uri of previewTemporaryUris.current) {
       if (visibleUris.has(uri)) continue;
       try { new File(uri).delete(); } catch { /* A removed preview no longer owns its cache copy. */ }
       previewTemporaryUris.current.delete(uri);
     }
-  }, [attachments, queueEdit]);
+  }, [attachments, goalEdit, queueEdit]);
   const queueEditRef = useRef(queueEdit);
   queueEditRef.current = queueEdit;
+  const goalEditRef = useRef(goalEdit);
+  goalEditRef.current = goalEdit;
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [queueOrderPreview, setQueueOrderPreview] = useState<string[]>();
   const [draggingQueueId, setDraggingQueueId] = useState<string>();
@@ -241,6 +250,7 @@ export function SessionWorkspace({
   const currentSessionId = useRef(sessionId);
   currentSessionId.current = sessionId;
   const activeQueueEdit = queueEdit?.sessionId === sessionId ? queueEdit : undefined;
+  const activeGoalEdit = goalEdit?.sessionId === sessionId ? goalEdit : undefined;
   useEffect(() => {
     const subscription = Keyboard.addListener('keyboardDidShow', () => {
       setKeyboardViewportRevision((revision) => revision + 1);
@@ -756,16 +766,32 @@ export function SessionWorkspace({
     if (draftTimer.current) clearTimeout(draftTimer.current);
     void drafts?.write(controlPlaneId, instanceId, session.id, edit.previousDraft);
   };
+  const restoreDraftAfterGoalEdit = (edit: NonNullable<typeof activeGoalEdit>) => {
+    if (goalEditRef.current !== edit) return;
+    if (edit.sessionId !== currentSessionId.current) {
+      setGoalEdit((current) => current === edit ? undefined : current);
+      return;
+    }
+    setGoalEdit(undefined);
+    setDraft(edit.previousDraft);
+    latestDraft.current = edit.previousDraft;
+    setAttachments(edit.previousAttachments);
+    setRuntimeCandidates(edit.previousRuntimeCandidates);
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    void drafts?.write(controlPlaneId, instanceId, session.id, edit.previousDraft);
+  };
   const beginQueueEdit = (item: AiSessionQueuedMessage) => {
     const previous = activeQueueEdit;
+    const goal = activeGoalEdit;
+    if (goal) setGoalEdit(undefined);
     setQueueEdit({
       sessionId: session.id,
       queueId: item.id,
       originalMessage: item.message,
       originalAttachmentIds: item.attachments.map((attachment) => attachment.id),
-      previousDraft: previous?.previousDraft ?? draft,
-      previousAttachments: previous?.previousAttachments ?? attachments,
-      previousRuntimeCandidates: previous?.previousRuntimeCandidates ?? runtimeCandidates,
+      previousDraft: previous?.previousDraft ?? goal?.previousDraft ?? draft,
+      previousAttachments: previous?.previousAttachments ?? goal?.previousAttachments ?? attachments,
+      previousRuntimeCandidates: previous?.previousRuntimeCandidates ?? goal?.previousRuntimeCandidates ?? runtimeCandidates,
     });
     setDraft(item.message);
     setAttachments(item.attachments.map((attachment) => ({
@@ -777,6 +803,23 @@ export function SessionWorkspace({
       phase: 'uploaded',
       retained: true,
     })));
+    setRuntimeCandidates([]);
+    setComposerFocused(true);
+    setComposerFocusRequest((value) => value + 1);
+  };
+  const beginGoalEdit = (goal: AiSessionGoal) => {
+    const previous = activeGoalEdit;
+    const queue = activeQueueEdit;
+    if (queue) setQueueEdit(undefined);
+    setGoalEdit({
+      sessionId: session.id,
+      originalObjective: goal.objective,
+      previousDraft: previous?.previousDraft ?? queue?.previousDraft ?? draft,
+      previousAttachments: previous?.previousAttachments ?? queue?.previousAttachments ?? attachments,
+      previousRuntimeCandidates: previous?.previousRuntimeCandidates ?? queue?.previousRuntimeCandidates ?? runtimeCandidates,
+    });
+    setDraft(goal.objective);
+    setAttachments([]);
     setRuntimeCandidates([]);
     setComposerFocused(true);
     setComposerFocusRequest((value) => value + 1);
@@ -795,6 +838,15 @@ export function SessionWorkspace({
     catch (cause) { setAttachments((current) => [...current, { localId: 'validation', kind: 'file', name: 'Attachment', mime: 'application/octet-stream', size: 0, phase: 'failed', error: cause instanceof Error ? cause.message : 'Attachment invalid.' }]); return; }
     const result = await performAction(t('workspace.saveAction'), () => actions.editQueue(instanceId, session.id, activeQueueEdit.queueId, session.queue.revision, draft.trim(), refs));
     if (result.disposition === 'accepted') restoreDraftAfterQueueEdit(activeQueueEdit);
+  };
+  const saveGoalEdit = async () => {
+    if (!actions || !activeGoalEdit || !draft.trim()) return;
+    if (draft.trim() === activeGoalEdit.originalObjective.trim()) {
+      restoreDraftAfterGoalEdit(activeGoalEdit);
+      return;
+    }
+    const result = await performAction(t('sessions.goal.saveEdit'), () => actions.goal(instanceId, session.id, `edit ${draft.trim()}`));
+    if (result.disposition === 'accepted') restoreDraftAfterGoalEdit(activeGoalEdit);
   };
   const send = async () => {
     if (!actions || (!draft.trim() && !attachments.length)) return;
@@ -844,7 +896,7 @@ export function SessionWorkspace({
     return uploaded;
   };
   const pasteImages = async (uris: string[]) => {
-    if (!client) return;
+    if (!client || activeGoalEdit) return;
     await Promise.all(uris.map(async (uri, index) => {
       try {
         await uploadLocalAttachment(mobilePastedImage(uri));
@@ -864,7 +916,7 @@ export function SessionWorkspace({
     }));
   };
   const pasteText = async (text: string) => {
-    if (!client || activeQueueEdit) return;
+    if (!client || activeQueueEdit || activeGoalEdit) return;
     try {
       if (attachments.length >= 6) throw new Error('You can attach at most 6 files.');
       const nextSequence = pastedTextSequence.current + 1;
@@ -898,7 +950,7 @@ export function SessionWorkspace({
   };
   const updateDraft = (text: string) => {
     setDraft(text);
-    if (activeQueueEdit) return;
+    if (activeQueueEdit || activeGoalEdit) return;
     latestDraft.current = text;
     if (draftTimer.current) clearTimeout(draftTimer.current);
     if (drafts) draftTimer.current = setTimeout(() => { void drafts.write(controlPlaneId, instanceId, session.id, text); }, 150);
@@ -908,7 +960,7 @@ export function SessionWorkspace({
     if (next === latestDraft.current) return;
     setDraft(next);
     latestDraft.current = next;
-    if (!queueEditRef.current) {
+    if (!queueEditRef.current && !goalEditRef.current) {
       if (draftTimer.current) clearTimeout(draftTimer.current);
       if (drafts) void drafts.write(controlPlaneId, instanceId, session.id, next);
     }
@@ -916,17 +968,20 @@ export function SessionWorkspace({
     setComposerFocusRequest((value) => value + 1);
   };
   const hasDraft = Boolean(draft.trim() || attachments.length);
-  const composerAction = activeQueueEdit ? 'save' : !hasDraft && canInterrupt ? 'stop' : 'send';
-  const composerOperationState = composerAction === 'stop' ? state('interrupt') : composerAction === 'save' ? state('queue-edit', activeQueueEdit?.queueId) : sendState;
+  const composerAction = activeQueueEdit || activeGoalEdit ? 'save' : !hasDraft && canInterrupt ? 'stop' : 'send';
+  const composerOperationState = composerAction === 'stop' ? state('interrupt')
+    : activeQueueEdit ? state('queue-edit', activeQueueEdit.queueId)
+      : activeGoalEdit ? state('goal') : sendState;
   const composerBusy = composerOperationState?.phase === 'busy';
   const attachmentUploading = attachments.some((attachment) => attachment.phase === 'uploading');
   const composerDisabled = !authoritativeActionsEnabled || !actions || attachmentUploading || ['busy', 'result-unknown'].includes(composerOperationState?.phase || '')
     || (composerAction === 'stop' ? !canInterrupt : composerAction === 'save'
-      ? !hasDraft || draft.trim() === activeQueueEdit?.originalMessage.trim()
+      ? !hasDraft || draft.trim() === (activeQueueEdit?.originalMessage ?? activeGoalEdit?.originalObjective)?.trim()
       : !session.actions?.send || !hasDraft);
   const runComposerAction = () => {
     if (composerAction === 'stop' && actions) void performAction(t('composer.stop'), () => actions.interrupt(instanceId, session.id));
-    else if (composerAction === 'save') void saveQueueEdit();
+    else if (composerAction === 'save' && activeQueueEdit) void saveQueueEdit();
+    else if (composerAction === 'save' && activeGoalEdit) void saveGoalEdit();
     else void send();
   };
   const setComposerFocus = (focused: boolean) => {
@@ -1153,6 +1208,7 @@ export function SessionWorkspace({
           disabled={!authoritativeActionsEnabled || !actions || goalState?.phase === 'busy'}
           goal={session.goal}
           onCommand={(command) => { void executeGoalCommand(command); }}
+          onEdit={() => { if (session.goal) beginGoalEdit(session.goal); }}
         /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surface }]}>
           {attachment.kind === 'image' && attachment.previewUri ? <AttachmentImage compact name={attachment.name} uri={attachment.previewUri} /> : <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />}
@@ -1171,10 +1227,12 @@ export function SessionWorkspace({
         <SessionComposer
           provider={session.agent}
           action={composerAction}
+          actionLabel={activeGoalEdit ? t('composer.saveGoalEdit') : undefined}
           actionBusy={composerBusy}
           actionDisabled={composerDisabled}
+          cancelEditLabel={activeGoalEdit ? t('composer.cancelGoalEdit') : undefined}
           editable={authoritativeActionsEnabled}
-          editingLabel={activeQueueEdit ? t('workspace.editMessage') : undefined}
+          editingLabel={activeQueueEdit ? t('workspace.editMessage') : activeGoalEdit ? t('workspace.editGoal') : undefined}
           expansion={composerExpansion}
           fileDisabled={!authoritativeActionsEnabled || !client}
           focused={composerFocused}
@@ -1186,7 +1244,10 @@ export function SessionWorkspace({
           onAddRuntimeFile={() => { void loadRuntimeFiles(); }}
           onPasteImages={(uris) => { void pasteImages(uris); }}
           onPasteText={(text) => { void pasteText(text); }}
-          onCancelEdit={() => { if (activeQueueEdit) restoreDraftAfterQueueEdit(activeQueueEdit); }}
+          onCancelEdit={() => {
+            if (activeQueueEdit) restoreDraftAfterQueueEdit(activeQueueEdit);
+            else if (activeGoalEdit) restoreDraftAfterGoalEdit(activeGoalEdit);
+          }}
           onFocusChange={setComposerFocus}
           onPermissionModeChange={updatePermissionMode}
           onValueChange={updateDraft}

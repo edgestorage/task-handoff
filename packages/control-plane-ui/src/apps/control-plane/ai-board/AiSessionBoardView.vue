@@ -189,14 +189,16 @@
           :conversation-session="selectedCardConversationSession || selectedCard.session"
           :detail-state="selectedCardContentState"
           :attachments="messageAttachments"
+          :cancel-edit-label="goalComposerEdit ? t('sessions.composer.cancelGoalEdit') : undefined"
           :draft="messageDraft"
-          :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : undefined"
+          :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : goalComposerEdit ? t('sessions.composer.editingGoal') : undefined"
           :folder-name="aiBoardCardPath(selectedCard).label"
           :mention-bindings="messageMentionBindings"
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"
           :command-trigger="commandTrigger"
           :session-busy="selectedCard.session.status === 'running' || selectedCard.session.status === 'waiting'"
+          :submit-label="goalComposerEdit ? t('sessions.composer.saveGoal') : undefined"
           :model-groups="selectedCardModelGroups"
           :model-selection-pending="modelSelectionPendingSessionId === selectedCard.session.id"
           :model-selection-enabled="selectedCardModelSelectionEnabled"
@@ -220,6 +222,7 @@
           @open-ai-session-app="openCardApp"
           @previous-prompt="previousPrompt(selectedCard)"
           @edit-queued-message="editSelectedQueuedMessage"
+          @edit-goal="editSelectedGoal"
           @remove-queued-message="removeSelectedQueuedMessage"
           @reorder-queued-messages="reorderSelectedQueuedMessages"
           @resolve-approval="resolveSelectedApproval"
@@ -231,7 +234,7 @@
           @continue-from-turn="forkCardSession(selectedCard, 'current', $event)"
           @run="runSelectedSessionAction"
           @command="executeSelectedSessionCommand"
-          @cancel-edit="cancelQueueComposerEdit"
+          @cancel-edit="cancelComposerEdit"
           @steer="steerMessageDraft"
           @steer-queued-message="steerSelectedQueuedMessage"
           @update:attachments="messageAttachments = $event"
@@ -380,6 +383,13 @@ const queueComposerEdit = ref<{
   previousAttachments: AiSessionComposerAttachment[];
   previousMentionBindings: AiSessionMentionBinding[];
 }>();
+const goalComposerEdit = ref<{
+  sessionId: string;
+  originalObjective: string;
+  previousDraft: string;
+  previousAttachments: AiSessionComposerAttachment[];
+  previousMentionBindings: AiSessionMentionBinding[];
+}>();
 const aiSessionActionBusy = ref(false);
 const modelSelectionPendingSessionId = ref("");
 const reasoningEffortPending = ref<{ sessionId: string; target: AiSessionReasoningEffort }>();
@@ -506,7 +516,7 @@ const selectedCardReasoningEffortEnabled = computed(() => normalizeAiSessionReas
 ).updateDuringSession);
 const messageAttachments = useAiSessionAttachmentDraft(
   computed(() => selectedCard.value?.session.id || ""),
-  { persistWhen: () => !queueComposerEdit.value },
+  { persistWhen: () => !queueComposerEdit.value && !goalComposerEdit.value },
 );
 useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: props.instances.map((instance) => instance.id) })));
 useAiSessionTimelineDemand(computed(() => selectedCard.value ? {
@@ -899,6 +909,7 @@ function selectCard(key: string) {
 
 function clearSelectedCard() {
   queueComposerEdit.value = undefined;
+  goalComposerEdit.value = undefined;
   selectedCardKey.value = "";
   messageDraft.value = "";
   messageAttachments.value = [];
@@ -929,6 +940,10 @@ async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode
   }
   if (queueComposerEdit.value) {
     await saveSelectedQueuedMessage();
+    return;
+  }
+  if (goalComposerEdit.value) {
+    await saveSelectedGoal();
     return;
   }
   if (messageDraft.value.trim() || messageAttachments.value.length) {
@@ -1089,17 +1104,39 @@ function editSelectedQueuedMessage(payload: { queueId: string; message: string }
   const session = selectedCardConversationSession.value || card?.session;
   const item = session?.queue.items.find((entry) => entry.id === payload.queueId);
   if (!card || !item) return;
+  const goalEdit = goalComposerEdit.value;
+  goalComposerEdit.value = undefined;
   const previous = queueComposerEdit.value;
   queueComposerEdit.value = {
     queueId: payload.queueId,
     originalMessage: payload.message,
     originalAttachmentIds: item.attachments.map((attachment) => attachment.id),
-    previousDraft: previous?.previousDraft ?? messageDraft.value,
-    previousAttachments: previous?.previousAttachments ?? messageAttachments.value,
-    previousMentionBindings: previous?.previousMentionBindings ?? messageMentionBindings.value,
+    previousDraft: previous?.previousDraft ?? goalEdit?.previousDraft ?? messageDraft.value,
+    previousAttachments: previous?.previousAttachments ?? goalEdit?.previousAttachments ?? messageAttachments.value,
+    previousMentionBindings: previous?.previousMentionBindings ?? goalEdit?.previousMentionBindings ?? messageMentionBindings.value,
   };
   messageDraft.value = payload.message;
   messageAttachments.value = queuedMessageComposerAttachments(card.instance.id, card.session.id, item);
+  messageMentionBindings.value = [];
+  detailCollapsed.value = false;
+  void nextTick(() => floatingDockEl.value?.focusComposer());
+}
+
+function editSelectedGoal() {
+  const card = selectedCard.value;
+  if (!card || !card.session.goal || aiSessionActionBusy.value) return;
+  const queueEdit = queueComposerEdit.value;
+  queueComposerEdit.value = undefined;
+  const previous = goalComposerEdit.value;
+  goalComposerEdit.value = {
+    sessionId: card.session.id,
+    originalObjective: card.session.goal.objective,
+    previousDraft: previous?.previousDraft ?? queueEdit?.previousDraft ?? messageDraft.value,
+    previousAttachments: previous?.previousAttachments ?? queueEdit?.previousAttachments ?? messageAttachments.value,
+    previousMentionBindings: previous?.previousMentionBindings ?? queueEdit?.previousMentionBindings ?? messageMentionBindings.value,
+  };
+  messageDraft.value = card.session.goal.objective;
+  messageAttachments.value = [];
   messageMentionBindings.value = [];
   detailCollapsed.value = false;
   void nextTick(() => floatingDockEl.value?.focusComposer());
@@ -1112,6 +1149,20 @@ function cancelQueueComposerEdit() {
   messageDraft.value = edit.previousDraft;
   messageAttachments.value = edit.previousAttachments;
   messageMentionBindings.value = edit.previousMentionBindings;
+}
+
+function cancelGoalComposerEdit() {
+  const edit = goalComposerEdit.value;
+  if (!edit) return;
+  goalComposerEdit.value = undefined;
+  messageDraft.value = edit.previousDraft;
+  messageAttachments.value = edit.previousAttachments;
+  messageMentionBindings.value = edit.previousMentionBindings;
+}
+
+function cancelComposerEdit() {
+  if (queueComposerEdit.value) cancelQueueComposerEdit();
+  else cancelGoalComposerEdit();
 }
 
 function reconcileQueueComposerEdit() {
@@ -1155,6 +1206,30 @@ async function saveSelectedQueuedMessage() {
     cancelQueueComposerEdit();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")), "error");
+  } finally {
+    aiSessionActionBusy.value = false;
+  }
+}
+
+async function saveSelectedGoal() {
+  const card = selectedCard.value;
+  const edit = goalComposerEdit.value;
+  const objective = messageDraft.value.trim();
+  if (!card || !edit || !objective || aiSessionActionBusy.value) return;
+  if (edit.sessionId !== card.session.id) {
+    cancelGoalComposerEdit();
+    return;
+  }
+  if (objective === edit.originalObjective.trim()) {
+    cancelGoalComposerEdit();
+    return;
+  }
+  aiSessionActionBusy.value = true;
+  try {
+    await executeAiSessionCommand(card.instance.id, card.session.id, { command: "goal", argument: `edit ${objective}` });
+    cancelGoalComposerEdit();
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editGoalFailed")), "error");
   } finally {
     aiSessionActionBusy.value = false;
   }
@@ -1289,6 +1364,7 @@ useEventListener(document, "click", closeBoardOverlays, { capture: true });
 
 watch(() => selectedCard.value?.session.id, (sessionId) => {
   queueComposerEdit.value = undefined;
+  goalComposerEdit.value = undefined;
   const draft = sessionId ? loadAiSessionDraftPayload(sessionId) : { value: "", bindings: [] };
   messageDraft.value = draft.value;
   messageMentionBindings.value = draft.bindings;
@@ -1303,6 +1379,10 @@ watch(
   reconcileQueueComposerEdit,
   { immediate: true },
 );
+
+watch(() => selectedCard.value?.session.goal, (goal) => {
+  if (goalComposerEdit.value && !goal) cancelGoalComposerEdit();
+}, { immediate: true });
 
 watch(() => ({
   key: selectedCard.value?.key,
@@ -1323,7 +1403,7 @@ watch(detailCollapsed, (collapsed, previous) => {
 });
 
 watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBindings], ([sessionId, draft, bindings]) => {
-  if (sessionId && !queueComposerEdit.value) {
+  if (sessionId && !queueComposerEdit.value && !goalComposerEdit.value) {
     persistAiSessionDraftPayload(sessionId, draft, bindings);
   }
 }, { deep: true });

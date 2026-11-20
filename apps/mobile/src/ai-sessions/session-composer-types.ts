@@ -6,8 +6,10 @@ export type SessionComposerAction = 'save' | 'send' | 'stop';
 
 export type SessionComposerProps = {
   action: SessionComposerAction;
+  actionLabel?: string;
   actionBusy: boolean;
   actionDisabled: boolean;
+  cancelEditLabel?: string;
   editable: boolean;
   editingLabel?: string;
   expansion: SharedValue<number>;

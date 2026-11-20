@@ -1,4 +1,4 @@
-import { Pause, Play, Target, Trash2 } from 'lucide-react-native';
+import { Pause, Pencil, Play, Target, Trash2 } from 'lucide-react-native';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AiSessionGoal } from '@task-handoff/protocol/ai-sessions';
@@ -41,10 +41,12 @@ export function SessionGoalBar({
   disabled = false,
   goal,
   onCommand,
+  onEdit,
 }: {
   disabled?: boolean;
   goal: AiSessionGoal;
   onCommand(command: MobileAiSessionGoalCommand): void;
+  onEdit(): void;
 }) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
@@ -68,6 +70,18 @@ export function SessionGoalBar({
         </View>
       </View>
       <View style={styles.actions}>
+        <Pressable
+          accessibilityLabel={t('sessions.goal.edit')}
+          accessibilityRole="button"
+          accessibilityState={{ disabled }}
+          disabled={disabled}
+          hitSlop={5}
+          onPress={onEdit}
+          style={({ pressed }) => [styles.action, disabled && styles.disabled, pressed && styles.pressed]}
+          testID="session-goal-edit"
+        >
+          <Pencil color={colors.primary} size={mobileWebMetric(14)} />
+        </Pressable>
         <Pressable
           accessibilityLabel={t(canResume ? 'sessions.goal.resume' : 'sessions.goal.pause')}
           accessibilityRole="button"
@@ -104,14 +118,16 @@ export function SessionGoalBar({
       onPress={() => setExpanded((value) => !value)}
       testID="session-goal-objective"
     >
-      <Text numberOfLines={expanded ? undefined : 1} style={[styles.objective, { color: colors.text }]}>{goal.objective}</Text>
+      <View style={styles.detailRow} testID="session-goal-detail">
+        <Text numberOfLines={expanded ? undefined : 1} style={[styles.objective, { color: colors.text }]}>{goal.objective}</Text>
+        <Text numberOfLines={1} style={[styles.usage, { color: colors.textMuted }]} testID="session-goal-usage">{usageLabel}</Text>
+      </View>
     </Pressable>
-    <Text numberOfLines={1} style={[styles.usage, { color: colors.textMuted }]} testID="session-goal-usage">{usageLabel}</Text>
   </View>;
 }
 
 const styles = StyleSheet.create({
-  card: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, gap: 5, paddingHorizontal: 10, paddingVertical: 8 },
+  card: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, gap: 4, paddingHorizontal: 10, paddingVertical: 8 },
   header: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 32 },
   title: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 6, minWidth: 0 },
   label: { flexShrink: 0, fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
@@ -120,8 +136,9 @@ const styles = StyleSheet.create({
   statusText: { flexShrink: 1, fontSize: mobileWebType.small, fontWeight: '500', lineHeight: mobileWebType.smallLine },
   actions: { alignItems: 'center', flexDirection: 'row', flexShrink: 0, gap: 2 },
   action: { alignItems: 'center', borderRadius: 8, height: 32, justifyContent: 'center', width: 32 },
-  objective: { fontSize: mobileWebType.meta, fontWeight: '400', lineHeight: mobileWebType.metaLine },
-  usage: { fontSize: mobileWebType.small, fontVariant: ['tabular-nums'], lineHeight: mobileWebType.smallLine },
+  detailRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 8, minWidth: 0 },
+  objective: { flex: 1, fontSize: mobileWebType.meta, fontWeight: '400', lineHeight: mobileWebType.metaLine, minWidth: 0 },
+  usage: { flexShrink: 0, fontSize: mobileWebType.small, fontVariant: ['tabular-nums'], lineHeight: mobileWebType.smallLine },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.65 },
 });

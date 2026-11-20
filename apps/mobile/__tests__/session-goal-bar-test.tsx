@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, within } from '@testing-library/react-native';
 
 import { formatSessionGoalDuration, SessionGoalBar } from '../src/ai-sessions/SessionGoalBar';
 import { translate } from '../src/i18n';
@@ -26,19 +26,23 @@ const goal = {
 
 test('active goals show budget usage and dispatch pause and clear commands', async () => {
   const onCommand = jest.fn();
-  const screen = await render(<SessionGoalBar goal={goal} onCommand={onCommand} />);
+  const onEdit = jest.fn();
+  const screen = await render(<SessionGoalBar goal={goal} onCommand={onCommand} onEdit={onEdit} />);
 
   expect(screen.getByText('Goal')).toBeTruthy();
   expect(screen.getByText('Active')).toBeTruthy();
   expect(screen.getByText('1,234 / 10,000 tokens · 1h 2m 3s')).toBeTruthy();
+  expect(within(screen.getByTestId('session-goal-detail')).getByTestId('session-goal-usage')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Edit goal' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Pause goal' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Clear goal' }));
+  expect(onEdit).toHaveBeenCalledTimes(1);
   expect(onCommand.mock.calls).toEqual([['pause'], ['clear']]);
 });
 
 test('non-active goals resume and goals without a budget show tokens only', async () => {
   const onCommand = jest.fn();
-  const screen = await render(<SessionGoalBar goal={{ ...goal, status: 'paused', tokenBudget: null, tokensUsed: 42, timeUsedSeconds: 0 }} onCommand={onCommand} />);
+  const screen = await render(<SessionGoalBar goal={{ ...goal, status: 'paused', tokenBudget: null, tokensUsed: 42, timeUsedSeconds: 0 }} onCommand={onCommand} onEdit={jest.fn()} />);
 
   expect(screen.getByText('Paused')).toBeTruthy();
   expect(screen.getByText('42 tokens')).toBeTruthy();
@@ -49,7 +53,7 @@ test('non-active goals resume and goals without a budget show tokens only', asyn
 
 test('the objective expands in place and disabled goals reject commands', async () => {
   const onCommand = jest.fn();
-  const screen = await render(<SessionGoalBar disabled goal={goal} onCommand={onCommand} />);
+  const screen = await render(<SessionGoalBar disabled goal={goal} onCommand={onCommand} onEdit={jest.fn()} />);
   const objective = screen.getByTestId('session-goal-objective');
 
   expect(objective.props.accessibilityState).toEqual({ expanded: false });

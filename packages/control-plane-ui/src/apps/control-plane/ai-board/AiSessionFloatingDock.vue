@@ -178,15 +178,17 @@
         v-if="card.session.goal"
         class="ai-board-floating-compose-goal"
         :goal="card.session.goal"
-        :disabled="busy"
+        :disabled="busy || Boolean(editingLabel)"
         tone="board"
         @command="executeGoalCommand"
+        @edit="$emit('editGoal')"
       />
       <AiSessionComposer
         ref="composerEl"
         class="ai-board-floating-compose"
         :model-value="draft"
         :attachments="attachments"
+        :cancel-edit-label="cancelEditLabel"
         :editing-label="editingLabel"
         :mention-bindings="mentionBindings"
         :mention-context="mentionContext"
@@ -204,6 +206,7 @@
         :reasoning-effort="reasoningEffort"
         :reasoning-effort-enabled="reasoningEffortEnabled"
         :reasoning-effort-pending="reasoningEffortPending"
+        :submit-label="submitLabel"
         :permission-key="aiSessionPermissionKey(card.instance.id, card.session.id)"
         :default-permission-mode="card.instance.config.defaultCodexPermissionMode"
         :max-file-attachment-bytes="card.instance.config.aiSessionMaxFileAttachmentBytes"
@@ -271,6 +274,7 @@ const props = defineProps<{
   detailState: AiSessionDetailState;
   collapsed: boolean;
   attachments: AiSessionComposerAttachment[];
+  cancelEditLabel?: string;
   draft: string;
   editingLabel?: string;
   folderName: string;
@@ -279,6 +283,7 @@ const props = defineProps<{
   mentionTrigger: string;
   commandTrigger: string;
   sessionBusy: boolean;
+  submitLabel?: string;
   modelGroups: AiSessionModelGroup[];
   modelSelectionPending: boolean;
   modelSelectionEnabled: boolean;
@@ -300,6 +305,7 @@ const emit = defineEmits<{
   cancelEdit: [];
   continueFromTurn: [turnId: string];
   editQueuedMessage: [payload: { queueId: string; message: string }];
+  editGoal: [];
   latestPrompt: [];
   loadTurnTimeline: [turnId: string, force?: boolean];
   loadToolActivityWindow: [turnId: string];

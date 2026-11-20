@@ -7,6 +7,7 @@ import { mobileMetrics } from '../observability/mobile-metrics';
 
 export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'rename' | 'goal' | 'fork' | 'model-selection' | 'reasoning-effort' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder' | 'queue-pause';
 export type MobileAiSessionGoalCommand = 'pause' | 'resume' | 'clear';
+export type MobileAiSessionGoalEdit = `edit ${string}`;
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
 export type MobileActionResult<T> =
   | { disposition: 'accepted'; result: T }
@@ -48,7 +49,7 @@ export class MobileAiSessionActionCoordinator {
   close(instanceId: string, sessionId: string, clientRequestId: string) {
     return this.run(instanceId, sessionId, 'close', undefined, () => this.client.aiSessions.close(instanceId, sessionId, clientRequestId));
   }
-  goal(instanceId: string, sessionId: string, argument: MobileAiSessionGoalCommand) {
+  goal(instanceId: string, sessionId: string, argument: MobileAiSessionGoalCommand | MobileAiSessionGoalEdit) {
     return this.run(instanceId, sessionId, 'goal', undefined, () => this.client.aiSessions.executeCommand(instanceId, sessionId, {
       command: 'goal',
       argument,

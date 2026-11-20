@@ -194,6 +194,17 @@ test('executes goal pause, resume, and clear through the shared command endpoint
   expect(executeCommand).toHaveBeenNthCalledWith(3, 'instance', 'session', { command: 'goal', argument: 'clear' });
 });
 
+test('executes an edited goal objective through the shared command endpoint', async () => {
+  const executeCommand = jest.fn().mockResolvedValue({ command: 'goal' });
+  const coordinator = new MobileAiSessionActionCoordinator('cp', client({ executeCommand }), new MobileAiSessionStore());
+
+  expect((await coordinator.goal('instance', 'session', 'edit Ship the mobile goal editor')).disposition).toBe('accepted');
+  expect(executeCommand).toHaveBeenCalledWith('instance', 'session', {
+    command: 'goal',
+    argument: 'edit Ship the mobile goal editor',
+  });
+});
+
 test('allows an idempotent goal command to be retried after an unknown result', async () => {
   const executeCommand = jest.fn()
     .mockRejectedValueOnce(Object.assign(new Error('connection lost'), { code: 'DIRECT_NETWORK_FAILED', retryable: true }))

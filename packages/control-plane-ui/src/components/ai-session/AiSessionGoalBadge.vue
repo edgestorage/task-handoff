@@ -16,6 +16,9 @@
     </TooltipProvider>
     <span v-if="usageLabel" class="ai-session-goal-usage">{{ usageLabel }}</span>
     <div class="ai-session-goal-actions">
+      <button type="button" :disabled="disabled" :aria-label="t('sessions.goal.edit')" :title="t('sessions.goal.edit')" @click="$emit('edit')">
+        <Pencil :size="14" />
+      </button>
       <button type="button" :disabled="disabled" :aria-label="canResume ? t('sessions.goal.resume') : t('sessions.goal.pause')" :title="canResume ? t('sessions.goal.resume') : t('sessions.goal.pause')" @click="$emit('command', canResume ? 'resume' : 'pause')">
         <Play v-if="canResume" :size="14" />
         <Pause v-else :size="14" />
@@ -30,7 +33,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { Pause, Play, Target, Trash2 } from "@lucide/vue";
+import { Pause, Pencil, Play, Target, Trash2 } from "@lucide/vue";
 import type { AiSessionGoal } from "@task-handoff/protocol/ai-sessions";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 
@@ -45,6 +48,7 @@ const props = withDefaults(defineProps<{
 
 defineEmits<{
   command: [argument: "pause" | "resume" | "clear"];
+  edit: [];
 }>();
 
 const { t, locale } = useI18n();

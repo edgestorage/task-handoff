@@ -60,6 +60,7 @@ export function SessionComposer(props: SessionComposerProps) {
   const permissionDanger = effectivePermissionMode === 'full-access';
   const PermissionIcon = effectivePermissionMode === 'ask' ? Hand : effectivePermissionMode === 'auto-review' ? ShieldCheck : ShieldAlert;
   const currentPermissionLabel = permissionLabel(effectivePermissionMode, t);
+  const primaryActionLabel = props.actionLabel ?? actionLabel(props.action, t, props.actionBusy);
   const modelGroups = props.modelGroups || [];
   const displayedModelName = modelSelectionLabel(modelGroups, props.modelSelection) || t('sessions.model');
   const noModelHint: ModelSettingsMenuHint | undefined = !modelGroups.length && !props.modelSelection
@@ -173,7 +174,7 @@ export function SessionComposer(props: SessionComposerProps) {
         {props.editingLabel ? <View style={styles.editingState}>
           <Pencil color={colors.textMuted} size={16} strokeWidth={1.8} />
           <Text numberOfLines={1} style={[styles.editingLabel, { color: colors.textMuted }]}>{props.editingLabel}</Text>
-          <Pressable accessibilityLabel={t('composer.cancelEdit')} accessibilityRole="button" accessibilityState={{ disabled: props.actionBusy }} disabled={props.actionBusy} hitSlop={6} onPress={props.onCancelEdit} style={({ pressed }) => [styles.cancelEditButton, props.actionBusy && styles.disabled, pressed && styles.pressed]}>
+          <Pressable accessibilityLabel={props.cancelEditLabel ?? t('composer.cancelEdit')} accessibilityRole="button" accessibilityState={{ disabled: props.actionBusy }} disabled={props.actionBusy} hitSlop={6} onPress={props.onCancelEdit} style={({ pressed }) => [styles.cancelEditButton, props.actionBusy && styles.disabled, pressed && styles.pressed]}>
             <X color={colors.textMuted} size={17} strokeWidth={1.9} />
           </Pressable>
         </View> : <View style={styles.leadingTools}>
@@ -250,7 +251,7 @@ export function SessionComposer(props: SessionComposerProps) {
           </Pressable>}
         </ModelSettingsMenu> : null}
         <Pressable
-          accessibilityLabel={actionLabel(props.action, t, props.actionBusy)}
+          accessibilityLabel={primaryActionLabel}
           accessibilityRole="button"
           accessibilityState={{ busy: props.actionBusy, disabled: props.actionDisabled }}
           disabled={props.actionDisabled}

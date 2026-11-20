@@ -127,6 +127,30 @@ test('executes goal commands against the selected session through the action coo
   await screen.unmount();
 });
 
+test('edits the goal in the composer and restores the previous draft after saving', async () => {
+  const goalCommand = jest.fn().mockResolvedValue({ disposition: 'accepted', result: { command: 'goal' } });
+  const goalSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    goal: { objective: 'Finish the mobile goal controls', status: 'active', tokenBudget: 2_000, tokensUsed: 400, timeUsedSeconds: 65 },
+  });
+  const screen = await renderWorkspace({
+    actions: { ...actions(jest.fn()), goal: goalCommand } as unknown as MobileAiSessionActionCoordinator,
+    session: goalSession,
+  });
+
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Preserved draft');
+  await fireEvent.press(screen.getByRole('button', { name: 'Edit goal' }));
+  await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('Finish the mobile goal controls'));
+  screen.getByText('Edit goal');
+
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Ship the revised goal');
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save goal' })).toBeEnabled());
+  await fireEvent.press(screen.getByRole('button', { name: 'Save goal' }));
+  await waitFor(() => expect(goalCommand).toHaveBeenCalledWith('instance', 'session-1', 'edit Ship the revised goal'));
+  await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('Preserved draft'));
+  await screen.unmount();
+});
+
 test('shows this session pending decision above the queue and submits the authoritative response', async () => {
   const decision = StoryDecisionSchema.parse({
     id: 'decision-1',

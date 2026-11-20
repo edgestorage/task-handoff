@@ -22,6 +22,7 @@ export const sessions = {
   },
   goal: {
     label: "目标",
+    edit: "编辑目标",
     pause: "暂停目标",
     resume: "恢复目标",
     clear: "清除目标",
@@ -84,7 +85,7 @@ export const sessions = {
     chooseWorktree: "选择 worktree", searchWorktrees: "搜索 worktree", noWorktrees: "没有匹配的 worktree", newWorktree: "新建 worktree", newWorktreeDescription: "从已有分支或新分支创建隔离的 worktree，并在其中启动此 AI 会话。", newWorktreeMode: "Worktree 分支模式", existingBranch: "已有分支", newBranch: "新分支", branch: "分支", noBranches: "没有匹配的分支", newWorktreeDetachedDescription: "该引用已被其他 worktree 检出，新 worktree 将以当前提交进入 Detached HEAD 模式。", newWorktreeBranch: "新分支", newWorktreeStartRef: "起始引用", useNewWorktree: "使用新 worktree", currentWorktree: "当前", mainWorktree: "主 worktree", managedWorktree: "托管", externalWorktree: "外部", dirtyWorktree: "有变更", worktreeInUse: "使用中", unknownBranch: "未知分支", unbornBranch: "尚无提交的分支", detachedWorktree: "游离于 {commit}",
     promptPlaceholder: "描述你想做的事", chooseProject: "选择项目", projectUnavailable: "这个项目已不在节点的登记目录中。", startedWorktree: "AI 会话已在所选 worktree 中启动。", backLatest: "返回最新消息", backLatestTurn: "回到最新",
     defaultPermissionFailed: "无法更新默认 Codex 权限模式。", starting: "新的 AI 会话仍在启动，请稍后重试。",
-    startFailed: "无法启动 AI 会话。", presetSaved: "预设动作已保存。", modelSwitchFailed: "无法切换模型。", reasoningEffortFailed: "无法调整思考程度。", sendFailed: "无法发送消息。", noGoal: "没有活跃目标", commandFailed: "无法运行命令。", steerFailed: "无法追加消息。",
+    startFailed: "无法启动 AI 会话。", presetSaved: "预设动作已保存。", modelSwitchFailed: "无法切换模型。", reasoningEffortFailed: "无法调整思考程度。", sendFailed: "无法发送消息。", noGoal: "没有活跃目标", commandFailed: "无法运行命令。", editGoalFailed: "无法编辑目标。", steerFailed: "无法追加消息。",
     steerQueuedFailed: "无法调整排队消息。", retryQueuedFailed: "无法重试排队消息。", removeQueuedFailed: "无法移除排队消息。", editQueuedFailed: "无法编辑排队消息。", reorderQueuedFailed: "无法调整排队消息顺序。",
     stopFailed: "无法停止 AI 会话。", forkFailed: "无法继续聊天。", forkProjectionPending: "新聊天已创建，但会话状态尚未确认，请稍后重试。", approvalFailed: "无法处理审批。", closeAppFailed: "无法关闭应用会话。", closeSessionFailed: "无法关闭 AI 会话。", openAppFailed: "无法为 AI 会话打开应用。", setQueuePausedFailed: "无法更新排队状态。",
     loadingHistory: "正在读取过往对话…", retry: "重试", noHistory: "暂无过往对话", viewHistory: "查看过往对话",
@@ -97,7 +98,7 @@ export const sessions = {
     resumePending: "对话已经启动，但运行状态尚未确认，请稍后重试。", continueFailed: "无法继续该对话。",
   },
   composer: {
-    plugins: "插件", skills: "技能", files: "文件", directories: "目录", apps: "应用", stopTurn: "停止当前 AI 回合", send: "发送消息", sending: "正在发送…", stopping: "正在停止…", editingQueuedMessage: "正在编辑排队消息", saveQueuedMessage: "保存排队消息", saving: "正在保存…", cancelQueuedEdit: "取消编辑排队消息",
+    plugins: "插件", skills: "技能", files: "文件", directories: "目录", apps: "应用", stopTurn: "停止当前 AI 回合", send: "发送消息", sending: "正在发送…", stopping: "正在停止…", editingQueuedMessage: "正在编辑排队消息", editingGoal: "正在编辑目标", saveQueuedMessage: "保存排队消息", saveGoal: "保存目标", saving: "正在保存…", cancelQueuedEdit: "取消编辑排队消息", cancelGoalEdit: "取消编辑目标",
     askDescription: "访问互联网或编辑工作区外文件前进行询问。", autoReviewDescription: "仅对检测为可能不安全的操作进行询问。",
     fullAccessDescription: "无需审批即可无限制访问互联网和文件。", localPath: "本地路径", removeAttachment: "移除附件", previewImage: "预览 {name}", zoomIn: "放大", zoomOut: "缩小", copyImage: "复制图片", imageCopied: "图片已复制", copyImageFailed: "无法复制图片。", uploadProgress: "正在上传：{progress}%", blankPastedText: "空白文本", textLength: "{count} 个字符", followUp: "请求后续修改",
     noMatches: "没有匹配项", commands: "命令", loading: "正在加载...", openCommands: "打开命令菜单", permissionMode: "权限模式：{mode}", choosePermission: "选择权限模式", modelSelectionTitle: "模型：{model}", modelSelectionUnavailable: "当前会话模型不可切换", noModelConfigured: "没有模型", openModelSettings: "去设置", modelGroupSummary: "{model} 等 {count} 个模型", provider: "提供方", model: "模型", reasoningEffort: "思考程度", selectionNotSet: "未设置",
