@@ -233,6 +233,77 @@ test("Codex timeline preserves visible message and activity order without exposi
   assert.equal(AiSessionTimelineSchema.safeParse(timeline).success, true);
 });
 
+test("Codex command actions collapse into one flat timeline activity", () => {
+  const cases = [
+    {
+      name: "read",
+      actions: [
+        { type: "read", command: "sed -n '1,20p' a.ts", name: "a.ts", path: "/workspace/a.ts" },
+        { type: "read", command: "cat b.ts", name: "b.ts", path: "/workspace/b.ts" },
+      ],
+      expected: { activityKind: "fileRead", title: "Read", summary: "a.ts, b.ts", paths: ["/workspace/a.ts", "/workspace/b.ts"] },
+    },
+    {
+      name: "search",
+      actions: [{ type: "search", command: "rg token src", query: "token", path: "src" }],
+      expected: { activityKind: "fileSearch", title: "Search", summary: "token in src", paths: ["src"] },
+    },
+    {
+      name: "list",
+      actions: [{ type: "listFiles", command: "ls src", path: "src" }],
+      expected: { activityKind: "fileList", title: "List", summary: "src", paths: ["src"] },
+    },
+    {
+      name: "mixed exploration",
+      actions: [
+        { type: "read", command: "cat a.ts", name: "a.ts", path: "/workspace/a.ts" },
+        { type: "search", command: "rg token src", query: "token", path: "src" },
+      ],
+      expected: { activityKind: "explore", title: "Explored", summary: "a.ts · token in src", paths: ["/workspace/a.ts", "src"] },
+    },
+    {
+      name: "unknown fallback",
+      actions: [
+        { type: "read", command: "cat a.ts", name: "a.ts", path: "/workspace/a.ts" },
+        { type: "unknown", command: "git diff -- a.ts" },
+      ],
+      expected: { activityKind: "commandExecution", title: "Command", summary: undefined, paths: undefined },
+    },
+    {
+      name: "missing action type fallback",
+      actions: [
+        { type: "read", command: "cat a.ts", name: "a.ts", path: "/workspace/a.ts" },
+        { command: "git diff -- a.ts" },
+      ],
+      expected: { activityKind: "commandExecution", title: "Command", summary: undefined, paths: undefined },
+    },
+  ];
+
+  for (const entry of cases) {
+    const command = entry.actions.map((action) => action.command).join(" && ");
+    const timeline = codexItemTimeline("ais_1", "thread_1", [{
+      turnId: "turn_1",
+      item: {
+        id: `command_${entry.name}`,
+        type: "commandExecution",
+        command,
+        commandActions: entry.actions,
+        status: "completed",
+        aggregatedOutput: "ok",
+        exitCode: 0,
+      },
+    }]);
+    const item = timeline.items[0];
+    assert.equal(item.activityKind, entry.expected.activityKind, entry.name);
+    assert.equal(item.title, entry.expected.title, entry.name);
+    assert.equal(item.summary, entry.expected.summary, entry.name);
+    assert.deepEqual(item.paths, entry.expected.paths, entry.name);
+    assert.equal(item.input, command, entry.name);
+    assert.equal("commandActions" in item, false, entry.name);
+    assert.equal(AiSessionTimelineSchema.safeParse(timeline).success, true, entry.name);
+  }
+});
+
 test("unknown Codex items remain visible as generic activity", () => {
   const timeline = codexItemTimeline("ais_1", "thread_1", [{
     turnId: "turn_1",

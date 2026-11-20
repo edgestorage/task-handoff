@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { OpenCodeMessage, OpenCodeSession } from "../src/opencode/wire.ts";
-import { openCodeErrorText, projectOpenCodeSession } from "../src/opencode/projector.ts";
+import type { OpenCodeMessage, OpenCodePart, OpenCodeSession } from "../src/opencode/wire.ts";
+import { openCodeErrorText, projectOpenCodePart, projectOpenCodeSession } from "../src/opencode/projector.ts";
 
 const session: OpenCodeSession = {
   id: "ses_test",
@@ -22,6 +22,38 @@ function message(role: "user" | "assistant", id: string, created: number, parts:
 function textPart(id: string, text: string, messageID: string) {
   return { id, sessionID: session.id, messageID, type: "text" as const, text };
 }
+
+test("OpenCode list tools use the shared flat file-list activity", () => {
+  const projected = projectOpenCodePart({
+    id: "prt_list",
+    sessionID: session.id,
+    messageID: "msg_assistant",
+    type: "tool",
+    tool: "list",
+    state: {
+      status: "completed",
+      input: { path: "src" },
+      output: "a.ts\nb.ts",
+      title: "List src",
+      metadata: {},
+      time: { start: 1, end: 2 },
+    },
+  } as OpenCodePart, "turn-1");
+
+  assert.deepEqual(projected, {
+    id: "prt_list",
+    turnId: "turn-1",
+    type: "activity",
+    activityKind: "fileList",
+    title: "List",
+    status: "completed",
+    summary: "src",
+    input: JSON.stringify({ path: "src" }),
+    output: "a.ts\nb.ts",
+    paths: ["src"],
+    durationMs: 1,
+  });
+});
 
 test("OpenCode turn lastMessage only carries the final assistant text part", () => {
   const projection = projectOpenCodeSession({

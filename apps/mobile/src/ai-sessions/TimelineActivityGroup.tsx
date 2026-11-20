@@ -13,6 +13,7 @@ import {
   Copy,
   FilePenLine,
   FileSearch,
+  FolderOpen,
   Image as ImageIcon,
   ListTodo,
   Minimize2,
@@ -106,7 +107,9 @@ function TimelineCommandResult({ command, exitCode, output }: { command?: string
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(resetTimer.current), []);
-  const content = [command ? `$ ${command}` : '', output || ''].filter(Boolean).join('\n');
+  const commandLine = command ? `$ ${command}` : '';
+  const outputText = output || '';
+  const content = [commandLine, outputText].filter(Boolean).join('\n');
   const failed = exitCode !== undefined && exitCode !== 0;
   const copyOutput = async () => {
     try {
@@ -134,7 +137,10 @@ function TimelineCommandResult({ command, exitCode, output }: { command?: string
     {content
       ? <ScrollView nestedScrollEnabled style={[styles.commandResultBody, { maxHeight: mobileWebMetric(320) }]} testID="timeline-command-result">
         <ScrollView contentContainerStyle={styles.commandResultContent} horizontal showsHorizontalScrollIndicator={false} style={{ height: contentHeight }} testID="timeline-command-result-content">
-          <Text selectable style={[styles.commandResultText, { color: colors.text }]}>{content}</Text>
+          <Text selectable style={[styles.commandResultText, { color: colors.text }]}>
+            {commandLine ? <Text testID="timeline-command-input" style={{ color: colors.textMuted }}>{commandLine}</Text> : null}
+            {outputText ? <Text testID="timeline-command-output" style={{ color: colors.text }}>{`${commandLine ? '\n' : ''}${outputText}`}</Text> : null}
+          </Text>
         </ScrollView>
       </ScrollView>
       : <Text style={[styles.commandResultEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoCommandOutput')}</Text>}
@@ -179,6 +185,8 @@ export function timelineActivityIcon(kind: string): LucideIcon | undefined {
   if (kind === 'contextCompaction') return Minimize2;
   if (kind === 'fileRead') return BookOpen;
   if (kind === 'fileSearch') return FileSearch;
+  if (kind === 'fileList') return FolderOpen;
+  if (kind === 'explore') return Search;
   if (kind === 'webFetch') return Download;
   if (kind === 'todoUpdate') return ListTodo;
   if (kind === 'userQuestion') return CircleHelp;

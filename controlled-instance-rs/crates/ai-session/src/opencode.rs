@@ -3589,6 +3589,18 @@ fn project_tool(
                 None,
             )
         }
+        "list" => {
+            let path = string_field(&input, "path");
+            (
+                "fileList",
+                "List",
+                path.clone().or(Some(fallback_title)),
+                state.get("input").and_then(safe_json),
+                path.clone(),
+                path.map(|path| vec![path]),
+                None,
+            )
+        }
         "read" => {
             let path =
                 string_field(&input, "filePath").or_else(|| string_field(&input, "filepath"));

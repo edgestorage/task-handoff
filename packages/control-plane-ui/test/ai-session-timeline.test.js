@@ -1196,6 +1196,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /activity\.activityKind === "fileChange"[\s\S]*activity\.paths\.map\(runtimePathBasename\)/);
   assert.match(group, /<AiSessionFileChanges v-if="fileChanges\(activity\)\.length" :changes="fileChanges\(activity\)"/);
   assert.match(group, /FilePenLine,[\s\S]*Image as ImageIcon,[\s\S]*SquareTerminal,/);
+  assert.match(group, /FileSearch,[\s\S]*FolderOpen,[\s\S]*Search,/);
   assert.match(group, /activity\.activityKind === "commandExecution"/);
   assert.match(group, /<AiSessionCommandResult v-else-if="isCommandActivity\(activity\)" :command="activity\.input" :output="activity\.output" :exit-code="activity\.exitCode"/);
   assert.match(group, /if \(isCommandActivity\(activity\)\) return Boolean\(activity\.input \|\| activity\.output \|\| activity\.exitCode !== undefined\)/);
@@ -1206,6 +1207,7 @@ test("conversation Timeline composes every turn from the same compact result com
   for (const kind of [
     "reasoning", "plan", "hookPrompt", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall",
     "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "enteredReviewMode", "exitedReviewMode", "contextCompaction",
+    "fileRead", "fileSearch", "fileList", "explore",
   ]) assert.match(group, new RegExp(`\\b${kind}:`));
   assert.match(group, /<ChevronRight v-if="!activityIcon\(activity\)" class="ai-session-activity-disclosure-icon"/);
   assert.match(toolActivity, /\.ai-session-tool-activity-trigger > svg \{[^}]*color: var\(--text-muted\);/);
@@ -1229,6 +1231,14 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(history, /\.ai-session-turn-history-message-user \{[\s\S]*justify-self: end;[\s\S]*width: fit-content;[\s\S]*max-width: min\(78%, 620px\);[\s\S]*border-radius: 14px;[\s\S]*background: var\(--ai-session-user-message-bg, var\(--surface-hover\)\);[\s\S]*padding: 12px 14px;/);
   assert.match(toolActivity, /\.ai-session-tool-activity-message-user \{[\s\S]*background: var\(--ai-session-user-message-bg, var\(--surface-hover\)\);/);
   assert.match(appStyles, /--ai-session-user-message-bg: #e5e5ea;/);
+});
+
+test("command cards mute the command input separately from the output", () => {
+  const commandResult = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCommandResult.vue", import.meta.url), "utf8");
+  assert.match(commandResult, /class="ai-session-command-result-input">\{\{ commandLine \}\}/);
+  assert.match(commandResult, /class="ai-session-command-result-output">\{\{ outputText \}\}/);
+  assert.match(commandResult, /\.ai-session-command-result-input \{ display: block; color: var\(--text-muted\); \}/);
+  assert.match(commandResult, /\.ai-session-command-result-output \{ display: block; color: var\(--text\); \}/);
 });
 
 test("conversation Timeline keeps only the final AI message visible for every turn", () => {

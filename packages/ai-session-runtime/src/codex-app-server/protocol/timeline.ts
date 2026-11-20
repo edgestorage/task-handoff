@@ -152,13 +152,16 @@ export function projectCodexTimelineActivity(id: string, turnId: string, item: J
       return compactActivity({ ...base, summary: stringField(item, "message") });
     case "hookPrompt":
       return compactActivity({ ...base, summary: hookPromptText(item) });
-    case "commandExecution":
+    case "commandExecution": {
+      const command = codexCommandActivity(item);
       return compactActivity({
         ...base,
+        ...command,
         input: stringField(item, "command"),
         output: stringField(item, "aggregatedOutput"),
         exitCode: integer(item.exitCode),
       });
+    }
     case "fileChange": {
       const changes = Array.isArray(item.changes) ? item.changes.map(asRecord) : [];
       const paths = [...new Set(changes.map((change) => stringField(change, "path")).filter((path): path is string => Boolean(path)))];
@@ -203,6 +206,74 @@ export function projectCodexTimelineActivity(id: string, turnId: string, item: J
     default:
       return compactActivity(base);
   }
+}
+
+type CodexCommandActivity = Pick<AiSessionTimelineActivity, "activityKind" | "title" | "paths" | "summary">;
+
+function codexCommandActivity(item: JsonValue): CodexCommandActivity {
+  const actions = Array.isArray(item.commandActions)
+    ? item.commandActions.map(asRecord)
+    : [];
+  if (!actions.length || actions.some((action) => !isKnownCommandAction(action))) {
+    return { activityKind: "commandExecution", title: "Command" };
+  }
+  const kind = commandActionKind(actions);
+  const title = commandActionTitle(kind);
+  const labels = uniqueStrings(actions.map(commandActionLabel).filter((label): label is string => Boolean(label)));
+  const paths = uniqueStrings(actions.map(commandActionPath).filter((path): path is string => Boolean(path)));
+  return {
+    activityKind: kind,
+    title,
+    summary: labels.join(kind === "explore" ? " · " : ", ") || undefined,
+    paths: paths.length ? paths : undefined,
+  };
+}
+
+function isKnownCommandAction(action: JsonValue) {
+  return ["read", "listFiles", "search"].includes(stringField(action, "type") || "");
+}
+
+function commandActionKind(actions: JsonValue[]) {
+  const kinds = new Set(actions.map((action) => stringField(action, "type")));
+  if (kinds.size > 1) return "explore";
+  const kind = [...kinds][0];
+  if (kind === "read") return "fileRead";
+  if (kind === "listFiles") return "fileList";
+  return "fileSearch";
+}
+
+function commandActionTitle(kind: string) {
+  if (kind === "fileRead") return "Read";
+  if (kind === "fileList") return "List";
+  if (kind === "explore") return "Explored";
+  return "Search";
+}
+
+function commandActionLabel(action: JsonValue) {
+  const kind = stringField(action, "type");
+  const command = stringField(action, "command");
+  const path = stringField(action, "path");
+  if (kind === "read") {
+    return stringField(action, "name") || (path ? runtimePathBasename(path) : command);
+  }
+  if (kind === "listFiles") return path || command;
+  if (kind === "search") {
+    const query = stringField(action, "query");
+    return query ? (path ? `${query} in ${path}` : query) : command;
+  }
+  return command;
+}
+
+function commandActionPath(action: JsonValue) {
+  return stringField(action, "path");
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values)];
+}
+
+function runtimePathBasename(path: string) {
+  return path.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || path;
 }
 
 function activityTitle(kind: string) {

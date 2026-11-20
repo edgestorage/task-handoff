@@ -9,7 +9,7 @@
       </button>
     </header>
     <ScrollArea v-if="content" type="auto" class="ai-session-command-result-scroll">
-      <pre><code>{{ content }}</code></pre>
+      <pre><code><span v-if="commandLine" class="ai-session-command-result-input">{{ commandLine }}</span><span v-if="outputText" class="ai-session-command-result-output">{{ outputText }}</span></code></pre>
     </ScrollArea>
     <div v-else class="ai-session-command-result-empty">{{ t("sessions.timeline.noCommandOutput") }}</div>
   </section>
@@ -26,7 +26,9 @@ const props = defineProps<{ command?: string; output?: string; exitCode?: number
 const { t } = useI18n();
 const copied = ref(false);
 const failed = computed(() => props.exitCode !== undefined && props.exitCode !== 0);
-const content = computed(() => [props.command ? `$ ${props.command}` : "", props.output || ""].filter(Boolean).join("\n"));
+const commandLine = computed(() => props.command ? `$ ${props.command}` : "");
+const outputText = computed(() => props.output || "");
+const content = computed(() => [commandLine.value, outputText.value].filter(Boolean).join("\n"));
 let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 
 onBeforeUnmount(() => { if (copiedTimer) clearTimeout(copiedTimer); });
@@ -56,5 +58,7 @@ async function copyOutput() {
 .ai-session-command-result-copy:hover, .ai-session-command-result-copy:focus-visible { outline: 0; background: var(--surface-hover); color: var(--text); }
 .ai-session-command-result-scroll { width: 100%; max-height: 320px; }
 .ai-session-command-result pre { min-width: max-content; margin: 0; background: transparent; color: var(--text); font: 12px/1.55 var(--font-mono, monospace); letter-spacing: 0; padding: 9px 12px 18px; tab-size: 2; white-space: pre; cursor: text; -webkit-user-select: text; user-select: text; }
+.ai-session-command-result-input { display: block; color: var(--text-muted); }
+.ai-session-command-result-output { display: block; color: var(--text); }
 .ai-session-command-result-empty { color: var(--text-muted); font-size: 12px; padding: 13px 11px; }
 </style>

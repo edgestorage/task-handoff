@@ -4166,12 +4166,13 @@ fn project_codex_timeline_activity(
     item: &Value,
 ) -> AiSessionTimelineItem {
     let tool = codex_tool_descriptor(item, None);
-    let title = tool
+    let mut title = tool
         .as_ref()
         .and_then(|tool| tool.get("name"))
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .unwrap_or_else(|| activity_title(activity_kind));
+    let mut projected_kind = activity_kind.to_string();
     let mut summary = None;
     let mut input = None;
     let mut output = None;
@@ -4183,6 +4184,11 @@ fn project_codex_timeline_activity(
         "codexRetry" => summary = string_field(item, "message"),
         "hookPrompt" => summary = hook_prompt_text(item),
         "commandExecution" => {
+            let command = codex_command_activity(item);
+            projected_kind = command.activity_kind;
+            title = command.title;
+            summary = command.summary;
+            paths = command.paths;
             input = string_field(item, "command");
             output = string_field(item, "aggregatedOutput");
             exit_code = item.get("exitCode").and_then(Value::as_i64);
@@ -4244,7 +4250,7 @@ fn project_codex_timeline_activity(
     AiSessionTimelineItem::Activity {
         id: id.to_string(),
         turn_id: turn_id.to_string(),
-        activity_kind: activity_kind.to_string(),
+        activity_kind: projected_kind,
         title,
         status: if activity_kind == "contextCompaction" {
             Some(AiSessionTimelineActivityStatus::Completed)
@@ -4261,6 +4267,132 @@ fn project_codex_timeline_activity(
         exit_code,
         duration_ms,
     }
+}
+
+struct CodexCommandActivity {
+    activity_kind: String,
+    title: String,
+    summary: Option<String>,
+    paths: Option<Vec<String>>,
+}
+
+fn codex_command_activity(item: &Value) -> CodexCommandActivity {
+    let actions = item
+        .get("commandActions")
+        .and_then(Value::as_array)
+        .and_then(|actions| {
+            actions
+                .iter()
+                .map(Value::as_object)
+                .collect::<Option<Vec<_>>>()
+        });
+    let Some(actions) = actions.filter(|actions| {
+        !actions.is_empty()
+            && actions.iter().all(|action| {
+                matches!(
+                    command_action_string(action, "type").as_deref(),
+                    Some("read" | "listFiles" | "search")
+                )
+            })
+    }) else {
+        return CodexCommandActivity {
+            activity_kind: "commandExecution".to_string(),
+            title: "Command".to_string(),
+            summary: None,
+            paths: None,
+        };
+    };
+    let activity_kind = command_action_kind(&actions);
+    let title = match activity_kind {
+        "fileRead" => "Read",
+        "fileList" => "List",
+        "explore" => "Explored",
+        _ => "Search",
+    }
+    .to_string();
+    let labels = unique_strings(
+        actions
+            .iter()
+            .filter_map(|action| command_action_label(action))
+            .collect(),
+    );
+    let paths = unique_strings(
+        actions
+            .iter()
+            .filter_map(|action| command_action_string(action, "path"))
+            .collect(),
+    );
+    CodexCommandActivity {
+        activity_kind: activity_kind.to_string(),
+        title,
+        summary: (!labels.is_empty()).then(|| {
+            labels.join(if activity_kind == "explore" {
+                " · "
+            } else {
+                ", "
+            })
+        }),
+        paths: (!paths.is_empty()).then_some(paths),
+    }
+}
+
+fn command_action_kind(actions: &[&Map<String, Value>]) -> &'static str {
+    let kinds = actions
+        .iter()
+        .filter_map(|action| command_action_string(action, "type"))
+        .collect::<HashSet<_>>();
+    if kinds.len() > 1 {
+        return "explore";
+    }
+    match kinds.iter().next().map(String::as_str) {
+        Some("read") => "fileRead",
+        Some("listFiles") => "fileList",
+        _ => "fileSearch",
+    }
+}
+
+fn command_action_label(action: &Map<String, Value>) -> Option<String> {
+    let command = command_action_string(action, "command");
+    let path = command_action_string(action, "path");
+    match command_action_string(action, "type").as_deref() {
+        Some("read") => command_action_string(action, "name")
+            .or_else(|| path.as_deref().map(runtime_path_basename))
+            .or(command),
+        Some("listFiles") => path.or(command),
+        Some("search") => {
+            let query = command_action_string(action, "query");
+            match (query, path) {
+                (Some(query), Some(path)) => Some(format!("{query} in {path}")),
+                (Some(query), None) => Some(query),
+                (None, _) => command,
+            }
+        }
+        _ => command,
+    }
+}
+
+fn command_action_string(action: &Map<String, Value>, field: &str) -> Option<String> {
+    action
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn runtime_path_basename(path: &str) -> String {
+    path.rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
+fn unique_strings(values: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .into_iter()
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
 }
 
 fn merge_codex_timeline_items(
@@ -6778,6 +6910,110 @@ mod tests {
             completed,
             AiSessionTimelineItem::AiMessage { ref text, .. } if text == "done"
         ));
+    }
+
+    #[test]
+    fn codex_command_actions_project_to_flat_timeline_activities() {
+        let read = project_codex_notification_timeline_item(
+            &json!({
+                "id": "read-1",
+                "type": "commandExecution",
+                "command": "sed -n '1,20p' a.ts && cat b.ts",
+                "status": "completed",
+                "commandActions": [
+                    { "type": "read", "command": "sed -n '1,20p' a.ts", "name": "a.ts", "path": "/workspace/a.ts" },
+                    { "type": "read", "command": "cat b.ts", "name": "b.ts", "path": "/workspace/b.ts" }
+                ]
+            }),
+            "turn-1",
+            true,
+        )
+        .expect("read timeline item");
+        let AiSessionTimelineItem::Activity {
+            activity_kind,
+            title,
+            summary,
+            input,
+            paths,
+            ..
+        } = read
+        else {
+            panic!("expected read activity");
+        };
+        assert_eq!(activity_kind, "fileRead");
+        assert_eq!(title, "Read");
+        assert_eq!(summary.as_deref(), Some("a.ts, b.ts"));
+        assert_eq!(input.as_deref(), Some("sed -n '1,20p' a.ts && cat b.ts"));
+        assert_eq!(
+            paths,
+            Some(vec![
+                "/workspace/a.ts".to_string(),
+                "/workspace/b.ts".to_string()
+            ])
+        );
+
+        let mixed = project_codex_notification_timeline_item(
+            &json!({
+                "id": "mixed-1",
+                "type": "commandExecution",
+                "command": "cat a.ts && rg token src",
+                "status": "completed",
+                "commandActions": [
+                    { "type": "read", "command": "cat a.ts", "name": "a.ts", "path": "/workspace/a.ts" },
+                    { "type": "search", "command": "rg token src", "query": "token", "path": "src" }
+                ]
+            }),
+            "turn-1",
+            true,
+        )
+        .expect("mixed timeline item");
+        let AiSessionTimelineItem::Activity {
+            activity_kind,
+            title,
+            summary,
+            paths,
+            ..
+        } = mixed
+        else {
+            panic!("expected mixed activity");
+        };
+        assert_eq!(activity_kind, "explore");
+        assert_eq!(title, "Explored");
+        assert_eq!(summary.as_deref(), Some("a.ts · token in src"));
+        assert_eq!(
+            paths,
+            Some(vec!["/workspace/a.ts".to_string(), "src".to_string()])
+        );
+
+        let fallback = project_codex_notification_timeline_item(
+            &json!({
+                "id": "unknown-1",
+                "type": "commandExecution",
+                "command": "cat a.ts && git diff -- a.ts",
+                "status": "completed",
+                "commandActions": [
+                    { "type": "read", "command": "cat a.ts", "name": "a.ts", "path": "/workspace/a.ts" },
+                    { "command": "git diff -- a.ts" }
+                ]
+            }),
+            "turn-1",
+            true,
+        )
+        .expect("fallback timeline item");
+        let AiSessionTimelineItem::Activity {
+            activity_kind,
+            title,
+            summary,
+            paths,
+            ..
+        } = fallback
+        else {
+            panic!("expected fallback activity");
+        };
+        assert_eq!(activity_kind, "commandExecution");
+        assert_eq!(title, "Command");
+        assert_eq!(summary, None);
+        assert_eq!(paths, None);
     }
 
     #[tokio::test]

@@ -335,6 +335,17 @@ function openCodeToolDescriptor(toolName: string, state: Record<string, unknown>
     const query = stringValue(input.query);
     return { activityKind: "webSearch", title: "Web search", summary: query || fallbackTitle, input: query || safeJson(state.input), inputPreview: query };
   }
+  if (tool === "list") {
+    const path = stringValue(input.path);
+    return {
+      activityKind: "fileList",
+      title: "List",
+      summary: path || fallbackTitle,
+      input: safeJson(state.input),
+      inputPreview: path,
+      paths: path ? [path] : undefined,
+    };
+  }
   if (tool === "read") {
     const path = stringValue(input.filePath) || stringValue(input.filepath);
     const image = arrayRecords(state.attachments).some((attachment) => stringValue(attachment.mime)?.startsWith("image/"));
