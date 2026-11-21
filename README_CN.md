@@ -32,13 +32,7 @@ TaskHandoff 是一个免费、开源、可自托管的 AI 远程工作与服务�
 
 ### 工作台
 
-暗色模式：
-
 ![暗色模式下的 TaskHandoff 工作台](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-overview-dark.png)
-
-亮色模式：
-
-![亮色模式下的 TaskHandoff 工作台](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-overview-light.png)
 
 ### 远程桌面
 

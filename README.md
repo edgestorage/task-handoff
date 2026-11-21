@@ -32,13 +32,7 @@ An iPhone Simulator remote desktop preview in a Mobile AI session.
 
 ### Workbench
 
-Dark mode:
-
 ![TaskHandoff workbench in dark mode](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-overview-dark.png)
-
-Light mode:
-
-![TaskHandoff workbench in light mode](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-overview-light.png)
 
 ### Remote Desktop
 
