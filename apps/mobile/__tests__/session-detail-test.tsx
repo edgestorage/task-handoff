@@ -10,7 +10,7 @@ import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@ta
 import { AiSessionDetailSchema, AiSessionTurnIndexSchema } from '@task-handoff/protocol/ai-sessions';
 import { ControlPlaneInstanceDirectoryCapabilitiesSchema } from '@task-handoff/protocol/control-plane-directory';
 
-import { conversationDetailItems, conversationListOptions, detailItems, isSessionScrollNearBottom, latestAiSessionMessage, processedDurationLabel, SessionDetail } from '../src/ai-sessions/SessionDetail';
+import { conversationDetailItems, conversationListOptions, detailItems, isSessionScrollNearBottom, latestAiSessionMessage, processedDurationLabel, sessionTurnPickerPage, SessionDetail } from '../src/ai-sessions/SessionDetail';
 import { appendConversationText, COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, OFFLINE_NOTICE_DELAY_MS, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { advanceStreamingMarkdownBlocks, CHARACTER_FADE_MS, hasUnclosedMarkdownFence, initialStreamingText, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText, streamingMarkdownStableCutoff } from '../src/components/SafeMarkdown';
@@ -905,6 +905,54 @@ test('detail navigates one authoritative turn and applies streaming only to late
   await screen.unmount();
 });
 
+test('compact turn counter opens the complete turn list and jumps to the selected turn', async () => {
+  const multiTurn = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    subAgents: [],
+    turns: [
+      { id: 'turn-1', userPrompt: 'First prompt', lastMessage: 'First response', status: 'completed', phase: 'responding', revision: 1, startedAt: session.startedAt, updatedAt: session.updatedAt },
+      { id: 'turn-2', userPrompt: 'Second prompt', lastMessage: 'Second response', status: 'completed', phase: 'responding', revision: 2, startedAt: session.startedAt, updatedAt: session.updatedAt },
+      { id: 'turn-3', userPrompt: 'Third prompt', lastMessage: 'Third response', status: 'running', phase: 'responding', revision: 3, startedAt: session.startedAt, updatedAt: session.updatedAt },
+    ],
+  });
+  const screen = await render(<SessionDetail messages={[]} session={multiTurn} />);
+
+  screen.getByText('3 / 3');
+  const onSelect = jest.fn();
+  const page = sessionTurnPickerPage(multiTurn.turns!, 2, onSelect, (key, params) => key === 'sessions.turnNumber'
+    ? `Turn ${params?.index}`
+    : key === 'sessions.turnList' ? 'All turns'
+      : key === 'sessions.searchTurns' ? 'Search messages'
+        : key === 'sessions.noMatchingTurns' ? 'No matching turns' : key);
+  expect(page.title).toBeUndefined();
+  expect(page.dense).toBe(true);
+  expect(page.search).toEqual({ emptyLabel: 'No matching turns', placeholder: 'Search messages' });
+  expect(page.blocks.map((block) => block.type === 'item' ? block.item.label : block.type === 'divider' ? '' : block.label)).toEqual([
+    'First prompt', 'Second prompt', 'Third prompt',
+  ]);
+  expect(page.blocks.map((block) => block.type === 'item' ? block.item.subtitle : undefined)).toEqual([
+    'First response', 'Second response', 'Third response',
+  ]);
+  const first = page.blocks[0];
+  if (first?.type !== 'item') throw new Error('Expected the first Turn item');
+  first.item.onPress?.();
+  expect(onSelect).toHaveBeenCalledWith(0);
+
+  const summaryOnlyTurn = { ...multiTurn.turns![0], userPrompt: undefined, summary: 'Earlier response summary' };
+  const summaryPage = sessionTurnPickerPage([summaryOnlyTurn], 0, onSelect, (key) => key);
+  const summaryItem = summaryPage.blocks[0];
+  if (summaryItem?.type !== 'item') throw new Error('Expected the summary Turn item');
+  expect(summaryItem.item).toMatchObject({ label: 'sessions.turnNumber', subtitle: 'Earlier response summary' });
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Previous turn' }));
+  await waitFor(() => screen.getByText('2 / 3'));
+  await fireEvent.press(screen.getByRole('button', { name: 'Previous turn' }));
+  await waitFor(() => screen.getByText('1 / 3'));
+  screen.getByText('First prompt');
+  expect(screen.queryByText('Third prompt')).toBeNull();
+  await screen.unmount();
+});
+
 test('compact workspace keeps the committed Turn visible and applies only the latest cold-cache selection', async () => {
   const controlPlaneId = 'cp-atomic-turn';
   const instanceId = 'instance-atomic-turn';
@@ -998,6 +1046,100 @@ test('compact workspace keeps the committed Turn visible and applies only the la
   await waitFor(() => screen.getByText('First prompt'));
   screen.getByText('1 / 3');
   expect(turnBody.mock.calls.filter((call) => call[2] === 'turn-2')).toHaveLength(1);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
+});
+
+test('compact workspace shows the latest running capsule above goal and queue controls while viewing an older Turn', async () => {
+  const controlPlaneId = 'cp-latest-running-capsule';
+  const instanceId = 'instance-latest-running-capsule';
+  const completedTurn = {
+    id: 'turn-1', status: 'completed' as const, phase: 'responding' as const,
+    revision: 1,
+    startedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:00:30.000Z', completedAt: '2026-08-05T00:00:30.000Z',
+  };
+  const runningTurn = {
+    id: 'turn-2', status: 'running' as const, phase: 'tool' as const,
+    revision: 2,
+    startedAt: '2026-08-05T00:01:00.000Z', updatedAt: '2026-08-05T00:02:00.000Z',
+  };
+  const compact = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-latest-running-capsule',
+    status: 'running',
+    phase: 'tool',
+    currentTool: { name: 'shell', inputPreview: 'pnpm test' },
+    turnCount: 2,
+    detailRevision: 'detail-latest-running-capsule',
+    turnsRevision: 'turns-latest-running-capsule',
+    goal: { objective: 'Finish the blocked request', status: 'blocked', tokenBudget: null, tokensUsed: 47_661, timeUsedSeconds: 83 },
+    subAgents: [],
+  });
+  mobileAiSessionStore.replaceSnapshot(controlPlaneId, {
+    updatedAt: compact.updatedAt,
+    instances: [{
+      instanceId,
+      streamId: 'stream-latest-running-capsule',
+      revision: 1,
+      aiSessions: { runningCount: 1, waitingCount: 0, staleCount: 0, updatedAt: compact.updatedAt, sessions: [compact] },
+    }],
+  });
+  mobileAiSessionStore.setSessionDetail(controlPlaneId, instanceId, compact.detailRevision!, AiSessionDetailSchema.parse({
+    id: compact.id,
+    queue: compact.queue,
+    subAgents: [],
+  }));
+  mobileAiSessionStore.setSessionTurnIndex(controlPlaneId, instanceId, compact.turnsRevision!, AiSessionTurnIndexSchema.parse({
+    sessionId: compact.id,
+    revision: compact.turnsRevision,
+    turns: [
+      { ...completedTurn, bodyRevision: 'body-1' },
+      { ...runningTurn, bodyRevision: 'body-2' },
+    ],
+  }));
+  mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, compact.id, 'body-1', {
+    ...completedTurn,
+    userPrompt: 'First prompt',
+    lastMessage: 'First response',
+  });
+  mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, compact.id, 'body-2', {
+    ...runningTurn,
+    userPrompt: 'Second prompt',
+    lastMessage: 'Second response',
+  });
+  function Harness() {
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, compact.id, rerender), []);
+    const view = mobileAiSessionStore.sessionView(controlPlaneId, instanceId, compact.id);
+    return <SessionWorkspace controlPlaneId={controlPlaneId} instanceId={instanceId} messages={[]} session={view.session} />;
+  }
+
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  screen.getByText('Second prompt');
+  expect(screen.queryByTestId('session-latest-running-capsule')).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: 'Previous turn' }));
+  await waitFor(() => screen.getByText('First prompt'));
+  const capsule = screen.getByTestId('session-latest-running-capsule');
+  expect(within(capsule).getByText('shell · pnpm test')).toBeTruthy();
+  expect(within(capsule).getByTestId('session-status-spinner')).toBeTruthy();
+  expect(StyleSheet.flatten(within(capsule).getByTestId('session-status-spinner').props.style)).toEqual(expect.objectContaining({ height: 12, width: 12 }));
+  const goal = screen.getByTestId('session-goal');
+  expect(StyleSheet.flatten(capsule.props.style).backgroundColor).toBe(mobileLightColors.surface);
+  expect(StyleSheet.flatten(capsule.props.style).backgroundColor).toBe(StyleSheet.flatten(goal.props.style).backgroundColor);
+  type TestNode = string | { children: TestNode[]; props: { testID?: string } };
+  const collectTestIds = (node: TestNode): string[] => typeof node === 'string' ? [] : [
+    ...(typeof node.props.testID === 'string' ? [node.props.testID] : []),
+    ...node.children.flatMap(collectTestIds),
+  ];
+  const actionOrder = collectTestIds(screen.getByTestId('session-actions') as unknown as TestNode);
+  expect(actionOrder.indexOf('session-latest-running-capsule')).toBeLessThan(actionOrder.indexOf('session-goal'));
+
+  await fireEvent.press(capsule);
+  await waitFor(() => screen.getByText('Second prompt'));
+  expect(screen.queryByTestId('session-latest-running-capsule')).toBeNull();
   await screen.unmount();
   mobileAiSessionStore.clearProfile(controlPlaneId);
 });

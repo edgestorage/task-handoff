@@ -71,3 +71,35 @@ test('floating menus keep disabled rows inert and open nested pages in place', a
   expect(onPress).not.toHaveBeenCalled();
   screen.getByText('Model A');
 });
+
+test('searchable dense menus filter both titles and subtitles into single-line rows', async () => {
+  const pressed: string[] = [];
+  const page = {
+    dense: true,
+    search: { emptyLabel: 'No matching turns', placeholder: 'Search messages' },
+    blocks: [
+      { type: 'item' as const, key: 'turn-1', item: { key: 'turn-1', label: 'First prompt', subtitle: 'First response', onPress: () => pressed.push('first') } },
+      { type: 'item' as const, key: 'turn-2', item: { key: 'turn-2', label: 'Second prompt', subtitle: 'Second response', selected: true, onPress: () => pressed.push('second') } },
+    ],
+  };
+  const screen = await render(
+    <SafeAreaProvider initialMetrics={metrics}>
+      <FloatingMenu anchor={{ height: 30, width: 30, x: 100, y: 100 }} onDismiss={() => undefined} page={page} />
+    </SafeAreaProvider>,
+  );
+
+  expect(screen.getByText('First prompt').props.numberOfLines).toBe(1);
+  expect(screen.getByText('Second response').props.numberOfLines).toBe(1);
+
+  await fireEvent.changeText(screen.getByLabelText('Search messages'), 'second response');
+  expect(screen.queryByText('First prompt')).toBeNull();
+  screen.getByText('Second prompt');
+
+  await fireEvent.changeText(screen.getByLabelText('Search messages'), 'missing');
+  expect(screen.queryByText('Second prompt')).toBeNull();
+  screen.getByText('No matching turns');
+
+  await fireEvent.changeText(screen.getByLabelText('Search messages'), 'first prompt');
+  await fireEvent.press(screen.getByText('First prompt'));
+  expect(pressed).toEqual(['first']);
+});

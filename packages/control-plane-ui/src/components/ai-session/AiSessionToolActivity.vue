@@ -68,6 +68,7 @@ import { ChevronRight, LoaderCircle } from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionLifecycle, AiSessionPhase, AiSessionTool } from "../../api/types";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
+import { aiSessionActivityText } from "./aiSessionActivityText";
 import AiSessionActivityGroup from "./AiSessionActivityGroup.vue";
 import type { TimelineTurnNode } from "./timelineActivities";
 import {
@@ -185,28 +186,13 @@ function toggleExpanded(event: MouseEvent) {
   if (!props.loading) emit("load");
 }
 const statusText = computed(() => {
-  if (props.phase === "approval") {
-    return props.summary ? `${t("sessions.status.waitingApproval")} · ${props.summary}` : t("sessions.activity.waitingApproval");
-  }
-  if (props.currentTool?.name) {
-    return props.currentTool.inputPreview
-      ? `${props.currentTool.name} · ${props.currentTool.inputPreview}`
-      : props.currentTool.name;
-  }
-  if (props.phase === "responding") {
-    return count.value > 0
-      ? t("sessions.activity.respondingTools", { count: count.value })
-      : t("sessions.activity.responding");
-  }
-  if (props.phase === "editing") {
-    return t("sessions.activity.editing");
-  }
-  if (props.status === "waiting") {
-    return t("sessions.activity.waiting");
-  }
-  return count.value > 0
-    ? t("sessions.activity.thinkingTools", { count: count.value })
-    : t("sessions.activity.thinking");
+  return aiSessionActivityText({
+    currentTool: props.currentTool,
+    phase: props.phase,
+    status: props.status,
+    summary: props.summary,
+    toolCallsSinceLastMessage: count.value,
+  }, t);
 });
 </script>
 

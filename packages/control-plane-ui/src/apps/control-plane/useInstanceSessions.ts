@@ -579,6 +579,24 @@ export function displayAiSessionTitle(session: AiSessionSummary | undefined, pro
   return session.userPrompt?.trim() || "";
 }
 
+export function aiSessionTurnMenuItems(
+  session: AiSessionSummary | undefined,
+  count: number,
+  t: Translate,
+) {
+  const turns = aiSessionTurns(session);
+  return Array.from({ length: count }, (_, index) => {
+    const turn = turns[index];
+    const prompt = turn ? displayAiSessionTitle(session, index, t).replace(/\s+/g, " ").trim() : "";
+    const answer = (turn?.summary || turn?.lastMessage || "").replace(/\s+/g, " ").trim();
+    return {
+      id: turn?.id || `turn-position-${index + 1}`,
+      label: prompt || t("sessions.panel.turnNumber", { index: index + 1 }),
+      ...(answer ? { subtitle: answer } : {}),
+    };
+  });
+}
+
 export function aiSessionContext(session: AiSessionSummary) {
   const cwd = aiSessionBasename(session.cwd);
   const id = shortAiSessionId(session.providerSessionId || session.id);

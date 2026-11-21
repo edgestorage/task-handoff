@@ -9,6 +9,7 @@ const floatingDock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board
 const compactPrompt = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCompactPrompt.vue", import.meta.url), "utf8");
 const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
 const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
+const runningTurnCapsule = fs.readFileSync(new URL("../src/components/ai-session/AiSessionRunningTurnCapsule.vue", import.meta.url), "utf8");
 const displayHelpers = fs.readFileSync(new URL("../src/apps/control-plane/useInstanceSessions.ts", import.meta.url), "utf8");
 const repositoryEnvironment = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/RepositoryEnvironment.vue", import.meta.url), "utf8");
 
@@ -124,6 +125,44 @@ test("compact Turn navigation loads the target body before committing selection"
   assert.match(panel, /const selectedPromptSnapshot = computed\(\(\) => \{[\s\S]*?snapshot\.turnId !== turn\.id/);
   assert.match(panel, /:content="selectedPromptSnapshot\.content"/);
   assert.match(floatingDock, /:content="detailState === 'ready' \? displayAiSessionTitle\(conversationSession, promptIndex, t\) : ''"/);
+});
+
+test("compact details surface the latest running turn above queue and goal controls", () => {
+  assert.match(panel, /<AiSessionRunningTurnCapsule[\s\S]*?:prompt-count="promptCount\(selectedSession\)"[\s\S]*?:prompt-index="promptIndexFor\(selectedSession\)"[\s\S]*?:session="selectedConversationSession \|\| selectedSession"[\s\S]*?:timeline-mode="effectiveTimelineViewMode"[\s\S]*?@latest="backToLatestPrompt\(selectedSession\)"/);
+  assert.match(floatingDock, /<AiSessionRunningTurnCapsule[\s\S]*?:prompt-count="promptCount"[\s\S]*?:prompt-index="promptIndex"[\s\S]*?:timeline-mode="timelineMode"[\s\S]*?@latest="\$emit\('latestPrompt'\)"/);
+  const panelCapsule = panel.indexOf("<AiSessionRunningTurnCapsule");
+  assert.ok(panelCapsule >= 0 && panelCapsule < panel.indexOf("<AiSessionQueue"));
+  assert.ok(panelCapsule < panel.indexOf("<AiSessionGoalBadge"));
+  const dockCapsule = floatingDock.indexOf("<AiSessionRunningTurnCapsule");
+  assert.ok(dockCapsule >= 0 && dockCapsule < floatingDock.indexOf("<AiSessionQueue"));
+  assert.ok(dockCapsule < floatingDock.indexOf("<AiSessionGoalBadge"));
+  assert.match(runningTurnCapsule, /props\.timelineMode === "compact"[\s\S]*?props\.promptIndex < props\.promptCount - 1[\s\S]*?latestTurnRunning\.value/);
+  assert.match(runningTurnCapsule, /latestTurn\.status === "running"/);
+  assert.match(runningTurnCapsule, /aiSessionActivityText\(props\.session, t\)/);
+  assert.match(runningTurnCapsule, /max-width: min\(calc\(100% - 40px\), 360px\)/);
+  assert.match(runningTurnCapsule, /<AiSessionStatusIndicator[^>]*status="running"/);
+  assert.match(runningTurnCapsule, /@click="\$emit\('latest'\)"/);
+});
+
+test("compact turn counter opens the complete turn list and jumps to the selected turn", () => {
+  assert.match(navigator, /<DropdownMenu v-model:open="pickerOpen">/);
+  assert.match(navigator, /data-testid="ai-session-turn-picker-trigger"/);
+  assert.doesNotMatch(navigator, /DropdownMenuLabel|turnList/);
+  assert.match(navigator, /v-model="turnQuery"[\s\S]*?sessions\.panel\.searchTurns/);
+  assert.match(navigator, /const filteredMenuItems = computed[\s\S]*?\[item\.label, item\.subtitle\][\s\S]*?toLocaleLowerCase\(\)\.includes\(query\)/);
+  assert.match(navigator, /!filteredMenuItems\.length[\s\S]*?sessions\.panel\.noMatchingTurns/);
+  assert.match(navigator, /<ScrollArea ref="turnScrollEl" type="auto" :horizontal="false" class="ai-session-turn-menu__scroll">/);
+  assert.match(navigator, /v-for="entry in filteredMenuItems"[\s\S]*?:key="entry\.item\.id"[\s\S]*?:data-current="entry\.index === index[\s\S]*?@select="\$emit\('select', entry\.index\)"/);
+  assert.match(navigator, /watch\(pickerOpen, \(open\) => \{[\s\S]*?emit\("open"\);[\s\S]*?nextTick\(scheduleSelectedScroll\)/);
+  assert.match(navigator, /function scheduleSelectedScroll[\s\S]*?\[0, 48, 160, 320\][\s\S]*?scrollSelectedIntoView\(0\)/);
+  assert.match(navigator, /function scrollSelectedIntoView[\s\S]*?querySelector<HTMLElement>\('\[data-current="true"\]'\)[\s\S]*?viewport\.scrollTop/);
+  assert.match(navigator, /\.ai-session-turn-menu__search-field\) \{[\s\S]*?display: flex[\s\S]*?gap: 6px/);
+  assert.match(navigator, /\.ai-session-turn-menu__search-input\) \{[\s\S]*?min-width: 0[\s\S]*?width: auto/);
+  assert.match(navigator, /\.ai-session-turn-menu__item:hover\),[\s\S]*?\.ai-session-turn-menu__item\[data-highlighted\][\s\S]*?background: var\(--surface-hover\)/);
+  assert.match(displayHelpers, /export function aiSessionTurnMenuItems[\s\S]*?displayAiSessionTitle\(session, index, t\)[\s\S]*?const answer = \(turn\?\.summary \|\| turn\?\.lastMessage[\s\S]*?label: prompt \|\| t\("sessions\.panel\.turnNumber"[\s\S]*?subtitle: answer/);
+  assert.match(panel, /:items="turnNavigatorItems\(selectedSession\)"[\s\S]*?@open="loadAllSelectedSessionTurns"[\s\S]*?@select="setPromptIndex\(selectedSession, \$event\)"/);
+  assert.match(floatingDock, /:items="turnNavigatorItems"[\s\S]*?@open="\$emit\('loadTurnBodies'\)"[\s\S]*?@select="\$emit\('selectPrompt', \$event\)"/);
+  assert.match(board, /@load-turn-bodies="loadAllSelectedCardTurns"[\s\S]*?@select-prompt="setPromptIndex\(selectedCard, \$event\)"/);
 });
 
 test("AI session prompt state exists before the timeline's immediate watcher", () => {

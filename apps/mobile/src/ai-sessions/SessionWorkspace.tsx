@@ -14,7 +14,7 @@ import { StoryDecisionChangedEventType, type StoryDecision } from '@task-handoff
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult, type MobileAiSessionGoalCommand } from './actions';
 import { useToolActivityWindow } from './use-tool-activity-window';
-import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
+import { aiSessionDisplayTurns, sessionActivityText, SessionDetail, type SessionDetailMode } from './SessionDetail';
 import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
 import { pickDocument, pickImage, type MobileLocalFile } from '../platform/file-picker';
 import { formatMobileAttachmentBytes, formatMobileTextLength, mobilePastedImage, mobilePastedText, runtimeAttachmentFromServerCandidate, uploadingMobileAttachment, uploadMobileAttachment, usableQueueEditRefs, usableUploadRefs, type MobilePendingAttachment } from './attachments';
@@ -23,6 +23,7 @@ import { ADAPTIVE_READING_MAX_WIDTH, useAdaptiveContentLayout } from '../compone
 import { Icon, type IconName } from '../components/Icon';
 import { AttachmentImage } from './AttachmentImage';
 import { SessionComposer } from './SessionComposer';
+import { RunningTurnCapsule } from './RunningTurnCapsule';
 import { SessionGoalBar } from './SessionGoalBar';
 import {
   SESSION_COMPOSER_COLLAPSED_HEIGHT,
@@ -377,6 +378,10 @@ export function SessionWorkspace({
       toast.show({ detail: t('sessions.turnLoadFailed'), title: t('toast.actionFailed', { action: t('sessions.turn') }), tone: 'error' });
     });
   }, [controlPlaneId, ensureTurnBody, instanceId, session, sessionId, t, toast, turnScope]);
+  const loadTurnPickerSummaries = useCallback(() => {
+    if (!sessionId || !session || !client?.aiSessions.turnBody) return;
+    void Promise.allSettled((session.turns || []).map((turn) => ensureTurnBody(turn.id)));
+  }, [client?.aiSessions.turnBody, ensureTurnBody, session, sessionId]);
   useEffect(() => {
     if (!sessionId || !session || !client?.aiSessions.turnBody) return;
     const turns = session.turns || [];
@@ -596,6 +601,11 @@ export function SessionWorkspace({
     : timelines;
   const authoritativeActionsEnabled = syncPhase === 'ready';
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
+  const latestTurn = session.turns?.[latestTurnIndex];
+  const latestTurnRunning = session.status === 'running' && (latestTurn ? latestTurn.status === 'running' : true);
+  const showLatestTurnRunningCapsule = detailMode === 'turn' && selectedTurnIndex < latestTurnIndex && latestTurnRunning;
+  const latestTurnActivity = latestTurnRunning ? sessionActivityText(session, t) : undefined;
+  const latestTurnRunningLabel = latestTurnActivity || t('sessions.thinking');
   const canInterrupt = canInterruptAiSession(session);
   const canPauseQueue = supportsDirectoryAiSessionQueuePause(instanceCapabilities);
   const supportsSendIdempotency = supportsDirectoryAiSessionSendIdempotency(instanceCapabilities);
@@ -1015,6 +1025,7 @@ export function SessionWorkspace({
           onModeChange={setDetailMode}
           onLoadTimeline={requestTimelineLoad}
           onLoadToolActivity={toolActivity.load}
+          onTurnPickerOpen={loadTurnPickerSummaries}
           toolActivityEnabled={supportsToolActivity}
           toolActivityWindows={toolActivity.windows}
           onOpenBuiltinBrowser={onOpenBuiltinBrowser}
@@ -1133,6 +1144,7 @@ export function SessionWorkspace({
           ))}
           </ScrollView>
         </View> : null}
+        {showLatestTurnRunningCapsule ? <RunningTurnCapsule label={latestTurnRunningLabel} onPress={() => requestTurnSelection(latestTurnIndex)} /> : null}
         {isLatestTurn && session.queue.items.length ? <View style={[styles.queueListFrame, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={[styles.queueHeader, { borderBottomColor: colors.border }]}>
             <Text style={[styles.queueHeaderTitle, { color: colors.textMuted }]}>{t('workspace.queuedMessages')}</Text>

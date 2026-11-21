@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Animated, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Animated, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { mobileWebType } from '../mobile-web-typography';
@@ -31,20 +31,39 @@ function clamp(value: number, min: number, max: number) {
  * the long-pressed point), with grouped rows, hairline separators, muted group labels,
  * leading icons/checkmarks, subtitles and nested pages.
  */
-export function FloatingMenu({ anchor, onDismiss, page: initialPage }: { anchor: FloatingMenuAnchor; onDismiss(): void; page: FloatingMenuPage }) {
+export function FloatingMenu({ accessibilityLabel, anchor, onDismiss, page: initialPage }: { accessibilityLabel?: string; anchor: FloatingMenuAnchor; onDismiss(): void; page: FloatingMenuPage }) {
   const { colors } = useMobileTheme();
   const insets = useSafeAreaInsets();
   const window = useWindowDimensions();
   const [stack, setStack] = useState<FloatingMenuPage[]>([]);
   const [cardSize, setCardSize] = useState<{ width: number; height: number }>();
   const [dismissing, setDismissing] = useState(false);
+  const [query, setQuery] = useState('');
+  const [selectedRowLayout, setSelectedRowLayout] = useState<{ height: number; y: number }>();
+  const [scrollViewportHeight, setScrollViewportHeight] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
   const [progress] = useState(() => new Animated.Value(0));
   const page = stack.length ? stack[stack.length - 1] : initialPage;
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleBlocks = normalizedQuery
+    ? page.blocks.filter((block) => block.type === 'item'
+      && [block.item.label, block.item.subtitle]
+        .some((value) => value?.toLocaleLowerCase().includes(normalizedQuery)))
+    : page.blocks;
 
   useEffect(() => {
     if (!cardSize) return;
     Animated.timing(progress, { duration: ENTER_DURATION, toValue: 1, useNativeDriver: true }).start();
   }, [cardSize, progress]);
+
+  useEffect(() => {
+    if (!selectedRowLayout || !scrollViewportHeight) return;
+    const centered = selectedRowLayout.y - Math.max(0, (scrollViewportHeight - selectedRowLayout.height) / 2);
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ animated: false, y: Math.max(0, centered) });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedRowLayout, scrollViewportHeight]);
 
   const dismiss = useCallback(() => {
     if (dismissing) return;
@@ -77,8 +96,9 @@ export function FloatingMenu({ anchor, onDismiss, page: initialPage }: { anchor:
     item.onPress?.();
   };
 
-  const leading = floatingMenuHasLeadingIcon(page.blocks);
+  const leading = floatingMenuHasLeadingIcon(visibleBlocks);
   const rows: ReactNode[] = [];
+  const dense = page.dense === true;
   const separator = (key: string) => <View key={key} style={[styles.separator, { backgroundColor: colors.border }]} />;
   const label = (key: string, text: string, kind: 'title' | 'section') => (
     <Text key={key} numberOfLines={2} style={[styles.label, kind === 'title' ? styles.menuTitle : styles.sectionLabel, { color: kind === 'title' ? colors.text : colors.textMuted }]}>{text}</Text>
@@ -92,9 +112,12 @@ export function FloatingMenu({ anchor, onDismiss, page: initialPage }: { anchor:
     </Pressable>);
   }
 
-  for (const block of page.blocks) {
+  for (const block of visibleBlocks) {
     if (block.type === 'item') {
-      rows.push(renderItem(block.item, colors, leading, pick));
+      rows.push(renderItem(block.item, colors, leading, pick, dense, (event: LayoutChangeEvent) => {
+        const { height, y } = event.nativeEvent.layout;
+        setSelectedRowLayout({ height, y });
+      }));
       continue;
     }
     if (rows.length) rows.push(separator(`${block.key}-divider`));
@@ -105,7 +128,7 @@ export function FloatingMenu({ anchor, onDismiss, page: initialPage }: { anchor:
   return <Modal animationType="none" navigationBarTranslucent onRequestClose={dismiss} statusBarTranslucent transparent visible>
     <View style={styles.root}>
       <Animated.View pointerEvents="none" style={[styles.backdrop, { opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [0, anchor.point ? 0.32 : 0.08] }) }]} />
-      <Pressable accessibilityLabel={initialPage.title} onPress={dismiss} style={StyleSheet.absoluteFill} />
+      <Pressable accessibilityLabel={accessibilityLabel || initialPage.title} onPress={dismiss} style={StyleSheet.absoluteFill} />
       <Animated.View
         onLayout={(event) => setCardSize({ height: event.nativeEvent.layout.height, width: event.nativeEvent.layout.width })}
         style={[styles.card, {
@@ -119,13 +142,43 @@ export function FloatingMenu({ anchor, onDismiss, page: initialPage }: { anchor:
           width,
         }]}
       >
-        <ScrollView bounces={false} contentContainerStyle={styles.cardContent} showsVerticalScrollIndicator={false}>{rows}</ScrollView>
+        {page.search ? <View style={[styles.search, { borderBottomColor: colors.border }]}>
+          <TextInput
+            accessibilityLabel={page.search.placeholder}
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setQuery}
+            placeholder={page.search.placeholder}
+            placeholderTextColor={colors.textPlaceholder}
+            returnKeyType="search"
+            style={[styles.searchInput, { color: colors.text }]}
+            value={query}
+          />
+        </View> : null}
+        <ScrollView
+          bounces={false}
+          contentContainerStyle={styles.cardContent}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          onLayout={(event) => setScrollViewportHeight(event.nativeEvent.layout.height)}
+          ref={scrollRef}
+          showsVerticalScrollIndicator={false}
+        >{normalizedQuery && !rows.length
+          ? <Text style={[styles.empty, { color: colors.textMuted }]}>{page.search?.emptyLabel}</Text>
+          : rows}</ScrollView>
       </Animated.View>
     </View>
   </Modal>;
 }
 
-function renderItem(item: FloatingMenuItem, colors: MobileThemeColors, leading: boolean, pick: (item: FloatingMenuItem) => void) {
+function renderItem(
+  item: FloatingMenuItem,
+  colors: MobileThemeColors,
+  leading: boolean,
+  pick: (item: FloatingMenuItem) => void,
+  dense: boolean,
+  onSelectedLayout?: (event: LayoutChangeEvent) => void,
+) {
   const tint = item.disabled ? colors.textMuted : item.destructive ? colors.error : item.iconColor || colors.textMuted;
   return <Pressable
     accessibilityHint={item.subtitle}
@@ -134,8 +187,9 @@ function renderItem(item: FloatingMenuItem, colors: MobileThemeColors, leading: 
     accessibilityState={{ disabled: Boolean(item.disabled), selected: Boolean(item.selected) }}
     disabled={item.disabled}
     key={item.key}
+    onLayout={item.selected ? onSelectedLayout : undefined}
     onPress={() => pick(item)}
-    style={({ pressed }) => [styles.row, pressed && !item.disabled && { backgroundColor: colors.surface }]}
+    style={({ pressed }) => [styles.row, dense && styles.rowDense, pressed && !item.disabled && { backgroundColor: colors.surface }]}
   >
     {leading ? <View style={styles.iconSlot}>
       {item.selected
@@ -145,8 +199,8 @@ function renderItem(item: FloatingMenuItem, colors: MobileThemeColors, leading: 
           : item.icon ? <MenuIcon color={tint} name={item.icon} size={20} /> : null}
     </View> : null}
     <View style={styles.copy}>
-      <Text numberOfLines={2} style={[styles.rowLabel, { color: item.disabled ? colors.textMuted : item.destructive ? colors.error : colors.text, opacity: item.disabled ? 0.55 : 1 }]}>{item.label}</Text>
-      {item.subtitle ? <Text numberOfLines={2} style={[styles.subtitle, { color: colors.textMuted }]}>{item.subtitle}</Text> : null}
+      <Text numberOfLines={dense ? 1 : 2} style={[styles.rowLabel, dense && styles.rowLabelDense, { color: item.disabled ? colors.textMuted : item.destructive ? colors.error : colors.text, opacity: item.disabled ? 0.55 : 1 }]}>{item.label}</Text>
+      {item.subtitle ? <Text numberOfLines={dense ? 1 : 2} style={[styles.subtitle, dense && styles.subtitleDense, { color: colors.textMuted }]}>{item.subtitle}</Text> : null}
     </View>
     {item.submenu ? <MenuIcon color={colors.textMuted} name="chevron-forward" size={18} /> : null}
   </Pressable>;
@@ -168,14 +222,20 @@ const styles = StyleSheet.create({
   },
   cardContent: { paddingVertical: 4 },
   copy: { flex: 1, gap: 1 },
+  empty: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, paddingHorizontal: 16, paddingVertical: 18, textAlign: 'center' },
   iconImage: { height: 20, width: 20 },
   iconSlot: { alignItems: 'center', justifyContent: 'center', minWidth: 22 },
   label: { fontSize: mobileWebType.small, fontWeight: '600', lineHeight: mobileWebType.smallLine, paddingHorizontal: 16, paddingVertical: 6 },
   menuTitle: { fontSize: mobileWebType.body, fontWeight: '700', lineHeight: mobileWebType.metaLine },
   root: { flex: 1 },
   row: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 44, paddingHorizontal: 16, paddingVertical: 11 },
+  rowDense: { gap: 8, minHeight: 38, paddingVertical: 4 },
   rowLabel: { fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
+  rowLabelDense: { fontSize: mobileWebType.small, lineHeight: 17 },
+  search: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: 8, paddingVertical: 6 },
+  searchInput: { borderWidth: 0, fontSize: mobileWebType.small, height: 34, paddingHorizontal: 4, paddingVertical: 0 },
   sectionLabel: { textTransform: 'none' },
   separator: { height: StyleSheet.hairlineWidth, marginVertical: 4 },
   subtitle: { fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },
+  subtitleDense: { fontSize: mobileWebType.tiny, lineHeight: 15 },
 });

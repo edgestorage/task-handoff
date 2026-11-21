@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
+const activityText = fs.readFileSync(new URL("../src/components/ai-session/aiSessionActivityText.ts", import.meta.url), "utf8");
 const activityGroup = fs.readFileSync(new URL("../src/components/ai-session/AiSessionActivityGroup.vue", import.meta.url), "utf8");
 const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
 const queue = fs.readFileSync(new URL("../src/components/ai-session/AiSessionQueue.vue", import.meta.url), "utf8");
@@ -20,8 +21,9 @@ test("tool activity uses the authoritative API projection", () => {
   assert.match(types, /export type AiSessionTool = ProtocolAiSessionTool/);
   assert.match(types, /export type AiSessionSummary = SharedControlPlaneAiSessionSummary/);
   assert.match(activity, /props\.toolCallsSinceLastMessage/);
-  assert.match(activity, /props\.currentTool\?\.name/);
+  assert.match(activity, /props\.currentTool/);
   assert.match(activity, /props\.summary/);
+  assert.match(activity, /aiSessionActivityText\(\{/);
   assert.doesNotMatch(activity, /watch\(\(\) => props/);
 });
 
@@ -68,13 +70,13 @@ test("background Timeline loading affects history without hiding authoritative l
 });
 
 test("tool activity projects the current execution into one line", () => {
-  assert.match(activity, /`\$\{props\.currentTool\.name\} · \$\{props\.currentTool\.inputPreview\}`/);
-  assert.match(activity, /t\("sessions\.activity\.thinking"\)/);
-  assert.match(activity, /t\("sessions\.activity\.thinkingTools", \{ count: count\.value \}\)/);
-  assert.match(activity, /t\("sessions\.activity\.waitingApproval"\)/);
-  assert.match(activity, /`\$\{t\("sessions\.status\.waitingApproval"\)\} · \$\{props\.summary\}`/);
-  assert.match(activity, /t\("sessions\.activity\.responding"\)/);
-  assert.match(activity, /props\.phase === "responding"[\s\S]*?count\.value > 0[\s\S]*?t\("sessions\.activity\.respondingTools", \{ count: count\.value \}\)/);
+  assert.match(activityText, /`\$\{activity\.currentTool\.name\} · \$\{activity\.currentTool\.inputPreview\}`/);
+  assert.match(activityText, /t\("sessions\.activity\.thinking"\)/);
+  assert.match(activityText, /t\("sessions\.activity\.thinkingTools", \{ count \}\)/);
+  assert.match(activityText, /t\("sessions\.activity\.waitingApproval"\)/);
+  assert.match(activityText, /`\$\{t\("sessions\.status\.waitingApproval"\)\} · \$\{activity\.summary\}`/);
+  assert.match(activityText, /t\("sessions\.activity\.responding"\)/);
+  assert.match(activityText, /activity\.phase === "responding"[\s\S]*?count > 0[\s\S]*?t\("sessions\.activity\.respondingTools", \{ count \}\)/);
   assert.match(activity, /\.ai-session-tool-activity-trigger \{[\s\S]*?font-weight: 400;[\s\S]*?line-height: 1\.45;/);
   assert.match(activity, /\.ai-session-tool-activity-trigger > span \{ font-weight: 400; \}/);
   assert.match(activity, /text-overflow: ellipsis/);

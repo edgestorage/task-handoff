@@ -15,6 +15,7 @@ const modules = {
   "@lucide/vue": {},
   "@task-handoff/web-theme/MarkdownContent.vue": {},
   "./AiSessionActivityGroup.vue": {},
+  "./aiSessionActivityText": { aiSessionActivityText: () => "" },
   "./disclosureTransition": transitions,
 };
 const componentExports = {};

@@ -823,11 +823,14 @@
               v-if="effectiveTimelineViewMode === 'compact'"
               :count="promptCount(selectedSession)"
               :index="promptIndexFor(selectedSession)"
+              :items="turnNavigatorItems(selectedSession)"
               :aria-label="t('sessions.composer.navigation')"
               :latest-label="t('sessions.panel.backLatestTurn')"
               :previous-label="t('sessions.actions.previousMessage', { agent: selectedSession.agent })"
               :next-label="t('sessions.actions.nextMessage', { agent: selectedSession.agent })"
               stable-latest
+              @open="loadAllSelectedSessionTurns"
+              @select="setPromptIndex(selectedSession, $event)"
               @latest="backToLatestPrompt(selectedSession)"
               @previous="previousPrompt(selectedSession)"
               @next="nextPrompt(selectedSession)"
@@ -1150,6 +1153,13 @@
         </Button>
         <div class="session-ai-compose-gradient" aria-hidden="true" />
         <div ref="composerStackEl" class="session-ai-compose-stack">
+          <AiSessionRunningTurnCapsule
+            :prompt-count="promptCount(selectedSession)"
+            :prompt-index="promptIndexFor(selectedSession)"
+            :session="selectedConversationSession || selectedSession"
+            :timeline-mode="effectiveTimelineViewMode"
+            @latest="backToLatestPrompt(selectedSession)"
+          />
           <AiSessionDecisionPrompt
             v-if="selectedSession?.storyId"
             class="session-ai-compose-decisions"
@@ -1444,6 +1454,7 @@ import type { LaunchableApp } from "../useInstanceSessions";
 import type { InstanceAction } from "../useInstanceActions";
 import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionRunningTurnCapsule from "../../../components/ai-session/AiSessionRunningTurnCapsule.vue";
 import AiSessionDecisionPrompt from "../../../components/ai-session/AiSessionDecisionPrompt.vue";
 import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
 import { prepareQueuedMessageEditAttachments, queuedMessageComposerAttachments, uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
@@ -1528,6 +1539,7 @@ import {
   aiSessionAppNavigationTarget,
   aiSessionBasename,
   aiSessionStatusLabel,
+  aiSessionTurnMenuItems,
   aiSessionTurns,
   displayAiSessionMessage,
   displayAiSessionResponse,
@@ -3008,6 +3020,13 @@ function promptCount(session: AiSessionSummary) {
     ? selectedConversationSession.value
     : session;
   return conversation.turns ? aiSessionTurns(conversation).length : conversation.turnCount ?? 0;
+}
+
+function turnNavigatorItems(session: AiSessionSummary) {
+  const conversation = selectedConversationSession.value?.id === session.id
+    ? selectedConversationSession.value
+    : session;
+  return aiSessionTurnMenuItems(conversation, promptCount(session), t);
 }
 
 function latestPromptIndex(session: AiSessionSummary) {

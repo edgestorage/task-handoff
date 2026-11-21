@@ -51,14 +51,17 @@
               v-if="timelineMode === 'compact'"
               :count="promptCount"
               :index="promptIndex"
+              :items="turnNavigatorItems"
               :aria-label="t('sessions.composer.navigation')"
               :latest-label="t('sessions.panel.backLatestTurn')"
               :previous-label="t('sessions.actions.previousMessage', { agent: card.session.agent })"
               :next-label="t('sessions.actions.nextMessage', { agent: card.session.agent })"
               stable-latest
+              @open="$emit('loadTurnBodies')"
               @latest="$emit('latestPrompt')"
               @previous="$emit('previousPrompt')"
               @next="$emit('nextPrompt')"
+              @select="$emit('selectPrompt', $event)"
             />
             <TooltipProvider :delay-duration="120">
               <Tooltip>
@@ -158,6 +161,14 @@
     </Transition>
 
     <div class="ai-board-floating-compose-stack">
+      <AiSessionRunningTurnCapsule
+        :prompt-count="promptCount"
+        :prompt-index="promptIndex"
+        :session="conversationSession"
+        :timeline-mode="timelineMode"
+        tone="board"
+        @latest="$emit('latestPrompt')"
+      />
       <AiSessionQueue
         v-if="(timelineMode === 'full' || queuePlacement === 'composer') && conversationSession.queue.items.length"
         class="ai-board-floating-compose-queue"
@@ -233,6 +244,7 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionGoalBadge from "../../../components/ai-session/AiSessionGoalBadge.vue";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionRunningTurnCapsule from "../../../components/ai-session/AiSessionRunningTurnCapsule.vue";
 import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
 import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionCompactPrompt.vue";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
@@ -254,6 +266,7 @@ import {
   aiSessionAppDisplayName,
   aiSessionBasename,
   aiSessionTurns,
+  aiSessionTurnMenuItems,
   displayAiSessionTitle,
 } from "../useInstanceSessions";
 import type { AiBoardCard } from "./aiBoardTypes";
@@ -307,11 +320,13 @@ const emit = defineEmits<{
   editQueuedMessage: [payload: { queueId: string; message: string }];
   editGoal: [];
   latestPrompt: [];
+  loadTurnBodies: [];
   loadTurnTimeline: [turnId: string, force?: boolean];
   loadToolActivityWindow: [turnId: string];
   nextPrompt: [];
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
   previousPrompt: [];
+  selectPrompt: [index: number];
   removeQueuedMessage: [queueId: string];
   reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
@@ -357,6 +372,11 @@ const promptTimestamp = computed(() => (
 ));
 const promptUserMessages = computed(() => (
   props.detailState === "ready" ? retainedPromptUserMessages() : []
+));
+const turnNavigatorItems = computed(() => aiSessionTurnMenuItems(
+  props.conversationSession,
+  props.promptCount,
+  t,
 ));
 const agentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {
   const agent = props.card.session.agent;

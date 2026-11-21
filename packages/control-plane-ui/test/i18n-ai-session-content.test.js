@@ -97,9 +97,9 @@ test("raw tool names and previews are appended outside localized presentation", 
 });
 
 test("tool activity does not interpolate authoritative summary or tool fields through t", () => {
-  const source = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
-  assert.match(source, /\$\{t\("sessions\.status\.waitingApproval"\)\} · \$\{props\.summary\}/);
-  assert.doesNotMatch(source, /t\([^)]*,\s*\{[^}]*props\.(?:summary|currentTool)/);
+  const source = fs.readFileSync(new URL("../src/components/ai-session/aiSessionActivityText.ts", import.meta.url), "utf8");
+  assert.match(source, /\$\{t\("sessions\.status\.waitingApproval"\)\} · \$\{activity\.summary\}/);
+  assert.doesNotMatch(source, /t\([^)]*,\s*\{[^}]*activity\.(?:summary|currentTool)/);
 });
 
 test("attachment-only provider content is locale-neutral and outside translation resources", () => {

@@ -34,6 +34,10 @@ export type FloatingMenuPage = {
   /** Title shown above a nested page. */
   title?: string;
   blocks: FloatingMenuBlock[];
+  /** Renders a fixed search field above the scrollable rows. */
+  search?: { emptyLabel: string; placeholder: string };
+  /** Uses single-line, lower-height rows for long scannable lists. */
+  dense?: boolean;
 };
 
 export function floatingMenuHasLeadingIcon(blocks: FloatingMenuBlock[]) {

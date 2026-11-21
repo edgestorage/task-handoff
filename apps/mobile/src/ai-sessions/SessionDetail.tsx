@@ -12,6 +12,8 @@ import { Icon } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingState } from '../components/LoadingState';
 import { MenuView, type MenuAction } from '../components/MenuView';
+import { FloatingMenuTrigger } from '../components/menu/FloatingMenuTrigger';
+import type { FloatingMenuPage } from '../components/menu/menu-model';
 import {
   ADAPTIVE_READING_MAX_WIDTH,
   adaptiveContentContainerStyle,
@@ -85,6 +87,7 @@ export function SessionDetail({
   onLoadTimeline,
   onLoadToolActivity,
   onRetryTimeline,
+  onTurnPickerOpen,
   onContinueFromTurn,
   onAddToConversation,
   onOpenBuiltinBrowser,
@@ -125,6 +128,7 @@ export function SessionDetail({
   onLoadTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onLoadToolActivity?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
   onRetryTimeline?(turn: Pick<AiSessionTurn, 'id' | 'providerTurnId'>): void;
+  onTurnPickerOpen?(): void;
   onContinueFromTurn?(turn: DetailTurn): void;
   onAddToConversation?(text: string): void;
   onOpenBuiltinBrowser?(url: string): void | Promise<void>;
@@ -334,6 +338,7 @@ export function SessionDetail({
     if (turnIndex === undefined) setLocalTurnSelection({ sessionId: session?.id, index: next });
     onTurnIndexChange?.(next);
   };
+  const turnPickerPage = sessionTurnPickerPage(turns, selectedIndex, selectTurn, t);
   const selectMode = (next: SessionDetailMode) => {
     if (mode === undefined) setLocalMode(next);
     onModeChange?.(next);
@@ -393,7 +398,23 @@ export function SessionDetail({
       </View>}
       {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator} testID="session-turn-navigator">
         <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex <= 0 }} disabled={navigationIndex <= 0} hitSlop={8} onPress={() => selectTurn(navigationIndex - 1)} style={[styles.turnButton, navigationIndex <= 0 && styles.turnButtonDisabled]}><Icon color={colors.primary} name="chevron-back" size={14} /></Pressable>
-        <Text style={[styles.turnIndex, { color: colors.textMuted }]}>{selectedIndex + 1} / {turns.length}</Text>
+        <FloatingMenuTrigger
+          accessibilityLabel={t('sessions.turnList')}
+          onOpen={onTurnPickerOpen}
+          page={turnPickerPage}
+          testID="session-turn-picker"
+        >
+          {(open) => <Pressable
+            accessibilityLabel={t('sessions.chooseTurn', { count: turns.length, index: selectedIndex + 1 })}
+            accessibilityRole="button"
+            onPress={open}
+            style={({ pressed }) => [styles.turnIndexButton, pressed && styles.turnButtonPressed]}
+            testID="session-turn-picker-trigger"
+          >
+            <Text style={[styles.turnIndex, { color: colors.textMuted }]}>{selectedIndex + 1} / {turns.length}</Text>
+            <Icon color={colors.textMuted} name="chevron-down" size={10} />
+          </Pressable>}
+        </FloatingMenuTrigger>
         <Pressable accessibilityLabel={t('sessions.nextTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex >= latestIndex }} disabled={navigationIndex >= latestIndex} hitSlop={8} onPress={() => selectTurn(navigationIndex + 1)} style={[styles.turnButton, navigationIndex >= latestIndex && styles.turnButtonDisabled]}><Icon color={colors.primary} name="chevron-forward" size={14} /></Pressable>
       </View> : null}
     </View>
@@ -976,6 +997,37 @@ export function aiSessionDisplayTurns(session: ControlPlaneAiSessionSummary | un
   return session?.turns ?? [];
 }
 
+export function sessionTurnPickerPage(
+  turns: readonly AiSessionTurn[],
+  selectedIndex: number,
+  onSelect: (index: number) => void,
+  t: Translate,
+): FloatingMenuPage {
+  return {
+    dense: true,
+    search: {
+      emptyLabel: t('sessions.noMatchingTurns'),
+      placeholder: t('sessions.searchTurns'),
+    },
+    blocks: turns.map((turn, index) => {
+      const prompt = turn.userPrompt?.replace(/\s+/g, ' ').trim();
+      const answer = (turn.summary || turn.lastMessage || '').replace(/\s+/g, ' ').trim();
+      const label = prompt || (turn.contextCompactions?.length ? '/compact' : t('sessions.turnNumber', { index: index + 1 }));
+      return {
+        item: {
+          key: turn.id,
+          label,
+          ...(answer ? { subtitle: answer } : {}),
+          selected: index === selectedIndex,
+          onPress: () => onSelect(index),
+        },
+        key: turn.id,
+        type: 'item' as const,
+      };
+    }),
+  };
+}
+
 export function sessionActivityText(session: ControlPlaneAiSessionSummary, t: Translate = english) {
   if (!['running', 'waiting'].includes(session.status) || isAiSessionApprovalPending(session)) return undefined;
   if (session.currentTool?.name) return session.currentTool.inputPreview
@@ -1183,7 +1235,9 @@ const styles = StyleSheet.create({
   turnNavigator: { alignItems: 'center', flexDirection: 'row', gap: 4 },
   turnButton: { alignItems: 'center', height: 32, justifyContent: 'center', width: 32 },
   turnButtonDisabled: { opacity: 0.3 },
-  turnIndex: { fontSize: mobileWebType.meta, fontVariant: ['tabular-nums'], fontWeight: '600', lineHeight: mobileWebType.metaLine, minWidth: 44, textAlign: 'center' },
+  turnButtonPressed: { opacity: 0.6 },
+  turnIndexButton: { alignItems: 'center', flexDirection: 'row', gap: 2, height: 32, justifyContent: 'center', minWidth: 44, paddingHorizontal: 3 },
+  turnIndex: { fontSize: mobileWebType.meta, fontVariant: ['tabular-nums'], fontWeight: '600', lineHeight: mobileWebType.metaLine, textAlign: 'center' },
   turnLoadingOverlay: { alignItems: 'center', left: 0, pointerEvents: 'none', position: 'absolute', right: 0, top: 104, zIndex: 2 },
   turnLoadingIndicator: { alignItems: 'center', borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, height: 36, justifyContent: 'center', width: 36 },
   statusDot: { borderRadius: 4, height: 8, width: 8 },

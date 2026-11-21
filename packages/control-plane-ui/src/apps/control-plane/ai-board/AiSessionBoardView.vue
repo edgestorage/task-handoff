@@ -215,6 +215,8 @@
           :tool-activity-windows="conversationToolActivityWindows"
           :supports-tool-activity="supportsToolActivity"
           @latest-prompt="backToLatestPrompt(selectedCard)"
+          @load-turn-bodies="loadAllSelectedCardTurns"
+          @select-prompt="setPromptIndex(selectedCard, $event)"
           @next-prompt="nextPrompt(selectedCard)"
           @select-model="selectSelectedSessionModel"
           @open-model-settings="emit('openInstanceSettings', selectedCard.instance.id, 'models')"

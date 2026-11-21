@@ -14,6 +14,7 @@ export type FloatingMenuTriggerHandle = { show(): void };
 type LongPressTriggerProps = { delayLongPress?: number; onLongPress?(event: GestureResponderEvent): void };
 
 type FloatingMenuTriggerProps = {
+  accessibilityLabel?: string;
   page?: FloatingMenuPage | null;
   disabled?: boolean;
   /**
@@ -37,7 +38,7 @@ type FloatingMenuTriggerProps = {
  * inside the trigger keeps working (RN's `Pressable` always claims the responder, which
  * is what made nested menu triggers unresponsive).
  */
-export function FloatingMenuTrigger({ children, disabled, longPress = false, onClose, onOpen, page, ref, style, testID }: FloatingMenuTriggerProps) {
+export function FloatingMenuTrigger({ accessibilityLabel, children, disabled, longPress = false, onClose, onOpen, page, ref, style, testID }: FloatingMenuTriggerProps) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const start = useRef<{ x: number; y: number } | null>(null);
   const moved = useRef(false);
@@ -115,6 +116,6 @@ export function FloatingMenuTrigger({ children, disabled, longPress = false, onC
       style={style}
       testID={testID}
     >{trigger}</View>
-    {anchor && page ? <FloatingMenu anchor={anchor} onDismiss={dismiss} page={page} /> : null}
+    {anchor && page ? <FloatingMenu accessibilityLabel={accessibilityLabel} anchor={anchor} onDismiss={dismiss} page={page} /> : null}
   </>;
 }
