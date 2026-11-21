@@ -55,6 +55,7 @@ test("detail navigators reserve a stable latest-turn action", () => {
   assert.match(navigator, /\.ai-session-turn-navigator__controls \{[\s\S]*?display: inline-flex;/);
   assert.match(navigator, /button\.ai-session-turn-navigator__latest \{[\s\S]*?display: inline-flex;[\s\S]*?border-left: 1px solid var\(--line-subtle\);[\s\S]*?border-radius: 0;/);
   assert.match(navigator, /button\.ai-session-turn-navigator__latest \{[\s\S]*?background: var\(--brand-accent-soft\);[\s\S]*?color: var\(--brand-accent\);/);
+  assert.match(navigator, /data-tone="panel"\] button\.ai-session-turn-navigator__latest \{[\s\S]*?background: transparent;[\s\S]*?color: inherit;/);
   assert.match(navigator, /data-tone="board"\] button\.ai-session-turn-navigator__latest \{[\s\S]*?background: var\(--ai-board-turn-hover-bg\);[\s\S]*?color: var\(--ai-board-active-text, var\(--brand-accent\)\);/);
   assert.match(navigator, /latestWidth\.value \/ 2/);
   assert.match(navigator, /new ResizeObserver\(\(\) => \{\s*latestWidth\.value = latestEl\.value\?\.getBoundingClientRect\(\)\.width/);
@@ -94,7 +95,7 @@ test("all viewport sizes share one compact detail actions menu", () => {
 });
 
 test("AI session details render messages without redundant section titles", () => {
-  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*?:content="selectedPromptSnapshot\.content"/);
+  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*?:content="displayedPromptSnapshot\.content"/);
   assert.match(panel, /<AiSessionConversationContent/);
   assert.match(floatingDock, /<AiSessionCompactPrompt[\s\S]*?:content="detailState === 'ready' \? displayAiSessionTitle/);
   assert.match(floatingDock, /<AiSessionConversationContent/);
@@ -123,7 +124,7 @@ test("compact Turn navigation loads the target body before committing selection"
   assert.match(board, /async function setPromptIndex[\s\S]*?await loadSelectedCardTurn\(targetTurn\.id\)[\s\S]*?promptIndexes\.value =/);
   assert.match(panel, /watch\(selectedPromptCandidate, \(candidate\) => \{\s*if \(candidate\) retainedPromptSnapshot\.value = candidate;/);
   assert.match(panel, /const selectedPromptSnapshot = computed\(\(\) => \{[\s\S]*?snapshot\.turnId !== turn\.id/);
-  assert.match(panel, /:content="selectedPromptSnapshot\.content"/);
+  assert.match(panel, /:content="displayedPromptSnapshot\.content"/);
   assert.match(floatingDock, /:content="detailState === 'ready' \? displayAiSessionTitle\(conversationSession, promptIndex, t\) : ''"/);
 });
 

@@ -824,25 +824,25 @@
   isolation: isolate;
   display: inline-grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  height: 32px;
-  width: 288px;
+  height: 34px;
+  width: 308px;
   overflow: hidden;
   border: 0;
   border-radius: 999px;
-  background: var(--workbench-view-switcher-bg, var(--surface-active));
+  background: transparent;
   box-shadow: none;
   padding: 2px;
 }
 
 .workbench-view-switcher[data-option-count="5"] {
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  width: 360px;
+  width: 384px;
 }
 
 /* The inline values keep the control aligned when views are added or removed. */
 .workbench-view-switcher[data-option-count] {
   grid-template-columns: repeat(var(--workbench-view-count, 4), minmax(0, 1fr));
-  width: var(--workbench-view-width, 288px);
+  width: var(--workbench-view-width, 308px);
 }
 
 .workbench-view-switcher::before {
@@ -964,7 +964,6 @@
   transform: translateY(-50%);
 }
 
-.control-plane-shell[data-header-density="compact"] .workbench-view-switcher,
 .control-plane-shell[data-header-density="compact"] .control-plane-settings-trigger.inline-flex,
 .control-plane-shell[data-header-density="compact"] .control-plane-user-trigger.inline-flex {
   height: 30px;

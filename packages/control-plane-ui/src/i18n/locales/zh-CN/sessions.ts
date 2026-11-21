@@ -149,6 +149,16 @@ export const sessions = {
     exitCode: "退出码：{code}",
     status: { running: "运行中", completed: "已完成", failed: "失败", waiting: "等待中" },
     commandStatus: { running: "运行中", completed: "已运行", failed: "运行失败", waiting: "等待运行", unknown: "运行命令" },
+    activityTitle: {
+      command: "命令", fileChange: "文件变更", fileChanges: "文件变更", editFile: "编辑文件", writeFile: "写入文件",
+      read: "读取", readFile: "读取文件", search: "搜索", searchFiles: "搜索文件", findFiles: "查找文件", list: "列出", explored: "已探索",
+      reasoning: "推理", plan: "计划", hookPrompt: "钩子提示", subAgentTask: "子代理任务", spawnAgent: "启动代理",
+      sendAgentInput: "发送代理输入", resumeAgent: "恢复代理", waitForAgents: "等待代理", closeAgent: "关闭代理",
+      subAgentActivity: "子代理活动", webSearch: "网页搜索", viewImage: "查看图片", sleep: "等待", imageGeneration: "图片生成",
+      enteredReviewMode: "进入审查模式", exitedReviewMode: "退出审查模式", contextCompaction: "压缩上下文",
+      codexRetry: "Codex 重试", retry: "重试", fetchUrl: "获取网址", updateTasks: "更新任务", askUser: "询问用户",
+      loadSkill: "加载技能", exitPlanMode: "退出计划模式", tool: "工具",
+    },
   },
   subAgents: {
     label: "子 Agent 活动", summary: "子 Agent · {details}", pending: "等待中", running: "运行中", interrupted: "已中断", completed: "已完成",

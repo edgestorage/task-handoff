@@ -27,9 +27,9 @@ beforeEach(() => { secureStore.__store.clear(); });
 
 test('parses the persisted session view and defaults unknown values to compact', () => {
   const { parseAiSessionViewPreferences } = loadPreferences();
-  expect(parseAiSessionViewPreferences(JSON.stringify({ version: 1, detailMode: 'conversation' }))).toEqual({ detailMode: 'conversation' });
-  expect(parseAiSessionViewPreferences(JSON.stringify({ version: 1, detailMode: 'turn' }))).toEqual({ detailMode: 'turn' });
-  expect(parseAiSessionViewPreferences(JSON.stringify({ version: 1, detailMode: 'unsupported' }))).toEqual({ detailMode: 'turn' });
+  expect(parseAiSessionViewPreferences(JSON.stringify({ version: 1, detailMode: 'conversation' }))).toEqual({ detailMode: 'conversation', toolActivityExpanded: false });
+  expect(parseAiSessionViewPreferences(JSON.stringify({ version: 1, detailMode: 'turn', toolActivityExpanded: true }))).toEqual({ detailMode: 'turn', toolActivityExpanded: true });
+  expect(parseAiSessionViewPreferences(JSON.stringify({ version: 1, detailMode: 'unsupported', toolActivityExpanded: 'yes' }))).toEqual({ detailMode: 'turn', toolActivityExpanded: false });
   expect(parseAiSessionViewPreferences(JSON.stringify({ version: 99, detailMode: 'conversation' }))).toBeUndefined();
   expect(parseAiSessionViewPreferences('not json')).toBeUndefined();
   expect(parseAiSessionViewPreferences(null)).toBeUndefined();
@@ -44,9 +44,23 @@ test('keeps the selected session view after the module reloads', async () => {
   unsubscribe();
 
   const reloaded = loadPreferences();
-  expect(reloaded.getAiSessionViewPreferences()).toEqual({ detailMode: 'turn' });
+  expect(reloaded.getAiSessionViewPreferences()).toEqual({ detailMode: 'turn', toolActivityExpanded: false });
   const unsubscribeReloaded = reloaded.subscribeAiSessionViewPreferences(() => undefined);
   await flush();
-  expect(reloaded.getAiSessionViewPreferences()).toEqual({ detailMode: 'conversation' });
+  expect(reloaded.getAiSessionViewPreferences()).toEqual({ detailMode: 'conversation', toolActivityExpanded: false });
+  unsubscribeReloaded();
+});
+
+test('keeps the tool activity disclosure state after the module reloads', async () => {
+  const first = loadPreferences();
+  const unsubscribe = first.subscribeAiSessionViewPreferences(() => undefined);
+  first.updateAiSessionViewPreferences({ toolActivityExpanded: true });
+  await flush();
+  unsubscribe();
+
+  const reloaded = loadPreferences();
+  const unsubscribeReloaded = reloaded.subscribeAiSessionViewPreferences(() => undefined);
+  await flush();
+  expect(reloaded.getAiSessionViewPreferences().toolActivityExpanded).toBe(true);
   unsubscribeReloaded();
 });

@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
+import { localizedAiSessionActivityTitle, localizedAiSessionToolName } from "@task-handoff/control-plane-client";
+import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
+
 const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
 const activityText = fs.readFileSync(new URL("../src/components/ai-session/aiSessionActivityText.ts", import.meta.url), "utf8");
 const activityGroup = fs.readFileSync(new URL("../src/components/ai-session/AiSessionActivityGroup.vue", import.meta.url), "utf8");
@@ -30,8 +33,10 @@ test("tool activity uses the authoritative API projection", () => {
 test("tool activity starts expansion only after its bounded window is ready", () => {
   const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
   assert.doesNotMatch(activity, /requestExpand|activityRevision/);
-  assert.match(activity, /const expanded = ref\(false\);/);
-  assert.match(activity, /const expandPending = ref\(false\);/);
+  assert.match(activity, /const TOOL_ACTIVITY_EXPANDED_STORAGE_KEY = "task-handoff\.control-plane\.ai-session-tool-activity-expanded";/);
+  assert.match(activity, /const expanded = ref\(restoredExpanded && \(props\.contentLoaded \|\| props\.unavailable\)\);/);
+  assert.match(activity, /onMounted\(\(\) => \{\s*if \(expandPending\.value && !props\.loading\) emit\("load"\);\s*\}\);/);
+  assert.match(activity, /const expandPending = ref\(restoredExpanded && !expanded\.value\);/);
   assert.match(activity, /const emit = defineEmits<\{ addToConversation: \[content: string\]; load: \[\] \}>\(\);/);
   assert.match(activity, /if \(props\.contentLoaded \|\| props\.unavailable\) \{[\s\S]*expanded\.value = true;[\s\S]*return;/);
   assert.match(activity, /expandPending\.value = true;[\s\S]*if \(!props\.loading\) emit\("load"\)/);
@@ -70,7 +75,8 @@ test("background Timeline loading affects history without hiding authoritative l
 });
 
 test("tool activity projects the current execution into one line", () => {
-  assert.match(activityText, /`\$\{activity\.currentTool\.name\} · \$\{activity\.currentTool\.inputPreview\}`/);
+  assert.match(activityText, /const toolName = localizedAiSessionToolName\(activity\.currentTool\.name, t\);/);
+  assert.match(activityText, /`\$\{toolName\} · \$\{activity\.currentTool\.inputPreview\}`/);
   assert.match(activityText, /t\("sessions\.activity\.thinking"\)/);
   assert.match(activityText, /t\("sessions\.activity\.thinkingTools", \{ count \}\)/);
   assert.match(activityText, /t\("sessions\.activity\.waitingApproval"\)/);
@@ -88,6 +94,17 @@ test("tool activity projects the current execution into one line", () => {
   assert.match(floatingDock, /ai-board-floating-block > div \{[\s\S]*?font-size: 14px/);
   assert.match(panelCss, /session-ai-question \{[\s\S]*?font-size: 14px/);
   assert.match(panelCss, /session-ai-message \{[\s\S]*?font-size: 14px/);
+});
+
+test("backend activity and tool labels render in the active locale", () => {
+  const chinese = createControlPlaneI18nForTest("zh-CN").global.t;
+  assert.equal(localizedAiSessionActivityTitle({ activityKind: "commandExecution", title: "Command" }, chinese), "命令");
+  assert.equal(localizedAiSessionActivityTitle({ activityKind: "fileChange", title: "File change" }, chinese), "文件变更");
+  assert.equal(localizedAiSessionActivityTitle({ activityKind: "fileSearch", title: "Search" }, chinese), "搜索");
+  assert.equal(localizedAiSessionActivityTitle({ activityKind: "fileRead", title: "Read" }, chinese), "读取");
+  assert.equal(localizedAiSessionToolName("Search", chinese), "搜索");
+  assert.equal(localizedAiSessionToolName("Read", chinese), "读取");
+  assert.equal(localizedAiSessionToolName("server · custom_tool", chinese), "server · custom_tool");
 });
 
 test("tool activity follows the authoritative active lifecycle", () => {
@@ -207,7 +224,7 @@ test("floating detail spacing below the prompt divider does not depend on respon
 });
 
 test("detail user prompts collapse to three lines with a local toggle", () => {
-  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*:timestamp="selectedPromptSnapshot\.timestamp"/);
+  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*:timestamp="displayedPromptSnapshot\.timestamp"/);
   assert.match(panel, /timestamp: turn\?\.startedAt \|\| session\.startedAt/);
   assert.match(compactPrompt, /class="ai-session-user-prompt-content"[\s\S]*:class="\{ expanded, 'has-overflow': hasOverflow \}"/);
   assert.match(compactPrompt, /<AiSessionMessageAttachments[\s\S]*v-for="message in attachmentMessages"[\s\S]*compact/);

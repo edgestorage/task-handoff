@@ -1,5 +1,6 @@
 import type { AiSessionLifecycle, AiSessionPhase, AiSessionTool } from "../../api/types";
 import type { Translate } from "../../i18n/status";
+import { localizedAiSessionToolName } from "@task-handoff/control-plane-client";
 
 export function aiSessionActivityText(
   activity: {
@@ -18,9 +19,10 @@ export function aiSessionActivityText(
       : t("sessions.activity.waitingApproval");
   }
   if (activity.currentTool?.name) {
+    const toolName = localizedAiSessionToolName(activity.currentTool.name, t);
     return activity.currentTool.inputPreview
-      ? `${activity.currentTool.name} · ${activity.currentTool.inputPreview}`
-      : activity.currentTool.name;
+      ? `${toolName} · ${activity.currentTool.inputPreview}`
+      : toolName;
   }
   if (activity.phase === "responding") {
     return count > 0

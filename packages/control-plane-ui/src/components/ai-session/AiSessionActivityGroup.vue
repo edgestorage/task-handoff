@@ -1,9 +1,10 @@
 <template>
   <section class="ai-session-activity-group">
-    <button v-if="summaryVisible" type="button" class="ai-session-activity-group-summary" :aria-expanded="groupOpen" @click="toggleGroup">
-      <ChevronRight :size="15" />
+    <button v-if="summaryAvailable" type="button" class="ai-session-activity-group-summary" :aria-expanded="groupOpen" @click="toggleGroup">
+      <ListTree class="ai-session-activity-group-icon" :size="15" aria-hidden="true" />
       <span>{{ summaryLabel }}</span>
-      <small v-if="latest">{{ latest.title }}</small>
+      <small v-if="latest">{{ activityLabel(latest) }}</small>
+      <ChevronDown class="ai-session-activity-group-chevron" :size="15" aria-hidden="true" />
     </button>
     <Transition
       name="activity-disclosure"
@@ -16,8 +17,8 @@
       @after-leave="finishDisclosureLeave"
       @leave-cancelled="cancelDisclosureTransition"
     >
-      <div v-if="groupOpen" class="ai-session-activity-list">
-        <div class="ai-session-activity-list-content" :class="{ 'ai-session-activity-list-inline': !summaryVisible }">
+      <div v-if="groupVisible" class="ai-session-activity-list">
+        <div class="ai-session-activity-list-content">
           <div
             v-for="activity in activities"
             :key="activity.id"
@@ -25,15 +26,15 @@
             :data-status="activity.status"
           >
             <button v-if="hasDetails(activity)" type="button" class="ai-session-activity-item-head" :aria-expanded="activityOpen(activity)" @click="toggleActivity(activity.id, $event)">
-              <ChevronRight v-if="!activityIcon(activity)" class="ai-session-activity-disclosure-icon" :size="14" aria-hidden="true" />
-              <component :is="activityIcon(activity)" v-else class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
+              <ChevronRight v-if="!activityIcon(activity)" class="ai-session-activity-disclosure-icon" :size="15" aria-hidden="true" />
+              <component :is="activityIcon(activity)" v-else class="ai-session-activity-kind-icon" :size="15" aria-hidden="true" />
               <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
               <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
               <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
-              <ChevronRight v-if="activityIcon(activity)" class="ai-session-activity-disclosure-trailing" :size="14" aria-hidden="true" />
+              <ChevronRight v-if="activityIcon(activity)" class="ai-session-activity-disclosure-trailing" :size="15" aria-hidden="true" />
             </button>
             <div v-else class="ai-session-activity-item-head">
-              <component :is="activityIcon(activity)" v-if="activityIcon(activity)" class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
+              <component :is="activityIcon(activity)" v-if="activityIcon(activity)" class="ai-session-activity-kind-icon" :size="15" aria-hidden="true" />
               <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
               <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
               <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
@@ -92,6 +93,7 @@ import {
   Bot,
   BookOpen,
   Brain,
+  ChevronDown,
   ChevronRight,
   CircleHelp,
   ClipboardCheck,
@@ -100,6 +102,7 @@ import {
   FileSearch,
   FolderOpen,
   Image as ImageIcon,
+  ListTree,
   ListTodo,
   Minimize2,
   Download,
@@ -111,6 +114,7 @@ import {
   Wrench,
 } from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
+import { localizedAiSessionActivityTitle } from "@task-handoff/control-plane-client";
 import { ScrollArea } from "../ui/scroll-area";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 import AiSessionCommandResult from "./AiSessionCommandResult.vue";
@@ -169,8 +173,10 @@ const markdownCodeTools = computed(() => ({
 }));
 const latest = computed(() => props.activities.at(-1));
 const summaryLabel = computed(() => t("sessions.timeline.activityCount", { count: props.activities.length }));
+const summaryAvailable = computed(() => props.summaryVisible && props.activities.length > 1);
 const fileChangesByActivityId = computed(() => new Map(props.activities.map((activity) => [activity.id, aiSessionFileChanges(activity)])));
 const groupOpen = ref(props.summaryVisible ? props.open : true);
+const groupVisible = computed(() => !summaryAvailable.value || groupOpen.value);
 const openActivities = ref(new Set<string>());
 const reasoningMenuOpen = ref(false);
 const selectedReasoningText = ref("");
@@ -213,7 +219,7 @@ function activityIcon(activity: AiSessionTimelineActivity) {
   return activityIcons[activity.activityKind];
 }
 function activityLabel(activity: AiSessionTimelineActivity) {
-  if (!isCommandActivity(activity)) return activity.title;
+  if (!isCommandActivity(activity)) return localizedAiSessionActivityTitle(activity, t);
   return t(`sessions.timeline.commandStatus.${activity.status || "unknown"}`);
 }
 function activitySummary(activity: AiSessionTimelineActivity) {
@@ -236,6 +242,9 @@ function runtimePathBasename(path: string) {
 
 <style scoped>
 .ai-session-activity-group {
+  --ai-session-activity-gap: 6px;
+  display: grid;
+  gap: var(--ai-session-activity-gap);
   min-width: 0;
   color: var(--text-muted);
 }
@@ -260,7 +269,7 @@ function runtimePathBasename(path: string) {
   flex: 0 0 auto;
   transition: transform 120ms ease;
 }
-.ai-session-activity-group-summary[aria-expanded="true"] svg { transform: rotate(90deg); }
+.ai-session-activity-group-summary[aria-expanded="false"] .ai-session-activity-group-chevron { transform: rotate(-90deg); }
 .ai-session-activity-group-summary span {
   color: var(--text-muted);
   font-weight: 400;
@@ -279,10 +288,8 @@ function runtimePathBasename(path: string) {
 }
 .ai-session-activity-list-content {
   display: grid;
-  gap: 6px;
-  padding: 8px 0 0 20px;
+  gap: var(--ai-session-activity-gap);
 }
-.ai-session-activity-list-inline { padding: 0; }
 .ai-session-activity-item {
   display: grid;
   gap: 0;

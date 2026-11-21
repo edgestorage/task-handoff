@@ -20,9 +20,10 @@
       :aria-busy="awaitingContent"
       @click="toggleExpanded"
     >
-      <LoaderCircle v-if="awaitingContent" class="ai-session-tool-activity-loading-icon" :size="15" :aria-label="t('sessions.timeline.loading')" />
-      <ChevronRight v-else :size="15" :class="{ open: expanded }" />
+      <ListTree class="ai-session-tool-activity-icon" :size="15" aria-hidden="true" />
       <span ref="activityTextEl" :data-status-text="statusText">{{ statusText }}</span>
+      <LoaderCircle v-if="awaitingContent" class="ai-session-tool-activity-loading-icon" :size="15" :aria-label="t('sessions.timeline.loading')" />
+      <ChevronDown v-else class="ai-session-tool-activity-chevron" :class="{ open: expanded }" :size="15" aria-hidden="true" />
     </button>
     <span v-else ref="activityTextEl" :data-status-text="statusText">{{ statusText }}</span>
     <span v-if="loadFailed && !expanded" class="ai-session-tool-activity-error" role="alert">{{ t("sessions.timeline.activityLoadFailed") }}</span>
@@ -62,9 +63,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronRight, LoaderCircle } from "@lucide/vue";
+import { ChevronDown, ListTree, LoaderCircle } from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionLifecycle, AiSessionPhase, AiSessionTool } from "../../api/types";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
@@ -126,8 +127,30 @@ const displayNodes = computed<TimelineTurnNode[]>(() => props.nodes.length
 
 const count = computed(() => Math.max(0, props.toolCallsSinceLastMessage));
 const visible = computed(() => props.status === "running" || props.status === "waiting");
-const expanded = ref(false);
-const expandPending = ref(false);
+const TOOL_ACTIVITY_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.ai-session-tool-activity-expanded";
+
+function readExpandedPreference() {
+  try {
+    return typeof window !== "undefined"
+      && window.localStorage.getItem(TOOL_ACTIVITY_EXPANDED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function persistExpandedPreference(value: boolean) {
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(TOOL_ACTIVITY_EXPANDED_STORAGE_KEY, String(value));
+    }
+  } catch {
+    // The disclosure still works when storage is unavailable.
+  }
+}
+
+const restoredExpanded = props.interactive && readExpandedPreference();
+const expanded = ref(restoredExpanded && (props.contentLoaded || props.unavailable));
+const expandPending = ref(restoredExpanded && !expanded.value);
 const triggerElement = ref<HTMLElement>();
 const shimmerDuration = ref(2.2);
 const shimmerSweepStop = ref("50%");
@@ -155,6 +178,9 @@ watch(activityTextEl, (element) => {
 }, { flush: "post" });
 
 onBeforeUnmount(() => resizeObserver?.disconnect());
+onMounted(() => {
+  if (expandPending.value && !props.loading) emit("load");
+});
 const loadFailed = computed(() => Boolean(props.error) && !props.contentLoaded && !props.loading && !props.unavailable);
 const awaitingContent = computed(() => expandPending.value && !loadFailed.value);
 watch(() => [props.contentLoaded, props.loading, props.error, props.unavailable] as const, () => {
@@ -170,19 +196,25 @@ function toggleExpanded(event: MouseEvent) {
   if (expanded.value) {
     beginDisclosureTransition(trigger);
     expanded.value = false;
+    persistExpandedPreference(false);
     return;
   }
   if (expandPending.value) {
     if (loadFailed.value) emit("load");
-    else expandPending.value = false;
+    else {
+      expandPending.value = false;
+      persistExpandedPreference(false);
+    }
     return;
   }
   if (props.contentLoaded || props.unavailable) {
     beginDisclosureTransition(trigger);
     expanded.value = true;
+    persistExpandedPreference(true);
     return;
   }
   expandPending.value = true;
+  persistExpandedPreference(true);
   if (!props.loading) emit("load");
 }
 const statusText = computed(() => {
@@ -236,14 +268,14 @@ const statusText = computed(() => {
 }
 .ai-session-tool-activity-trigger > span { font-weight: 400; }
 .ai-session-tool-activity-trigger > svg { flex: 0 0 auto; color: var(--text-muted); transition: transform 120ms ease; }
-.ai-session-tool-activity-trigger > svg.open { transform: rotate(90deg); }
+.ai-session-tool-activity-trigger > .ai-session-tool-activity-chevron { transform: rotate(-90deg); }
+.ai-session-tool-activity-trigger > .ai-session-tool-activity-chevron.open { transform: none; }
 .ai-session-tool-activity-loading-icon { animation: tool-activity-spin 800ms linear infinite; }
 .ai-session-tool-activity-error {
   flex: 0 0 100%;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
-  padding-left: 20px;
 }
 .ai-session-tool-activity-expanded {
   flex: 0 0 100%;
@@ -255,8 +287,7 @@ const statusText = computed(() => {
   display: grid;
   gap: 6px;
   min-width: 0;
-  padding-top: 10px;
-  padding-left: 20px;
+  padding-top: 6px;
 }
 .tool-activity-expand-enter-active,
 .tool-activity-expand-leave-active { overflow: hidden; }

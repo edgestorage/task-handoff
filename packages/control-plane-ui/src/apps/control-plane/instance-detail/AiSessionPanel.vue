@@ -1027,14 +1027,14 @@
             </TooltipProvider>
             <div v-if="effectiveTimelineViewMode === 'compact'" class="session-ai-detail-prompt-stage">
               <Transition name="session-ai-prompt-fade" appear>
-                <section v-if="selectedPromptSnapshot" :key="selectedPromptSnapshot.sessionId" ref="detailPromptSectionEl" class="session-ai-detail-block session-ai-detail-block-user">
+                <section v-if="displayedPromptSnapshot" :key="displayedPromptSnapshot.sessionId" ref="detailPromptSectionEl" class="session-ai-detail-block session-ai-detail-block-user">
                   <AiSessionCompactPrompt
                     :code-tools="markdownCodeTools"
-                    :content="selectedPromptSnapshot.content"
+                    :content="displayedPromptSnapshot.content"
                     :instance-id="instance.id"
-                    :session-id="selectedPromptSnapshot.sessionId"
-                    :timestamp="selectedPromptSnapshot.timestamp"
-                    :user-messages="selectedPromptSnapshot.userMessages"
+                    :session-id="displayedPromptSnapshot.sessionId"
+                    :timestamp="displayedPromptSnapshot.timestamp"
+                    :user-messages="displayedPromptSnapshot.userMessages"
                   />
                 </section>
               </Transition>
@@ -1938,6 +1938,18 @@ const selectedPromptSnapshot = computed(() => {
   if (snapshot.turnId && (!turn || snapshot.turnId !== turn.id)) return undefined;
   if (!snapshot.turnId && turn) return undefined;
   return snapshot;
+});
+// Keep the outgoing prompt block mounted while the incoming session is loading.
+// Unmounting it lets the leaving prompt drop out of flow (the fade transition
+// makes it absolute), which collapses the prompt stage and pulls the whole
+// conversation upward until the new prompt arrives.
+const displayedPromptSnapshot = computed(() => {
+  const snapshot = selectedPromptSnapshot.value;
+  if (snapshot) return snapshot;
+  const summary = selectedSession.value;
+  const retained = retainedPromptSnapshot.value;
+  if (!summary || !retained || retained.sessionId === summary.id) return undefined;
+  return selectedSessionContentState.value === "loading" ? retained : undefined;
 });
 const selectedSessionFolderName = computed(() => {
   const session = selectedSession.value;

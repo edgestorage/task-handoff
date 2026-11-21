@@ -14,6 +14,7 @@ export * from "./remote-desktop-wheel-pump.ts";
 export * from "./app-inventory.ts";
 export * from "./instance-shell.ts";
 export * from "./ai-session-state.ts";
+export * from "./ai-session-activity-labels.ts";
 export * from "./approval-center.ts";
 export * from "./ai-session-conversation-cache.ts";
 export * from "./ai-session-paste.ts";

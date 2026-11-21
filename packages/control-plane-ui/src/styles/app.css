@@ -76,7 +76,7 @@
   --control-plane-status-offline: var(--status-warning);
   --control-plane-status-danger: var(--status-danger);
   --workbench-view-switcher-bg: #f2f2f7;
-  --workbench-view-selection-bg: #ffffff;
+  --workbench-view-selection-bg: var(--surface-hover);
   --workbench-view-selection-fg: #1c1c1e;
   --control-plane-settings-background: var(--surface-inset);
   --instance-board-background: var(--workspace-bg);

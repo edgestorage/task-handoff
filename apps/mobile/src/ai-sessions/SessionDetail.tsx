@@ -1,9 +1,9 @@
-import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback, type ReactNode } from 'react';
+import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ProfilerOnRenderCallback, type ReactNode } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
-import { Check, ChevronRight, Copy, Split, Timer } from 'lucide-react-native';
-import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
+import { Check, ChevronRight, Copy, ListTree, Split, Timer } from 'lucide-react-native';
+import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, localizedAiSessionToolName, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessionTimelineItem, type AiSessionTurn, type AiSessionConversationAttachment } from '@task-handoff/protocol/ai-sessions';
 
 import { SafeMarkdown } from '../components/SafeMarkdown';
@@ -34,7 +34,8 @@ import type { MobileToolActivityWindow } from './use-tool-activity-window';
 import { formatSessionTurnTime } from '../session-time';
 import { useSessionPreviewPresentation } from '../remote-desktop/session-preview-presentation';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
-import { AnimatedDisclosure, DisclosureChevron } from './AnimatedDisclosure';
+import { AnimatedDisclosure, DisclosureChevron, DisclosureChevronDown } from './AnimatedDisclosure';
+import { getAiSessionViewPreferences, subscribeAiSessionViewPreferences, updateAiSessionViewPreferences } from './session-view-preferences';
 
 import { MessageAttachments, SessionAttachmentContext } from './MessageAttachments';
 import { CollapsibleUserMessage } from './CollapsibleUserMessage';
@@ -951,43 +952,51 @@ export function processedDurationLabel(turn: DetailTurn | undefined, t: Translat
 function TimelineCurrentActivity({ item, onLoad, onAddToConversation, onOpenBuiltinBrowser, onOpenFile }: { item: DetailItem; onLoad?(): void; onAddToConversation?(text: string): void; onOpenBuiltinBrowser?(url: string): void | Promise<void>; onOpenFile?(href: string): void | Promise<void> }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(false);
-  const [expandPending, setExpandPending] = useState(false);
+  const preferences = useSyncExternalStore(
+    subscribeAiSessionViewPreferences,
+    getAiSessionViewPreferences,
+    getAiSessionViewPreferences,
+  );
+  const preferredExpanded = preferences.toolActivityExpanded;
   const nodes = item.history ?? [];
   const interactive = Boolean(item.interactive);
   const status = item.activityStatus ?? 'idle';
   const failed = status === 'error';
-  const loading = expandPending && status !== 'ready' && status !== 'error';
-  const revealed = expanded || (expandPending && status === 'ready');
+  const revealed = Boolean(interactive && preferredExpanded && (status === 'ready' || !onLoad));
+  const loading = Boolean(interactive && preferredExpanded && !revealed && status !== 'error');
+  const onLoadRef = useRef(onLoad);
+  useEffect(() => {
+    onLoadRef.current = onLoad;
+  }, [onLoad]);
+  useEffect(() => {
+    if (!interactive || !preferredExpanded || status === 'ready' || status === 'loading' || !onLoadRef.current) return;
+    if (status === 'idle') onLoadRef.current();
+  }, [interactive, preferredExpanded, status]);
   const toggleExpanded = () => {
     if (revealed) {
-      setExpanded(false);
-      setExpandPending(false);
+      updateAiSessionViewPreferences({ toolActivityExpanded: false });
       return;
     }
-    if (expandPending) {
-      if (failed) onLoad?.();
-      else setExpandPending(false);
+    if (preferredExpanded) {
+      if (failed) onLoadRef.current?.();
+      else updateAiSessionViewPreferences({ toolActivityExpanded: false });
       return;
     }
-    if (status === 'ready' || !onLoad) {
-      setExpanded(true);
-      return;
-    }
-    setExpandPending(true);
-    onLoad();
+    updateAiSessionViewPreferences({ toolActivityExpanded: true });
+    if (status === 'error') onLoadRef.current?.();
   };
   const content = <>
+    {interactive ? <View testID="session-current-activity-icon"><ListTree color={colors.textMuted} size={mobileWebMetric(15)} /></View> : null}
+    <ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={Boolean(item.streaming)} textStyle={styles.currentActivityText}>{item.text ?? ''}</ToolActivityText>
     {interactive ? loading
       ? <ActivityIndicator animating color={colors.textMuted} size="small" testID="session-current-activity-loading" />
-      : <DisclosureChevron color={colors.textMuted} expanded={revealed} size={mobileWebMetric(15)} /> : null}
-    <ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={Boolean(item.streaming)} textStyle={styles.currentActivityText}>{item.text ?? ''}</ToolActivityText>
+      : <DisclosureChevronDown color={colors.textMuted} expanded={revealed} size={mobileWebMetric(15)} /> : null}
   </>;
   return <View style={styles.currentActivity}>
     {interactive ? <Pressable accessibilityRole="button" accessibilityState={{ busy: loading, expanded: revealed }} onPress={toggleExpanded} style={styles.currentActivityHeader}>{content}</Pressable>
       : <View style={styles.currentActivityHeader}>{content}</View>}
     {failed ? <Text accessibilityLiveRegion="polite" style={[styles.currentActivityError, { color: colors.textMuted }]}>{t('sessions.timelineLoadFailed')}</Text> : null}
-    <AnimatedDisclosure expanded={revealed} spacing={mobileWebMetric(10)}><View style={styles.currentActivityItems} testID="session-current-activity-items">{nodes.length ? nodes.map((node) => node.role === 'activity'
+    <AnimatedDisclosure expanded={revealed} spacing={mobileWebMetric(6)} testID="session-current-activity-disclosure"><View style={styles.currentActivityItems} testID="session-current-activity-items">{nodes.length ? nodes.map((node) => node.role === 'activity'
       ? <TimelineActivityGroup activities={node.activities ?? []} key={node.id} summaryVisible={false} />
       : <DetailItemContent conversation={false} item={node} key={node.id} onAddToConversation={onAddToConversation} onOpenBuiltinBrowser={onOpenBuiltinBrowser} onOpenFile={onOpenFile} timelineNested />) : <Text style={[styles.currentActivityEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoActivities')}</Text>}</View></AnimatedDisclosure>
   </View>;
@@ -1030,9 +1039,12 @@ export function sessionTurnPickerPage(
 
 export function sessionActivityText(session: ControlPlaneAiSessionSummary, t: Translate = english) {
   if (!['running', 'waiting'].includes(session.status) || isAiSessionApprovalPending(session)) return undefined;
-  if (session.currentTool?.name) return session.currentTool.inputPreview
-    ? `${session.currentTool.name} · ${session.currentTool.inputPreview}`
-    : session.currentTool.name;
+  if (session.currentTool?.name) {
+    const toolName = localizedAiSessionToolName(session.currentTool.name, t);
+    return session.currentTool.inputPreview
+      ? `${toolName} · ${session.currentTool.inputPreview}`
+      : toolName;
+  }
   if (session.phase === 'responding') return t('sessions.responding');
   if (session.phase === 'editing') return t('sessions.editing');
   if (session.status === 'waiting') return t('sessions.waiting');
@@ -1058,7 +1070,7 @@ export function mobileAiSessionStatusLabel(session: ControlPlaneAiSessionSummary
   if (session.status === 'waiting') return session.phase === 'approval' ? t('sessions.statusWaitingApproval') : t('sessions.statusWaiting');
   if (session.status === 'failed') return t('sessions.statusFailed');
   if (session.status === 'idle') return t('sessions.statusIdle');
-  if (session.currentTool?.name) return t('sessions.statusRunningWith', { detail: session.currentTool.name });
+  if (session.currentTool?.name) return t('sessions.statusRunningWith', { detail: localizedAiSessionToolName(session.currentTool.name, t) });
   if (session.phase === 'tool') return t('sessions.statusRunningWith', { detail: t('sessions.statusTool') });
   if (session.phase === 'editing') return t('sessions.statusRunningWith', { detail: t('sessions.statusEditing') });
   if (session.phase === 'responding') return t('sessions.statusRunningWith', { detail: t('sessions.statusResponding') });
@@ -1248,8 +1260,8 @@ const styles = StyleSheet.create({
   currentActivityHeader: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebType.bodyLine },
   currentActivityText: { fontSize: mobileWebType.body, fontWeight: '400', lineHeight: mobileWebType.bodyLine },
   currentActivityEmpty: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
-  currentActivityError: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, marginLeft: mobileWebMetric(20) },
-  currentActivityItems: { gap: mobileWebMetric(6), marginLeft: mobileWebMetric(20) },
+  currentActivityError: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
+  currentActivityItems: { gap: mobileWebMetric(6) },
   conversationEmpty: { paddingVertical: 32 },
   userMessage: { alignSelf: 'flex-end', maxWidth: '90%', minWidth: 0 },
   assistantMessage: { alignSelf: 'stretch', minWidth: 0 },

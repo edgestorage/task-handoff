@@ -2,6 +2,7 @@ import { createElement, useEffect, useRef, useState } from 'react';
 import { PixelRatio, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import type { AiSessionTimelineActivity } from '@task-handoff/protocol/ai-sessions';
+import { localizedAiSessionActivityTitle } from '@task-handoff/control-plane-client';
 import {
   Bot,
   BookOpen,
@@ -16,6 +17,7 @@ import {
   FolderOpen,
   Image as ImageIcon,
   ListTodo,
+  ListTree,
   Minimize2,
   Download,
   Plug,
@@ -28,9 +30,9 @@ import {
 } from 'lucide-react-native';
 
 import { useMobileTheme } from '../components/theme';
-import { useI18n } from '../i18n';
+import { useI18n, type Translate } from '../i18n';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
-import { AnimatedDisclosure, DisclosureChevron } from './AnimatedDisclosure';
+import { AnimatedDisclosure, DisclosureChevron, DisclosureChevronDown } from './AnimatedDisclosure';
 
 export function TimelineActivityGroup({
   activities,
@@ -43,10 +45,11 @@ export function TimelineActivityGroup({
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   if (!activities.length) return null;
-  const activityList = <View style={[styles.activityList, !summaryVisible && styles.activityListInline]}>{activities.map((activity) => (
+  const summaryAvailable = summaryVisible && activities.length > 1;
+  const activityList = <View style={styles.activityList} testID="timeline-activity-list">{activities.map((activity) => (
     <TimelineActivity key={activity.id} activity={activity} />
   ))}</View>;
-  if (!summaryVisible) return activityList;
+  if (!summaryAvailable) return activityList;
   const latest = activities.at(-1)!;
   return (
     <View style={styles.group}>
@@ -56,11 +59,12 @@ export function TimelineActivityGroup({
         onPress={() => setExpanded((value) => !value)}
         style={styles.groupHeader}
       >
-        <DisclosureChevron color={colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} />
+        <View testID="timeline-activity-group-icon"><ListTree color={colors.textMuted} size={mobileWebMetric(15)} /></View>
         <Text style={[styles.groupTitle, { color: colors.textMuted }]}>{t('sessions.timelineActivityCount', { count: activities.length })}</Text>
-        <Text numberOfLines={1} style={[styles.groupLatest, { color: colors.textMuted }]}>· {activitySummary(latest) || latest.title}</Text>
+        <Text numberOfLines={1} style={[styles.groupLatest, { color: colors.textMuted }]}>· {activitySummary(latest) || activityLabel(latest, t)}</Text>
+        <DisclosureChevronDown color={colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} />
       </Pressable>
-      <AnimatedDisclosure expanded={expanded} spacing={mobileWebMetric(8)}>{activityList}</AnimatedDisclosure>
+      <AnimatedDisclosure expanded={expanded}>{activityList}</AnimatedDisclosure>
     </View>
   );
 }
@@ -74,13 +78,13 @@ function TimelineActivity({ activity }: { activity: AiSessionTimelineActivity })
   const ActivityIcon = timelineActivityIcon(activity.activityKind);
   const title = activity.activityKind === 'commandExecution'
     ? t(`sessions.timelineCommand.${activity.status || 'unknown'}` as 'sessions.timelineCommand.unknown')
-    : activity.title;
+    : localizedAiSessionActivityTitle(activity, t);
   const status = activity.activityKind !== 'commandExecution' && (activity.status === 'running' || activity.status === 'failed')
     ? t(`sessions.timelineStatus.${activity.status}` as 'sessions.timelineStatus.running')
     : undefined;
   const content = <>
-    {ActivityIcon ? createElement(ActivityIcon, { color: failed ? colors.error : colors.textMuted, size: mobileWebMetric(14), style: styles.activityKindIcon })
-      : hasDetails ? <DisclosureChevron color={failed ? colors.error : colors.textMuted} expanded={expanded} size={mobileWebMetric(14)} style={styles.activityKindIcon} />
+    {ActivityIcon ? createElement(ActivityIcon, { color: failed ? colors.error : colors.textMuted, size: mobileWebMetric(15), style: styles.activityKindIcon })
+      : hasDetails ? <DisclosureChevron color={failed ? colors.error : colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} style={styles.activityKindIcon} />
         : null}
     <Text style={[styles.activityTitle, { color: failed ? colors.error : colors.textMuted }]}>{title}</Text>
     {activitySummary(activity) ? <Text numberOfLines={1} style={[styles.activitySummary, { color: colors.textMuted }]}>· {activitySummary(activity)}</Text> : null}
@@ -163,6 +167,12 @@ function activitySummary(activity: AiSessionTimelineActivity) {
   return activity.summary || activity.paths?.join(', ') || '';
 }
 
+function activityLabel(activity: AiSessionTimelineActivity, t: Translate) {
+  return activity.activityKind === 'commandExecution'
+    ? t(`sessions.timelineCommand.${activity.status || 'unknown'}` as 'sessions.timelineCommand.unknown')
+    : localizedAiSessionActivityTitle(activity, t);
+}
+
 function runtimePathBasename(path: string) {
   return path.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || path;
 }
@@ -196,12 +206,11 @@ export function timelineActivityIcon(kind: string): LucideIcon | undefined {
 }
 
 const styles = StyleSheet.create({
-  group: { minWidth: 0 },
+  group: { gap: mobileWebMetric(6), minWidth: 0 },
   groupHeader: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebType.bodyLine },
   groupTitle: { fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
   groupLatest: { flex: 1, fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
-  activityList: { gap: mobileWebMetric(6), marginLeft: mobileWebMetric(20) },
-  activityListInline: { marginLeft: 0 },
+  activityList: { gap: mobileWebMetric(6) },
   activity: { minWidth: 0 },
   activityHeader: { alignItems: 'center', flexDirection: 'row', gap: mobileWebMetric(5), minHeight: mobileWebType.bodyLine },
   activityKindIcon: { flexShrink: 0 },

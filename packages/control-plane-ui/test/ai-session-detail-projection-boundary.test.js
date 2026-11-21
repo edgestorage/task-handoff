@@ -35,7 +35,7 @@ test("AI Session detail does not render the list summary projection as conversat
   assert.ok(stickyRule);
   assert.doesNotMatch(stickyRule[1], /opacity:\s*0/);
   assert.match(panel, /<Transition name="session-ai-prompt-fade" appear>/);
-  assert.match(panel, /v-if="selectedPromptSnapshot" :key="selectedPromptSnapshot\.sessionId" ref="detailPromptSectionEl"/);
+  assert.match(panel, /v-if="displayedPromptSnapshot" :key="displayedPromptSnapshot\.sessionId" ref="detailPromptSectionEl"/);
   assert.match(panelCss, /\.session-ai-prompt-fade-enter-active,[\s\S]*?\.session-ai-prompt-fade-leave-active[\s\S]*?transition: opacity 180ms ease/);
   assert.match(board, /:detail-state="selectedCardContentState"/);
   assert.match(projection, /const hadRenderableContent = conversations\.hasRenderableProjection\(instanceId, summary\.id\) && boundaryReady/);
@@ -89,8 +89,9 @@ test("outgoing session layers do not control incoming conversation layout", () =
   assert.match(panel, /if \(!summary \|\| selectedSessionContentState\.value === "loading"\) return undefined;/);
   assert.match(panel, /watch\(selectedPromptCandidate, \(candidate\) => \{\s*if \(candidate\) retainedPromptSnapshot\.value = candidate;/);
   assert.match(panel, /const selectedPromptSnapshot = computed\(\(\) => \{[\s\S]*?snapshot\.sessionId !== summary\.id[\s\S]*?!selectedSessionTurnBoundaryReady\.value[\s\S]*?snapshot\.turnId !== turn\.id/);
-  assert.match(panel, /:content="selectedPromptSnapshot\.content"/);
-  assert.match(panel, /:user-messages="selectedPromptSnapshot\.userMessages"/);
+  assert.match(panel, /const displayedPromptSnapshot = computed\(\(\) => \{[\s\S]*?const snapshot = selectedPromptSnapshot\.value;[\s\S]*?if \(snapshot\) return snapshot;[\s\S]*?retained\.sessionId === summary\.id[\s\S]*?selectedSessionContentState\.value === "loading" \? retained : undefined/);
+  assert.match(panel, /:content="displayedPromptSnapshot\.content"/);
+  assert.match(panel, /:user-messages="displayedPromptSnapshot\.userMessages"/);
   assert.doesNotMatch(panel, /:content="selectedSessionContentState === 'ready' \? displayAiSessionTitle/);
 });
 

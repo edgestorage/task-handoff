@@ -24,6 +24,7 @@ import { TimelineActivityGroup, timelineActivityIcon } from '../src/ai-sessions/
 import { mobileWebMetric, mobileWebType } from '../src/components/mobile-web-typography';
 import { mobileLightColors } from '../src/components/theme';
 import { setSessionPreviewPresentation } from '../src/remote-desktop/session-preview-presentation';
+import { updateAiSessionViewPreferences } from '../src/ai-sessions/session-view-preferences';
 
 jest.mock('../src/components/MenuView', () => {
   const { Children, cloneElement, isValidElement } = require('react');
@@ -62,6 +63,10 @@ const opencodePermissionCapabilities = ControlPlaneInstanceDirectoryCapabilities
 });
 const initialWindowMetrics = Dimensions.get('window');
 const initialScreenMetrics = Dimensions.get('screen');
+
+afterEach(() => {
+  updateAiSessionViewPreferences({ toolActivityExpanded: false });
+});
 
 test('session footer opens the saved remote desktop preview after tool activity', async () => {
   const onOpenRemoteDesktopPreview = jest.fn();
@@ -316,9 +321,27 @@ test('timeline activity groups stay collapsed until explicitly expanded', async 
     input: 'pnpm test',
   }]} />);
 
-  expect(screen.queryByText('Command failed')).toBeNull();
-  await fireEvent.press(screen.getByRole('button', { name: /1 activities/ }));
   screen.getByText('Command failed');
+  expect(screen.queryByText('1 activities')).toBeNull();
+  expect(screen.queryByTestId('timeline-command-input')).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: /Command failed/ }));
+  screen.getByTestId('timeline-command-input');
+  await screen.unmount();
+});
+
+test('timeline activity groups keep a parent disclosure only for multiple activities', async () => {
+  const screen = await render(<TimelineActivityGroup activities={[
+    { id: 'reasoning-1', turnId: 'turn-1', type: 'activity', activityKind: 'reasoning', title: 'First thought', status: 'completed' },
+    { id: 'reasoning-2', turnId: 'turn-1', type: 'activity', activityKind: 'reasoning', title: 'Second thought', status: 'completed' },
+  ]} />);
+
+  screen.getByTestId('timeline-activity-group-icon');
+  expect(screen.queryByText('First thought')).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: /2 activities/ }));
+  screen.getByText('First thought');
+  screen.getByText('Second thought');
+  expect(StyleSheet.flatten(screen.getByTestId('timeline-activity-list').props.style)).toEqual(expect.objectContaining({ gap: 7 }));
+  expect(StyleSheet.flatten(screen.getByTestId('timeline-activity-list').props.style).marginLeft).toBeUndefined();
   await screen.unmount();
 });
 
@@ -336,7 +359,6 @@ test('expanded command activities render the Web command card with copy support'
     exitCode: 0,
   }]} />);
 
-  await fireEvent.press(screen.getByRole('button', { name: /1 activities/ }));
   await fireEvent.press(screen.getByRole('button', { name: /Ran command/ }));
   screen.getByText('Shell');
   screen.getByText('$ pnpm test');
@@ -366,7 +388,6 @@ test('failed command activities keep the exit code in the command card header', 
     exitCode: 1,
   }]} />);
 
-  await fireEvent.press(screen.getByRole('button', { name: /1 activities/ }));
   await fireEvent.press(screen.getByRole('button', { name: /Command failed/ }));
   screen.getByText('Exit code: 1');
   screen.getByText('$ pnpm test');
@@ -384,7 +405,6 @@ test('command cards without command or output show the Web empty state', async (
     exitCode: 0,
   }]} />);
 
-  await fireEvent.press(screen.getByRole('button', { name: /1 activities/ }));
   await fireEvent.press(screen.getByRole('button', { name: /Ran command/ }));
   screen.getByText('No output');
   expect(screen.queryByRole('button', { name: 'Copy output' })).toBeNull();
@@ -1405,6 +1425,34 @@ test('current tool activity without the capability opens live content without wa
   expect(screen.getByRole('button', { name: 'shell · pnpm test' }).props.accessibilityState).toEqual(expect.objectContaining({ busy: false, expanded: true }));
   screen.getByTestId('session-current-activity-items');
   await screen.unmount();
+});
+
+test('current tool activity aligns its disclosure and remembers the parent state', async () => {
+  const windows = { 'turn-1': {
+    status: 'ready' as const,
+    items: [{ id: 'window-command', turnId: 'turn-1', type: 'activity' as const, activityKind: 'commandExecution', title: 'Command', status: 'running' as const, input: 'pnpm test' }],
+    total: 1,
+    truncated: false,
+  } };
+  const first = await render(<SessionDetail messages={[]} session={session} timelineEnabled timelines={{ 'turn-1': { status: 'ready', items: [] } }} toolActivityWindows={windows} />);
+  const firstTrigger = first.getByRole('button', { name: 'shell · pnpm test' });
+  expect(firstTrigger.props.accessibilityState).toEqual(expect.objectContaining({ expanded: false }));
+  await fireEvent.press(firstTrigger);
+  await waitFor(() => expect(first.getByRole('button', { name: 'shell · pnpm test' }).props.accessibilityState).toEqual(expect.objectContaining({ expanded: true })));
+  first.getByTestId('session-current-activity-icon');
+  expect(StyleSheet.flatten(first.getByTestId('session-current-activity-disclosure-content').props.style).paddingTop).toBe(7);
+  expect(StyleSheet.flatten(first.getByTestId('session-current-activity-items').props.style).marginLeft).toBeUndefined();
+  await first.unmount();
+
+  const restored = await render(<SessionDetail messages={[]} session={session} timelineEnabled timelines={{ 'turn-1': { status: 'ready', items: [] } }} toolActivityWindows={windows} />);
+  expect(restored.getByRole('button', { name: 'shell · pnpm test' }).props.accessibilityState).toEqual(expect.objectContaining({ expanded: true }));
+  await fireEvent.press(restored.getByRole('button', { name: 'shell · pnpm test' }));
+  await waitFor(() => expect(restored.getByRole('button', { name: 'shell · pnpm test' }).props.accessibilityState).toEqual(expect.objectContaining({ expanded: false })));
+  await restored.unmount();
+
+  const collapsed = await render(<SessionDetail messages={[]} session={session} timelineEnabled timelines={{ 'turn-1': { status: 'ready', items: [] } }} toolActivityWindows={windows} />);
+  expect(collapsed.getByRole('button', { name: 'shell · pnpm test' }).props.accessibilityState).toEqual(expect.objectContaining({ expanded: false }));
+  await collapsed.unmount();
 });
 
 test('completed timeline exposes loading, failure retry, and empty history states', async () => {

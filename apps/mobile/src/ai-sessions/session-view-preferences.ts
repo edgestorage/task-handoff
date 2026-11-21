@@ -1,18 +1,24 @@
 import { createPersistedPreferenceStore } from '../platform/persisted-preferences';
 import type { SessionDetailMode } from './SessionDetail';
 
-export type AiSessionViewPreferences = { detailMode: SessionDetailMode };
+export type AiSessionViewPreferences = {
+  detailMode: SessionDetailMode;
+  toolActivityExpanded: boolean;
+};
 
 export const AI_SESSION_VIEW_PREFERENCES_KEY = 'task-handoff.mobile.ai-session-view-preferences';
 const STORAGE_VERSION = 1;
-const DEFAULT_PREFERENCES: AiSessionViewPreferences = { detailMode: 'turn' };
+const DEFAULT_PREFERENCES: AiSessionViewPreferences = { detailMode: 'turn', toolActivityExpanded: false };
 
 export function parseAiSessionViewPreferences(raw: string | null | undefined): AiSessionViewPreferences | undefined {
   if (!raw) return undefined;
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== STORAGE_VERSION) return undefined;
-    return { detailMode: value.detailMode === 'conversation' ? 'conversation' : 'turn' };
+    return {
+      detailMode: value.detailMode === 'conversation' ? 'conversation' : 'turn',
+      toolActivityExpanded: value.toolActivityExpanded === true,
+    };
   } catch {
     return undefined;
   }

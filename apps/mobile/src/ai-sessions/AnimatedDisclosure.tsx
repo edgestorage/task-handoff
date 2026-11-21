@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { ChevronRight } from 'lucide-react-native';
+import { ChevronDown, ChevronRight } from 'lucide-react-native';
 import Animated, {
   Easing,
   interpolate,
@@ -131,6 +131,35 @@ export function DisclosureChevron({
   }));
   return <Animated.View style={[style, animatedStyle]}>
     <ChevronRight color={color} size={size} />
+  </Animated.View>;
+}
+
+export function DisclosureChevronDown({
+  color,
+  expanded,
+  size,
+  style,
+}: {
+  color: string;
+  expanded: boolean;
+  size: number;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const rotation = useSharedValue(expanded ? 0 : -90);
+
+  useEffect(() => {
+    rotation.value = withTiming(expanded ? 0 : -90, {
+      duration: expanded ? DISCLOSURE_EXPAND_DURATION_MS : DISCLOSURE_COLLAPSE_DURATION_MS,
+      easing: Easing.out(Easing.cubic),
+      reduceMotion: ReduceMotion.System,
+    });
+  }, [expanded, rotation]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotation.value}deg` }],
+  }));
+  return <Animated.View style={[style, animatedStyle]}>
+    <ChevronDown color={color} size={size} />
   </Animated.View>;
 }
 

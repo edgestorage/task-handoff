@@ -14,6 +14,7 @@ import {
   sortedAiSessionInboxEntries,
   sortedAiSessions,
   sortedAiSessionsByLastUserMessage,
+  localizedAiSessionToolName,
 } from "@task-handoff/control-plane-client";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 
@@ -459,7 +460,7 @@ export function aiSessionStatusLabel(session: AiSessionSummary | undefined, t: T
   }
   if (session.status === "running") {
     if (session.currentTool?.name) {
-      return `${t("sessions.status.running")} · ${session.currentTool.name}`;
+      return `${t("sessions.status.running")} · ${localizedAiSessionToolName(session.currentTool.name, t)}`;
     }
     if (session.phase === "tool") {
       return t("sessions.status.runningWith", { detail: t("sessions.status.tool") });
@@ -552,7 +553,7 @@ function aiSessionDisplayTurns(session?: AiSessionSummary) {
 
 function aiSessionProgressText(session: AiSessionSummary, t: Translate) {
   if (session.currentTool?.name) {
-    return `${t("sessions.status.running")} ${session.currentTool.name}${session.currentTool.inputPreview ? `: ${session.currentTool.inputPreview}` : ""}`;
+    return `${t("sessions.status.running")} ${localizedAiSessionToolName(session.currentTool.name, t)}${session.currentTool.inputPreview ? `: ${session.currentTool.inputPreview}` : ""}`;
   }
   if (session.status === "running") {
     return t("sessions.activity.running");

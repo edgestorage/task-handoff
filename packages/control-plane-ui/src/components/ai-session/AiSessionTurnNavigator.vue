@@ -334,6 +334,7 @@ onBeforeUnmount(() => {
   border-left-color: var(--line-subtle);
   border-radius: 0 4px 4px 0;
   background: transparent;
+  color: inherit;
 }
 
 .ai-session-turn-navigator[data-tone="panel"] .ai-session-turn-navigator__latest span {

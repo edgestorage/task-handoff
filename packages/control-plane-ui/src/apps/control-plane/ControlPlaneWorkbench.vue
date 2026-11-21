@@ -958,7 +958,7 @@ const workbenchViewOptions = computed<Array<{ value: WorkbenchView; label: strin
 ]);
 const workbenchViewSwitcherStyle = computed<Record<string, string>>(() => {
   const count = workbenchViewOptions.value.length;
-  const width = Math.max(288, count * 72);
+  const width = count * 76 + 4;
   const itemWidth = (width - 4) / count;
   const activeIndex = Math.max(0, workbenchViewOptions.value.findIndex((option) => option.value === workbenchView.value));
   return {

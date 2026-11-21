@@ -146,6 +146,16 @@ export const sessions = {
     exitCode: "Exit code: {code}",
     status: { running: "Running", completed: "Completed", failed: "Failed", waiting: "Waiting" },
     commandStatus: { running: "Running", completed: "Ran", failed: "Run failed", waiting: "Waiting to run", unknown: "Run command" },
+    activityTitle: {
+      command: "Command", fileChange: "File change", fileChanges: "File changes", editFile: "Edit file", writeFile: "Write file",
+      read: "Read", readFile: "Read file", search: "Search", searchFiles: "Search files", findFiles: "Find files", list: "List", explored: "Explored",
+      reasoning: "Reasoning", plan: "Plan", hookPrompt: "Hook prompt", subAgentTask: "Sub-agent task", spawnAgent: "Spawn agent",
+      sendAgentInput: "Send agent input", resumeAgent: "Resume agent", waitForAgents: "Wait for agents", closeAgent: "Close agent",
+      subAgentActivity: "Sub-agent activity", webSearch: "Web search", viewImage: "View image", sleep: "Sleep", imageGeneration: "Image generation",
+      enteredReviewMode: "Entered review mode", exitedReviewMode: "Exited review mode", contextCompaction: "Context compaction",
+      codexRetry: "Codex retry", retry: "Retry", fetchUrl: "Fetch URL", updateTasks: "Update tasks", askUser: "Ask user",
+      loadSkill: "Load skill", exitPlanMode: "Exit plan mode", tool: "Tool",
+    },
   },
   subAgents: {
     label: "Sub-agent activity", summary: "Sub-agents · {details}", pending: "Pending", running: "Running", interrupted: "Interrupted", completed: "Completed",

@@ -24,6 +24,10 @@ describe('mobile i18n', () => {
     expect(translate('en-US', 'approvalCenter.fabLabel', { count: 3 })).toBe('Open approvals. 3 pending');
     expect(translate('en-US', 'sessions.modelGroupSummary', { model: 'small', count: 2 })).toBe('small and 2 models');
     expect(translate('zh-CN', 'sessions.modelGroupSummary', { model: 'small', count: 2 })).toBe('small 等 2 个模型');
+    expect(translate('zh-CN', 'sessions.timeline.activityTitle.command')).toBe('命令');
+    expect(translate('zh-CN', 'sessions.timeline.activityTitle.fileChange')).toBe('文件变更');
+    expect(translate('zh-CN', 'sessions.timeline.activityTitle.search')).toBe('搜索');
+    expect(translate('zh-CN', 'sessions.timeline.activityTitle.read')).toBe('读取');
     expect(translate('en-US', 'composer.placeholder')).toBe('Message');
     expect(translate('zh-CN', 'composer.placeholder')).toBe('输入消息');
     expect(translate('en-US', 'controlPlane.closedTitle')).toBe('Control Plane closed');

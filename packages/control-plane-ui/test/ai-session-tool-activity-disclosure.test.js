@@ -67,6 +67,23 @@ function mountActivity(initial = {}) {
   };
 }
 
+function withBrowserStorage(storage) {
+  const previousWindow = globalThis.window;
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: (key) => storage.get(key) ?? null,
+        setItem: (key, value) => storage.set(key, String(value)),
+      },
+    },
+  });
+  return () => {
+    if (previousWindow === undefined) delete globalThis.window;
+    else Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow });
+  };
+}
+
 test("tool activity waits for loaded content before starting its expansion", async (context) => {
   const activity = mountActivity();
   context.after(activity.stop);
@@ -134,4 +151,52 @@ test("failed tool activity stays collapsed and can retry into the deferred expan
   activity.props.contentLoaded = true;
   await vue.nextTick();
   assert.equal(activity.state.expanded.value, true);
+});
+
+test("tool activity restores and persists its parent disclosure preference", async (context) => {
+  const storage = new Map([
+    ["task-handoff.control-plane.ai-session-tool-activity-expanded", "true"],
+  ]);
+  const restoreWindow = withBrowserStorage(storage);
+  const activity = mountActivity({ contentLoaded: true });
+  context.after(() => {
+    activity.stop();
+    restoreWindow();
+  });
+
+  assert.equal(activity.state.expanded.value, true);
+
+  activity.toggle();
+  await vue.nextTick();
+  assert.equal(activity.state.expanded.value, false);
+  assert.equal(storage.get("task-handoff.control-plane.ai-session-tool-activity-expanded"), "false");
+
+  activity.toggle();
+  await vue.nextTick();
+  assert.equal(activity.state.expanded.value, true);
+  assert.equal(storage.get("task-handoff.control-plane.ai-session-tool-activity-expanded"), "true");
+});
+
+test("a restored expanded preference loads deferred tool activity", async (context) => {
+  const storage = new Map([
+    ["task-handoff.control-plane.ai-session-tool-activity-expanded", "true"],
+  ]);
+  const restoreWindow = withBrowserStorage(storage);
+  const activity = mountActivity();
+  context.after(() => {
+    activity.stop();
+    restoreWindow();
+  });
+
+  await vue.nextTick();
+  assert.deepEqual(activity.events, ["load"]);
+  assert.equal(activity.state.expandPending.value, true);
+
+  activity.props.loading = true;
+  await vue.nextTick();
+  activity.props.loading = false;
+  activity.props.contentLoaded = true;
+  await vue.nextTick();
+  assert.equal(activity.state.expanded.value, true);
+  assert.equal(activity.state.expandPending.value, false);
 });

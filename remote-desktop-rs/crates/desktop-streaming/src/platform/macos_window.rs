@@ -403,6 +403,14 @@ fn resize_attribute_error(error: AXError) -> BackendError {
         _ => BackendError::WindowResizeFailed,
     }
 }
+
+fn resize_error_may_settle(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<BackendError>(),
+        Some(BackendError::WindowResizeFailed)
+    )
+}
+
 fn set_ax_value(
     element: &AXUIElement,
     key: &str,
@@ -555,18 +563,34 @@ impl Native {
             return Ok(before);
         }
 
+        let mut deferred_error = None;
         if desired.x != before.x || desired.y != before.y {
-            set_point_attribute(&self.window, "AXPosition", desired.x, desired.y)?;
+            if let Err(error) =
+                set_point_attribute(&self.window, "AXPosition", desired.x, desired.y)
+            {
+                if !resize_error_may_settle(&error) {
+                    return Err(error);
+                }
+                deferred_error = Some(error);
+            }
         }
         if desired.width != before.width || desired.height != before.height {
-            set_size_attribute(
+            if let Err(error) = set_size_attribute(
                 &self.window,
                 "AXSize",
                 i64::from(desired.width),
                 i64::from(desired.height),
-            )?;
+            ) {
+                if !resize_error_may_settle(&error) {
+                    return Err(error);
+                }
+                deferred_error.get_or_insert(error);
+            }
         }
-        self.wait_for_resize(before)
+        match self.wait_for_resize(before) {
+            Ok(geometry) => Ok(geometry),
+            Err(error) => Err(deferred_error.unwrap_or(error)),
+        }
     }
     fn wait_for_resize(&self, before: Geometry) -> anyhow::Result<Geometry> {
         let started = Instant::now();
@@ -942,7 +966,7 @@ mod tests {
     use super::{
         capture_layout_from_windows, capture_union, focused_window_matches, geometry_contains,
         owned_layer_zero_window_matches, pointer_hit_allowed, resize_attribute_error,
-        transient_geometry_ax_error, Identity, Visible,
+        resize_error_may_settle, transient_geometry_ax_error, Identity, Visible,
     };
     use crate::error::BackendError;
     use crate::traits::Geometry;
@@ -981,6 +1005,19 @@ mod tests {
             resize_attribute_error(AXError::InvalidUIElement),
             BackendError::WindowUnavailable
         );
+    }
+
+    #[test]
+    fn unconfirmed_accessibility_resize_errors_wait_for_actual_geometry() {
+        assert!(resize_error_may_settle(&anyhow::anyhow!(
+            BackendError::WindowResizeFailed
+        )));
+        assert!(!resize_error_may_settle(&anyhow::anyhow!(
+            BackendError::WindowResizeDenied
+        )));
+        assert!(!resize_error_may_settle(&anyhow::anyhow!(
+            BackendError::WindowResizeUnsupported
+        )));
     }
 
     fn positioned(
