@@ -2115,7 +2115,7 @@ test("ai session aggregate snapshots separate turns from list summaries", () => 
   });
   const updatedSummary = registry.snapshot().sessions[0];
   assert.equal(updatedSummary.detailRevision, firstSummary.detailRevision);
-  assert.equal(updatedSummary.turnsRevision, firstSummary.turnsRevision);
+  assert.notEqual(updatedSummary.turnsRevision, firstSummary.turnsRevision);
   assert.notEqual(updatedSummary.latestTurnRef?.bodyRevision, firstSummary.latestTurnRef?.bodyRevision);
 });
 

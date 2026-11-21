@@ -172,7 +172,7 @@
         "turnId": "t1",
         "type": "activity",
         "activityKind": "commandExecution",
-        "title": "commandExecution",
+        "title": "Command",
         "input": "ls"
       },
       "expectedTool": null
@@ -336,7 +336,7 @@
           "turnId": "turn_0",
           "type": "activity",
           "activityKind": "commandExecution",
-          "title": "commandExecution",
+          "title": "Command",
           "input": "ls"
         }
       ]

@@ -18,6 +18,46 @@ TaskHandoff is a free, open-source, self-hostable control plane for AI remote wo
 
 > **Beta:** TaskHandoff is under active development. Breaking changes may land between releases.
 
+## Interface
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/media/mobile/mobile-remote-desktop-en.png" alt="TaskHandoff Mobile remote desktop preview" width="320">
+</p>
+
+An iPhone Simulator remote desktop preview in a Mobile AI session.
+
+### Story
+
+![TaskHandoff Story workspace with a linked AI session and a remote desktop preview](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-overview-en.png)
+
+### Workbench
+
+Dark mode:
+
+![TaskHandoff workbench in dark mode](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-overview-dark.png)
+
+Light mode:
+
+![TaskHandoff workbench in light mode](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-overview-light.png)
+
+### Remote Desktop
+
+![Remote Desktop source picker](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/remote-desktop-source-picker-en.png)
+
+Choose an entire desktop or a single window, then review the source and connection details before opening the viewer.
+
+### Mobile
+
+<p align="center">
+  <video src="https://docs.thandoff.com/media/mobile/mobile-demo.mp4" controls width="320">
+    <a href="https://docs.thandoff.com/media/mobile/mobile-demo.mp4">Open the TaskHandoff Mobile demo</a>
+  </video>
+</p>
+
+Launch an app from an AI session and inspect it in the built-in browser. [Open the full video](https://docs.thandoff.com/media/mobile/mobile-demo.mp4) or see the [Mobile client guide](https://docs.thandoff.com/en/clients/mobile).
+
+For more interface screenshots, see the [Interface and Workbench guide](https://docs.thandoff.com/en/guide/workbench).
+
 ## Use Cases
 
 - **Many machines, one control plane** — Connect multiple workstations or servers and let agents work in isolated instances without switching between separate environments.
@@ -37,40 +77,6 @@ TaskHandoff is being developed around three directions:
 - **Agent kernels:** Codex and OpenCode only. Claude may remain visible as a compatibility path in existing images or configurations, but it is not a first-class supported kernel.
 - **Remote Desktop:** window-level capture is supported, along with an entire desktop, a single application, or a custom region. Session previews are read-only; open the full viewer to control input.
 - **Instances:** Docker container instances are supported today. A built-in Local Runtime is also available; Kubernetes runtime support is still in development and is not yet a supported deployment target.
-
-## Interface
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/media/mobile/mobile-remote-desktop-en.png" alt="TaskHandoff Mobile remote desktop preview" width="320">
-</p>
-
-An iPhone Simulator remote desktop preview in a Mobile AI session.
-
-### Workbench
-
-![TaskHandoff workbench](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-dark-en.png)
-
-### Story
-
-Light mode:
-
-![TaskHandoff Story workspace in light mode](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-light-en.png)
-
-Dark mode, with a Story session and a browser running in the container:
-
-![TaskHandoff Story workspace in dark mode](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-dark-en.png)
-
-### Mobile
-
-<p align="center">
-  <video src="https://docs.thandoff.com/media/mobile/mobile-demo.mp4" controls width="320">
-    <a href="https://docs.thandoff.com/media/mobile/mobile-demo.mp4">Open the TaskHandoff Mobile demo</a>
-  </video>
-</p>
-
-Launch an app from an AI session and inspect it in the built-in browser. [Open the full video](https://docs.thandoff.com/media/mobile/mobile-demo.mp4) or see the [Mobile client guide](https://docs.thandoff.com/en/clients/mobile).
-
-For more interface screenshots, see the [Interface and Workbench guide](https://docs.thandoff.com/en/guide/workbench).
 
 ## Features
 

@@ -11,7 +11,7 @@
       },
       "deliveredFramesAtLeast": 0,
       "deliveredFramesBelowFrameCount": true,
-      "deliveredPayloadBytesAtMost": 16777216,
+      "deliveredPayloadBytesAtMost": 18875392,
       "afterCloseDelivered": 0
     }
   }

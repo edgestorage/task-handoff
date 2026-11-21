@@ -18,6 +18,46 @@ TaskHandoff 是一个免费、开源、可自托管的 AI 远程工作与服务�
 
 > **Beta 阶段**：TaskHandoff 仍在积极开发中，版本之间可能存在破坏性变更（breaking changes）。
 
+## 产品界面
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/media/mobile/mobile-remote-desktop-zh.png" alt="TaskHandoff 移动端远程桌面预览" width="320">
+</p>
+
+移动端 AI 会话中的 iPhone 模拟器远程桌面预览。
+
+### Story
+
+![包含关联 AI 会话和远程桌面预览的 TaskHandoff Story 工作区](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-overview-zh.png)
+
+### 工作台
+
+暗色模式：
+
+![暗色模式下的 TaskHandoff 工作台](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-overview-dark.png)
+
+亮色模式：
+
+![亮色模式下的 TaskHandoff 工作台](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-overview-light.png)
+
+### 远程桌面
+
+![远程桌面画面选择](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/remote-desktop-source-picker-zh.png)
+
+选择整个桌面或单个窗口，并确认画面来源和连接方式后再打开远程桌面。
+
+### 移动端
+
+<p align="center">
+  <video src="https://docs.thandoff.com/media/mobile/mobile-demo.mp4" controls width="320">
+    <a href="https://docs.thandoff.com/media/mobile/mobile-demo.mp4">打开 TaskHandoff 移动端演示视频</a>
+  </video>
+</p>
+
+从 AI 会话启动应用，并在内置浏览器中查看预览。[打开完整视频](https://docs.thandoff.com/media/mobile/mobile-demo.mp4)，或查看[移动端使用指南](https://docs.thandoff.com/zh/clients/mobile)。
+
+更多界面截图见 [界面与工作台指南](https://docs.thandoff.com/zh/guide/workbench)。
+
 ## 适用场景
 
 - **多台设备，一个控制面板**：接入多台工作站或服务器，让 Agent 在隔离实例中工作，不必在多个环境之间来回切换。
@@ -37,40 +77,6 @@ TaskHandoff 主要沿三个方向演进：
 - **AI 内核**：当前仅支持 Codex 和 OpenCode。部分既有镜像或配置中可能保留 Claude 兼容入口，但不属于当前首选的受管内核。
 - **远程桌面**：支持窗口级画面共享，也支持整桌面、单个应用和自定义区域。会话预览默认只读，进入完整查看器后才能控制输入。
 - **实例运行时**：当前支持 Docker 容器实例，同时提供本机 Local Runtime；Kubernetes 运行时仍在开发中，尚不是受支持的部署目标。
-
-## 产品界面
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/media/mobile/mobile-remote-desktop-zh.png" alt="TaskHandoff 移动端远程桌面预览" width="320">
-</p>
-
-移动端 AI 会话中的 iPhone 模拟器远程桌面预览。
-
-### 工作台
-
-![TaskHandoff 工作台](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-dark-en.png)
-
-### Story
-
-亮色模式：
-
-![亮色模式下的 TaskHandoff Story 工作区](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-light-en.png)
-
-暗色模式，包含 Story 会话和容器中运行的浏览器：
-
-![暗色模式下的 TaskHandoff Story 工作区](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-dark-en.png)
-
-### 移动端
-
-<p align="center">
-  <video src="https://docs.thandoff.com/media/mobile/mobile-demo.mp4" controls width="320">
-    <a href="https://docs.thandoff.com/media/mobile/mobile-demo.mp4">打开 TaskHandoff 移动端演示视频</a>
-  </video>
-</p>
-
-从 AI 会话启动应用，并在内置浏览器中查看预览。[打开完整视频](https://docs.thandoff.com/media/mobile/mobile-demo.mp4)，或查看[移动端使用指南](https://docs.thandoff.com/zh/clients/mobile)。
-
-更多界面截图见 [界面与工作台指南](https://docs.thandoff.com/zh/guide/workbench)。
 
 ## 核心能力
 
