@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "2026-11-22",
+  "protocolVersion": "2026-11-23",
   "limits": {
     "frameHeaderBytes": 9,
     "controlMaxMessageBytes": 262144,
@@ -24,13 +24,13 @@
   "cdp": {
     "profile": "electron-page-cdp",
     "methods": {
-      "Accessibility.enable": "adapter-only",
-      "Accessibility.disable": "adapter-only",
+      "Accessibility.enable": "session",
+      "Accessibility.disable": "session",
       "Accessibility.getFullAXTree": "read",
       "Accessibility.getPartialAXTree": "read",
       "Accessibility.getRootAXNode": "read",
-      "Console.enable": "adapter-only",
-      "Console.disable": "adapter-only",
+      "Console.enable": "session",
+      "Console.disable": "session",
       "DOM.getDocument": "read",
       "DOM.describeNode": "read",
       "DOM.resolveNode": "read",
@@ -41,21 +41,21 @@
       "DOM.querySelectorAll": "read",
       "DOM.getAttributes": "read",
       "DOM.getOuterHTML": "read",
-      "DOMSnapshot.enable": "adapter-only",
-      "DOMSnapshot.disable": "adapter-only",
+      "DOMSnapshot.enable": "session",
+      "DOMSnapshot.disable": "session",
       "DOMSnapshot.captureSnapshot": "read",
       "Input.dispatchMouseEvent": "page-write",
       "Input.dispatchKeyEvent": "page-write",
       "Input.dispatchTouchEvent": "page-write",
       "Input.insertText": "page-write",
-      "Log.enable": "adapter-only",
-      "Log.disable": "adapter-only",
-      "Network.enable": "adapter-only",
-      "Network.disable": "adapter-only",
+      "Log.enable": "session",
+      "Log.disable": "session",
+      "Network.enable": "session",
+      "Network.disable": "session",
       "Network.getResponseBody": "read",
       "Network.getRequestPostData": "read",
-      "Page.enable": "adapter-only",
-      "Page.disable": "adapter-only",
+      "Page.enable": "session",
+      "Page.disable": "session",
       "Page.getNavigationHistory": "read",
       "Page.getFrameTree": "read",
       "Page.getLayoutMetrics": "read",
@@ -63,12 +63,13 @@
       "Page.reload": "page-write",
       "Page.stopLoading": "page-write",
       "Page.captureScreenshot": "read",
-      "Runtime.enable": "adapter-only",
-      "Runtime.disable": "adapter-only",
+      "Runtime.enable": "session",
+      "Runtime.disable": "session",
       "Runtime.evaluate": "page-write",
       "Runtime.callFunctionOn": "page-write",
       "Runtime.getProperties": "read",
-      "Runtime.releaseObject": "adapter-only",
+      "Runtime.releaseObject": "session",
+      "Runtime.runIfWaitingForDebugger": "session",
       "Schema.getDomains": "read",
       "Emulation.*": "page-write"
     },
@@ -98,6 +99,7 @@
       "profile": "embedded-browser-target-cdp",
       "protocolVersion": "1.3",
       "methods": [
+        "Browser.getVersion",
         "Target.getTargets",
         "Target.getTargetInfo",
         "Target.getBrowserContexts",
@@ -105,14 +107,371 @@
         "Target.detachFromTarget",
         "Target.closeTarget",
         "Target.createTarget",
-        "Target.setDiscoverTargets"
+        "Target.setDiscoverTargets",
+        "Target.setAutoAttach"
       ],
       "events": [
+        "Target.attachedToTarget",
         "Target.targetCreated",
         "Target.targetDestroyed",
         "Target.targetInfoChanged",
         "Target.detachedFromTarget"
-      ]
+      ],
+      "protocolDocument": {
+        "version": {
+          "major": "1",
+          "minor": "3"
+        },
+        "domains": [
+          {
+            "domain": "Accessibility",
+            "commands": [
+              {
+                "name": "disable"
+              },
+              {
+                "name": "enable"
+              },
+              {
+                "name": "getFullAXTree"
+              },
+              {
+                "name": "getPartialAXTree"
+              },
+              {
+                "name": "getRootAXNode"
+              }
+            ]
+          },
+          {
+            "domain": "Browser",
+            "commands": [
+              {
+                "name": "getVersion"
+              }
+            ]
+          },
+          {
+            "domain": "Console",
+            "commands": [
+              {
+                "name": "disable"
+              },
+              {
+                "name": "enable"
+              }
+            ],
+            "events": [
+              {
+                "name": "messageAdded"
+              }
+            ]
+          },
+          {
+            "domain": "DOM",
+            "commands": [
+              {
+                "name": "describeNode"
+              },
+              {
+                "name": "getAttributes"
+              },
+              {
+                "name": "getBoxModel"
+              },
+              {
+                "name": "getContentQuads"
+              },
+              {
+                "name": "getDocument"
+              },
+              {
+                "name": "getNodeForLocation"
+              },
+              {
+                "name": "getOuterHTML"
+              },
+              {
+                "name": "querySelector"
+              },
+              {
+                "name": "querySelectorAll"
+              },
+              {
+                "name": "resolveNode"
+              }
+            ]
+          },
+          {
+            "domain": "DOMSnapshot",
+            "commands": [
+              {
+                "name": "captureSnapshot"
+              },
+              {
+                "name": "disable"
+              },
+              {
+                "name": "enable"
+              }
+            ]
+          },
+          {
+            "domain": "Emulation",
+            "commands": [
+              {
+                "name": "clearDeviceMetricsOverride"
+              },
+              {
+                "name": "setDeviceMetricsOverride"
+              },
+              {
+                "name": "setEmulatedMedia"
+              },
+              {
+                "name": "setEmulatedVisionDeficiency"
+              },
+              {
+                "name": "setFocusEmulationEnabled"
+              },
+              {
+                "name": "setScriptExecutionDisabled"
+              },
+              {
+                "name": "setTouchEmulationEnabled"
+              },
+              {
+                "name": "setUserAgentOverride"
+              }
+            ]
+          },
+          {
+            "domain": "Input",
+            "commands": [
+              {
+                "name": "dispatchKeyEvent"
+              },
+              {
+                "name": "dispatchMouseEvent"
+              },
+              {
+                "name": "dispatchTouchEvent"
+              },
+              {
+                "name": "insertText"
+              }
+            ]
+          },
+          {
+            "domain": "Log",
+            "commands": [
+              {
+                "name": "disable"
+              },
+              {
+                "name": "enable"
+              }
+            ],
+            "events": [
+              {
+                "name": "entryAdded"
+              }
+            ]
+          },
+          {
+            "domain": "Network",
+            "commands": [
+              {
+                "name": "disable"
+              },
+              {
+                "name": "enable"
+              },
+              {
+                "name": "getRequestPostData"
+              },
+              {
+                "name": "getResponseBody"
+              }
+            ],
+            "events": [
+              {
+                "name": "loadingFailed"
+              },
+              {
+                "name": "loadingFinished"
+              },
+              {
+                "name": "requestServedFromCache"
+              },
+              {
+                "name": "requestWillBeSent"
+              },
+              {
+                "name": "responseReceived"
+              }
+            ]
+          },
+          {
+            "domain": "Page",
+            "commands": [
+              {
+                "name": "captureScreenshot"
+              },
+              {
+                "name": "disable"
+              },
+              {
+                "name": "enable"
+              },
+              {
+                "name": "getFrameTree"
+              },
+              {
+                "name": "getLayoutMetrics"
+              },
+              {
+                "name": "getNavigationHistory"
+              },
+              {
+                "name": "navigate"
+              },
+              {
+                "name": "reload"
+              },
+              {
+                "name": "stopLoading"
+              }
+            ],
+            "events": [
+              {
+                "name": "domContentEventFired"
+              },
+              {
+                "name": "frameNavigated"
+              },
+              {
+                "name": "frameStartedLoading"
+              },
+              {
+                "name": "frameStoppedLoading"
+              },
+              {
+                "name": "javascriptDialogClosed"
+              },
+              {
+                "name": "javascriptDialogOpening"
+              },
+              {
+                "name": "lifecycleEvent"
+              },
+              {
+                "name": "loadEventFired"
+              }
+            ]
+          },
+          {
+            "domain": "Runtime",
+            "commands": [
+              {
+                "name": "callFunctionOn"
+              },
+              {
+                "name": "disable"
+              },
+              {
+                "name": "enable"
+              },
+              {
+                "name": "evaluate"
+              },
+              {
+                "name": "getProperties"
+              },
+              {
+                "name": "releaseObject"
+              },
+              {
+                "name": "runIfWaitingForDebugger"
+              }
+            ],
+            "events": [
+              {
+                "name": "consoleAPICalled"
+              },
+              {
+                "name": "exceptionThrown"
+              },
+              {
+                "name": "executionContextCreated"
+              },
+              {
+                "name": "executionContextDestroyed"
+              },
+              {
+                "name": "executionContextsCleared"
+              }
+            ]
+          },
+          {
+            "domain": "Schema",
+            "commands": [
+              {
+                "name": "getDomains"
+              }
+            ]
+          },
+          {
+            "domain": "Target",
+            "commands": [
+              {
+                "name": "attachToTarget"
+              },
+              {
+                "name": "closeTarget"
+              },
+              {
+                "name": "createTarget"
+              },
+              {
+                "name": "detachFromTarget"
+              },
+              {
+                "name": "getBrowserContexts"
+              },
+              {
+                "name": "getTargetInfo"
+              },
+              {
+                "name": "getTargets"
+              },
+              {
+                "name": "setAutoAttach"
+              },
+              {
+                "name": "setDiscoverTargets"
+              }
+            ],
+            "events": [
+              {
+                "name": "attachedToTarget"
+              },
+              {
+                "name": "detachedFromTarget"
+              },
+              {
+                "name": "targetCreated"
+              },
+              {
+                "name": "targetDestroyed"
+              },
+              {
+                "name": "targetInfoChanged"
+              }
+            ]
+          }
+        ]
+      }
     }
   },
   "frames": {
@@ -132,7 +491,7 @@
       "protocolVersion": "2026-11-22"
     },
     "hello": {
-      "protocolVersion": "2026-11-22",
+      "protocolVersion": "2026-11-23",
       "sourceRef": "source_renderer",
       "generation": 1,
       "pageHost": "renderer-webview",
@@ -310,7 +669,7 @@
       "httpEndpoint": "http://127.0.0.1:49221",
       "token": "cdp_access_token",
       "expiresAt": "2026-11-22T12:02:00.000Z",
-      "protocolVersion": "2026-11-22"
+      "protocolVersion": "2026-11-23"
     },
     "cdpCommand": {
       "leaseRef": "lease_1",
@@ -411,7 +770,35 @@
     "targetSetDiscoverParams": {
       "discover": true
     },
+    "targetSetAutoAttachParams": {
+      "autoAttach": true,
+      "waitForDebuggerOnStart": true,
+      "flatten": true,
+      "filter": [
+        {
+          "type": "page",
+          "exclude": true
+        },
+        {}
+      ]
+    },
+    "targetSetAutoAttachResult": {},
     "targetUnsupportedMethod": "Target.createBrowserContext",
+    "targetAttachedEvent": {
+      "method": "Target.attachedToTarget",
+      "params": {
+        "sessionId": "target_session_1",
+        "targetInfo": {
+          "targetId": "browser_tab_2",
+          "type": "page",
+          "title": "Renderer page",
+          "url": "https://renderer.example/",
+          "attached": true,
+          "browserContextId": "source_renderer"
+        },
+        "waitingForDebugger": false
+      }
+    },
     "targetCreatedEvent": {
       "method": "Target.targetCreated",
       "params": {

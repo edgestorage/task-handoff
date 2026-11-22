@@ -120,6 +120,7 @@ export function registerBrowserControlRoutes(options: RegisterBrowserControlRout
       generation: target.generation,
       url: creation.requestedUrl,
       ...(creation.title ? { title: creation.title } : {}),
+      requesterSessionRef: target.requesterSessionRef,
     });
   });
 
@@ -136,6 +137,7 @@ export function registerBrowserControlRoutes(options: RegisterBrowserControlRout
         ...(body.rendererHostBinding ? { rendererHostBinding: body.rendererHostBinding } : {}),
         pageHost: body.pageHost,
         pageHostCapabilities: body.pageHostCapabilities,
+        ...(body.cdpIdentity ? { cdpIdentity: body.cdpIdentity } : {}),
       });
       return {
         data: EmbeddedBrowserSourceRegistrationViewSchema.parse({

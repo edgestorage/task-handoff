@@ -1,13 +1,14 @@
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use controlled_instance_protocol::{
     embedded_browser_error_code, mint_entity_id, EmbeddedBrowserAccessRequestView,
-    EmbeddedBrowserAccessView, EmbeddedBrowserBrowserContext, EmbeddedBrowserChannelCapabilities,
-    EmbeddedBrowserCreationCandidate, EmbeddedBrowserCreationContextSnapshot,
-    EmbeddedBrowserCreationPanel, EmbeddedBrowserCreationPending, EmbeddedBrowserCreationStatus,
-    EmbeddedBrowserCreationView, EmbeddedBrowserDefaultContextClaimResult, EmbeddedBrowserLease,
-    EmbeddedBrowserPage, EmbeddedBrowserPageHost, EmbeddedBrowserPageHostCapabilities,
-    EmbeddedBrowserPageListResponse, EmbeddedBrowserRegistryDelta, EmbeddedBrowserSource,
-    EmbeddedBrowserSourceDelta, EmbeddedBrowserSourceSnapshot, EmbeddedBrowserTargetInfo,
+    EmbeddedBrowserAccessView, EmbeddedBrowserBrowserContext, EmbeddedBrowserCdpIdentity,
+    EmbeddedBrowserChannelCapabilities, EmbeddedBrowserCreationCandidate,
+    EmbeddedBrowserCreationContextSnapshot, EmbeddedBrowserCreationPanel,
+    EmbeddedBrowserCreationPending, EmbeddedBrowserCreationStatus, EmbeddedBrowserCreationView,
+    EmbeddedBrowserDefaultContextClaimResult, EmbeddedBrowserLease, EmbeddedBrowserPage,
+    EmbeddedBrowserPageHost, EmbeddedBrowserPageHostCapabilities, EmbeddedBrowserPageListResponse,
+    EmbeddedBrowserRegistryDelta, EmbeddedBrowserSource, EmbeddedBrowserSourceDelta,
+    EmbeddedBrowserSourceSnapshot, EmbeddedBrowserTargetInfo,
     EMBEDDED_BROWSER_ACCESS_REQUEST_TTL_MS, EMBEDDED_BROWSER_CDP_ACCESS_TTL_MS,
     EMBEDDED_BROWSER_CDP_PROFILE, EMBEDDED_BROWSER_CREATION_TTL_MS,
     EMBEDDED_BROWSER_MAX_PAGES_PER_SOURCE, EMBEDDED_BROWSER_MAX_SOURCES,
@@ -81,6 +82,7 @@ pub struct BrowserSourceRegistration {
     pub renderer_host_binding: Option<String>,
     pub page_host: EmbeddedBrowserPageHost,
     pub page_host_capabilities: EmbeddedBrowserPageHostCapabilities,
+    pub cdp_identity: Option<EmbeddedBrowserCdpIdentity>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +196,7 @@ pub struct BrowserCreationDispatch {
     pub creation: EmbeddedBrowserCreationView,
     pub source_ref: String,
     pub generation: u64,
+    pub requester_session_ref: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1174,6 +1177,34 @@ impl BrowserControlService {
         ready_pages(&self.lock())
     }
 
+    pub fn browser_cdp_identity(
+        &self,
+        session_ref: Option<&str>,
+    ) -> Option<EmbeddedBrowserCdpIdentity> {
+        let mut inner = self.lock();
+        remove_expired_leases(&mut inner, Utc::now());
+        if let Some(session_ref) = session_ref {
+            for record in inner.leases.values() {
+                if record.session_ref != session_ref {
+                    continue;
+                }
+                let Some(source) = inner.sources.get(&record.lease.source_ref) else {
+                    continue;
+                };
+                if source.state == BrowserSourceState::Ready {
+                    if let Some(identity) = source.registration.cdp_identity.clone() {
+                        return Some(identity);
+                    }
+                }
+            }
+        }
+        inner.sources.values().find_map(|source| {
+            (source.state == BrowserSourceState::Ready)
+                .then(|| source.registration.cdp_identity.clone())
+                .flatten()
+        })
+    }
+
     pub fn page(&self, tab_ref: &str) -> Result<EmbeddedBrowserPage, BrowserControlError> {
         let inner = self.lock();
         locate_page(&inner, tab_ref)
@@ -1662,6 +1693,11 @@ impl BrowserControlService {
                     "Browser creation request has not been assigned to a source.",
                 )
             })?;
+        let requester_session_ref = inner
+            .creations
+            .get(creation_ref)
+            .map(|creation| creation.requester_session_ref.clone())
+            .unwrap_or_default();
         let Some(creation) = begin_creation_dispatch_inner(&mut inner, &source_ref, creation_ref)?
         else {
             return Ok(None);
@@ -1671,6 +1707,7 @@ impl BrowserControlService {
             creation,
             source_ref,
             generation,
+            requester_session_ref,
         }))
     }
 
@@ -2876,6 +2913,7 @@ mod tests {
             renderer_host_binding: Some("private-renderer-host-a".to_string()),
             page_host: EmbeddedBrowserPageHost::RendererWebview,
             page_host_capabilities: EmbeddedBrowserPageHostCapabilities::default(),
+            cdp_identity: None,
         }
     }
 
@@ -2893,6 +2931,7 @@ mod tests {
                 survive_host_window_close: true,
                 cross_window_adopt: true,
             },
+            cdp_identity: None,
         }
     }
 

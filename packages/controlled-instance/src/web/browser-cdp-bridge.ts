@@ -9,11 +9,15 @@ import {
   EmbeddedBrowserTargetCreateTargetParamsSchema,
   EmbeddedBrowserTargetDetachFromTargetParamsSchema,
   EmbeddedBrowserTargetGetTargetInfoParamsSchema,
+  EmbeddedBrowserTargetSetAutoAttachParamsSchema,
   EmbeddedBrowserTargetSetDiscoverTargetsParamsSchema,
   assertEmbeddedBrowserCdpMethod,
   embeddedBrowserTargetInfoFromPage,
+  embeddedBrowserCdpProtocolDocument,
   supportsEmbeddedBrowserTargetCdpMethod,
   type EmbeddedBrowserTargetInfo,
+  type EmbeddedBrowserTargetFilter,
+  type EmbeddedBrowserCdpIdentity,
 } from "@task-handoff/protocol/embedded-browser-control";
 import { BrowserControlError, type BrowserControlErrorDetails, type BrowserControlService } from "./browser-control.ts";
 import type {
@@ -57,6 +61,11 @@ type BrowserConnection = {
   socket: CdpSocket;
   sessionRef: string;
   discover: boolean;
+  autoAttach?: {
+    waitForDebuggerOnStart: boolean;
+    flatten: true;
+    filter?: EmbeddedBrowserTargetFilter[];
+  };
   closed: boolean;
   targets: Map<string, EmbeddedBrowserTargetInfo>;
   sessions: Map<string, BrowserTargetSession>;
@@ -66,6 +75,26 @@ type BrowserConnection = {
 
 const EARLY_CDP_MESSAGE_LIMIT = 256;
 const EARLY_CDP_BYTES_LIMIT = 8 * 1024 * 1024;
+
+function browserVersionResult(identity: EmbeddedBrowserCdpIdentity | undefined) {
+  const chromeVersion = identity?.chromeVersion;
+  return {
+    protocolVersion: "1.3",
+    product: chromeVersion ? `Chrome/${chromeVersion}` : "TaskHandoff/EmbeddedBrowser",
+    revision: chromeVersion ? `@${chromeVersion}` : "@embedded",
+    userAgent: identity?.userAgent ?? "TaskHandoff embedded Chromium",
+    jsVersion: identity?.v8Version ?? "electron",
+  };
+}
+
+function targetMatchesAutoAttachFilter(target: EmbeddedBrowserTargetInfo, filter: EmbeddedBrowserTargetFilter[] | undefined) {
+  if (!filter?.length) return true;
+  for (const entry of filter) {
+    if (entry.type && entry.type !== target.type) continue;
+    return entry.exclude !== true;
+  }
+  return false;
+}
 
 function messageBytes(data: unknown) {
   if (Buffer.isBuffer(data)) return data;
@@ -192,36 +221,41 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
   const browserConnections = new Set<BrowserConnection>();
 
   const syncDiscovery = (connection: BrowserConnection) => {
-    if (connection.closed || !connection.discover) return;
+    if (connection.closed || (!connection.discover && !connection.autoAttach)) return;
     const pages = service.allPages();
     const pageByTabRef = new Map(pages.map((page) => [page.tabRef, page]));
     for (const [sessionId, session] of [...connection.sessions]) {
       if (pageByTabRef.has(session.tabRef)) continue;
       connection.sessions.delete(sessionId);
       if (connection.targetSessions.get(session.tabRef) === sessionId) connection.targetSessions.delete(session.tabRef);
-      sendJson(connection.socket, {
-        method: "Target.detachedFromTarget",
-        params: { sessionId, targetId: session.tabRef },
-      });
+      if (connection.discover || connection.autoAttach) {
+        sendJson(connection.socket, {
+          method: "Target.detachedFromTarget",
+          params: { sessionId, targetId: session.tabRef },
+        });
+      }
     }
     const attachedTabRefs = new Set([...connection.sessions.values()].map((session) => session.tabRef));
     const nextTargets = new Map<string, EmbeddedBrowserTargetInfo>();
     for (const page of pages) {
       nextTargets.set(page.tabRef, embeddedBrowserTargetInfoFromPage(page, attachedTabRefs.has(page.tabRef)));
     }
+    const newTargets: EmbeddedBrowserTargetInfo[] = [];
     for (const [tabRef, targetInfo] of nextTargets) {
       const previous = connection.targets.get(tabRef);
       if (!previous) {
-        sendJson(connection.socket, { method: "Target.targetCreated", params: { targetInfo } });
-      } else if (JSON.stringify(previous) !== JSON.stringify(targetInfo)) {
+        newTargets.push(targetInfo);
+        if (connection.discover) sendJson(connection.socket, { method: "Target.targetCreated", params: { targetInfo } });
+      } else if (connection.discover && JSON.stringify(previous) !== JSON.stringify(targetInfo)) {
         sendJson(connection.socket, { method: "Target.targetInfoChanged", params: { targetInfo } });
       }
     }
     for (const tabRef of [...connection.targets.keys()]) {
       if (nextTargets.has(tabRef)) continue;
-      sendJson(connection.socket, { method: "Target.targetDestroyed", params: { targetId: tabRef } });
+      if (connection.discover) sendJson(connection.socket, { method: "Target.targetDestroyed", params: { targetId: tabRef } });
     }
     connection.targets = nextTargets;
+    for (const targetInfo of newTargets) void autoAttachTarget(connection, targetInfo);
   };
 
   const detachTargetSessionsEverywhere = (tabRef: string, reason: string) => {
@@ -238,7 +272,7 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
           generation: session.generation,
           reason,
         }));
-        if (connection.discover) {
+        if (connection.discover || connection.autoAttach) {
           sendJson(connection.socket, {
             method: "Target.detachedFromTarget",
             params: { sessionId, targetId: session.tabRef },
@@ -248,8 +282,103 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
     }
   };
 
+  const attachTargetSession = async (
+    connection: BrowserConnection,
+    targetId: string,
+    options: { emitAttached?: boolean; waitingForDebugger?: boolean } = {},
+  ) => {
+    const existingSessionId = connection.targetSessions.get(targetId);
+    if (existingSessionId) {
+      const existing = connection.sessions.get(existingSessionId);
+      if (existing) {
+        try {
+          service.leaseCommandTarget(connection.sessionRef, existing.leaseRef);
+          return existing.sessionId;
+        } catch {
+          connection.sessions.delete(existingSessionId);
+          connection.targetSessions.delete(targetId);
+        }
+      }
+    }
+    const existingLease = service.leaseForSessionTab(connection.sessionRef, targetId);
+    const lease = service.attachTab(connection.sessionRef, targetId);
+    const target = service.leaseCommandTarget(connection.sessionRef, lease.leaseRef);
+    try {
+      if (!existingLease) {
+        await relay.targetAttach({
+          leaseRef: lease.leaseRef,
+          tabRef: lease.tabRef,
+          sourceRef: lease.sourceRef,
+          generation: lease.generation,
+          pageHost: target.page.pageHost,
+          profile: service.pageProfile(),
+        });
+      }
+    } catch (error) {
+      service.detachLease(connection.sessionRef, lease.leaseRef);
+      throw error;
+    }
+    const sessionId = createEntityId("tbs");
+    connection.sessions.set(sessionId, {
+      sessionId,
+      leaseRef: lease.leaseRef,
+      tabRef: lease.tabRef,
+      sourceRef: lease.sourceRef,
+      generation: lease.generation,
+    });
+    connection.targetSessions.set(lease.tabRef, sessionId);
+    if (options.emitAttached) {
+      sendJson(connection.socket, {
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId,
+          targetInfo: embeddedBrowserTargetInfoFromPage(target.page, true),
+          waitingForDebugger: options.waitingForDebugger === true,
+        },
+      });
+    }
+    return sessionId;
+  };
+
+  const autoAttachTarget = async (connection: BrowserConnection, targetInfo: EmbeddedBrowserTargetInfo) => {
+    if (!connection.autoAttach || connection.closed) return false;
+    if (!targetMatchesAutoAttachFilter(targetInfo, connection.autoAttach.filter)) return false;
+    if (connection.targetSessions.has(targetInfo.targetId)) return false;
+    try {
+      await attachTargetSession(connection, targetInfo.targetId, {
+        emitAttached: true,
+        waitingForDebugger: connection.autoAttach.waitForDebuggerOnStart,
+      });
+      syncDiscovery(connection);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const handleTargetMethod = async (connection: BrowserConnection, id: unknown, method: string, rawParams: unknown) => {
     const attachedTabRefs = new Set([...connection.sessions.values()].map((session) => session.tabRef));
+    if (method === "Browser.getVersion") {
+      sendJson(connection.socket, { id, result: browserVersionResult(service.browserCdpIdentity(connection.sessionRef)) });
+      return;
+    }
+    if (method === "Target.setAutoAttach") {
+      const params = EmbeddedBrowserTargetSetAutoAttachParamsSchema.parse(rawParams ?? {});
+      connection.autoAttach = params.autoAttach
+        ? {
+          waitForDebuggerOnStart: params.waitForDebuggerOnStart,
+          flatten: true,
+          ...(params.filter ? { filter: params.filter } : {}),
+        }
+        : undefined;
+      sendJson(connection.socket, { id, result: {} });
+      if (!connection.autoAttach) return;
+      for (const page of service.allPages()) {
+        await autoAttachTarget(connection, embeddedBrowserTargetInfoFromPage(page, connection.targetSessions.has(page.tabRef)));
+      }
+      syncDiscovery(connection);
+      return;
+    }
     if (method === "Target.getTargets") {
       sendJson(connection.socket, { id, result: service.targetInfos(attachedTabRefs) });
       return;
@@ -284,47 +413,7 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
         return;
       }
       const params = EmbeddedBrowserTargetAttachToTargetParamsSchema.parse(raw);
-      const existingSessionId = connection.targetSessions.get(params.targetId);
-      if (existingSessionId) {
-        const existing = connection.sessions.get(existingSessionId);
-        if (existing) {
-          try {
-            service.leaseCommandTarget(connection.sessionRef, existing.leaseRef);
-            sendJson(connection.socket, { id, result: { sessionId: existing.sessionId } });
-            return;
-          } catch {
-            connection.sessions.delete(existingSessionId);
-            connection.targetSessions.delete(params.targetId);
-          }
-        }
-      }
-      const existingLease = service.leaseForSessionTab(connection.sessionRef, params.targetId);
-      const lease = service.attachTab(connection.sessionRef, params.targetId);
-      const target = service.leaseCommandTarget(connection.sessionRef, lease.leaseRef);
-      try {
-        if (!existingLease) {
-          await relay.targetAttach({
-            leaseRef: lease.leaseRef,
-            tabRef: lease.tabRef,
-            sourceRef: lease.sourceRef,
-            generation: lease.generation,
-            pageHost: target.page.pageHost,
-            profile: service.pageProfile(),
-          });
-        }
-      } catch (error) {
-        service.detachLease(connection.sessionRef, lease.leaseRef);
-        throw error;
-      }
-      const sessionId = createEntityId("tbs");
-      connection.sessions.set(sessionId, {
-        sessionId,
-        leaseRef: lease.leaseRef,
-        tabRef: lease.tabRef,
-        sourceRef: lease.sourceRef,
-        generation: lease.generation,
-      });
-      connection.targetSessions.set(lease.tabRef, sessionId);
+      const sessionId = await attachTargetSession(connection, params.targetId);
       sendJson(connection.socket, { id, result: { sessionId } });
       syncDiscovery(connection);
       return;
@@ -344,7 +433,7 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
           generation: session.generation,
           reason: "target.detached",
         }));
-        if (connection.discover) {
+        if (connection.discover || connection.autoAttach) {
           sendJson(connection.socket, {
             method: "Target.detachedFromTarget",
             params: { sessionId: session.sessionId, targetId: session.tabRef },
@@ -411,7 +500,7 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
       return;
     }
     if (method === "Target.createBrowserContext" || method === "Target.disposeBrowserContext"
-      || method === "Target.setAutoAttach" || method === "Target.sendMessageToTarget") {
+      || method === "Target.sendMessageToTarget") {
       sendJson(connection.socket, cdpErrorValue(id, -32000, "The requested Target method is not supported.", "BROWSER_OPERATION_UNSUPPORTED"));
       return;
     }
@@ -434,13 +523,17 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
       return;
     }
     try {
-      assertEmbeddedBrowserCdpMethod(record.method, { adapterOnly: false });
+      assertEmbeddedBrowserCdpMethod(record.method);
     } catch {
       sendSessionError(connection.socket, id, session.sessionId, new BrowserControlError(
         "BROWSER_OPERATION_UNSUPPORTED",
         "The CDP method is outside the embedded page profile.",
         400,
       ));
+      return;
+    }
+    if (record.method === "Runtime.runIfWaitingForDebugger") {
+      sendJson(connection.socket, { id, result: {}, sessionId: session.sessionId });
       return;
     }
     try {
@@ -515,30 +608,39 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
   });
   app.addHook("onClose", async () => unsubscribeServiceEvents());
 
-  app.get("/json/version", PUBLIC_ROUTE, async (request, reply) => {
+  const jsonVersion = async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const auth = authenticate(request, service, sessionExists);
+      const identity = service.browserCdpIdentity(auth.sessionRef);
       return {
-        Browser: "TaskHandoff/EmbeddedBrowser",
+        Browser: identity ? `Chrome/${identity.chromeVersion}` : "TaskHandoff/EmbeddedBrowser",
         "Protocol-Version": "1.3",
-        "User-Agent": "TaskHandoff embedded Chromium",
-        "V8-Version": "electron",
-        "WebKit-Version": "electron",
+        "User-Agent": identity?.userAgent ?? "TaskHandoff embedded Chromium",
+        "V8-Version": identity?.v8Version ?? "electron",
+        "WebKit-Version": identity?.webkitVersion ?? "electron",
         webSocketDebuggerUrl: browserDebuggerUrl(httpEndpoint, service.registryEpochValue(), auth.token),
       };
     } catch (error) {
       return handleAuthError(reply, error);
     }
-  });
+  };
+  app.get("/json/version", PUBLIC_ROUTE, jsonVersion);
+  app.get("/json/version/", PUBLIC_ROUTE, jsonVersion);
 
-  app.get("/json/list", PUBLIC_ROUTE, async (request, reply) => {
+  const jsonList = async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const auth = authenticate(request, service, sessionExists);
       return service.allPages().map((page) => targetObject(httpEndpoint, page, auth.token));
     } catch (error) {
       return handleAuthError(reply, error);
     }
-  });
+  };
+  app.get("/json/list", PUBLIC_ROUTE, jsonList);
+  app.get("/json/list/", PUBLIC_ROUTE, jsonList);
+
+  const jsonProtocol = async () => embeddedBrowserCdpProtocolDocument();
+  app.get("/json/protocol", PUBLIC_ROUTE, jsonProtocol);
+  app.get("/json/protocol/", PUBLIC_ROUTE, jsonProtocol);
 
   const createTarget = async (request: FastifyRequest, reply: FastifyReply) => {
     let auth: CdpRequestAuth;
@@ -853,7 +955,7 @@ async function dispatchPageMessage(options: PageSocketOptions, data: unknown, is
     return;
   }
   try {
-    assertEmbeddedBrowserCdpMethod(record.method, { adapterOnly: false });
+    assertEmbeddedBrowserCdpMethod(record.method);
   } catch {
     sendJson(socket, cdpErrorValue(id, -32601, "The CDP method is outside the embedded page profile.", "BROWSER_OPERATION_UNSUPPORTED"));
     return;

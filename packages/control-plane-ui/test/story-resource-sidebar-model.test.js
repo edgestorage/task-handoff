@@ -367,6 +367,41 @@ test("Story browser page moves adopt the live page host and leave the source bla
   delete globalThis.window;
 });
 
+test("a page opened by another AI Session lands in that Session without switching the current view", async () => {
+  const storage = localStorageWindow();
+  globalThis.window = storage.window;
+  const aiSessionId = ref("ai-a");
+  const scope = effectScope();
+  const sidebar = scope.run(() => useStoryResourceSidebar({
+    aiSessionId: computed(() => aiSessionId.value),
+    instanceId: computed(() => "instance-a"),
+    instances: computed(() => [instance("instance-a")]),
+  }));
+  assert.ok(sidebar);
+  sidebar.openBrowserForAiSession("instance-a", "ai-a", "https://example.com/current");
+  const current = sidebar.resources.value.find((resource) => resource.kind === "embedded-browser");
+  assert.ok(current);
+  const currentKey = sidebar.activeKey.value;
+
+  sidebar.openBrowserForAiSession("instance-a", "ai-b", "https://example.com/background", {
+    title: "Background",
+    creationRef: "bcr_background",
+  });
+  assert.equal(sidebar.activeKey.value, currentKey);
+  assert.equal(sidebar.resources.value.some((resource) => resource.kind === "embedded-browser" && resource.aiSessionId === "ai-b"), false);
+  const background = sidebar.allBrowserResources.value.find((resource) => resource.aiSessionId === "ai-b");
+  assert.ok(background);
+  assert.equal(background.initialUrl, "https://example.com/background");
+  assert.equal(background.creationRef, "bcr_background");
+
+  aiSessionId.value = "ai-b";
+  await nextTick();
+  assert.equal(sidebar.resources.value.some((resource) => resource.aiSessionId === "ai-b" && resource.kind === "embedded-browser"), true);
+  assert.equal(sidebar.activeKey.value, storyResourceKey(background));
+  scope.stop();
+  delete globalThis.window;
+});
+
 test("activating a page from another AI Session resolves that Session's Story owner", () => {
   const resource = {
     kind: "embedded-browser",

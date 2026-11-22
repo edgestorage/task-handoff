@@ -744,7 +744,7 @@ import type { StorySelection } from "./story/storySelection";
 import { storyDecisionSessionInstance } from "./story/storyDecisionSession";
 import { inSessionDisplayedDecisionIds } from "./story/sessionDecisionDisplay";
 import StoryResourceSidebar from "./story/StoryResourceSidebar.vue";
-import { closeStoryResourceTarget, repositoryResource, storyBrowserSessionSelection, storyResourceKey, type StoryRepositoryPage } from "./story/storyResources";
+import { closeStoryResourceTarget, repositoryResource, storyBrowserSessionSelection, storyResourceKey, storySessionSelectionForAiSession, type StoryRepositoryPage } from "./story/storyResources";
 import { storyResourceSidebarKeyboardWidth, storyResourceSidebarMaxWidth, storyResourceSidebarMode, storyResourceSidebarProportionalWidth } from "./story/storyResourceLayout";
 import { STORY_RESOURCE_SIDEBAR_MIN_WIDTH, normalizeStoryResourceSidebarWidth, useStoryResourceSidebar } from "./story/useStoryResourceSidebar";
 import type { NodeLoadState } from "./shared/nodeQueryLoad";
@@ -780,7 +780,7 @@ import { useInstanceActions } from "./useInstanceActions";
 import { useWorkbenchLayoutPreferences } from "./useWorkbenchLayoutPreferences";
 import { useInstanceBoardSessions, type BoardSessionTab } from "./board/useInstanceBoardSessions";
 import { appDisplayName, buildAppSessionTabs, EMBEDDED_BROWSER_APP_ID, type RepositoryWorkspaceTabTarget, type SessionTab } from "./useInstanceSessions";
-import { isInstanceConnecting } from "./useInstanceStatus";
+import { isInstanceAppReady, isInstanceConnecting } from "./useInstanceStatus";
 import { applyInstanceBoardTargetSnapshot } from "./instanceBoardCache.ts";
 import { useResizableInstancesSidebar } from "./instance-list/useResizableInstancesSidebar";
 import { useWorkbenchInstances } from "./instance-list/useWorkbenchInstances";
@@ -807,7 +807,8 @@ type DesktopBridge = {
   openInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: string; code?: string }>;
   switchInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: "switched" | "focused" | "error"; code?: string }>;
   onOpenSettings?: (listener: () => void) => () => void;
-  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string; title?: string; creationRef?: string }) => void) => () => void;
+  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string; title?: string; creationRef?: string; requesterSessionRef?: string }) => void) => () => void;
+  ensureBrowserAgentControl?: (instanceId: string) => Promise<{ ok: boolean; code?: string; sourceRef?: string; ready?: boolean }>;
   logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
   setDiagnosticLogsEnabled?: (enabled: boolean) => Promise<{ enabled: boolean }>;
   windowChrome?: { mode: "custom" | "macos-overlay" | "windows-overlay"; supportsDensity?: boolean };
@@ -2021,10 +2022,29 @@ const authoritativeInstanceIds = computed<ReadonlySet<string> | undefined>(() =>
 watch(authoritativeInstanceIds, (instanceIds) => {
   if (instanceIds) pruneBrowserInstances(instanceIds);
 }, { immediate: true });
-const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId: sourceInstanceId, url, title, creationRef }) => {
+const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId: sourceInstanceId, url, title, creationRef, requesterSessionRef }) => {
   const instanceId = sourceInstanceId || activeStoryBrowserResource.value?.instanceId || activeInstanceId.value;
   desktopBridge?.logBrowserDiagnostic?.({ message: `popup event received url=${String(url || "").slice(0, 200)}`, instanceId: instanceId || undefined });
   if (!instanceId || typeof url !== "string" || !url.trim()) return;
+  if (requesterSessionRef) {
+    const requesterStory = storySessionSelectionForAiSession(instanceId, requesterSessionRef, boardInstancesWithAiSessions.value);
+    if (requesterStory) {
+      storyResourceSidebar.openBrowserForAiSession(instanceId, requesterSessionRef, url, { title, creationRef });
+      desktopBridge?.logBrowserDiagnostic?.({
+        message: `browser tab routed to requester story session=${requesterSessionRef} url=${url.slice(0, 200)}`,
+        instanceId,
+      });
+      return;
+    }
+    // Requirement: an Agent Session without a Story falls back to an ordinary
+    // instance tab, but a background request must not move the user's view.
+    openBrowserTab(instanceId, url, { title, creationRef, activate: false });
+    desktopBridge?.logBrowserDiagnostic?.({
+      message: `browser tab routed to requester instance tab session=${requesterSessionRef} url=${url.slice(0, 200)}`,
+      instanceId,
+    });
+    return;
+  }
   if (storyMode.value) {
     if (storyResourceTargetAiSessionId.value && storyResourceTargetInstanceId.value === instanceId) {
       storyResourceSidebar.openBrowser(instanceId, url, { title, creationRef });
@@ -2038,6 +2058,43 @@ const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId:
   openBrowserTab(instanceId, url, { title, creationRef });
   desktopBridge?.logBrowserDiagnostic?.({ message: `popup browser tab created url=${url.slice(0, 200)}`, instanceId });
 });
+
+const browserAgentControlInstanceIds = computed(() => [...new Set(sortedInstances.value
+  .filter((instance) => isInstanceAppReady(instance))
+  .map((instance) => instance.id))].sort());
+const browserAgentControlRegisteredInstanceIds = new Set<string>();
+const browserAgentControlRegisteringInstanceIds = new Set<string>();
+
+function registerBrowserAgentControl(instanceId: string) {
+  if (!desktopBridge?.ensureBrowserAgentControl
+    || browserAgentControlRegisteredInstanceIds.has(instanceId)
+    || browserAgentControlRegisteringInstanceIds.has(instanceId)) return;
+  browserAgentControlRegisteringInstanceIds.add(instanceId);
+  void desktopBridge.ensureBrowserAgentControl(instanceId).then((result) => {
+    if (result?.ok) {
+      browserAgentControlRegisteredInstanceIds.add(instanceId);
+      return;
+    }
+    if (result?.code && result.code !== "BROWSER_PAGE_HOST_UNAVAILABLE") {
+      desktopBridge?.logBrowserDiagnostic?.({ message: `browser agent control registration failed code=${result.code}`, instanceId });
+    }
+  }).catch((error) => {
+    desktopBridge?.logBrowserDiagnostic?.({
+      message: `browser agent control registration failed error=${error instanceof Error ? error.message : String(error)}`,
+      instanceId,
+    });
+  }).finally(() => {
+    browserAgentControlRegisteringInstanceIds.delete(instanceId);
+  });
+}
+
+watch(browserAgentControlInstanceIds, (instanceIds) => {
+  const eligibleInstanceIds = new Set(instanceIds);
+  for (const instanceId of browserAgentControlRegisteredInstanceIds) {
+    if (!eligibleInstanceIds.has(instanceId)) browserAgentControlRegisteredInstanceIds.delete(instanceId);
+  }
+  for (const instanceId of instanceIds) registerBrowserAgentControl(instanceId);
+}, { immediate: true });
 
 function applyPendingInstanceDetailSelection() {
   const selection = pendingInstanceDetailSelection.value;

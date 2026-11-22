@@ -190,6 +190,41 @@ test("Page.reload stays scoped to the guest webContents instead of the embedding
   assert.deepEqual(debuggerCalls, []);
 });
 
+test("Page.captureScreenshot uses the guest webContents instead of the debugger", async () => {
+  const debuggerCalls = [];
+  const captures = [];
+  const debuggerApi = new EventEmitter();
+  debuggerApi.attach = () => undefined;
+  debuggerApi.isAttached = () => false;
+  debuggerApi.sendCommand = async (method, params) => {
+    debuggerCalls.push([method, params]);
+    return { method, params };
+  };
+  const image = {
+    isEmpty: () => false,
+    toPNG: () => Buffer.from("png-bytes"),
+    toJPEG: (quality) => Buffer.from(`jpeg-${quality}`),
+  };
+  const store = registry();
+  const host = fakeHost();
+  const guest = fakeGuest(41, debuggerApi);
+  guest.capturePage = async (rect) => {
+    captures.push(rect);
+    return image;
+  };
+  store.addGuest({ host, guest, partition: "persist:instance-a" });
+  const tab = store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "key-a", partition: "persist:instance-a" });
+
+  store.attachDebugger({ tabRef: tab.tabRef, senderId: host.id });
+  assert.deepEqual(await store.sendCommand({ tabRef: tab.tabRef, senderId: host.id, method: "Page.captureScreenshot", params: {
+    format: "jpeg",
+    quality: 75,
+    clip: { x: 10, y: 20, width: 300, height: 200, scale: 2 },
+  } }), { data: Buffer.from("jpeg-75").toString("base64") });
+  assert.deepEqual(captures, [{ x: 10, y: 20, width: 300, height: 200 }]);
+  assert.deepEqual(debuggerCalls, []);
+});
+
 test("guest and host destruction clear tabRefs and debugger ownership", () => {
   const removals = [];
   const store = registry({ onRemoved: (entry) => removals.push(entry) });

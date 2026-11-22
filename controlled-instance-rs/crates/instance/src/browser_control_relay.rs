@@ -3,8 +3,8 @@ use controlled_instance_protocol::{
     decode_embedded_browser_stream_open, encode_embedded_browser_channel_error,
     encode_embedded_browser_control_message, encode_embedded_browser_frame,
     encode_embedded_browser_stream_open_ok, supports_embedded_browser_cdp_event,
-    EmbeddedBrowserCdpEvent, EmbeddedBrowserChannelError, EmbeddedBrowserControlHello,
-    EmbeddedBrowserControlMessageDecoder, EmbeddedBrowserControlReady,
+    supports_embedded_browser_tab_origin, EmbeddedBrowserCdpEvent, EmbeddedBrowserChannelError,
+    EmbeddedBrowserControlHello, EmbeddedBrowserControlMessageDecoder, EmbeddedBrowserControlReady,
     EmbeddedBrowserControlSynced, EmbeddedBrowserFrame, EmbeddedBrowserFrameDecoder,
     EmbeddedBrowserFrameType, EmbeddedBrowserProtocolErrorCode, EmbeddedBrowserTabsCloseParams,
     EmbeddedBrowserTabsCreatedParams, EmbeddedBrowserTabsDestroyedParams,
@@ -62,6 +62,7 @@ enum RelayOutbound {
 struct RelayConnection {
     connection_id: u64,
     generation: u64,
+    peer_protocol_version: String,
     ready: Arc<AtomicBool>,
     sender: mpsc::UnboundedSender<RelayOutbound>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<RelayReply>>>>,
@@ -89,6 +90,7 @@ impl BrowserControlRelayRegistry {
         &self,
         source_ref: &str,
         generation: u64,
+        peer_protocol_version: String,
         sender: mpsc::UnboundedSender<RelayOutbound>,
         pending: Arc<Mutex<HashMap<String, oneshot::Sender<RelayReply>>>>,
     ) -> RegisteredConnection {
@@ -97,6 +99,7 @@ impl BrowserControlRelayRegistry {
         let connection = RelayConnection {
             connection_id,
             generation,
+            peer_protocol_version,
             ready: ready.clone(),
             sender,
             pending,
@@ -254,11 +257,21 @@ impl BrowserControlRelayRegistry {
         &self,
         params: EmbeddedBrowserTabsOpenParams,
     ) -> Result<Value, BrowserControlError> {
+        let peer_protocol_version = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .connections
+            .get(&params.source_ref)
+            .map(|connection| connection.peer_protocol_version.clone())
+            .unwrap_or_default();
+        let wire_params =
+            embedded_browser_tabs_open_params_for_peer(&params, &peer_protocol_version);
         self.request(
             &params.source_ref,
             params.generation,
             "tabs.open",
-            serde_json::to_value(&params).unwrap_or(Value::Null),
+            wire_params,
             RELAY_RESPONSE_TIMEOUT,
         )
         .await
@@ -884,6 +897,7 @@ fn handle_hello(
     let registered = registry.register(
         &hello.source_ref,
         hello.generation,
+        hello.protocol_version.clone(),
         outbound.clone(),
         pending.clone(),
     );
@@ -1083,6 +1097,21 @@ fn static_error_code(value: &str) -> &'static str {
     }
 }
 
+fn embedded_browser_tabs_open_params_for_peer(
+    params: &EmbeddedBrowserTabsOpenParams,
+    peer_protocol_version: &str,
+) -> Value {
+    let mut wire_params = serde_json::to_value(params).unwrap_or(Value::Null);
+    if !supports_embedded_browser_tab_origin(peer_protocol_version) {
+        // Compatibility for desktops before 2026-11-23: their strict tabs.open
+        // schema rejects requesterSessionRef.
+        if let Some(object) = wire_params.as_object_mut() {
+            object.remove("requesterSessionRef");
+        }
+    }
+    wire_params
+}
+
 fn publish_browser_events(state: &AppState) {
     for event in state.browser_control.take_events() {
         let _ = state.events.publish(event.event_type, event.payload);
@@ -1098,6 +1127,29 @@ mod tests {
         assert_eq!(rpc_id(&json!("req_1")), Some("req_1".to_string()));
         assert_eq!(rpc_id(&json!(7)), Some("7".to_string()));
         assert_eq!(rpc_id(&Value::Null), None);
+    }
+
+    #[test]
+    fn tabs_open_omits_requester_session_for_old_desktops() {
+        let params = EmbeddedBrowserTabsOpenParams {
+            creation_ref: "bcr_one".to_string(),
+            source_ref: "bsr_one".to_string(),
+            generation: 2,
+            url: "https://example.com/".to_string(),
+            title: None,
+            requester_session_ref: Some("session_one".to_string()),
+        };
+        assert!(
+            embedded_browser_tabs_open_params_for_peer(&params, "2026-11-22")
+                .get("requesterSessionRef")
+                .is_none()
+        );
+        assert_eq!(
+            embedded_browser_tabs_open_params_for_peer(&params, "2026-11-23")
+                .get("requesterSessionRef")
+                .and_then(Value::as_str),
+            Some("session_one")
+        );
     }
 
     #[test]

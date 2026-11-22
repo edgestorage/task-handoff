@@ -309,6 +309,7 @@ async fn register_source(
         renderer_host_binding: body.renderer_host_binding,
         page_host: body.page_host,
         page_host_capabilities: body.page_host_capabilities,
+        cdp_identity: body.cdp_identity,
     };
     match state.browser_control.register_source(registration) {
         Ok(source) => {
@@ -595,6 +596,7 @@ pub(crate) async fn dispatch_creation(
         generation: dispatch.generation,
         url: dispatch.creation.requested_url.clone(),
         title: dispatch.creation.title.clone(),
+        requester_session_ref: Some(dispatch.requester_session_ref.clone()),
     };
     if let Err(error) = state.browser_control_relay.tabs_open(open).await {
         let _ = state.browser_control.fail_creation(

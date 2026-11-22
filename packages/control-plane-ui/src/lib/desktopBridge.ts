@@ -4,7 +4,7 @@ type OpenLocalPathResult = {
   error?: string;
 };
 
-export type DesktopBrowserAgentControl = { ok: boolean; code?: string };
+export type DesktopBrowserAgentControl = { ok: boolean; code?: string; sourceRef?: string; ready?: boolean };
 
 export type DesktopBrowserContextResult = { ok: boolean; code?: string; message?: string; contextId?: string; partition?: string; agentControl?: DesktopBrowserAgentControl };
 
@@ -72,6 +72,7 @@ type DesktopBridge = {
   releaseBrowserContext?: (contextId: string) => Promise<{ ok: boolean }>;
   touchBrowserContext?: (contextId: string) => Promise<{ ok: boolean }>;
   getBrowserControlInfo?: (instanceId?: string) => Promise<DesktopBrowserControlInfo>;
+  ensureBrowserAgentControl?: (instanceId: string) => Promise<DesktopBrowserAgentControl>;
   registerBrowserTab?: (input: { webContentsId: number; instanceId: string; sessionKey: string; creationRef?: string; title?: string; url?: string; state?: string }) => Promise<DesktopBrowserTabResult>;
   updateBrowserTab?: (input: { tabRef: string; title?: string; url?: string; state?: string }) => Promise<DesktopBrowserTabResult>;
   unregisterBrowserTab?: (webContentsId: number) => Promise<{ ok: boolean }>;
@@ -81,7 +82,7 @@ type DesktopBridge = {
   detachBrowserTarget?: (tabRef: string) => Promise<{ ok: boolean; code?: string }>;
   sendBrowserCdpCommand?: (input: { tabRef: string; method: string; params?: unknown }) => Promise<{ ok: boolean; code?: string; message?: string; result?: unknown }>;
   setBrowserTabThrottled?: (webContentsId: number, throttled: boolean) => Promise<{ ok: boolean }>;
-  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string; title?: string; creationRef?: string }) => void) => () => void;
+  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string; title?: string; creationRef?: string; requesterSessionRef?: string }) => void) => () => void;
   onBrowserFocusAddress?: (listener: (input: { webContentsId?: number }) => void) => () => void;
   onBrowserLoadFailure?: (listener: (input: DesktopBrowserLoadFailure) => void) => () => void;
   onBrowserTabClosed?: (listener: (input: { tabRef: string; instanceId?: string }) => void) => () => void;
@@ -148,6 +149,10 @@ export function canUseDesktopBrowserControl() {
 
 export function getDesktopBrowserControlInfo(instanceId?: string): Promise<DesktopBrowserControlInfo> {
   return desktopBridge()?.getBrowserControlInfo?.(instanceId) ?? Promise.resolve({ ok: false, code: "desktop-bridge-unavailable" });
+}
+
+export function ensureDesktopBrowserAgentControl(instanceId: string): Promise<DesktopBrowserAgentControl> {
+  return desktopBridge()?.ensureBrowserAgentControl?.(instanceId) ?? Promise.resolve({ ok: false, code: "desktop-bridge-unavailable" });
 }
 
 export function registerDesktopBrowserTab(input: { webContentsId: number; instanceId: string; sessionKey: string; creationRef?: string; title?: string; url?: string; state?: string }): Promise<DesktopBrowserTabResult> {

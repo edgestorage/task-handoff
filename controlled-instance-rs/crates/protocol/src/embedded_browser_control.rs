@@ -1,9 +1,22 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::HashSet;
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use thiserror::Error;
 
-pub const EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION: &str = "2026-11-22";
+/// Control protocol version negotiated in control.hello/ready. It may grow
+/// optional fields, so peers must gate features by this version.
+pub const EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION: &str = "2026-11-23";
+/// Wire framing version carried by OPEN_OK. It is frozen because older
+/// desktops decode OPEN_OK with a literal schema before control.hello.
+pub const EMBEDDED_BROWSER_CHANNEL_FRAMING_PROTOCOL_VERSION: &str = "2026-11-22";
+pub const EMBEDDED_BROWSER_TAB_ORIGIN_MIN_PROTOCOL_VERSION: &str = "2026-11-23";
+
+pub fn supports_embedded_browser_tab_origin(protocol_version: &str) -> bool {
+    protocol_version.len() == 10
+        && protocol_version.as_bytes().get(4) == Some(&b'-')
+        && protocol_version.as_bytes().get(7) == Some(&b'-')
+        && protocol_version >= EMBEDDED_BROWSER_TAB_ORIGIN_MIN_PROTOCOL_VERSION
+}
 /// Browser-level Target CDP sub-protocol; independent from channel framing and
 /// from the electron-page-cdp page profile.
 pub const EMBEDDED_BROWSER_TARGET_CDP_PROFILE: &str = "embedded-browser-target-cdp";
@@ -32,6 +45,7 @@ pub const EMBEDDED_BROWSER_CDP_PROFILE: &str = "electron-page-cdp";
 pub const EMBEDDED_BROWSER_CDP_ACCESS_TTL_MS: u64 = 8 * 60 * 60 * 1_000;
 
 pub const EMBEDDED_BROWSER_TARGET_CDP_METHODS: &[&str] = &[
+    "Browser.getVersion",
     "Target.getTargets",
     "Target.getTargetInfo",
     "Target.getBrowserContexts",
@@ -40,9 +54,11 @@ pub const EMBEDDED_BROWSER_TARGET_CDP_METHODS: &[&str] = &[
     "Target.closeTarget",
     "Target.createTarget",
     "Target.setDiscoverTargets",
+    "Target.setAutoAttach",
 ];
 
 pub const EMBEDDED_BROWSER_TARGET_CDP_EVENTS: &[&str] = &[
+    "Target.attachedToTarget",
     "Target.targetCreated",
     "Target.targetDestroyed",
     "Target.targetInfoChanged",
@@ -270,6 +286,15 @@ impl EmbeddedBrowserPageHostCapabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserCdpIdentity {
+    pub chrome_version: String,
+    pub user_agent: String,
+    pub v8_version: String,
+    pub webkit_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct EmbeddedBrowserSource {
     pub source_ref: String,
     pub generation: u64,
@@ -295,6 +320,8 @@ pub struct EmbeddedBrowserSourceRegistrationRequest {
     pub page_host: EmbeddedBrowserPageHost,
     #[serde(default)]
     pub page_host_capabilities: EmbeddedBrowserPageHostCapabilities,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cdp_identity: Option<EmbeddedBrowserCdpIdentity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -467,10 +494,60 @@ pub struct EmbeddedBrowserTargetSetDiscoverTargetsParams {
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedBrowserTargetSetDiscoverTargetsResult {}
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetFilter {
+    #[serde(rename = "type")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetSetAutoAttachParams {
+    pub auto_attach: bool,
+    #[serde(default)]
+    pub wait_for_debugger_on_start: bool,
+    #[serde(default = "default_true")]
+    pub flatten: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Vec<EmbeddedBrowserTargetFilter>>,
+}
+
+impl EmbeddedBrowserTargetSetAutoAttachParams {
+    pub fn validate(&self) -> Result<(), EmbeddedBrowserProtocolError> {
+        if self.auto_attach && !self.flatten {
+            return Err(EmbeddedBrowserProtocolError::protocol(
+                "Target.setAutoAttach only supports flatten=true.",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetSetAutoAttachResult {}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedBrowserTargetCreatedParams {
     pub target_info: EmbeddedBrowserTargetInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetAttachedToTargetParams {
+    pub session_id: EmbeddedBrowserCdpSessionId,
+    pub target_info: EmbeddedBrowserTargetInfo,
+    #[serde(default)]
+    pub waiting_for_debugger: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -496,6 +573,8 @@ pub struct EmbeddedBrowserTargetDetachedFromTargetParams {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "method", content = "params")]
 pub enum EmbeddedBrowserTargetCdpEvent {
+    #[serde(rename = "Target.attachedToTarget")]
+    AttachedToTarget(EmbeddedBrowserTargetAttachedToTargetParams),
     #[serde(rename = "Target.targetCreated")]
     TargetCreated(EmbeddedBrowserTargetCreatedParams),
     #[serde(rename = "Target.targetInfoChanged")]
@@ -834,6 +913,8 @@ pub struct EmbeddedBrowserTabsOpenParams {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_session_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -978,104 +1059,228 @@ impl EmbeddedBrowserChannelCapabilities {
 pub enum EmbeddedBrowserCdpMethodKind {
     Read,
     PageWrite,
-    AdapterOnly,
+    Session,
 }
+
+pub const EMBEDDED_BROWSER_CDP_METHODS: &[(&str, EmbeddedBrowserCdpMethodKind)] = &[
+    (
+        "Accessibility.enable",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    (
+        "Accessibility.disable",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    (
+        "Accessibility.getFullAXTree",
+        EmbeddedBrowserCdpMethodKind::Read,
+    ),
+    (
+        "Accessibility.getPartialAXTree",
+        EmbeddedBrowserCdpMethodKind::Read,
+    ),
+    (
+        "Accessibility.getRootAXNode",
+        EmbeddedBrowserCdpMethodKind::Read,
+    ),
+    ("Console.enable", EmbeddedBrowserCdpMethodKind::Session),
+    ("Console.disable", EmbeddedBrowserCdpMethodKind::Session),
+    ("DOM.getDocument", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOM.describeNode", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOM.resolveNode", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOM.getBoxModel", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOM.getContentQuads", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOM.getNodeForLocation", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOM.querySelector", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOM.querySelectorAll", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOM.getAttributes", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOM.getOuterHTML", EmbeddedBrowserCdpMethodKind::Read),
+    ("DOMSnapshot.enable", EmbeddedBrowserCdpMethodKind::Session),
+    ("DOMSnapshot.disable", EmbeddedBrowserCdpMethodKind::Session),
+    (
+        "DOMSnapshot.captureSnapshot",
+        EmbeddedBrowserCdpMethodKind::Read,
+    ),
+    (
+        "Input.dispatchMouseEvent",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
+    (
+        "Input.dispatchKeyEvent",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
+    (
+        "Input.dispatchTouchEvent",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
+    ("Input.insertText", EmbeddedBrowserCdpMethodKind::PageWrite),
+    ("Log.enable", EmbeddedBrowserCdpMethodKind::Session),
+    ("Log.disable", EmbeddedBrowserCdpMethodKind::Session),
+    ("Network.enable", EmbeddedBrowserCdpMethodKind::Session),
+    ("Network.disable", EmbeddedBrowserCdpMethodKind::Session),
+    (
+        "Network.getResponseBody",
+        EmbeddedBrowserCdpMethodKind::Read,
+    ),
+    (
+        "Network.getRequestPostData",
+        EmbeddedBrowserCdpMethodKind::Read,
+    ),
+    ("Page.enable", EmbeddedBrowserCdpMethodKind::Session),
+    ("Page.disable", EmbeddedBrowserCdpMethodKind::Session),
+    (
+        "Page.getNavigationHistory",
+        EmbeddedBrowserCdpMethodKind::Read,
+    ),
+    ("Page.getFrameTree", EmbeddedBrowserCdpMethodKind::Read),
+    ("Page.getLayoutMetrics", EmbeddedBrowserCdpMethodKind::Read),
+    ("Page.navigate", EmbeddedBrowserCdpMethodKind::PageWrite),
+    ("Page.reload", EmbeddedBrowserCdpMethodKind::PageWrite),
+    ("Page.stopLoading", EmbeddedBrowserCdpMethodKind::PageWrite),
+    ("Page.captureScreenshot", EmbeddedBrowserCdpMethodKind::Read),
+    ("Runtime.enable", EmbeddedBrowserCdpMethodKind::Session),
+    ("Runtime.disable", EmbeddedBrowserCdpMethodKind::Session),
+    ("Runtime.evaluate", EmbeddedBrowserCdpMethodKind::PageWrite),
+    (
+        "Runtime.callFunctionOn",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
+    ("Runtime.getProperties", EmbeddedBrowserCdpMethodKind::Read),
+    (
+        "Runtime.releaseObject",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    (
+        "Runtime.runIfWaitingForDebugger",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    ("Schema.getDomains", EmbeddedBrowserCdpMethodKind::Read),
+];
 
 pub fn embedded_browser_cdp_method_kind(method: &str) -> Option<EmbeddedBrowserCdpMethodKind> {
     if method.starts_with("Emulation.") {
         return Some(EmbeddedBrowserCdpMethodKind::PageWrite);
     }
-    let kind = match method {
-        "Accessibility.enable"
-        | "Accessibility.disable"
-        | "Console.enable"
-        | "Console.disable"
-        | "DOMSnapshot.enable"
-        | "DOMSnapshot.disable"
-        | "Log.enable"
-        | "Log.disable"
-        | "Network.enable"
-        | "Network.disable"
-        | "Page.enable"
-        | "Page.disable"
-        | "Runtime.enable"
-        | "Runtime.disable"
-        | "Runtime.releaseObject" => EmbeddedBrowserCdpMethodKind::AdapterOnly,
-        "Accessibility.getFullAXTree"
-        | "Accessibility.getPartialAXTree"
-        | "Accessibility.getRootAXNode"
-        | "DOM.getDocument"
-        | "DOM.describeNode"
-        | "DOM.resolveNode"
-        | "DOM.getBoxModel"
-        | "DOM.getContentQuads"
-        | "DOM.getNodeForLocation"
-        | "DOM.querySelector"
-        | "DOM.querySelectorAll"
-        | "DOM.getAttributes"
-        | "DOM.getOuterHTML"
-        | "DOMSnapshot.captureSnapshot"
-        | "Network.getResponseBody"
-        | "Network.getRequestPostData"
-        | "Page.getNavigationHistory"
-        | "Page.getFrameTree"
-        | "Page.getLayoutMetrics"
-        | "Page.captureScreenshot"
-        | "Runtime.getProperties"
-        | "Schema.getDomains" => EmbeddedBrowserCdpMethodKind::Read,
-        "Input.dispatchMouseEvent"
-        | "Input.dispatchKeyEvent"
-        | "Input.dispatchTouchEvent"
-        | "Input.insertText"
-        | "Page.navigate"
-        | "Page.reload"
-        | "Page.stopLoading"
-        | "Runtime.evaluate"
-        | "Runtime.callFunctionOn" => EmbeddedBrowserCdpMethodKind::PageWrite,
-        _ => return None,
-    };
-    Some(kind)
+    EMBEDDED_BROWSER_CDP_METHODS
+        .iter()
+        .find_map(|(name, kind)| (*name == method).then_some(*kind))
 }
 
 pub fn assert_embedded_browser_cdp_method(
     method: &str,
-    adapter_only: bool,
 ) -> Result<(), EmbeddedBrowserProtocolError> {
-    match embedded_browser_cdp_method_kind(method) {
-        Some(EmbeddedBrowserCdpMethodKind::AdapterOnly) if !adapter_only => Err(
-            EmbeddedBrowserProtocolError::protocol("CDP method is adapter-only."),
-        ),
-        Some(_) => Ok(()),
-        None => Err(EmbeddedBrowserProtocolError::protocol(
-            "CDP method is outside the electron-page-cdp profile.",
-        )),
-    }
+    embedded_browser_cdp_method_kind(method)
+        .map(|_| ())
+        .ok_or_else(|| {
+            EmbeddedBrowserProtocolError::protocol(
+                "CDP method is outside the electron-page-cdp profile.",
+            )
+        })
 }
 
+pub const EMBEDDED_BROWSER_CDP_EVENTS: &[&str] = &[
+    "Console.messageAdded",
+    "Log.entryAdded",
+    "Network.loadingFailed",
+    "Network.loadingFinished",
+    "Network.requestServedFromCache",
+    "Network.requestWillBeSent",
+    "Network.responseReceived",
+    "Page.domContentEventFired",
+    "Page.frameNavigated",
+    "Page.frameStartedLoading",
+    "Page.frameStoppedLoading",
+    "Page.javascriptDialogClosed",
+    "Page.javascriptDialogOpening",
+    "Page.lifecycleEvent",
+    "Page.loadEventFired",
+    "Runtime.consoleAPICalled",
+    "Runtime.exceptionThrown",
+    "Runtime.executionContextCreated",
+    "Runtime.executionContextDestroyed",
+    "Runtime.executionContextsCleared",
+];
+
 pub fn supports_embedded_browser_cdp_event(method: &str) -> bool {
-    matches!(
-        method,
-        "Console.messageAdded"
-            | "Log.entryAdded"
-            | "Network.loadingFailed"
-            | "Network.loadingFinished"
-            | "Network.requestServedFromCache"
-            | "Network.requestWillBeSent"
-            | "Network.responseReceived"
-            | "Page.domContentEventFired"
-            | "Page.frameNavigated"
-            | "Page.frameStartedLoading"
-            | "Page.frameStoppedLoading"
-            | "Page.javascriptDialogClosed"
-            | "Page.javascriptDialogOpening"
-            | "Page.lifecycleEvent"
-            | "Page.loadEventFired"
-            | "Runtime.consoleAPICalled"
-            | "Runtime.exceptionThrown"
-            | "Runtime.executionContextCreated"
-            | "Runtime.executionContextDestroyed"
-            | "Runtime.executionContextsCleared"
-    )
+    EMBEDDED_BROWSER_CDP_EVENTS.contains(&method)
+}
+
+const EMBEDDED_BROWSER_EMULATION_PROTOCOL_COMMANDS: &[&str] = &[
+    "clearDeviceMetricsOverride",
+    "setDeviceMetricsOverride",
+    "setEmulatedMedia",
+    "setEmulatedVisionDeficiency",
+    "setFocusEmulationEnabled",
+    "setScriptExecutionDisabled",
+    "setTouchEmulationEnabled",
+    "setUserAgentOverride",
+];
+
+pub fn embedded_browser_cdp_protocol_document() -> Value {
+    fn add(target: &mut BTreeMap<String, BTreeSet<String>>, method: &str) {
+        let Some((domain, name)) = method.split_once('.') else {
+            return;
+        };
+        if domain.is_empty() || name.is_empty() {
+            return;
+        }
+        target
+            .entry(domain.to_string())
+            .or_default()
+            .insert(name.to_string());
+    }
+
+    let mut commands = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut events = BTreeMap::<String, BTreeSet<String>>::new();
+    for (method, _) in EMBEDDED_BROWSER_CDP_METHODS {
+        add(&mut commands, method);
+    }
+    for command in EMBEDDED_BROWSER_EMULATION_PROTOCOL_COMMANDS {
+        add(&mut commands, &format!("Emulation.{command}"));
+    }
+    for method in EMBEDDED_BROWSER_TARGET_CDP_METHODS {
+        add(&mut commands, method);
+    }
+    for method in EMBEDDED_BROWSER_CDP_EVENTS {
+        add(&mut events, method);
+    }
+    for method in EMBEDDED_BROWSER_TARGET_CDP_EVENTS {
+        add(&mut events, method);
+    }
+    let domains = commands
+        .keys()
+        .chain(events.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|domain| {
+            let mut entry = serde_json::Map::new();
+            entry.insert("domain".to_string(), json!(domain));
+            if let Some(names) = commands.get(&domain) {
+                entry.insert(
+                    "commands".to_string(),
+                    json!(names
+                        .iter()
+                        .map(|name| json!({ "name": name }))
+                        .collect::<Vec<_>>()),
+                );
+            }
+            if let Some(names) = events.get(&domain) {
+                entry.insert(
+                    "events".to_string(),
+                    json!(names
+                        .iter()
+                        .map(|name| json!({ "name": name }))
+                        .collect::<Vec<_>>()),
+                );
+            }
+            Value::Object(entry)
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "version": { "major": "1", "minor": "3" },
+        "domains": domains,
+    })
 }
 
 pub fn encode_embedded_browser_frame(
@@ -1222,7 +1427,7 @@ pub fn decode_embedded_browser_stream_open(
 pub fn encode_embedded_browser_stream_open_ok() -> Result<Vec<u8>, EmbeddedBrowserProtocolError> {
     serde_json::to_vec(&EmbeddedBrowserStreamOpenOk {
         stream_kind: "control".to_string(),
-        protocol_version: EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION.to_string(),
+        protocol_version: EMBEDDED_BROWSER_CHANNEL_FRAMING_PROTOCOL_VERSION.to_string(),
     })
     .map_err(|_| {
         EmbeddedBrowserProtocolError::protocol("Embedded browser OPEN_OK payload is invalid.")
@@ -1236,7 +1441,7 @@ pub fn decode_embedded_browser_stream_open_ok(
         EmbeddedBrowserProtocolError::protocol("Embedded browser OPEN_OK payload is invalid.")
     })?;
     if value.stream_kind != "control"
-        || value.protocol_version != EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION
+        || value.protocol_version != EMBEDDED_BROWSER_CHANNEL_FRAMING_PROTOCOL_VERSION
     {
         return Err(EmbeddedBrowserProtocolError::protocol(
             "Embedded browser OPEN_OK payload is invalid.",
@@ -1591,7 +1796,7 @@ mod tests {
             let expected = match kind {
                 "read" => EmbeddedBrowserCdpMethodKind::Read,
                 "page-write" => EmbeddedBrowserCdpMethodKind::PageWrite,
-                "adapter-only" => EmbeddedBrowserCdpMethodKind::AdapterOnly,
+                "session" => EmbeddedBrowserCdpMethodKind::Session,
                 other => panic!("unexpected method kind {other}"),
             };
             assert_eq!(embedded_browser_cdp_method_kind(method), Some(expected));
@@ -1599,12 +1804,10 @@ mod tests {
         for event in fixture["cdp"]["events"].as_array().unwrap() {
             assert!(supports_embedded_browser_cdp_event(event.as_str().unwrap()));
         }
-        assert!(assert_embedded_browser_cdp_method("Network.enable", false).is_err());
-        assert!(assert_embedded_browser_cdp_method("Network.enable", true).is_ok());
-        assert!(
-            assert_embedded_browser_cdp_method("Emulation.setDeviceMetricsOverride", false).is_ok()
-        );
-        assert!(assert_embedded_browser_cdp_method("Target.attachToTarget", true).is_err());
+        assert!(assert_embedded_browser_cdp_method("Network.enable").is_ok());
+        assert!(assert_embedded_browser_cdp_method("Runtime.releaseObject").is_ok());
+        assert!(assert_embedded_browser_cdp_method("Emulation.setDeviceMetricsOverride").is_ok());
+        assert!(assert_embedded_browser_cdp_method("Target.attachToTarget").is_err());
     }
 
     #[test]
@@ -1651,6 +1854,12 @@ mod tests {
             created,
             EmbeddedBrowserTargetCdpEvent::TargetCreated(_)
         ));
+        let attached: EmbeddedBrowserTargetCdpEvent =
+            serde_json::from_value(fixture["messages"]["targetAttachedEvent"].clone()).unwrap();
+        assert!(matches!(
+            attached,
+            EmbeddedBrowserTargetCdpEvent::AttachedToTarget(_)
+        ));
         let detached: EmbeddedBrowserTargetCdpEvent =
             serde_json::from_value(fixture["messages"]["targetDetachedEvent"].clone()).unwrap();
         assert!(matches!(
@@ -1660,11 +1869,20 @@ mod tests {
         assert!(supports_embedded_browser_target_cdp_method(
             "Target.createTarget"
         ));
+        assert!(supports_embedded_browser_target_cdp_method(
+            "Browser.getVersion"
+        ));
+        assert!(supports_embedded_browser_target_cdp_method(
+            "Target.setAutoAttach"
+        ));
         assert!(!supports_embedded_browser_target_cdp_method(
             "Target.createBrowserContext"
         ));
         assert!(supports_embedded_browser_target_cdp_event(
             "Target.targetInfoChanged"
+        ));
+        assert!(supports_embedded_browser_target_cdp_event(
+            "Target.attachedToTarget"
         ));
         assert!(!supports_embedded_browser_target_cdp_event(
             "Target.setAutoAttach"
@@ -1676,6 +1894,15 @@ mod tests {
         ));
         assert!(assert_embedded_browser_target_cdp_method("Target.getBrowserContexts").is_ok());
         assert!(assert_embedded_browser_target_cdp_method("Target.createBrowserContext").is_err());
+        let auto_attach: EmbeddedBrowserTargetSetAutoAttachParams =
+            serde_json::from_value(fixture["messages"]["targetSetAutoAttachParams"].clone())
+                .unwrap();
+        auto_attach.validate().unwrap();
+        assert!(auto_attach.flatten);
+        assert_eq!(
+            fixture["cdp"]["targetCdp"]["protocolDocument"],
+            embedded_browser_cdp_protocol_document()
+        );
     }
 
     #[test]

@@ -708,7 +708,11 @@ export function useActiveInstanceSessions({
     normalizeSessionLayout();
   }
 
-  function openBrowserTab(instanceId: string, initialUrl?: string, options: { title?: string; creationRef?: string } = {}) {
+  function openBrowserTab(
+    instanceId: string,
+    initialUrl?: string,
+    options: { title?: string; creationRef?: string; activate?: boolean } = {},
+  ) {
     const page = createBrowserPage(instanceId, {
       title: options.title?.trim() || t("sessions.tabs.embeddedBrowser"),
       status: initialUrl ? "loading" : "running",
@@ -719,6 +723,7 @@ export function useActiveInstanceSessions({
     const key = `${BROWSER_TAB_SLOT_PREFIX}${createBrowserUuid()}`;
     const slots = browserTabSlots[instanceId] ||= reactive<BrowserTabSlot[]>([]);
     slots.push({ key, pageKey: page.key });
+    if (options.activate === false) return;
     const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";
     if (pane === "right") {
       ensurePaneAssignments(instanceId)[key] = true;

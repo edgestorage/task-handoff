@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   releaseBrowserContext: (contextId) => ipcRenderer.invoke("task-handoff:browser-context-release", contextId),
   touchBrowserContext: (contextId) => ipcRenderer.invoke("task-handoff:browser-context-touch", contextId),
   getBrowserControlInfo: (instanceId) => ipcRenderer.invoke("task-handoff:browser-control-info", instanceId ? { instanceId } : {}),
+  ensureBrowserAgentControl: (instanceId) => ipcRenderer.invoke("task-handoff:browser-agent-control-ensure", instanceId),
   registerBrowserTab: (input) => ipcRenderer.invoke("task-handoff:browser-tab-register", input),
   updateBrowserTab: (input) => ipcRenderer.invoke("task-handoff:browser-tab-update", input),
   unregisterBrowserTab: (webContentsId) => ipcRenderer.invoke("task-handoff:browser-tab-unregister", { webContentsId }),

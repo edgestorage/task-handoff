@@ -29,6 +29,12 @@ test("guest popups are routed to the renderer as browser tabs", () => {
   assert.match(preload, /onBrowserNewTab/);
 });
 
+test("desktop browser agent control registers before a browser surface mounts", () => {
+  assert.match(main, /task-handoff:browser-agent-control-ensure[\s\S]*?trustedControlPlaneSenderUrl\(event\.sender\)[\s\S]*?ensureDesktopBrowserAgentControl/);
+  assert.match(main, /async function ensureDesktopBrowserAgentControl[\s\S]*?desktopBrowserChannelManager\.ensureSource\(\{/);
+  assert.match(preload, /ensureBrowserAgentControl[\s\S]*?task-handoff:browser-agent-control-ensure/);
+});
+
 test("guest address shortcuts are routed to the owning browser tab", () => {
   assert.match(main, /guest\.on\("before-input-event"[\s\S]*?input\.key\?\.toLowerCase\(\) !== "l"[\s\S]*?event\.preventDefault\(\)[\s\S]*?!host\.isDestroyed\(\)[\s\S]*?host\.send\("task-handoff:browser-focus-address", \{ webContentsId: guest\.id \}\)/);
   assert.match(preload, /onBrowserFocusAddress[\s\S]*?task-handoff:browser-focus-address/);

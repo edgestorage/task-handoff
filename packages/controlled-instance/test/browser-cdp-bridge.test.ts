@@ -24,6 +24,13 @@ type RegistrationOptions = {
 
 type CdpMessage = Record<string, any>;
 
+const TEST_CDP_IDENTITY = {
+  chromeVersion: "150.0.7871.47",
+  userAgent: "Mozilla/5.0 Chrome/150.0.7871.47 Safari/537.36",
+  v8Version: "15.0.245.15-electron.0",
+  webkitVersion: "537.36",
+};
+
 function fakeRelay() {
   return {
     subscribeCdpEvent: () => () => undefined,
@@ -57,6 +64,7 @@ function registration(options: RegistrationOptions = {}) {
     pageHostCapabilities: pageHost === "renderer-webview"
       ? { ...EMBEDDED_BROWSER_RENDERER_WEBVIEW_CAPABILITIES }
       : { ...EMBEDDED_BROWSER_MAIN_PAGE_POOL_CAPABILITIES },
+    cdpIdentity: TEST_CDP_IDENTITY,
   };
 }
 
@@ -216,14 +224,33 @@ test("browser CDP exposes contexts, targets, sessions, discovery and disconnect 
   try {
     const version = await app.inject({ method: "GET", url: `/json/version?token=${encodeURIComponent(token)}` });
     assert.equal(version.statusCode, 200);
+    assert.equal(version.json().Browser, "Chrome/150.0.7871.47");
+    assert.equal(version.json()["User-Agent"], TEST_CDP_IDENTITY.userAgent);
+    assert.equal(version.json()["V8-Version"], TEST_CDP_IDENTITY.v8Version);
+    assert.equal(version.json()["WebKit-Version"], TEST_CDP_IDENTITY.webkitVersion);
     assert.match(version.json().webSocketDebuggerUrl, /\/devtools\/browser\//);
+    assert.equal((await app.inject({ method: "GET", url: `/json/version/?token=${encodeURIComponent(token)}` })).statusCode, 200);
+
+    const protocol = await app.inject({ method: "GET", url: "/json/protocol" });
+    assert.equal(protocol.statusCode, 200);
+    assert.ok(protocol.json().domains.some((domain: CdpMessage) => domain.domain === "Browser"));
 
     const list = await app.inject({ method: "GET", url: `/json/list?token=${encodeURIComponent(token)}` });
     assert.equal(list.statusCode, 200);
     assert.deepEqual(list.json().map((target: CdpMessage) => target.browserContextId), [source.sourceRef, source.sourceRef]);
+    assert.equal((await app.inject({ method: "GET", url: `/json/list/?token=${encodeURIComponent(token)}` })).statusCode, 200);
 
     client.send({ id: 1, method: "Target.getBrowserContexts" });
     assert.deepEqual((await client.response(1)).result, { browserContextIds: [source.sourceRef] });
+
+    client.send({ id: 20, method: "Browser.getVersion" });
+    assert.deepEqual((await client.response(20)).result, {
+      protocolVersion: "1.3",
+      product: "Chrome/150.0.7871.47",
+      revision: "@150.0.7871.47",
+      userAgent: TEST_CDP_IDENTITY.userAgent,
+      jsVersion: TEST_CDP_IDENTITY.v8Version,
+    });
 
     client.send({ id: 2, method: "Target.getTargets" });
     const targets = (await client.response(2)).result.targetInfos;
@@ -259,6 +286,14 @@ test("browser CDP exposes contexts, targets, sessions, discovery and disconnect 
     assert.deepEqual(evaluated.result, { value: "Runtime.evaluate" });
     assert.equal(commandCalls.length, 1);
 
+    client.send({ id: 71, sessionId, method: "Network.enable" });
+    assert.deepEqual((await client.response(71)).result, { value: "Network.enable" });
+    assert.equal(commandCalls.length, 2);
+
+    client.send({ id: 72, sessionId, method: "Runtime.releaseObject", params: { objectId: "obj_1" } });
+    assert.deepEqual((await client.response(72)).result, { value: "Runtime.releaseObject" });
+    assert.equal(commandCalls.length, 3);
+
     client.send({ id: 8, method: "Target.detachFromTarget", params: { sessionId } });
     assert.deepEqual((await client.response(8)).result, {});
     assert.equal(detachCalls.length, 1);
@@ -277,6 +312,51 @@ test("browser CDP exposes contexts, targets, sessions, discovery and disconnect 
 
   assert.equal(service.leaseRefsForSession("session_one").length, 0);
   assert.ok(detachCalls.length >= 2);
+});
+
+test("browser Target.setAutoAttach attaches current pages and supports waiting clients", async () => {
+  const service = new BrowserControlService();
+  const relay = fakeRelay();
+  const attachCalls: unknown[] = [];
+  const commandCalls: unknown[] = [];
+  relay.targetAttach = async (params) => { attachCalls.push(params); return {}; };
+  relay.cdpSend = async (_sourceRef, _generation, params) => {
+    commandCalls.push(params);
+    return { value: params.method };
+  };
+
+  const source = service.registerSource(registration());
+  syncSource(service, source, [page(source, "tab_auto")]);
+  service.grantInstanceAccess();
+  const token = service.issueCdpToken("session_one").token;
+  const { app, port } = await startBridge(service, relay);
+  const client = await connectCdp(
+    `ws://127.0.0.1:${port}/devtools/browser/${encodeURIComponent(service.registryEpochValue())}?token=${encodeURIComponent(token)}`,
+  );
+
+  try {
+    client.send({
+      id: 1,
+      method: "Target.setAutoAttach",
+      params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: "page" }] },
+    });
+    assert.deepEqual((await client.response(1)).result, {});
+    const attached = await client.waitFor((message) => message.method === "Target.attachedToTarget");
+    assert.equal(attached.params.targetInfo.targetId, "tab_auto");
+    assert.equal(attached.params.targetInfo.attached, true);
+    assert.equal(attached.params.waitingForDebugger, true);
+    assert.equal(attachCalls.length, 1);
+
+    client.send({ id: 2, sessionId: attached.params.sessionId, method: "Runtime.runIfWaitingForDebugger" });
+    const resumed = await client.response(2);
+    assert.deepEqual(resumed.result, {});
+    assert.equal(resumed.sessionId, attached.params.sessionId);
+    assert.equal(commandCalls.length, 0);
+  } finally {
+    client.close();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await app.close();
+  }
 });
 
 test("browser Target.createTarget waits for the bounded creation window before returning a creationRef", async () => {
