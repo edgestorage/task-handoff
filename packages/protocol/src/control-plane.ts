@@ -1,4 +1,5 @@
 import { RemoteDesktopCapabilitiesSchema, normalizeRemoteDesktopCapabilities, unsupportedRemoteDesktopCapabilities, type RemoteDesktopCapabilities } from "./remote-desktop.ts";
+import { EmbeddedBrowserChannelCapabilitiesSchema, normalizeEmbeddedBrowserChannelCapabilities, unsupportedEmbeddedBrowserChannelCapabilities, type EmbeddedBrowserChannelCapabilities } from "./embedded-browser-control.ts";
 import { z } from "zod";
 import { DateTimeStringSchema, NonEmptyTrimmedTextSchema, TrimmedTextSchema } from "./internal/text-schemas.ts";
 import {
@@ -180,6 +181,7 @@ function defaultControlledInstanceFeatures() {
     aiSessionProviders: emptyAiSessionProviderCapabilities(),
     instanceShell: unsupportedInstanceShellCapabilities(),
     remoteDesktop: unsupportedRemoteDesktopCapabilities(),
+    embeddedBrowserChannel: unsupportedEmbeddedBrowserChannelCapabilities(),
   };
 }
 
@@ -367,6 +369,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   remoteDesktop: z.preprocess((value) => value === undefined ? undefined : normalizeRemoteDesktopCapabilities(value), RemoteDesktopCapabilitiesSchema.optional()),
   // Additive capability: absence disables only instance-owned install source settings.
   appInstallEnvironment: ControlledInstanceAppInstallEnvironmentCapabilitiesSchema.optional(),
+  // Additive capability: absence disables only Agent browser control.
+  embeddedBrowserChannel: EmbeddedBrowserChannelCapabilitiesSchema.optional(),
 }).passthrough();
 
 /** The single capability document for the controlled-instance/control-plane boundary. */
@@ -423,6 +427,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     appInstallEnvironment: ControlledInstanceAppInstallEnvironmentCapabilities;
     instanceShell: InstanceShellCapabilities;
     remoteDesktop: RemoteDesktopCapabilities;
+    embeddedBrowserChannel: EmbeddedBrowserChannelCapabilities;
   };
 };
 
@@ -474,6 +479,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
   const managedModelEnvironment = ControlledInstanceManagedModelEnvironmentCapabilitiesSchema.safeParse(features.managedModelEnvironment);
   if (managedModelEnvironment.success) normalizedFeatures.managedModelEnvironment = managedModelEnvironment.data;
   normalizedFeatures.remoteDesktop = normalizeRemoteDesktopCapabilities(features.remoteDesktop);
+  normalizedFeatures.embeddedBrowserChannel = normalizeEmbeddedBrowserChannelCapabilities(features.embeddedBrowserChannel);
   const instanceShell = InstanceShellCapabilitiesSchema.safeParse(features.instanceShell);
   if (instanceShell.success) normalizedFeatures.instanceShell = instanceShell.data;
   const appInstallEnvironment = ControlledInstanceAppInstallEnvironmentCapabilitiesSchema.safeParse(features.appInstallEnvironment);
@@ -553,6 +559,14 @@ export function supportsControlledInstanceAppInstallEnvironment(capabilities: un
   const feature = controlledInstanceAppInstallEnvironmentCapabilities(capabilities);
   return feature.protocolVersion === APP_INSTALL_ENVIRONMENT_PROTOCOL_VERSION
     && feature.sourceProfiles.length > 0;
+}
+
+export function controlledInstanceEmbeddedBrowserChannelCapabilities(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.embeddedBrowserChannel;
+}
+
+export function supportsControlledInstanceEmbeddedBrowserChannel(capabilities: unknown) {
+  return controlledInstanceEmbeddedBrowserChannelCapabilities(capabilities).supported;
 }
 
 export function supportsBrowserTunnel(capabilities: unknown) {

@@ -218,6 +218,13 @@ import {
 } from "@task-handoff/protocol/story-agent-tools";
 import { registerRepositoryRoutes, repositoryWorkspaceRootsFromEnv } from "../repository/routes";
 import { attachBrowserTunnel } from "./browser-tunnel";
+import { BrowserControlService } from "./browser-control";
+import { BrowserControlRelayRegistry } from "./browser-control-relay";
+import { registerBrowserControlRoutes } from "./browser-control-routes";
+import { registerBrowserCdpBridgeRoutes } from "./browser-cdp-bridge";
+import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
+import { BROWSER_AGENT_TOOL_NAMES } from "@task-handoff/protocol/browser-agent-tools";
+import { EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION, EmbeddedBrowserCdpAccessSchema } from "@task-handoff/protocol/embedded-browser-control";
 
 const WebSocketClient = require("ws");
 
@@ -744,8 +751,24 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   applyManagedClaudeModelConfig(managedModelEnv);
   const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
+  const browserControl = new BrowserControlService();
+  const browserControlRelay = new BrowserControlRelayRegistry(
+    browserControl,
+    process.env.TASK_HANDOFF_INSTANCE_ID || "standalone",
+  );
+  const browserCdpHttpEndpoint = (
+    options.agentToolsBaseUrl || `http://127.0.0.1:${process.env.TASK_HANDOFF_WEB_PORT || 8080}`
+  ).replace(/\/+$/, "");
+  const unsubscribeBrowserControlEvents = browserControl.subscribe((event) => {
+    events.publish(event.type, event.payload);
+    if (event.type === "browser.registry.changed") browserControlRelay.notifyBrowserStateChanged();
+  });
+  const withBrowserAgentTools = (tools: readonly AiSessionAgentToolName[]): AiSessionAgentToolName[] => [
+    ...new Set<AiSessionAgentToolName>([...tools, ...BROWSER_AGENT_TOOL_NAMES]),
+  ];
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths, undefined, { managedAppRoot });
   const app = Fastify({ logger: withSafeLogDestination(options.logger) as FastifyServerOptions["logger"] });
+  app.addHook("onClose", async () => unsubscribeBrowserControlEvents());
   const appManagementStateDir = path.join(storagePaths.runtimeDir, "app-management");
   const installEnvironment = new AppInstallEnvironmentManager({
     dataDir: storagePaths.dataDir,
@@ -830,10 +853,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
     onRemove: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
   });
-  const aiSessionController = new AiSessionController(aiSessions, async (session) => (
+  const aiSessionController = new AiSessionController(aiSessions, async (session) => withBrowserAgentTools(
     session.storyId && nodeAgentClient.enabled()
       ? (await nodeAgentClient.resolveStoryAgentToolsForSession(session.id, session.storyId)).enabledTools
-      : []
+      : [],
   ));
   let aiSessionClose: AiSessionCloseCoordinator | undefined;
   const aiSessionProviderCapabilities = () => aiSessionProviders.capabilities();
@@ -860,8 +883,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const storyAgentToolBridge = nodeAgentClient.enabled() ? new StoryAgentToolBridge({
     service: storyAgentTools,
     resolveSession: (provider, providerSessionId) => aiSessions.getByProviderSessionId(provider, providerSessionId),
-    endpoint: `${(options.agentToolsBaseUrl || `http://127.0.0.1:${process.env.TASK_HANDOFF_WEB_PORT || 8080}`).replace(/\/$/, "")}/api/internal/agent-tools`,
+    endpoint: `${browserCdpHttpEndpoint}/api/internal/agent-tools`,
     pluginPath: fs.existsSync(bundledOpenCodeStoryPlugin) ? bundledOpenCodeStoryPlugin : undefined,
+    issueBrowserCdpAccess: (session) => {
+      const issued = browserControl.issueCdpToken(session.id);
+      return EmbeddedBrowserCdpAccessSchema.parse({
+        httpEndpoint: browserCdpHttpEndpoint,
+        token: issued.token,
+        expiresAt: issued.expiresAt,
+        protocolVersion: EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
+      });
+    },
   }) : undefined;
   const replaceManagedAppEnvironment = () => appRuntime.replaceManagedEnvironment(installEnvironment.runtimeEnvironment(managedAppEnvironment(managedModelEnv)));
   installEnvironment.onChange(replaceManagedAppEnvironment);
@@ -873,6 +905,19 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   registerDesktopRoutes(app,desktopService,()=>process.env.TASK_HANDOFF_CONTROL_MODE === "controlled" ? process.env.TASK_HANDOFF_REGISTRATION_TOKEN?.trim() : undefined);
   registerAuth(app, auth);
+  registerBrowserControlRoutes({
+    app,
+    service: browserControl,
+    relay: browserControlRelay,
+    registrationToken: process.env.TASK_HANDOFF_REGISTRATION_TOKEN?.trim(),
+  });
+  registerBrowserCdpBridgeRoutes({
+    app,
+    service: browserControl,
+    relay: browserControlRelay,
+    httpEndpoint: browserCdpHttpEndpoint,
+    sessionExists: (sessionRef) => Boolean(aiSessions.get(sessionRef)),
+  });
   const instanceShellRuntime = new InstanceShellRuntime({
     environment: () => appRuntime.processEnvironment(),
     prepareShell: (command, args, env) => appRuntime.prepareShell(command, args, env),
@@ -1251,10 +1296,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         providerSessionId: item.providerSessionId,
       },
     }),
-    resolveStoryAgentTools: async (item) => (
+    resolveStoryAgentTools: async (item) => withBrowserAgentTools(
       item.storyId && nodeAgentClient.enabled()
         ? (await nodeAgentClient.resolveStoryAgentToolsForStory(item.storyId)).enabledTools
-        : []
+        : [],
     ),
     resumeProvider: async (item, storyAgentTools) => {
       return aiSessionProviders.resume(item, storyAgentTools);
@@ -1269,10 +1314,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       await aiSessionProviders.ensureReady(agent);
     },
     resolveModelSelection: (agent, requested) => resolveControlledPrivateModelSelection(privateModelCatalog, agent, requested, { intent: "target" }),
-    resolveStoryAgentTools: async (storyId) => (
+    resolveStoryAgentTools: async (storyId) => withBrowserAgentTools(
       storyId && nodeAgentClient.enabled()
         ? (await nodeAgentClient.resolveStoryAgentToolsForStory(storyId)).enabledTools
-        : []
+        : [],
     ),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session create compensation"),
     onTiming: (timing) => app.log.info({ ...timing, traceId: timing.clientRequestId }, "ai-session.create.coordinator"),
@@ -1294,7 +1339,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     prepareManagedWorktree: async (source, clientRequestId) => repositoryAiSessionWorkspace.prepareForkWorktree(source.id, clientRequestId),
     validateManagedWorktree: async (source, worktreeId, cwd) => repositoryAiSessionWorkspace.validateForkWorktree(source.id, worktreeId, cwd),
     removeManagedWorktree: async (source, worktreeId) => repositoryAiSessionWorkspace.removeForkWorktree(source.id, worktreeId),
-    resolveStoryAgentTools: async (source) => (
+    resolveStoryAgentTools: async (source) => withBrowserAgentTools(
       source.storyId && nodeAgentClient.enabled()
         ? (await nodeAgentClient.resolveStoryAgentToolsForSession(source.id, source.storyId)).enabledTools
         : []
@@ -1313,12 +1358,37 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }),
     stopApp: (appSessionId) => { appRuntime.stop(appSessionId); },
   });
+  const cleanupBrowserSession = async (sessionId: string) => {
+    const leaseRefs = browserControl.leaseRefsForSession(sessionId);
+    await Promise.all(leaseRefs.map(async (leaseRef) => {
+      try {
+        const target = browserControl.leaseCommandTarget(sessionId, leaseRef);
+        await Promise.race([
+          browserControlRelay.targetDetach({
+            leaseRef: target.lease.leaseRef,
+            tabRef: target.lease.tabRef,
+            sourceRef: target.lease.sourceRef,
+            generation: target.lease.generation,
+            reason: "session-closed",
+          }).catch(() => undefined),
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 3_000);
+            timer.unref?.();
+          }),
+        ]);
+      } catch {
+        // A disconnected source is already unable to serve this lease.
+      }
+    }));
+    browserControl.cleanupSession(sessionId);
+  };
   aiSessionClose = new AiSessionCloseCoordinator({
     registry: aiSessions,
     controller: aiSessionController,
     history: aiSessionHistory,
     stopApp: (appSessionId) => { appRuntime.stop(appSessionId); },
     releaseSessionResources: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
+    onSessionClosed: cleanupBrowserSession,
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session close rollback"),
   });
   const sessionTitles = new SessionTitleCoordinator({

@@ -22,7 +22,10 @@ pub const AI_SESSION_AGENT_TOOL_NAMES: &[&str] = &[
     "story_get_ai_session_turn",
     "story_request_decision",
     "agent_run",
+    "browser_cdp_access",
 ];
+
+pub const BROWSER_AGENT_TOOL_NAMES: &[&str] = &["browser_cdp_access"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,6 +47,7 @@ pub enum AiSessionAgentToolName {
     StoryGetAiSessionTurn,
     StoryRequestDecision,
     AgentRun,
+    BrowserCdpAccess,
 }
 
 impl AiSessionAgentToolName {
@@ -65,6 +69,7 @@ impl AiSessionAgentToolName {
         Self::StoryGetAiSessionTurn,
         Self::StoryRequestDecision,
         Self::AgentRun,
+        Self::BrowserCdpAccess,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -86,7 +91,12 @@ impl AiSessionAgentToolName {
             Self::StoryGetAiSessionTurn => "story_get_ai_session_turn",
             Self::StoryRequestDecision => "story_request_decision",
             Self::AgentRun => "agent_run",
+            Self::BrowserCdpAccess => "browser_cdp_access",
         }
+    }
+
+    pub fn is_browser(self) -> bool {
+        BROWSER_AGENT_TOOL_NAMES.contains(&self.as_str())
     }
 }
 

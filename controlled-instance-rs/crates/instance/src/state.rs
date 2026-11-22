@@ -15,9 +15,9 @@ use controlled_instance_app_runtime::{
 use controlled_instance_core::process::process_start_identity;
 use controlled_instance_protocol::{
     project_ai_sessions_snapshot_for_consumer, AiSessionHistoryItem, AiSessionsSnapshot,
-    AiSessionsState, AppCounts, ControlledInstanceCapabilities, EventEnvelope,
-    InstanceStatusSnapshot, WorkspaceGitStatus, WorkspaceStatus, WorkspaceStorageStatus,
-    SESSION_STREAM_PROTOCOL_VERSION,
+    AiSessionsState, AppCounts, ControlledInstanceCapabilities, EmbeddedBrowserTargetDetachParams,
+    EventEnvelope, InstanceStatusSnapshot, WorkspaceGitStatus, WorkspaceStatus,
+    WorkspaceStorageStatus, SESSION_STREAM_PROTOCOL_VERSION,
 };
 use controlled_instance_workspace::{
     triggers::{local_instance_id, TriggerExecutor, TriggerManager, TriggerStore},
@@ -30,7 +30,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -50,6 +50,8 @@ use crate::{
     ai_session_open_app::AiSessionOpenAppCoordinator,
     app_session_authority::AppSessionAuthority,
     auth::WebAuthState,
+    browser_control::BrowserControlService,
+    browser_control_relay::BrowserControlRelayRegistry,
     claude_discovery::{apply_claude_subscribe_message, refresh_claude_sessions},
     codex_discovery::{
         app_thread_bindings, merge_codex_session, project_new_codex_session,
@@ -172,6 +174,9 @@ pub struct AppState {
     pub started_at: String,
     pub events: EventBus,
     pub app_runtime: Arc<AppRuntime>,
+    pub browser_control: Arc<BrowserControlService>,
+    pub browser_control_relay: BrowserControlRelayRegistry,
+    browser_cdp_http_endpoint: Arc<OnceLock<String>>,
     pub app_management: Arc<AppManagementManager>,
     pub desktop_service: desktop_component_host::service::DesktopService,
     pub install_environment: AppInstallEnvironmentManager,
@@ -487,6 +492,8 @@ impl AppState {
             app_runtime.clone(),
         );
         let events = EventBus::default();
+        let browser_control = Arc::new(BrowserControlService::new());
+        let browser_control_relay = BrowserControlRelayRegistry::default();
         let delta_window_ms = std::env::var("TASK_HANDOFF_AI_SESSION_DELTA_COALESCE_MS")
             .ok()
             .map(|value| {
@@ -752,6 +759,9 @@ impl AppState {
             started_at,
             events,
             app_runtime,
+            browser_control,
+            browser_control_relay,
+            browser_cdp_http_endpoint: Arc::new(OnceLock::new()),
             app_management,
             desktop_service,
             install_environment,
@@ -816,6 +826,23 @@ impl AppState {
         self.draining.load(Ordering::SeqCst)
     }
 
+    pub fn set_browser_cdp_http_endpoint(&self, endpoint: String) {
+        let _ = self.browser_cdp_http_endpoint.set(endpoint);
+    }
+
+    pub fn browser_cdp_http_endpoint(&self) -> String {
+        self.browser_cdp_http_endpoint
+            .get()
+            .cloned()
+            .unwrap_or_else(|| {
+                let host = match self.config.host.trim() {
+                    "" | "0.0.0.0" | "::" | "[::]" => "127.0.0.1",
+                    host => host,
+                };
+                format!("http://{host}:{}", self.config.port)
+            })
+    }
+
     pub fn set_draining(&self, draining: bool) {
         self.draining.store(draining, Ordering::SeqCst);
         if draining {
@@ -861,6 +888,7 @@ impl AppState {
         let git_credential_broker_installed = self.git_credential_broker_installed.clone();
         let install_environment = self.install_environment.clone();
         let desktop = self.desktop_service.clone();
+        let browser_control = self.browser_control.clone();
         self.node_agent_client.start(move || {
             let mut snapshot = build_status_snapshot(
                 &config,
@@ -872,6 +900,8 @@ impl AppState {
                 Some(&install_environment),
             );
             snapshot.capabilities.features.remote_desktop = Some(desktop.status());
+            snapshot.capabilities.features.embedded_browser_channel =
+                Some(browser_control.capabilities());
             snapshot
         });
     }
@@ -909,6 +939,7 @@ impl AppState {
             Some(&self.install_environment),
         );
         capabilities.features.remote_desktop = Some(self.desktop_service.status());
+        capabilities.features.embedded_browser_channel = Some(self.browser_control.capabilities());
         capabilities
     }
     pub fn start_desktop_services(&self) {
@@ -1811,6 +1842,8 @@ impl AppState {
             Some(&self.install_environment),
         );
         snapshot.capabilities.features.remote_desktop = Some(self.desktop_service.status());
+        snapshot.capabilities.features.embedded_browser_channel =
+            Some(self.browser_control.capabilities());
         snapshot
     }
 
@@ -2120,6 +2153,52 @@ impl AppState {
         self.ai_session_close.close(self.clone(), target_id).await
     }
 
+    pub(crate) async fn detach_browser_leases_for_session(
+        &self,
+        session_ref: &str,
+        reason: &str,
+    ) -> usize {
+        let lease_refs = self.browser_control.lease_refs_for_session(session_ref);
+        let mut detached = 0;
+        for lease_ref in lease_refs {
+            let Ok(target) = self
+                .browser_control
+                .lease_command_target(session_ref, &lease_ref)
+            else {
+                continue;
+            };
+            let detach = tokio::time::timeout(
+                Duration::from_secs(3),
+                self.browser_control_relay
+                    .target_detach(EmbeddedBrowserTargetDetachParams {
+                        lease_ref: target.lease.lease_ref,
+                        tab_ref: target.lease.tab_ref,
+                        source_ref: target.lease.source_ref,
+                        generation: target.lease.generation,
+                        reason: reason.to_string(),
+                    }),
+            )
+            .await;
+            match detach {
+                Ok(Ok(_)) => detached += 1,
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        code = error.code,
+                        session_ref,
+                        lease_ref,
+                        "Browser target detach failed during session cleanup"
+                    );
+                }
+                Err(_) => tracing::warn!(
+                    session_ref,
+                    lease_ref,
+                    "Browser target detach timed out during session cleanup"
+                ),
+            }
+        }
+        detached
+    }
+
     pub(crate) fn ai_session_close_scope(
         &self,
         target_id: &str,
@@ -2202,6 +2281,14 @@ impl AppState {
                 .await
             {
                 Ok(()) => {
+                    let had_cdp_tokens = self.browser_control.session_has_cdp_tokens(session_id);
+                    let detached = self
+                        .detach_browser_leases_for_session(session_id, "session-closed")
+                        .await;
+                    let removed_leases = self.browser_control.cleanup_session(session_id);
+                    if had_cdp_tokens || detached > 0 || removed_leases > 0 {
+                        crate::browser_control_routes::publish_browser_events(self);
+                    }
                     if session_id == target_id {
                         removed_target = Some(original);
                     }

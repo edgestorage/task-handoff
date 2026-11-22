@@ -380,6 +380,13 @@ impl StoryToolService {
                 400,
             ));
         }
+        if tool.is_browser() {
+            return Err(StoryToolError::new(
+                "BROWSER_TOOL_ROUTE_REQUIRED",
+                "Browser tools require the Browser tool bridge.",
+                409,
+            ));
+        }
         require_story(session)?;
         self.require_node_agent()?;
         match tool {

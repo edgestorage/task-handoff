@@ -31,6 +31,15 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   prepareBrowserContext: (instanceId) => ipcRenderer.invoke("task-handoff:browser-context-prepare", instanceId),
   releaseBrowserContext: (contextId) => ipcRenderer.invoke("task-handoff:browser-context-release", contextId),
   touchBrowserContext: (contextId) => ipcRenderer.invoke("task-handoff:browser-context-touch", contextId),
+  getBrowserControlInfo: (instanceId) => ipcRenderer.invoke("task-handoff:browser-control-info", instanceId ? { instanceId } : {}),
+  registerBrowserTab: (input) => ipcRenderer.invoke("task-handoff:browser-tab-register", input),
+  updateBrowserTab: (input) => ipcRenderer.invoke("task-handoff:browser-tab-update", input),
+  unregisterBrowserTab: (webContentsId) => ipcRenderer.invoke("task-handoff:browser-tab-unregister", { webContentsId }),
+  listBrowserTabs: (instanceId) => ipcRenderer.invoke("task-handoff:browser-tab-list", instanceId ? { instanceId } : {}),
+  closeBrowserTab: (tabRef) => ipcRenderer.invoke("task-handoff:browser-tab-close", tabRef),
+  attachBrowserTarget: (tabRef) => ipcRenderer.invoke("task-handoff:browser-target-attach", tabRef),
+  detachBrowserTarget: (tabRef) => ipcRenderer.invoke("task-handoff:browser-target-detach", tabRef),
+  sendBrowserCdpCommand: (input) => ipcRenderer.invoke("task-handoff:browser-cdp-send", input),
   setBrowserTabThrottled: (webContentsId, throttled) => ipcRenderer.invoke("task-handoff:browser-tab-throttled", webContentsId, throttled),
   onBrowserNewTab: (listener) => {
     const handler = (_event, input) => listener(input);
@@ -46,6 +55,11 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
     const handler = (_event, input) => listener(input);
     ipcRenderer.on("task-handoff:browser-load-failure", handler);
     return () => ipcRenderer.removeListener("task-handoff:browser-load-failure", handler);
+  },
+  onBrowserTabClosed: (listener) => {
+    const handler = (_event, input) => listener(input);
+    ipcRenderer.on("task-handoff:browser-tab-closed", handler);
+    return () => ipcRenderer.removeListener("task-handoff:browser-tab-closed", handler);
   },
   logBrowserDiagnostic: (input) => ipcRenderer.send("task-handoff:browser-diagnostic", input),
   openControlPlaneWindow: (url) => ipcRenderer.invoke("task-handoff:open-control-plane-window", url),

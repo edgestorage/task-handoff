@@ -59,7 +59,7 @@ test("stable browser host lets the start page and guest fill the pane surface", 
 
 test("browser navigation keeps about:blank history and dispatches address bar submissions", () => {
   const browser = source("instance-detail/EmbeddedBrowserTab.vue");
-  assert.match(browser, /if \(!url \|\| url === "about:blank"\) \{[\s\S]*?address\.value = ""[\s\S]*?emit\("updateTab", \{ url: "about:blank" \}\)/);
+  assert.match(browser, /if \(!url \|\| url === "about:blank"\) \{[\s\S]*?address\.value = ""[\s\S]*?publishTabPatch\(\{ url: "about:blank" \}\)/);
   assert.match(browser, /async function dispatchPendingNavigation\(sequence: number\)/);
   assert.match(browser, /void dispatchPendingNavigation\(sequence\)/);
   assert.match(browser, /start-page-active.*webview \{ visibility: hidden; \}/);
@@ -91,12 +91,15 @@ test("browser popup requests create a sibling browser tab with its initial URL",
   const sessions = source("instance-detail/useActiveInstanceSessions.ts");
   const layer = source("instance-detail/EmbeddedBrowserSurfaceLayer.vue");
   const browser = source("instance-detail/EmbeddedBrowserTab.vue");
-  assert.match(workbench, /onBrowserNewTab\?\.\(\(\{ instanceId: sourceInstanceId, url \}\) =>[\s\S]*?openBrowserTab\(instanceId, url\)/);
-  assert.match(sessions, /function openBrowserTab\(instanceId: string, initialUrl\?: string\)/);
+  assert.match(workbench, /onBrowserNewTab\?\.\(\(\{ instanceId: sourceInstanceId, url, title, creationRef \}\) =>[\s\S]*?openBrowserTab\(instanceId, url, \{ title, creationRef \}\)/);
+  assert.match(sessions, /function openBrowserTab\(instanceId: string, initialUrl\?: string, options: \{ title\?: string; creationRef\?: string \} = \{\}\)/);
+  assert.match(sessions, /options\.creationRef \? \{ creationRef: options\.creationRef \} : \{\}/);
   assert.match(sessions, /status: initialUrl \? "loading" : "running"/);
   assert.match(sessions, /initialUrl \? \{ initialUrl \} : \{\}/);
   assert.match(layer, /:initial-url="typeof tab\.source\?\.currentUrl === 'string'/);
   assert.match(browser, /initialUrl\?: string/);
+  assert.match(browser, /creationRef\?: string/);
+  assert.match(browser, /props\.creationRef \? \{ creationRef: props\.creationRef \} : \{\}/);
   assert.match(browser, /await waitForGuestReady\(\)/);
   assert.match(browser, /function waitForGuestReady\(\)/);
   assert.match(browser, /function handleGuestDomReady\(\)/);
@@ -111,9 +114,9 @@ test("browser tabs publish page title and loading state", () => {
   const workbench = source("ControlPlaneWorkbench.vue");
   const sessions = source("instance-detail/useActiveInstanceSessions.ts");
   assert.match(browser, /page-title-updated/);
-  assert.match(browser, /emit\("updateTab", \{ title, status: "running" \}\)/);
-  assert.match(browser, /emit\("updateTab", \{ url \}\)/);
-  assert.match(browser, /emit\("updateTab", \{ status: "loading" \}\)/);
+  assert.match(browser, /publishTabPatch\(\{ title, status: "running" \}\)/);
+  assert.match(browser, /publishTabPatch\(\{ url \}\)/);
+  assert.match(browser, /publishTabPatch\(\{ status: "loading" \}\)/);
   assert.match(browser, /browser start page ready/);
   assert.match(browser, /did-finish-load/);
   assert.match(browser, /getTitle\?\.\(\)/);
@@ -124,6 +127,39 @@ test("browser tabs publish page title and loading state", () => {
   assert.match(workbench, /@update-browser-tab="updateCombinedBrowserTab"/);
   assert.match(workbench, /function updateCombinedBrowserTab\(instanceId: string, sessionKey: string, patch:/);
   assert.match(sessions, /function updateBrowserTab\(/);
+});
+
+test("browser guests register their live tab identity after dom-ready and clear it on teardown", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  const bridge = fs.readFileSync(new URL("../src/lib/desktopBridge.ts", import.meta.url), "utf8");
+  assert.match(browser, /function handleGuestDomReady\(\) \{\s*applyBackgroundThrottling\(\);\s*void registerGuestTab\(\);/);
+  assert.match(browser, /registerDesktopBrowserTab\(\{[\s\S]*?webContentsId[\s\S]*?instanceId: props\.instanceId[\s\S]*?sessionKey: localSessionKey/);
+  assert.match(browser, /registeredTabRef = result\.tab\.tabRef/);
+  assert.match(browser, /updateDesktopBrowserTab\(\{ tabRef: registeredTabRef, \.\.\.patch \}\)/);
+  assert.match(browser, /function unregisterGuestTab\(\)[\s\S]*?unregisterDesktopBrowserTab/);
+  assert.match(browser, /onBeforeUnmount\(\(\) => \{[\s\S]*?unregisterGuestTab\(\)/);
+  assert.match(browser, /recoveringContext = true;[\s\S]*?unregisterGuestTab\(\)/);
+  assert.match(bridge, /registerBrowserTab/);
+  assert.match(bridge, /sendBrowserCdpCommand/);
+  assert.match(bridge, /onBrowserTabClosed/);
+});
+
+test("an authoritative tab close is matched by opaque tabRef and removes the owning local tab", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  const layer = source("instance-detail/EmbeddedBrowserSurfaceLayer.vue");
+  const workbench = source("ControlPlaneWorkbench.vue");
+  assert.match(browser, /onDesktopBrowserTabClosed\(\(\{ tabRef, instanceId \}\) => \{[\s\S]*?tabRef !== registeredTabRef[\s\S]*?emit\("closeTab"\)/);
+  assert.match(layer, /@close-tab="\$emit\('closeBrowserTab', instanceId, tab\.key\)"/);
+  assert.match(workbench, /@close-browser-tab="closeCombinedBrowserTab"/);
+  assert.match(workbench, /function closeCombinedBrowserTab\(instanceId: string, sessionKey: string\)[\s\S]*?storyResourceSidebar\.removeBrowser\(storyResource\)[\s\S]*?stopSelectedAppSession\(instance, session\)/);
+});
+
+test("a degraded main page pool is reported while the renderer webview keeps working", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  assert.match(browser, /getDesktopBrowserControlInfo\(props\.instanceId\)/);
+  assert.match(browser, /if \(!info\?\.ok \|\| disposed\) return;[\s\S]*?if \(!info\.degraded\) return;/);
+  assert.match(browser, /pageHostNotice\.value = t\("sessions\.browser\.pageHostDegraded"\)/);
+  assert.match(browser, /class="embedded-browser-host-notice"/);
 });
 
 test("browser context lease loss rebuilds the guest instead of leaving a dead surface", () => {

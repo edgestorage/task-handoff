@@ -5,7 +5,7 @@
   "main": "src/main.cjs",
   "scripts": {
     "start": "node node_modules/electron/cli.js .",
-    "build": "node --check src/config.cjs && node --check src/main.cjs && node --check src/preload.cjs && node --check src/desktop-clipboard.cjs",
+    "build": "node --check src/config.cjs && node --check src/desktop-browser-guest-registry.cjs && node --check src/desktop-clipboard.cjs && node --check src/embedded-browser-cdp-policy.cjs && node --check src/embedded-browser-page-host.cjs && node --check src/main.cjs && node --check src/preload.cjs",
     "check": "pnpm run build",
     "test": "node --test"
   },

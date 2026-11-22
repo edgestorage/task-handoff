@@ -16,9 +16,11 @@
         <EmbeddedBrowserTab
           :instance-id="instanceId"
           :session-key="tab.key"
+          :creation-ref="typeof tab.source?.creationRef === 'string' ? tab.source.creationRef : undefined"
           :background-throttled="!isActiveTab(instanceId, tab.key)"
           :initial-url="typeof tab.source?.currentUrl === 'string' ? tab.source.currentUrl : typeof tab.source?.initialUrl === 'string' ? tab.source.initialUrl : undefined"
           @update-tab="(patch) => $emit('updateBrowserTab', instanceId, tab.key, patch)"
+          @close-tab="$emit('closeBrowserTab', instanceId, tab.key)"
         />
       </div>
     </div>
@@ -44,6 +46,7 @@ const props = defineProps<{
 
 defineEmits<{
   updateBrowserTab: [instanceId: string, sessionKey: string, patch: { title?: string; url?: string; status?: string }];
+  closeBrowserTab: [instanceId: string, sessionKey: string];
 }>();
 
 const host = ref<HTMLElement>();

@@ -12,7 +12,7 @@ use controlled_instance_protocol::{
     AiSessionCommandResult, AiSessionConversationAttachment, AiSessionGoal, AiSessionHistoryItem,
     AiSessionMentionCatalog, AiSessionMentionFileSearch, AiSessionMessageAttachmentMeta,
     AiSessionProviderCapability, AiSessionProviderTimelineCapabilities, AiSessionQueue,
-    AiSessionTimeline, AiSessionTurnTimeline,
+    AiSessionTimeline, AiSessionTurnTimeline, BROWSER_AGENT_TOOL_NAMES,
 };
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
@@ -71,6 +71,16 @@ impl std::error::Error for ProviderError {}
 
 fn materialization_failed(message: impl Into<String>) -> ProviderError {
     ProviderError::bad_gateway("AI_SESSION_MATERIALIZATION_FAILED", message)
+}
+
+fn with_browser_agent_tools(tools: Option<Vec<String>>) -> Option<Vec<String>> {
+    let mut tools = tools.unwrap_or_default();
+    for name in BROWSER_AGENT_TOOL_NAMES {
+        if !tools.iter().any(|tool| tool == name) {
+            tools.push((*name).to_string());
+        }
+    }
+    Some(tools)
 }
 
 fn send_request_conflict() -> ProviderError {
@@ -1279,6 +1289,7 @@ impl AiSessionController {
                 .resolve_story_agent_tools(input.story_id.as_deref())
                 .await;
         }
+        options.agent_tools = with_browser_agent_tools(options.agent_tools);
         let cwd = canonical_directory(&input.cwd.path)?;
         let runtime_workspace_roots = if options.runtime_workspace_roots.is_empty() {
             vec![cwd.clone()]
@@ -1727,6 +1738,7 @@ impl AiSessionController {
         let story_agent_tools = self
             .resolve_story_agent_tools(item.story_id.as_deref())
             .await;
+        let story_agent_tools = with_browser_agent_tools(story_agent_tools);
         let resumed = match provider
             .resume_session_with_story_tools(&saved, story_agent_tools)
             .await
@@ -1861,6 +1873,7 @@ impl AiSessionController {
                     .await
             }
         };
+        let story_agent_tools = with_browser_agent_tools(story_agent_tools);
         let provider_input = ProviderForkInput {
             through_turn_id: provider_through_turn_id,
             cwd: input.cwd,

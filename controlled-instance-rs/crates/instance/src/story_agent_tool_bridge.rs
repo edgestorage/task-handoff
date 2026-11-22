@@ -1,8 +1,5 @@
-use crate::{
-    agent_run_bindings::AgentRunMemberBindingStore,
-    story_tools::{StoryToolError, StoryToolService},
-};
-use controlled_instance_ai_session::{AiSession, AiSessionRuntime};
+use crate::{state::AppState, story_tools::StoryToolError};
+use controlled_instance_ai_session::AiSession;
 use controlled_instance_protocol::AiSessionAgentToolName;
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
@@ -34,9 +31,7 @@ impl AgentToolInvocationInput {
 }
 
 pub async fn invoke_for_provider_session(
-    service: &StoryToolService,
-    bindings: &AgentRunMemberBindingStore,
-    sessions: &AiSessionRuntime,
+    state: &AppState,
     invocation: StoryToolInvocation<'_>,
 ) -> Result<Value, StoryToolError> {
     let StoryToolInvocation {
@@ -50,7 +45,8 @@ pub async fn invoke_for_provider_session(
     if provider != "codex" && provider != "opencode" {
         return Err(invalid_request("provider must be codex or opencode."));
     }
-    let session = sessions
+    let session = state
+        .ai_sessions
         .get_by_provider_session_id(provider, provider_session_id)
         .ok_or_else(|| {
             StoryToolError::new(
@@ -60,8 +56,7 @@ pub async fn invoke_for_provider_session(
             )
         })?;
     invoke_for_session(
-        service,
-        bindings,
+        state,
         &session,
         StoryToolInvocation {
             provider,
@@ -75,8 +70,7 @@ pub async fn invoke_for_provider_session(
 }
 
 async fn invoke_for_session(
-    service: &StoryToolService,
-    bindings: &AgentRunMemberBindingStore,
+    state: &AppState,
     session: &AiSession,
     invocation: StoryToolInvocation<'_>,
 ) -> Result<Value, StoryToolError> {
@@ -87,16 +81,24 @@ async fn invoke_for_session(
         arguments,
         call_id,
     } = invocation;
-    if tool == AiSessionAgentToolName::AgentRun {
+    if tool.is_browser() {
         let request_id = invocation_request_id(provider, provider_session_id, call_id);
-        let member = bindings
+        crate::browser_agent_tools::invoke(state, session, tool, arguments, &request_id).await
+    } else if tool == AiSessionAgentToolName::AgentRun {
+        let request_id = invocation_request_id(provider, provider_session_id, call_id);
+        let member = state
+            .agent_run_bindings
             .get_by_session(&session.id)
             .map(|binding| (binding.run_id, binding.member_id));
-        service
+        state
+            .story_tools
             .invoke_agent_run(session, arguments, &request_id, member)
             .await
     } else {
-        service.invoke_story_tool(session, tool, arguments).await
+        state
+            .story_tools
+            .invoke_story_tool(session, tool, arguments)
+            .await
     }
 }
 
@@ -132,6 +134,8 @@ pub fn required_thread_id_for(
         .ok_or_else(|| {
             let target = if tool == AiSessionAgentToolName::AgentRun {
                 "Agent"
+            } else if tool.is_browser() {
+                "Browser"
             } else {
                 "Story"
             };

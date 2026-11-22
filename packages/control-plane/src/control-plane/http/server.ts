@@ -87,6 +87,7 @@ import { CloudRelayNodeAgentTransport } from "../nodes/cloud-relay-transport.ts"
 import { nodeRelayInstallCommand } from "../cloud-connectivity/node-install-command.ts";
 import { AuthorizationConnectionRegistry } from "../auth/authorization-connections.ts";
 import { registerBrowserRelayRoutes } from "./browser-relay-routes.ts";
+import { registerEmbeddedBrowserControlRoutes } from "./embedded-browser-control-routes.ts";
 import { BrowserAccessService } from "../instances/browser-access-service.ts";
 import { ControlPlaneAgentAggregator } from "../agents/agent-aggregator.ts";
 import { decodeCloudRelayRequestBody } from "./relay-request-body.ts";
@@ -1915,6 +1916,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const releaseDesktopLogout = auth.sessions.onSessionRevoked(id => { void desktopAccess?.invalidate(p => p.actor.type === "user" && p.deviceSessionId === id); });
   app.addHook("onClose", async () => { releaseDesktopLogout(); });
   registerBrowserRelayRoutes({ app, service, auth, authorizationConnections, events, browserAccess, browserRelay });
+  registerEmbeddedBrowserControlRoutes({ app, service, auth, authorizationConnections, events });
 
   app.get("*", { config: PUBLIC_CONTROL_PLANE_UI_ROUTE }, async (_request, reply) =>
     fs.existsSync(staticDir)

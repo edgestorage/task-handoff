@@ -48,7 +48,12 @@ type Options = {
   metrics: ProxyMetrics;
   instanceBase(id: string): string | Promise<string>;
   syncModelEnvironment(id: string): Promise<unknown>;
-  webSocketUpstreamHeaders?(id: string, path: string): Record<string, string> | Promise<Record<string, string>>;
+  httpUpstreamHeaders?(id: string, path: string): Record<string, string> | Promise<Record<string, string>>;
+  webSocketUpstreamHeaders?(
+    id: string,
+    path: string,
+    requestHeaders: Record<string, string | string[] | undefined>,
+  ): Record<string, string> | Promise<Record<string, string>>;
   /** Test seam; production always constructs the real `ws` client. */
   webSocketFactory?: (
     url: URL,
@@ -108,10 +113,11 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     const proxyPath = normalizedPath(parsed.path);
     if (instanceEndpointAccess(proxyPath) !== "generic") return reply.code(403).send({ error:{code:"INSTANCE_ENDPOINT_PRIVATE",message:"This endpoint requires its dedicated managed transport."} });
     if (parsed.method === "POST" && proxyPath === "/api/apps/sessions") await options.syncModelEnvironment(id);
+    const upstreamHeaders = await options.httpUpstreamHeaders?.(id, proxyPath) || {};
     diagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, instanceBase }, "node instance proxy requested");
     const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
       method: parsed.method,
-      headers: { ...parsed.headers },
+      headers: { ...parsed.headers, ...upstreamHeaders },
       body: proxyRequestBody(parsed),
     }, { instanceId: id, method: parsed.method, path: proxyPath, diagnostic });
     const contentType = response.headers.get("content-type") || "application/octet-stream";
@@ -156,10 +162,11 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
       const instanceBase = await options.instanceBase(id);
       const proxyPath = normalizedPath(parsed.path);
       if (instanceEndpointAccess(proxyPath) !== "generic") { finalize("aborted"); return reply.code(403).send({ error:{code:"INSTANCE_ENDPOINT_PRIVATE",message:"This endpoint requires its dedicated managed transport."} }); }
+      const upstreamHeaders = await options.httpUpstreamHeaders?.(id, proxyPath) || {};
       diagnostic({ instanceId: id, action: "proxy.stream", method: parsed.method, path: proxyPath, instanceBase }, "node instance streaming proxy requested");
       const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
         method: parsed.method,
-        headers: { ...parsed.headers },
+        headers: { ...parsed.headers, ...upstreamHeaders },
         body: proxyRequestBody(parsed),
         signal: controller.signal,
       }, { instanceId: id, method: parsed.method, path: proxyPath, diagnostic });
@@ -206,10 +213,11 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     const instanceBase = await options.instanceBase(id);
     const proxyPath = normalizedPath(parsed.path);
     if (instanceEndpointAccess(proxyPath) !== "generic") return reply.code(403).send({ error:{code:"INSTANCE_ENDPOINT_PRIVATE",message:"This endpoint requires its dedicated managed transport."} });
+    const upstreamHeaders = await options.httpUpstreamHeaders?.(id, proxyPath) || {};
     diagnostic({ instanceId: id, action: "proxy.raw", method: parsed.method, path: proxyPath, instanceBase }, "node instance raw proxy requested");
     const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
       method: parsed.method,
-      headers: { ...parsed.headers },
+      headers: { ...parsed.headers, ...upstreamHeaders },
       body: proxyRequestBody(parsed),
     }, { instanceId: id, method: parsed.method, path: proxyPath, diagnostic });
     const declaredLength = Number(response.headers.get("content-length"));
@@ -267,7 +275,7 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
         socket.close(1002, "Instance shell subprotocol is required.");
         return;
       }
-      const upstreamHeaders = await options.webSocketUpstreamHeaders?.(id, proxyPath) || {};
+      const upstreamHeaders = await options.webSocketUpstreamHeaders?.(id, proxyPath, request.headers) || {};
       diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, upstreamUrl: upstreamUrl.toString(), protocols: protocols || [] }, "node instance websocket proxy opening");
       upstream = createWebSocket(upstreamUrl, protocols, { perMessageDeflate: false, headers: upstreamHeaders });
       upstream.on("open", () => {

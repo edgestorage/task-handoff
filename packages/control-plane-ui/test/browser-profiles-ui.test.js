@@ -166,7 +166,7 @@ test("every launcher surface focuses the running profile session instead of rela
 test("the embedded browser is named separately from the Chromium Browser app", () => {
   assert.match(instanceSessions, /\[EMBEDDED_BROWSER_APP_ID\]: t\("sessions\.tabs\.embeddedBrowser"\)/);
   assert.match(sessionHook, /\{ id: EMBEDDED_BROWSER_APP_ID, label: t\("sessions\.tabs\.embeddedBrowser"\) \}/);
-  assert.match(sessionHook, /title: t\("sessions\.tabs\.embeddedBrowser"\)/);
+  assert.match(sessionHook, /title: options\.title\?\.trim\(\) \|\| t\("sessions\.tabs\.embeddedBrowser"\)/);
   assert.match(storySidebar, /resource\.kind === "embedded-browser" \? resource\.title \|\| t\("sessions\.tabs\.embeddedBrowser"\)/);
   assert.equal(localeValue(enUS, "sessions.tabs.embeddedBrowser"), "Embedded browser");
   assert.equal(localeValue(zhCN, "sessions.tabs.embeddedBrowser"), "内嵌浏览器");

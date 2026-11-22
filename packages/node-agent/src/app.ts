@@ -104,6 +104,7 @@ import {
   createInstanceProxyMetrics,
   registerInstanceProxyRoutes,
 } from "./instances/proxy-routes.ts";
+import { browserControlIdentityHeaders } from "./instances/browser-control-proxy-headers.ts";
 import { nodeLocalInstanceWebBase } from "./instance-target.ts";
 import {
   allocateNodeAgentExternalListener,
@@ -809,6 +810,10 @@ async function startNodeInstance(
   return stored;
 }
 
+
+function isEmbeddedBrowserControlProxyPath(path: string) {
+  return path.startsWith("/api/browser-control/");
+}
 
 export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}) {
   const token = options.token || process.env.TASK_HANDOFF_NODE_AGENT_TOKEN;
@@ -2190,11 +2195,24 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     metrics: instanceProxyMetrics,
     instanceBase: (id) => resolveInstanceWeb(state.requireInstance(id)),
     syncModelEnvironment: (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb),
-    webSocketUpstreamHeaders: (id, proxyPath) => {
-      if (proxyPath !== "/api/internal/instance-shell") return {};
+    httpUpstreamHeaders: (id, proxyPath) => {
+      if (!isEmbeddedBrowserControlProxyPath(proxyPath)) return {};
       const token = state.requireInstance(id).registrationToken;
       if (!token) throw Object.assign(new Error("Instance registration token is unavailable."), { code: "INSTANCE_REGISTRATION_TOKEN_MISSING" });
       return { authorization: `Bearer ${token}` };
+    },
+    webSocketUpstreamHeaders: (id, proxyPath, requestHeaders) => {
+      if (proxyPath === "/api/internal/instance-shell") {
+        const token = state.requireInstance(id).registrationToken;
+        if (!token) throw Object.assign(new Error("Instance registration token is unavailable."), { code: "INSTANCE_REGISTRATION_TOKEN_MISSING" });
+        return { authorization: `Bearer ${token}` };
+      }
+      if (isEmbeddedBrowserControlProxyPath(proxyPath)) {
+        const token = state.requireInstance(id).registrationToken;
+        if (!token) throw Object.assign(new Error("Instance registration token is unavailable."), { code: "INSTANCE_REGISTRATION_TOKEN_MISSING" });
+        return { authorization: `Bearer ${token}`, ...browserControlIdentityHeaders(requestHeaders) };
+      }
+      return {};
     },
     diagnostic: logDiagnostic,
   });

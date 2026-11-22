@@ -237,6 +237,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(status))
         .route("/api/instance/status", get(instance_status))
         .merge(crate::remote_desktop::routes(state.clone()))
+        .merge(crate::browser_control_routes::routes())
+        .merge(crate::browser_cdp_bridge::routes())
         .route("/api/instance/capabilities", get(capabilities))
         .route("/api/workspace/status", get(workspace_status))
         .route("/api/diagnostics", get(diagnostics))
@@ -4173,6 +4175,7 @@ pub async fn run_web(options: ServerOptions) -> anyhow::Result<()> {
     state.publish_ai_session_snapshot("startup");
     let listener = TcpListener::bind((bind_host.as_str(), bind_port)).await?;
     let local = listener.local_addr()?;
+    state.set_browser_cdp_http_endpoint(format!("http://127.0.0.1:{}", local.port()));
     info!(address = %local, draining = state.is_draining(), "controlled instance HTTP server listening");
     state.start_node_agent();
     let server_state = state.clone();
@@ -9886,9 +9889,7 @@ async fn invoke_agent_tool(
     };
     let call_id = input.call_id().map(ToString::to_string);
     match invoke_for_provider_session(
-        &state.story_tools,
-        &state.agent_run_bindings,
-        &state.ai_sessions,
+        &state,
         StoryToolInvocation {
             provider: &input.provider,
             provider_session_id: &input.provider_session_id,
@@ -10911,9 +10912,7 @@ async fn call_mcp_tool(state: &AppState, params: Option<&Value>) -> Result<Value
     };
     let call_id = optional_call_id(meta);
     match invoke_for_provider_session(
-        &state.story_tools,
-        &state.agent_run_bindings,
-        &state.ai_sessions,
+        &state,
         StoryToolInvocation {
             provider: "codex",
             provider_session_id: thread_id,
@@ -14986,6 +14985,11 @@ async fn auth_middleware(State(state): State<AppState>, request: Request, next: 
     if path == "/api/health" || path == "/api/auth/status" {
         return next.run(request).await;
     }
+    if crate::browser_control_routes::is_browser_control_path(path)
+        || crate::browser_cdp_bridge::is_path(path)
+    {
+        return next.run(request).await;
+    }
     if path.starts_with("/api/internal/remote-desktop/") {
         return next.run(request).await; // Dedicated route middleware owns credentials.
     }
@@ -15101,7 +15105,7 @@ fn ai_session_path_id(path: &str) -> Option<&str> {
     (!session_id.is_empty()).then_some(session_id)
 }
 
-fn bearer_token(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn bearer_token(headers: &HeaderMap) -> Option<String> {
     let value = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())?;
@@ -15125,11 +15129,11 @@ fn request_token(headers: &HeaderMap, uri: &Uri) -> Option<String> {
     })
 }
 
-fn tokens_match(expected: &str, actual: &str) -> bool {
+pub(crate) fn tokens_match(expected: &str, actual: &str) -> bool {
     expected.as_bytes().ct_eq(actual.as_bytes()).into()
 }
 
-fn api_error(status: StatusCode, code: &str, message: &str) -> Response {
+pub(crate) fn api_error(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
         Json(ApiErrorEnvelope {
@@ -15244,7 +15248,9 @@ mod tests {
         AiSessionCommandInput, AiSessionCommandResult, AiSessionHistoryItem,
         AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionFileSearch,
         AiSessionMentionKind, AiSessionProviderActions, AiSessionProviderCapability,
-        AiSessionProviderTimelineCapabilities, AppLaunchOptions,
+        AiSessionProviderTimelineCapabilities, AppLaunchOptions, EmbeddedBrowserPage,
+        EmbeddedBrowserPageHost, EmbeddedBrowserPageHostCapabilities,
+        EmbeddedBrowserSourceSnapshot,
     };
     use controlled_instance_workspace::ConfigSyncEnvironment;
     use http_body_util::BodyExt;
@@ -17411,6 +17417,83 @@ mod tests {
             )
             .await
             .expect("response")
+    }
+
+    async fn browser_proxy_request(app: &Router, method: Method, uri: &str) -> Response {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header(header::AUTHORIZATION, "Bearer test-registration-token")
+                    .header("x-task-handoff-control-plane-id", "control_plane_1")
+                    .header("x-task-handoff-user-id", "user_1")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response")
+    }
+
+    fn browser_test_source(
+        state: &AppState,
+        pages: Vec<(String, String)>,
+    ) -> controlled_instance_protocol::EmbeddedBrowserSource {
+        let source = state
+            .browser_control
+            .register_source(crate::browser_control::BrowserSourceRegistration {
+                panel_id: "control_plane_1".to_string(),
+                owner_ref: "user_1".to_string(),
+                display_name: "Desktop A".to_string(),
+                host_label: None,
+                publisher_ref: "test-browser-source".to_string(),
+                renderer_host_binding: None,
+                page_host: EmbeddedBrowserPageHost::MainPagePool,
+                page_host_capabilities: EmbeddedBrowserPageHostCapabilities::default(),
+            })
+            .expect("browser source");
+        let snapshot = EmbeddedBrowserSourceSnapshot {
+            source_ref: source.source_ref.clone(),
+            generation: source.generation,
+            source_revision: 1,
+            registry_epoch: state.browser_control.registry_epoch(),
+            snapshot_ref: "test-browser-snapshot".to_string(),
+            chunk_index: 0,
+            chunk_count: 1,
+            complete: true,
+            pages: pages
+                .into_iter()
+                .map(|(tab_ref, url)| {
+                    let title = tab_ref.clone();
+                    EmbeddedBrowserPage {
+                        source_ref: source.source_ref.clone(),
+                        generation: source.generation,
+                        tab_ref,
+                        instance_id: state.config.instance_id.clone(),
+                        page_host: source.page_host,
+                        page_host_capabilities: source.page_host_capabilities,
+                        title,
+                        url,
+                        state: "ready".to_string(),
+                        revision: 1,
+                    }
+                })
+                .collect(),
+        };
+        state
+            .browser_control
+            .commit_snapshot(snapshot)
+            .expect("browser snapshot");
+        state
+            .browser_control
+            .mark_synced(
+                &source.source_ref,
+                source.generation,
+                &state.browser_control.registry_epoch(),
+                state.browser_control.registry_revision(),
+            )
+            .expect("browser source sync");
+        source
     }
 
     fn managed_worktree_path(managed_root: &std::path::Path, worktree_id: &str) -> PathBuf {
@@ -23565,5 +23648,148 @@ mod tests {
         assert!(receiver.try_recv().is_err());
         assert!(*slow_receiver.borrow());
         assert_eq!(queued.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn browser_control_access_routes_are_shared_by_the_instance() {
+        let (state, _root) = test_state();
+        let app = router(state);
+
+        let unauthorized = get_json(&app, "/api/browser-control/access").await;
+        assert_eq!(unauthorized.status(), StatusCode::FORBIDDEN);
+
+        let granted =
+            browser_proxy_request(&app, Method::POST, "/api/browser-control/access").await;
+        assert_eq!(granted.status(), StatusCode::OK);
+        assert_eq!(body_json(granted).await["data"]["active"], true);
+
+        let active = browser_proxy_request(&app, Method::GET, "/api/browser-control/access").await;
+        assert_eq!(active.status(), StatusCode::OK);
+        assert_eq!(body_json(active).await["data"]["active"], true);
+
+        let revoked =
+            browser_proxy_request(&app, Method::DELETE, "/api/browser-control/access").await;
+        assert_eq!(revoked.status(), StatusCode::OK);
+        assert_eq!(body_json(revoked).await["data"]["revokedLeases"], 0);
+
+        let inactive =
+            browser_proxy_request(&app, Method::GET, "/api/browser-control/access").await;
+        assert_eq!(body_json(inactive).await["data"]["active"], false);
+    }
+
+    #[tokio::test]
+    async fn browser_cdp_lists_all_instance_pages_and_expires_tokens_per_session_and_access() {
+        let (state, _root) = test_state();
+        browser_test_source(
+            &state,
+            (0..75)
+                .map(|index| {
+                    (
+                        format!("browser_tab_{index:03}"),
+                        format!("https://example.com/{index}"),
+                    )
+                })
+                .collect(),
+        );
+        state
+            .ai_sessions
+            .save(ai_session_record("ses_0000000000001", "aps_0000000000001"))
+            .expect("first session");
+        state
+            .ai_sessions
+            .save(ai_session_record("ses_0000000000002", "aps_0000000000002"))
+            .expect("second session");
+        state.browser_control.grant_instance_access();
+        let (first_token, _) = state
+            .browser_control
+            .issue_cdp_token("ses_0000000000001")
+            .expect("first token");
+        let (second_token, _) = state
+            .browser_control
+            .issue_cdp_token("ses_0000000000002")
+            .expect("second token");
+
+        let app = router(state.clone());
+        let unauthorized = get_json(&app, "/json/list").await;
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let listed = get_json(&app, &format!("/json/list?token={first_token}")).await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed = body_json(listed).await;
+        assert_eq!(listed.as_array().expect("page targets").len(), 75);
+        assert!(listed
+            .as_array()
+            .expect("page targets")
+            .iter()
+            .all(|page| page["webSocketDebuggerUrl"]
+                .as_str()
+                .is_some_and(|url| url.starts_with("ws://127.0.0.1:0/devtools/page/"))));
+
+        state.browser_control.cleanup_session("ses_0000000000001");
+        let session_closed = get_json(&app, &format!("/json/list?token={first_token}")).await;
+        assert_eq!(session_closed.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            body_json(session_closed).await["error"]["code"],
+            "BROWSER_AUTHORIZATION_REVOKED"
+        );
+        let other_session = get_json(&app, &format!("/json/list?token={second_token}")).await;
+        assert_eq!(other_session.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(other_session)
+                .await
+                .as_array()
+                .expect("page targets")
+                .len(),
+            75
+        );
+
+        state.browser_control.revoke_instance_access();
+        let access_revoked = get_json(&app, &format!("/json/list?token={second_token}")).await;
+        assert_eq!(access_revoked.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            body_json(access_revoked).await["error"]["code"],
+            "BROWSER_AUTHORIZATION_REVOKED"
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_cdp_rejects_unsafe_new_targets_and_unauthenticated_page_sockets() {
+        let (state, _root) = test_state();
+        state
+            .ai_sessions
+            .save(ai_session_record("ses_0000000000001", "aps_0000000000001"))
+            .expect("session");
+        state.browser_control.grant_instance_access();
+        let (token, _) = state
+            .browser_control
+            .issue_cdp_token("ses_0000000000001")
+            .expect("token");
+        let app = router(state);
+
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!(
+                        "/json/new?url=file%3A%2F%2F%2Ftmp%2Fsecret&token={token}"
+                    ))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(rejected).await["error"]["code"],
+            "BROWSER_OPERATION_UNSUPPORTED"
+        );
+
+        let unauthenticated = get_json(&app, "/json/version").await;
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            body_json(unauthenticated).await["error"]["code"],
+            "BROWSER_AUTHORIZATION_REQUIRED"
+        );
     }
 }

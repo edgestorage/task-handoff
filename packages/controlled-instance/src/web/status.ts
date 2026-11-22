@@ -222,6 +222,13 @@ export function controlledInstanceCapabilities(
       gui: available.some((item) => item.kind === "gui"),
       browser: available.some((item) => item.id === "browser" || item.id === "chromium"),
       browserTunnel: true,
+      embeddedBrowserChannel: {
+        supported: true,
+        transports: ["reverse-websocket"],
+        streamKinds: ["control"],
+        drivers: ["electron-page-cdp"],
+        pageHosts: ["renderer-webview", "main-page-pool"],
+      },
       screenshots: available.some((item) => item.kind === "gui") && Boolean(executablePath("import")),
       logs: true,
       aiSessionWorkspaceSelection: true,

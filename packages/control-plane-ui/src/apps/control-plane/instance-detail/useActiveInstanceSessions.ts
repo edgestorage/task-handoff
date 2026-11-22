@@ -671,16 +671,20 @@ export function useActiveInstanceSessions({
     normalizeSessionLayout();
   }
 
-  function openBrowserTab(instanceId: string, initialUrl?: string) {
+  function openBrowserTab(instanceId: string, initialUrl?: string, options: { title?: string; creationRef?: string } = {}) {
     const key = `embedded-browser:${createBrowserUuid()}`;
     const tabs = browserSessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
     tabs.push({
       key,
       kind: "embedded-browser",
       label: EMBEDDED_BROWSER_APP_ID,
-      title: t("sessions.tabs.embeddedBrowser"),
+      title: options.title?.trim() || t("sessions.tabs.embeddedBrowser"),
       status: initialUrl ? "loading" : "running",
-      source: { browserTabId: key, ...(initialUrl ? { initialUrl } : {}) },
+      source: {
+        browserTabId: key,
+        ...(initialUrl ? { initialUrl } : {}),
+        ...(options.creationRef ? { creationRef: options.creationRef } : {}),
+      },
     });
     const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";
     if (pane === "right") {

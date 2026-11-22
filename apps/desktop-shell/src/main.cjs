@@ -4,7 +4,7 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
-const { app, BrowserView, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net: electronNet, Notification, session, shell, Tray } = require("electron");
+const { app, BrowserView, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net: electronNet, Notification, session, shell, Tray, webContents } = require("electron");
 const WebSocket = require("ws");
 const { autoUpdater } = require("electron-updater");
 const {
@@ -54,6 +54,9 @@ const { applyMainWindowChromeDensity, applyWindowsTitleBarTheme, desktopTitleBar
 const { appendRotatingLog } = require("./rotating-log.cjs");
 const { markLogStreamUnavailable, writeLogLine } = require("./log-sink.cjs");
 const { DesktopBrowserContextManager } = require("./desktop-browser-contexts.cjs");
+const { DesktopBrowserGuestRegistry } = require("./desktop-browser-guest-registry.cjs");
+const { DesktopEmbeddedBrowserChannelManager } = require("./desktop-embedded-browser-channel-manager.cjs");
+const { detectEmbeddedBrowserPagePoolApi, resolveEmbeddedBrowserPageHost } = require("./embedded-browser-page-host.cjs");
 const { externalNavigationUrl, isAllowedControlPlaneNavigation } = require("./navigation-policy.cjs");
 const { createDesktopClipboardBridge } = require("./desktop-clipboard.cjs");
 
@@ -69,7 +72,9 @@ let desktopWindowPreferences;
 let desktopWindows;
 let desktopQuitCoordinator;
 let desktopBrowserContexts;
-const desktopBrowserGuests = new Map();
+let desktopBrowserRegistry;
+let desktopBrowserChannelManager;
+let desktopBrowserPageHostState;
 const desktopServiceSupervisor = createDesktopServiceSupervisor();
 const controlPlaneWindows = createControlPlaneWindowRegistry();
 const desktopClipboard = createDesktopClipboardBridge({
@@ -420,9 +425,8 @@ function createDesktopBrowserWindow(options, windowsOverlayHeight, browserTabs =
 
 function configureBrowserTabGuests(host) {
   host.once("destroyed", () => {
-    for (const [guestId, entry] of desktopBrowserGuests) {
-      if (entry.host === host) desktopBrowserGuests.delete(guestId);
-    }
+    desktopBrowserRegistry?.removeHost(host);
+    void desktopBrowserChannelManager?.releaseSender(host.id);
     void desktopBrowserContexts?.releaseSender(host.id);
   });
   host.on("did-start-navigation", (_event, url, _isInPlace, isMainFrame) => {
@@ -445,10 +449,8 @@ function configureBrowserTabGuests(host) {
     webPreferences.nodeIntegration = false;
   });
   host.on("did-attach-webview", (_event, guest) => {
-    desktopBrowserGuests.set(guest.id, { guest, host });
-    guest.once("destroyed", () => {
-      if (desktopBrowserGuests.get(guest.id)?.guest === guest) desktopBrowserGuests.delete(guest.id);
-    });
+    const partition = guest.session?.getPartition?.() || "";
+    desktopBrowserRegistry?.addGuest({ host, guest, partition });
     logInfo(`[desktop-shell] browser webview did-attach host=${host.id} guest=${guest.id} url=${browserDiagnosticUrl(guest.getURL())}`);
     const allowNavigation = (event, targetUrl) => {
       const allowed = browserTabUrlAllowed(targetUrl);
@@ -493,6 +495,27 @@ function configureBrowserTabGuests(host) {
       return { action: "deny" };
     });
   });
+}
+
+function initializeDesktopBrowserControl() {
+  const customPagePoolAvailable = detectEmbeddedBrowserPagePoolApi(webContents);
+  desktopBrowserPageHostState = resolveEmbeddedBrowserPageHost(process.env, customPagePoolAvailable);
+  desktopBrowserRegistry = new DesktopBrowserGuestRegistry({
+    pageHost: desktopBrowserPageHostState.pageHost,
+    pageHostCapabilities: desktopBrowserPageHostState.capabilities,
+    logInfo,
+    onChanged: (change) => desktopBrowserChannelManager?.handleRegistryChange(change),
+    onCdpEvent: (event) => desktopBrowserChannelManager?.handleCdpEvent(event),
+    onDebuggerDetached: (event) => desktopBrowserChannelManager?.handleTargetDetached(event),
+  });
+  desktopBrowserChannelManager = new DesktopEmbeddedBrowserChannelManager({
+    fetch: (url, init) => fetchControlPlaneWithSessionCookies(url, init),
+    WebSocket,
+    registry: desktopBrowserRegistry,
+    logInfo,
+    logError,
+  });
+  logInfo(`[desktop-shell] embedded browser pageHost requested=${desktopBrowserPageHostState.requestedPageHost} actual=${desktopBrowserPageHostState.pageHost} customApi=${customPagePoolAvailable} degraded=${desktopBrowserPageHostState.degraded}${desktopBrowserPageHostState.degradedReason ? ` reason=${desktopBrowserPageHostState.degradedReason}` : ""}`);
 }
 
 function browserTabUrlAllowed(value) {
@@ -540,6 +563,18 @@ function trustedControlPlaneSenderUrl(sender) {
     throw new Error("Browser context requests require the active Control Plane origin.");
   }
   return senderUrl.toString();
+}
+
+function browserControlError(code, message = code) {
+  return Object.assign(new Error(message), { code });
+}
+
+function browserControlFailure(error) {
+  const code = typeof error?.code === "string" && /^BROWSER_[A-Z0-9_]+$/.test(error.code)
+    ? error.code
+    : "BROWSER_CONTROL_FAILED";
+  const message = error instanceof Error ? error.message.trim().slice(0, 240) : String(error || "").slice(0, 240);
+  return { ok: false, code, ...(message && message !== code ? { message } : {}) };
 }
 
 function createWindow(url) {
@@ -1261,7 +1296,27 @@ ipcMain.handle("task-handoff:browser-context-prepare", async (event, instanceId)
       instanceId: normalized,
       senderId: event.sender.id,
     });
-    return { ok: true, ...context };
+    let agentControl;
+    if (desktopBrowserPageHostState?.pageHost === "main-page-pool") {
+      agentControl = { ok: false, code: "BROWSER_PAGE_HOST_UNAVAILABLE" };
+    } else {
+      try {
+        await desktopBrowserChannelManager.ensureSource({
+          controlPlaneUrl: senderUrl,
+          instanceId: normalized,
+          senderId: event.sender.id,
+          host: event.sender,
+          hostLabel: BrowserWindow.fromWebContents(event.sender)?.getTitle?.() || `Desktop window ${event.sender.id}`,
+          pageHost: desktopBrowserPageHostState.pageHost,
+          pageHostCapabilities: desktopBrowserPageHostState.capabilities,
+        });
+        agentControl = { ok: true };
+      } catch (error) {
+        logError(`[desktop-shell] embedded browser agent control unavailable instanceId=${normalized} error=${error instanceof Error ? error.message : String(error)}`);
+        agentControl = { ok: false, code: error?.code || "BROWSER_CONTROL_UNSUPPORTED" };
+      }
+    }
+    return { ok: true, ...context, agentControl };
   } catch (error) {
     logError(`[desktop-shell] browser context prepare failed instanceId=${normalized} error=${error instanceof Error ? error.message : String(error)}`);
     const code = error?.code || "browser-context-unavailable";
@@ -1276,10 +1331,135 @@ ipcMain.handle("task-handoff:browser-context-release", async (event, contextId) 
 ipcMain.handle("task-handoff:browser-context-touch", (event, contextId) => ({
   ok: Boolean(desktopBrowserContexts?.touch(String(contextId || ""), event.sender.id)),
 }));
+
+ipcMain.handle("task-handoff:browser-control-info", (event, input) => {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+  } catch {
+    return { ok: false, code: "BROWSER_CONTROL_UNAUTHORIZED" };
+  }
+  const instanceId = typeof input?.instanceId === "string" ? input.instanceId.trim() : "";
+  const source = instanceId ? desktopBrowserChannelManager?.infoFor(event.sender.id, instanceId) : undefined;
+  const state = desktopBrowserPageHostState;
+  return {
+    ok: true,
+    pageHost: state?.pageHost || "renderer-webview",
+    pageHostCapabilities: state?.capabilities || { backgroundCreation: false, surviveHostWindowClose: false, crossWindowAdopt: false },
+    requestedPageHost: state?.requestedPageHost || "renderer-webview",
+    degraded: Boolean(state?.degraded),
+    ...(state?.degradedReason ? { degradedReason: state.degradedReason } : {}),
+    ...(source?.sourceRef ? { sourceRef: source.sourceRef, generation: source.generation, ready: source.ready } : {}),
+  };
+});
+
+ipcMain.handle("task-handoff:browser-tab-register", (event, input) => {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+    if (!desktopBrowserRegistry || !input || typeof input !== "object") throw browserControlError("BROWSER_GUEST_INVALID");
+    const webContentsId = Number(input.webContentsId);
+    const entry = desktopBrowserRegistry.getByGuestId(webContentsId, event.sender.id);
+    if (!entry) throw browserControlError("BROWSER_GUEST_NOT_FOUND");
+    const instanceId = String(input.instanceId || "").trim();
+    if (!instanceId || instanceId.length > 160) throw browserControlError("BROWSER_INSTANCE_ID_INVALID");
+    const partitionInstanceId = desktopBrowserContexts?.instanceIdForPartition(event.sender.id, entry.partition);
+    if (partitionInstanceId !== instanceId) throw browserControlError("BROWSER_GUEST_PARTITION_MISMATCH");
+    const tab = desktopBrowserRegistry.register({
+      senderId: event.sender.id,
+      webContentsId,
+      instanceId,
+      sessionKey: input.sessionKey,
+      partition: entry.partition,
+      title: input.title,
+      url: input.url,
+      state: input.state,
+      creationRef: input.creationRef,
+    });
+    return { ok: true, tab };
+  } catch (error) {
+    return browserControlFailure(error);
+  }
+});
+
+ipcMain.handle("task-handoff:browser-tab-update", (event, input) => {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+    if (!desktopBrowserRegistry || !input || typeof input !== "object") throw browserControlError("BROWSER_TAB_NOT_FOUND");
+    const tab = desktopBrowserRegistry.update({ senderId: event.sender.id, ...input });
+    return { ok: true, tab };
+  } catch (error) {
+    return browserControlFailure(error);
+  }
+});
+
+ipcMain.handle("task-handoff:browser-tab-unregister", (event, input) => {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+    const webContentsId = Number(input?.webContentsId);
+    return { ok: Boolean(desktopBrowserRegistry?.unregister({ senderId: event.sender.id, webContentsId })) };
+  } catch (error) {
+    return browserControlFailure(error);
+  }
+});
+
+ipcMain.handle("task-handoff:browser-tab-list", (event, input) => {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+    return { ok: true, tabs: desktopBrowserRegistry?.list({ senderId: event.sender.id, instanceId: input?.instanceId }) || [] };
+  } catch (error) {
+    return browserControlFailure(error);
+  }
+});
+
+ipcMain.handle("task-handoff:browser-tab-close", async (event, tabRef) => {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+    if (!desktopBrowserRegistry) throw browserControlError("BROWSER_TAB_NOT_FOUND");
+    const entry = desktopBrowserRegistry.getInternal(tabRef, event.sender.id);
+    if (!entry) throw browserControlError("BROWSER_TAB_NOT_FOUND");
+    if (!entry.host.isDestroyed?.()) entry.host.send("task-handoff:browser-tab-closed", { tabRef: entry.tabRef, instanceId: entry.instanceId });
+    await desktopBrowserRegistry.close({ tabRef, senderId: event.sender.id });
+    return { ok: true };
+  } catch (error) {
+    return browserControlFailure(error);
+  }
+});
+
+ipcMain.handle("task-handoff:browser-target-attach", (event, tabRef) => {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+    if (!desktopBrowserRegistry) throw browserControlError("BROWSER_CONTROL_UNSUPPORTED");
+    const tab = desktopBrowserRegistry.attachDebugger({ tabRef, senderId: event.sender.id });
+    return { ok: true, tab };
+  } catch (error) {
+    return browserControlFailure(error);
+  }
+});
+
+ipcMain.handle("task-handoff:browser-target-detach", (event, tabRef) => {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+    if (!desktopBrowserRegistry) throw browserControlError("BROWSER_CONTROL_UNSUPPORTED");
+    return { ok: Boolean(desktopBrowserRegistry.detachDebugger({ tabRef, senderId: event.sender.id })) };
+  } catch (error) {
+    return browserControlFailure(error);
+  }
+});
+
+ipcMain.handle("task-handoff:browser-cdp-send", async (event, input) => {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+    if (!desktopBrowserRegistry || !input || typeof input !== "object") throw browserControlError("BROWSER_CONTROL_UNSUPPORTED");
+    const result = await desktopBrowserRegistry.sendCommand({ senderId: event.sender.id, ...input });
+    return { ok: true, result };
+  } catch (error) {
+    return browserControlFailure(error);
+  }
+});
+
 ipcMain.handle("task-handoff:browser-tab-throttled", (event, webContentsId, throttled) => {
   const id = Number(webContentsId);
-  const entry = Number.isInteger(id) ? desktopBrowserGuests.get(id) : undefined;
-  if (!entry || entry.host !== event.sender || typeof entry.guest.setBackgroundThrottling !== "function") return { ok: false };
+  const entry = desktopBrowserRegistry?.getByGuestId(id, event.sender.id);
+  if (!entry || typeof entry.guest.setBackgroundThrottling !== "function") return { ok: false };
   entry.guest.setBackgroundThrottling(Boolean(throttled));
   return { ok: true };
 });
@@ -1458,6 +1638,7 @@ if (!ownsDesktopInstanceLock) {
 
   app.whenReady().then(() => {
     desktopClipboard.start();
+    initializeDesktopBrowserControl();
     desktopBrowserContexts = new DesktopBrowserContextManager({
       fetch: (url, init) => fetchControlPlaneWithSessionCookies(url, init),
       WebSocket,
@@ -1522,6 +1703,7 @@ if (!ownsDesktopInstanceLock) {
   app.on("before-quit", (event) => {
     desktopUpdater?.stop();
     if (desktopQuitCoordinator.isReadyToExit()) {
+      void desktopBrowserChannelManager?.close();
       void desktopBrowserContexts?.close();
       desktopServiceSupervisor.markStopped();
       desktopTray?.destroy();

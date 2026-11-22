@@ -10,6 +10,7 @@ import {
   AGENT_INVOCATION_TOOL_SCHEMA,
   type AgentInvocationToolName,
 } from "@task-handoff/protocol/agent-invocation-tools";
+import { BROWSER_AGENT_TOOL_NAMES, type BrowserAgentToolName } from "@task-handoff/protocol/browser-agent-tools";
 
 type OpenCodeToolContext = {
   sessionID: string;
@@ -23,7 +24,9 @@ type PluginOptions = {
   fetch?: typeof globalThis.fetch;
 };
 
-async function invoke(options: PluginOptions, tool: StoryAgentToolName | AgentInvocationToolName, args: unknown, context: OpenCodeToolContext) {
+const BROWSER_CDP_ACCESS_DESCRIPTION = "Return a short-lived standard CDP endpoint and token for this controlled instance. Send Authorization: Bearer <token> or ?token=<token> on HTTP requests. Use GET /json/list to discover all open pages, PUT /json/new?url=... to request a new page, GET /json/close/{tabRef} to close a page, and connect to each page's webSocketDebuggerUrl for raw CDP JSON. Only one writer may control the same tab at a time.";
+
+async function invoke(options: PluginOptions, tool: StoryAgentToolName | AgentInvocationToolName | BrowserAgentToolName, args: unknown, context: OpenCodeToolContext) {
   const endpoint = options.endpoint?.trim();
   const token = options.token?.trim();
   if (!endpoint || !token) throw new Error("TaskHandoff Story tools are not configured.");
@@ -66,6 +69,11 @@ export function createOpenCodeStoryPlugin(options: PluginOptions = {
         args: AGENT_INVOCATION_TOOL_SCHEMA.input.shape,
         execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, "agent_run", args, context),
       }],
+      ...BROWSER_AGENT_TOOL_NAMES.map((name) => [name, {
+        description: BROWSER_CDP_ACCESS_DESCRIPTION,
+        args: {},
+        execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, name, args, context),
+      }] as const),
     ]),
   });
 }

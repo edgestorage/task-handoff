@@ -7,6 +7,11 @@ mod ai_session_open_app;
 mod ai_session_validation;
 mod app_session_authority;
 pub mod auth;
+mod browser_agent_tools;
+mod browser_cdp_bridge;
+mod browser_control;
+mod browser_control_relay;
+mod browser_control_routes;
 mod browser_tunnel;
 mod claude_discovery;
 mod codex_discovery;
@@ -32,6 +37,11 @@ pub(crate) const WEBSOCKET_MAX_PAYLOAD_BYTES: usize = 100 * 1024 * 1024;
 pub use agent_run_bindings::{
     AgentRunMemberBinding, AgentRunMemberBindingInput, AgentRunMemberBindingStore,
 };
+pub use browser_control::{
+    BrowserControlError, BrowserControlEvent, BrowserControlService, BrowserControlSourceBinding,
+    BrowserLeaseCommandTarget, BrowserSourceRegistration,
+};
+pub use browser_control_relay::BrowserControlRelayRegistry;
 pub use config::{
     resolve_package_version, ControlMode, InstanceConfig, RuntimeKind, ServerOptions,
 };
