@@ -35,6 +35,7 @@ import {
   type EmbeddedBrowserAccessView,
   type EmbeddedBrowserAccessRequestView,
   type EmbeddedBrowserChannelCapabilities,
+  type EmbeddedBrowserCdpIdentity,
   type EmbeddedBrowserCreationCandidate,
   type EmbeddedBrowserCreationContextSnapshot,
   type EmbeddedBrowserCreationPanel,
@@ -145,6 +146,7 @@ export type BrowserSourceRegistration = {
   rendererHostBinding?: string;
   pageHost: EmbeddedBrowserPageHost;
   pageHostCapabilities: EmbeddedBrowserPageHostCapabilities;
+  cdpIdentity?: EmbeddedBrowserCdpIdentity;
 };
 
 export type BrowserControlSourceBinding = {
@@ -201,6 +203,7 @@ type CreationContextRecord = {
 export type BrowserCreationDispatchTarget = {
   sourceRef: string;
   generation: number;
+  requesterSessionRef: string;
 };
 
 export type BrowserCreationDispatcher = (
@@ -302,6 +305,7 @@ function validateRegistration(registration: BrowserSourceRegistration) {
     ...(registration.rendererHostBinding ? { rendererHostBinding: registration.rendererHostBinding } : {}),
     pageHost: registration.pageHost,
     pageHostCapabilities: EmbeddedBrowserPageHostCapabilitiesSchema.parse(registration.pageHostCapabilities),
+    ...(registration.cdpIdentity ? { cdpIdentity: registration.cdpIdentity } : {}),
   });
   if (!registration.panelId.trim() || !registration.ownerRef.trim()) {
     throw new BrowserControlError("BROWSER_AUTHORIZATION_REQUIRED", "Browser source identity is incomplete.", 403);
@@ -914,6 +918,25 @@ export class BrowserControlService {
       .sort((left, right) => left.tabRef.localeCompare(right.tabRef));
   }
 
+  browserCdpIdentity(sessionRef?: string): EmbeddedBrowserCdpIdentity | undefined {
+    if (sessionRef) {
+      this.removeExpiredLeases(nowMs());
+      for (const record of this.leases.values()) {
+        if (record.sessionRef !== sessionRef) continue;
+        const source = this.sources.get(record.lease.sourceRef);
+        if (source?.state === "ready" && source.registration.cdpIdentity) {
+          return source.registration.cdpIdentity;
+        }
+      }
+    }
+    for (const source of this.sources.values()) {
+      if (source.state === "ready" && source.registration.cdpIdentity) {
+        return source.registration.cdpIdentity;
+      }
+    }
+    return undefined;
+  }
+
   page(tabRef: string) {
     for (const source of this.sources.values()) {
       if (source.state !== "ready") continue;
@@ -1307,7 +1330,11 @@ export class BrowserControlService {
       revision: creation.view.revision + 1,
     });
     this.recordCreationEvent(creation.view);
-    void dispatcher(creation.view, { sourceRef, generation: source.generation }).catch((error) => {
+    void dispatcher(creation.view, {
+      sourceRef,
+      generation: source.generation,
+      requesterSessionRef: creation.requesterSessionRef,
+    }).catch((error) => {
       try { this.failCreation(sourceRef, creationRef, error instanceof Error ? error.message : String(error)); } catch { /* Creation may already be settled. */ }
     });
   }

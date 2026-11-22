@@ -32,7 +32,11 @@ class DesktopEmbeddedBrowserChannelManager {
     if (this.closed) throw browserChannelError("BROWSER_CONTROL_UNSUPPORTED", "Browser control is shutting down.");
     const key = sessionKey(input.senderId, input.instanceId);
     const existing = this.sessions.get(key);
-    if (existing && !existing.closed && existing.controlPlaneUrl === input.controlPlaneUrl) return existing;
+    if (existing && !existing.closed && existing.controlPlaneUrl === input.controlPlaneUrl) {
+      if (!existing.cdpIdentity && input.cdpIdentity) existing.cdpIdentity = input.cdpIdentity;
+      if (existing.ready && existing.channel?.state === "ready") return existing;
+      if (existing.connectPromise) return existing.connectPromise;
+    }
     if (existing) await this.releaseKey(key);
     const session = {
       key,
@@ -43,6 +47,7 @@ class DesktopEmbeddedBrowserChannelManager {
       hostLabel: input.hostLabel,
       pageHost: input.pageHost,
       pageHostCapabilities: input.pageHostCapabilities,
+      cdpIdentity: input.cdpIdentity,
       sourceRef: undefined,
       generation: undefined,
       registryEpoch: undefined,
@@ -55,17 +60,20 @@ class DesktopEmbeddedBrowserChannelManager {
       retryTimer: undefined,
       retryDelayMs: 500,
       needsSnapshot: false,
+      connectPromise: undefined,
       channel: undefined,
       ready: false,
       closed: false,
     };
     this.sessions.set(key, session);
+    session.connectPromise = this.connectSession(session).then(() => session);
     try {
-      await this.connectSession(session);
-      return session;
+      return await session.connectPromise;
     } catch (error) {
       await this.releaseKey(key);
       throw error;
+    } finally {
+      session.connectPromise = undefined;
     }
   }
 
@@ -79,6 +87,7 @@ class DesktopEmbeddedBrowserChannelManager {
         rendererHostBinding: `renderer-host:${crypto.randomUUID()}`,
         pageHost: session.pageHost,
         pageHostCapabilities: session.pageHostCapabilities,
+        ...(session.cdpIdentity ? { cdpIdentity: session.cdpIdentity } : {}),
       },
     });
     const { source, connection } = EmbeddedBrowserSourceConnectionSchema.parse(registration);
@@ -342,6 +351,7 @@ class DesktopEmbeddedBrowserChannelManager {
           title: params.title,
           instanceId: session.instanceId,
           creationRef: params.creationRef,
+          ...(params.requesterSessionRef ? { requesterSessionRef: params.requesterSessionRef } : {}),
         });
         return { accepted: true };
       },

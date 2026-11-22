@@ -68,20 +68,28 @@ type StoryBrowserSessionOwner = {
  * first move the Story selection to its owner instead of silently failing the
  * sidebar's current-context guard.
  */
-export function storyBrowserSessionSelection(
-  resource: StoryEmbeddedBrowserResourceRef,
+export function storySessionSelectionForAiSession(
+  instanceId: string,
+  aiSessionId: string,
   instances: readonly StoryBrowserSessionOwner[],
 ): Extract<StorySelection, { kind: "session" }> | undefined {
-  const instance = instances.find((candidate) => candidate.id === resource.instanceId);
-  const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === resource.aiSessionId);
+  const instance = instances.find((candidate) => candidate.id === instanceId);
+  const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === aiSessionId);
   if (!instance || !session?.storyId) return undefined;
   return {
     kind: "session",
     ownerNodeId: instance.nodeId,
     storyId: session.storyId,
-    instanceId: resource.instanceId,
-    sessionId: resource.aiSessionId,
+    instanceId,
+    sessionId: aiSessionId,
   };
+}
+
+export function storyBrowserSessionSelection(
+  resource: StoryEmbeddedBrowserResourceRef,
+  instances: readonly StoryBrowserSessionOwner[],
+): Extract<StorySelection, { kind: "session" }> | undefined {
+  return storySessionSelectionForAiSession(resource.instanceId, resource.aiSessionId, instances);
 }
 
 export function aiSessionResourceContextKey(instanceId: string, aiSessionId: string) {

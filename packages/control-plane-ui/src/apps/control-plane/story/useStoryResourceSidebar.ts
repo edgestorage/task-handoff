@@ -159,11 +159,15 @@ export function useStoryResourceSidebar(input: {
     );
   }
 
-  function openBrowser(instanceId: string, initialUrl?: string, options: { title?: string; creationRef?: string } = {}) {
-    const aiSessionId = input.aiSessionId.value;
-    if (!aiSessionId || instanceId !== input.instanceId.value) return;
-    const resource = {
-      kind: "embedded-browser" as const,
+  function openBrowserForAiSession(
+    instanceId: string,
+    aiSessionId: string,
+    initialUrl?: string,
+    options: { title?: string; creationRef?: string } = {},
+  ) {
+    if (!instanceId || !aiSessionId) return undefined;
+    const resource: StoryEmbeddedBrowserResourceRef = {
+      kind: "embedded-browser",
       aiSessionId,
       instanceId,
       browserTabId: `story-browser:${createBrowserUuid()}`,
@@ -172,8 +176,18 @@ export function useStoryResourceSidebar(input: {
       status: initialUrl ? "loading" : "running",
       ...(initialUrl ? { initialUrl } : {}),
     };
-    browserByAiSession[contextKey.value] = [...(browserByAiSession[contextKey.value] || []), resource];
-    select(resource);
+    const resourceContextKey = aiSessionResourceContextKey(instanceId, aiSessionId);
+    browserByAiSession[resourceContextKey] = [...(browserByAiSession[resourceContextKey] || []), resource];
+    // A page opened by another Agent belongs in that Session's sidebar, but it
+    // must not steal the current Story selection from the person using the app.
+    if (resourceContextKey === contextKey.value) select(resource);
+    return resource;
+  }
+
+  function openBrowser(instanceId: string, initialUrl?: string, options: { title?: string; creationRef?: string } = {}) {
+    const aiSessionId = input.aiSessionId.value;
+    if (!aiSessionId || instanceId !== input.instanceId.value) return;
+    openBrowserForAiSession(instanceId, aiSessionId, initialUrl, options);
   }
 
   function browserResourceKeyOf(resource: StoryEmbeddedBrowserResourceRef) {
@@ -361,6 +375,7 @@ export function useStoryResourceSidebar(input: {
     openRepository,
     removeRepository,
     openBrowser,
+    openBrowserForAiSession,
     updateBrowser,
     updateBrowserPage,
     removeBrowser,

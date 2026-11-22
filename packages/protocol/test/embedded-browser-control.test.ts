@@ -25,6 +25,7 @@ import {
   EmbeddedBrowserRpcRequestSchema,
   EmbeddedBrowserSourceSchema,
   EmbeddedBrowserSourceDeltaSchema,
+  EmbeddedBrowserSourceRegistrationRequestSchema,
   EmbeddedBrowserSourceSnapshotSchema,
   EmbeddedBrowserTargetAttachToTargetParamsSchema,
   EmbeddedBrowserTargetCdpEventSchema,
@@ -32,6 +33,8 @@ import {
   EmbeddedBrowserTargetDetachFromTargetParamsSchema,
   EmbeddedBrowserTargetGetBrowserContextsResultSchema,
   EmbeddedBrowserTargetInfoSchema,
+  EmbeddedBrowserTargetSetAutoAttachParamsSchema,
+  EmbeddedBrowserTabsOpenParamsSchema,
   assertEmbeddedBrowserTargetCdpMethod,
   assertEmbeddedBrowserCdpMethod,
   decodeEmbeddedBrowserChannelError,
@@ -44,6 +47,7 @@ import {
   encodeEmbeddedBrowserStreamOpenOk,
   encodeEmbeddedBrowserStreamOpen,
   embeddedBrowserCdpMethodKind,
+  embeddedBrowserCdpProtocolDocument,
   embeddedBrowserBrowserContextId,
   embeddedBrowserTargetId,
   embeddedBrowserTargetInfoFromPage,
@@ -53,6 +57,7 @@ import {
   supportsEmbeddedBrowserTargetCdp,
   supportsEmbeddedBrowserTargetCdpEvent,
   supportsEmbeddedBrowserTargetCdpMethod,
+  supportsEmbeddedBrowserTabOrigin,
 } from "../src/embedded-browser-control.ts";
 import { normalizeControlledInstanceCapabilities, supportsControlledInstanceEmbeddedBrowserChannel } from "../src/control-plane.ts";
 
@@ -163,7 +168,8 @@ test("the CDP profile is a method and namespace allowlist with stable classes an
   assert.equal(embeddedBrowserCdpMethodKind("Page.navigate"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Runtime.evaluate"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Accessibility.getFullAXTree"), "read");
-  assert.equal(embeddedBrowserCdpMethodKind("Network.enable"), "adapter-only");
+  assert.equal(embeddedBrowserCdpMethodKind("Network.enable"), "session");
+  assert.equal(embeddedBrowserCdpMethodKind("Runtime.releaseObject"), "session");
   assert.equal(embeddedBrowserCdpMethodKind("Emulation.setDeviceMetricsOverride"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Emulation.setUserAgentOverride"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Target.attachToTarget"), undefined);
@@ -172,10 +178,58 @@ test("the CDP profile is a method and namespace allowlist with stable classes an
   assert.equal(supportsEmbeddedBrowserCdpEvent("Page.lifecycleEvent"), true);
   assert.equal(supportsEmbeddedBrowserCdpEvent("Target.targetCreated"), false);
   assert.throws(() => assertEmbeddedBrowserCdpMethod("Target.attachToTarget"), { code: "BROWSER_OPERATION_UNSUPPORTED" });
-  assert.throws(() => assertEmbeddedBrowserCdpMethod("Network.enable"), { code: "BROWSER_OPERATION_UNSUPPORTED" });
-  assert.equal(assertEmbeddedBrowserCdpMethod("Network.enable", { adapterOnly: true }), "Network.enable");
+  assert.equal(assertEmbeddedBrowserCdpMethod("Network.enable"), "Network.enable");
+  assert.equal(assertEmbeddedBrowserCdpMethod("Runtime.releaseObject"), "Runtime.releaseObject");
   assert.equal(assertEmbeddedBrowserCdpMethod("Page.navigate"), "Page.navigate");
   assert.equal(assertEmbeddedBrowserCdpMethod("Emulation.setDeviceMetricsOverride"), "Emulation.setDeviceMetricsOverride");
+});
+
+test("source registration carries the desktop host's CDP identity", () => {
+  const parsed = EmbeddedBrowserSourceRegistrationRequestSchema.parse({
+    displayName: "Desktop",
+    publisherRef: "publisher",
+    pageHost: "renderer-webview",
+    rendererHostBinding: "renderer-host",
+    cdpIdentity: {
+      chromeVersion: "150.0.7871.47",
+      userAgent: "Mozilla/5.0 Chrome/150.0.7871.47 Safari/537.36",
+      v8Version: "15.0.245.15-electron.0",
+      webkitVersion: "537.36",
+    },
+  });
+  assert.equal(parsed.cdpIdentity?.chromeVersion, "150.0.7871.47");
+  assert.equal(EmbeddedBrowserSourceRegistrationRequestSchema.parse({
+    displayName: "Desktop",
+    publisherRef: "publisher",
+    pageHost: "main-page-pool",
+  }).cdpIdentity, undefined);
+});
+
+test("the CDP protocol document lists the browser and page methods Chrome clients discover", () => {
+  const document = embeddedBrowserCdpProtocolDocument();
+  const domain = (name: string) => document.domains.find((entry) => entry.domain === name);
+  assert.deepEqual(domain("Browser")?.commands, [{ name: "getVersion" }]);
+  assert.ok(domain("Target")?.commands?.some((command) => command.name === "setAutoAttach"));
+  assert.ok(domain("Target")?.events?.some((event) => event.name === "attachedToTarget"));
+  assert.ok(domain("Page")?.commands?.some((command) => command.name === "captureScreenshot"));
+  assert.ok(domain("Emulation")?.commands?.some((command) => command.name === "setFocusEmulationEnabled"));
+  assert.equal(document.version.major, "1");
+  assert.equal(document.version.minor, "3");
+});
+
+test("Target.setAutoAttach accepts Chrome filters and requires flattened sessions", () => {
+  const parsed = EmbeddedBrowserTargetSetAutoAttachParamsSchema.parse({
+    autoAttach: true,
+    waitForDebuggerOnStart: true,
+    flatten: true,
+    filter: [{ type: "page", exclude: true }, {}],
+  });
+  assert.equal(parsed.filter?.length, 2);
+  assert.throws(() => EmbeddedBrowserTargetSetAutoAttachParamsSchema.parse({
+    autoAttach: true,
+    waitForDebuggerOnStart: true,
+    flatten: false,
+  }), /flatten=true/);
 });
 
 test("browser-level Target CDP reuses sourceRef and tabRef as context and target identities", () => {
@@ -223,10 +277,11 @@ test("browser-level Target methods and discovery events stay in a separate allow
   assert.equal(supportsEmbeddedBrowserTargetCdpMethod("Target.getTargets"), true);
   assert.equal(supportsEmbeddedBrowserTargetCdpMethod("Target.createTarget"), true);
   assert.equal(supportsEmbeddedBrowserTargetCdpMethod("Target.createBrowserContext"), false);
-  assert.equal(supportsEmbeddedBrowserTargetCdpMethod("Browser.getVersion"), false);
+  assert.equal(supportsEmbeddedBrowserTargetCdpMethod("Browser.getVersion"), true);
   assert.equal(assertEmbeddedBrowserTargetCdpMethod("Target.attachToTarget"), "Target.attachToTarget");
   assert.throws(() => assertEmbeddedBrowserTargetCdpMethod("Target.createBrowserContext"), { code: "BROWSER_OPERATION_UNSUPPORTED" });
   assert.equal(supportsEmbeddedBrowserTargetCdpEvent("Target.targetCreated"), true);
+  assert.equal(supportsEmbeddedBrowserTargetCdpEvent("Target.attachedToTarget"), true);
   assert.equal(supportsEmbeddedBrowserTargetCdpEvent("Target.targetDestroyed"), true);
   assert.equal(supportsEmbeddedBrowserTargetCdpEvent("Target.setAutoAttach"), false);
 
@@ -254,6 +309,37 @@ test("browser-level Target methods and discovery events stay in a separate allow
       },
     },
   }).method, "Target.targetInfoChanged");
+  assert.deepEqual(EmbeddedBrowserTargetCdpEventSchema.parse({
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "target_session_1",
+      targetInfo: {
+        targetId: "tab_a",
+        type: "page",
+        title: "A",
+        url: "https://a.example/",
+        attached: true,
+        browserContextId: "bsr_source_a",
+        futureField: true,
+      },
+      waitingForDebugger: true,
+      futureField: true,
+    },
+  }), {
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "target_session_1",
+      targetInfo: {
+        targetId: "tab_a",
+        type: "page",
+        title: "A",
+        url: "https://a.example/",
+        attached: true,
+        browserContextId: "bsr_source_a",
+      },
+      waitingForDebugger: true,
+    },
+  });
 });
 
 test("default creation context and panel claims are single-owner compare-and-swap DTOs", () => {
@@ -414,13 +500,13 @@ test("snapshot, delta, creation and result contracts are bounded and source-fenc
     httpEndpoint: "http://127.0.0.1:49221",
     token: "token_1",
     expiresAt: accessExpiresAt,
-    protocolVersion: "2026-11-22",
+    protocolVersion: "2026-11-23",
     ignored: true,
   }), {
     httpEndpoint: "http://127.0.0.1:49221",
     token: "token_1",
     expiresAt: accessExpiresAt,
-    protocolVersion: "2026-11-22",
+    protocolVersion: "2026-11-23",
   });
   const pendingRequest = {
     requestRef: "breq_one",
@@ -445,7 +531,7 @@ test("snapshot, delta, creation and result contracts are bounded and source-fenc
     httpEndpoint: "http://127.0.0.1:49221",
     token: "token_1",
     expiresAt: accessExpiresAt,
-    protocolVersion: "2026-11-22",
+    protocolVersion: "2026-11-23",
   }).status, "granted");
   assert.deepEqual(EmbeddedBrowserCdpAccessResultSchema.parse({
     status: "pending",
@@ -460,7 +546,7 @@ test("snapshot, delta, creation and result contracts are bounded and source-fenc
   }));
 });
 
-test("OPEN_OK and channel ERROR payloads use the shared strict envelope", () => {
+test("OPEN_OK keeps the frozen framing version so older desktops can complete the handshake", () => {
   assert.deepEqual(decodeEmbeddedBrowserStreamOpenOk(encodeEmbeddedBrowserStreamOpenOk()), {
     streamKind: "control",
     protocolVersion: "2026-11-22",
@@ -531,4 +617,23 @@ test("embedded browser capability is optional and malformed values only disable 
   assert.equal(supportsControlledInstanceEmbeddedBrowserChannel(current), true);
   assert.deepEqual(current.features.embeddedBrowserChannel.pageHosts, ["renderer-webview"]);
   assert.equal(current.features.embeddedBrowserChannel.targetCdp, false);
+});
+
+
+test("tabs.open accepts the legacy shape and gates requester session by peer protocol", () => {
+  const legacy = EmbeddedBrowserTabsOpenParamsSchema.parse({
+    creationRef: "creation_1",
+    sourceRef: "source_1",
+    generation: 2,
+    url: "https://example.com/",
+  });
+  assert.equal(legacy.requesterSessionRef, undefined);
+  const current = EmbeddedBrowserTabsOpenParamsSchema.parse({
+    ...legacy,
+    requesterSessionRef: "session_one",
+  });
+  assert.equal(current.requesterSessionRef, "session_one");
+  assert.equal(supportsEmbeddedBrowserTabOrigin("2026-11-22"), false);
+  assert.equal(supportsEmbeddedBrowserTabOrigin("2026-11-23"), true);
+  assert.equal(supportsEmbeddedBrowserTabOrigin(undefined), false);
 });

@@ -92,10 +92,17 @@ test("source registration, snapshot and registry deltas stay ordered", async () 
     hostLabel: "Window A",
     pageHost: "renderer-webview",
     pageHostCapabilities: tab.pageHostCapabilities,
+    cdpIdentity: {
+      chromeVersion: "150.0.7871.47",
+      userAgent: "Mozilla/5.0 Chrome/150.0.7871.47 Safari/537.36",
+      v8Version: "15.0.245.15-electron.0",
+      webkitVersion: "537.36",
+    },
   });
 
   assert.equal(calls.length, 2);
   assert.equal(JSON.parse(calls[0].init.body).publisherRef, "desktop:11:instance-a");
+  assert.equal(JSON.parse(calls[0].init.body).cdpIdentity.chromeVersion, "150.0.7871.47");
   const snapshot = JSON.parse(calls[1].init.body);
   assert.equal(snapshot.sourceRef, "bsr_1");
   assert.equal(snapshot.registryEpoch, "bep_1");
@@ -130,6 +137,72 @@ test("source registration, snapshot and registry deltas stay ordered", async () 
   assert.equal(createdDelta.upserts[0].tabRef, "browser_tab_2");
   assert.equal(FakeChannel.instances[0].notifications[0][0], "tabs.created");
   assert.equal(FakeChannel.instances[0].notifications[0][2], "bcr_created");
+});
+
+test("source registration deduplicates concurrent setup and reconnects a closed channel", async () => {
+  FakeChannel.instances.length = 0;
+  let sourceRegistrations = 0;
+  const pageHostCapabilities = { backgroundCreation: false, surviveHostWindowClose: false, crossWindowAdopt: false };
+  const fetch = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (init?.method === "DELETE") return response(200, {});
+    if (path.endsWith("/browser-control/sources")) {
+      sourceRegistrations += 1;
+      const sourceRef = `bsr_${sourceRegistrations}`;
+      return response(201, {
+        source: {
+          sourceRef,
+          generation: sourceRegistrations,
+          panelId: "control_plane_1",
+          displayName: "Desktop",
+          pageHost: "renderer-webview",
+          pageHostCapabilities,
+          revision: 0,
+        },
+        connection: {
+          accessId: `bca_${sourceRegistrations}`,
+          token: "ticket",
+          expiresAt: new Date(Date.now() + 30_000).toISOString(),
+          relayPath: "/browser-channel-relay",
+          sourceRef,
+          generation: sourceRegistrations,
+          registryEpoch: "bep_1",
+          registryRevision: 3,
+        },
+      });
+    }
+    if (path.endsWith("/snapshot")) {
+      return response(200, { registryEpoch: "bep_1", registryRevision: 4, sourceRevision: 1 });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+  const manager = new DesktopEmbeddedBrowserChannelManager({
+    fetch,
+    WebSocket: class {},
+    ChannelClient: FakeChannel,
+    registry: { list: () => [], close: async () => true },
+    logError: (message) => { throw new Error(message); },
+  });
+  const input = {
+    controlPlaneUrl: "http://control-plane.test",
+    instanceId: "instance-a",
+    senderId: 11,
+    host: { id: 11, isDestroyed: () => false, send() {} },
+    hostLabel: "Window A",
+    pageHost: "renderer-webview",
+    pageHostCapabilities,
+  };
+
+  const [first, concurrent] = await Promise.all([manager.ensureSource(input), manager.ensureSource(input)]);
+  assert.equal(first, concurrent);
+  assert.equal(sourceRegistrations, 1);
+
+  first.channel.state = "closed";
+  first.ready = false;
+  const reconnected = await manager.ensureSource(input);
+  assert.notEqual(reconnected, first);
+  assert.equal(sourceRegistrations, 2);
+  assert.equal(reconnected.channel.state, "ready");
 });
 
 test("agent tabs.close removes the renderer tab shell", async () => {
@@ -444,10 +517,20 @@ test("a second source takeover keeps the first source pages and leases without f
   assert.equal(hostASends.length, 0);
 
   sessionB.host = hostB;
-  await manager.channelAdapter(sessionB).openTab({ url: firstPage.url, creationRef: "bcr_b" });
+  await manager.channelAdapter(sessionB).openTab({
+    url: firstPage.url,
+    creationRef: "bcr_b",
+    requesterSessionRef: "session_b",
+  });
   assert.deepEqual(hostBSends.at(-1), [
     "task-handoff:browser-new-tab",
-    { url: firstPage.url, title: undefined, instanceId: "instance-a", creationRef: "bcr_b" },
+    {
+      url: firstPage.url,
+      title: undefined,
+      instanceId: "instance-a",
+      creationRef: "bcr_b",
+      requesterSessionRef: "session_b",
+    },
   ]);
 
   manager.handleRegistryChange({ type: "registered", senderId: 12, creationRef: "bcr_b", entry: createdPage });

@@ -163,6 +163,9 @@ class DesktopBrowserGuestRegistry {
     const entry = this.requireEntry(tabRef, senderId);
     if (!entry.debuggerAttached) throw browserGuestError("BROWSER_TARGET_NOT_ATTACHED");
     const normalizedMethod = assertEmbeddedBrowserCdpMethod(method);
+    if (normalizedMethod === "Page.captureScreenshot") {
+      return capturePageScreenshot(entry, params);
+    }
     // Electron's renderer-webview debugger applies Page.reload to the embedding
     // renderer, which reloads the Control Plane UI and releases every browser
     // context. Use the guest WebContents API so reload stays scoped to the page.
@@ -255,6 +258,37 @@ function optionalString(value, maxLength) {
 
 function browserGuestError(code) {
   return Object.assign(new Error(code), { code });
+}
+
+async function capturePageScreenshot(entry, params) {
+  if (typeof entry.guest.capturePage !== "function") throw browserGuestError("BROWSER_OPERATION_UNSUPPORTED");
+  const input = params && typeof params === "object" ? params : {};
+  const format = input.format === undefined ? "png" : input.format;
+  if (format !== "png" && format !== "jpeg") throw browserGuestError("BROWSER_OPERATION_UNSUPPORTED");
+  const clip = input.clip && typeof input.clip === "object" ? input.clip : undefined;
+  const rect = clip
+    ? {
+      x: Math.max(0, Math.floor(Number(clip.x) || 0)),
+      y: Math.max(0, Math.floor(Number(clip.y) || 0)),
+      width: Math.max(1, Math.ceil(Number(clip.width) || 1)),
+      height: Math.max(1, Math.ceil(Number(clip.height) || 1)),
+    }
+    : undefined;
+  const captured = await entry.guest.capturePage(rect);
+  if (!captured || typeof captured.isEmpty !== "function" || captured.isEmpty()) {
+    throw browserGuestError("BROWSER_CDP_ERROR");
+  }
+  const scale = clip ? Number(clip.scale) : Number.NaN;
+  const image = Number.isFinite(scale) && scale > 0 && scale !== 1 && typeof captured.resize === "function"
+    ? captured.resize({
+      width: Math.max(1, Math.round(rect.width * scale)),
+      height: Math.max(1, Math.round(rect.height * scale)),
+      quality: "best",
+    })
+    : captured;
+  const quality = Math.max(0, Math.min(100, Math.round(Number(input.quality ?? 100)) || 100));
+  const data = format === "jpeg" ? image.toJPEG(quality) : image.toPNG();
+  return { data: data.toString("base64") };
 }
 
 module.exports = { DesktopBrowserGuestRegistry };

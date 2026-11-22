@@ -11,7 +11,8 @@ test("the embedded browser accepts page-profile CDP domains and the Emulation na
   for (const method of ["Page.navigate", "Runtime.evaluate", "DOM.getDocument", "Accessibility.getFullAXTree", "Input.dispatchMouseEvent", "Page.captureScreenshot", "Emulation.setDeviceMetricsOverride", "Emulation.setUserAgentOverride"]) {
     assert.equal(assertEmbeddedBrowserCdpMethod(method), method);
   }
-  assert.equal(assertEmbeddedBrowserCdpMethod("Network.enable", { adapterOnly: true }), "Network.enable");
+  assert.equal(assertEmbeddedBrowserCdpMethod("Network.enable"), "Network.enable");
+  assert.equal(assertEmbeddedBrowserCdpMethod("Runtime.releaseObject"), "Runtime.releaseObject");
   assert.equal(embeddedBrowserCdpMethodKind("Page.navigate"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Runtime.evaluate"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Accessibility.getFullAXTree"), "read");
@@ -20,7 +21,7 @@ test("the embedded browser accepts page-profile CDP domains and the Emulation na
 });
 
 test("the embedded browser rejects browser-level, target, and malformed CDP methods", () => {
-  for (const method of ["Browser.getVersion", "Target.attachToTarget", "Target.createTarget", "SystemInfo.getInfo", "Storage.getCookies", "Network.enable", "Page", "Page.navigate\nRuntime.evaluate", ""]) {
+  for (const method of ["Browser.getVersion", "Target.attachToTarget", "Target.createTarget", "SystemInfo.getInfo", "Storage.getCookies", "Page", "Page.navigate\nRuntime.evaluate", ""]) {
     assert.throws(() => assertEmbeddedBrowserCdpMethod(method), { code: "BROWSER_OPERATION_UNSUPPORTED" });
   }
   assert.equal(supportsEmbeddedBrowserCdpEvent("Target.targetCreated"), false);

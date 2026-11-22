@@ -1,6 +1,17 @@
 import { z } from "zod";
 
-export const EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION = "2026-11-22";
+// Control protocol version negotiated in control.hello/ready. It may grow
+// optional fields, so peers must gate features by this version.
+export const EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION = "2026-11-23";
+// Wire framing version carried by OPEN_OK. It is frozen because older desktops
+// decode OPEN_OK with a literal schema before they can send control.hello.
+export const EMBEDDED_BROWSER_CHANNEL_FRAMING_PROTOCOL_VERSION = "2026-11-22";
+export const EMBEDDED_BROWSER_TAB_ORIGIN_MIN_PROTOCOL_VERSION = "2026-11-23";
+export function supportsEmbeddedBrowserTabOrigin(protocolVersion: unknown) {
+  return typeof protocolVersion === "string"
+    && /^\d{4}-\d{2}-\d{2}$/.test(protocolVersion)
+    && protocolVersion >= EMBEDDED_BROWSER_TAB_ORIGIN_MIN_PROTOCOL_VERSION;
+}
 // Browser-level Target CDP is exposed through /json/version and is a separate
 // sub-protocol from the channel framing and electron-page-cdp method profile.
 export const EMBEDDED_BROWSER_TARGET_CDP_PROFILE = "embedded-browser-target-cdp";
@@ -74,7 +85,7 @@ export type EmbeddedBrowserStreamOpen = z.infer<typeof EmbeddedBrowserStreamOpen
 
 export const EmbeddedBrowserStreamOpenOkSchema = z.object({
   streamKind: z.literal("control"),
-  protocolVersion: z.literal(EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION),
+  protocolVersion: z.literal(EMBEDDED_BROWSER_CHANNEL_FRAMING_PROTOCOL_VERSION),
 }).strict();
 export type EmbeddedBrowserStreamOpenOk = z.infer<typeof EmbeddedBrowserStreamOpenOkSchema>;
 
@@ -111,7 +122,7 @@ export function decodeEmbeddedBrowserStreamOpen(payload: Uint8Array): EmbeddedBr
 export function encodeEmbeddedBrowserStreamOpenOk(): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(EmbeddedBrowserStreamOpenOkSchema.parse({
     streamKind: "control",
-    protocolVersion: EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
+    protocolVersion: EMBEDDED_BROWSER_CHANNEL_FRAMING_PROTOCOL_VERSION,
   })));
 }
 
@@ -129,17 +140,17 @@ export function decodeEmbeddedBrowserChannelError(payload: Uint8Array): Embedded
 
 export const EMBEDDED_BROWSER_CDP_PROFILE = "electron-page-cdp" as const;
 export type EmbeddedBrowserCdpProfile = typeof EMBEDDED_BROWSER_CDP_PROFILE;
-export const EmbeddedBrowserCdpMethodKindSchema = z.enum(["read", "page-write", "adapter-only"]);
+export const EmbeddedBrowserCdpMethodKindSchema = z.enum(["read", "page-write", "session"]);
 export type EmbeddedBrowserCdpMethodKind = z.infer<typeof EmbeddedBrowserCdpMethodKindSchema>;
 
 export const EMBEDDED_BROWSER_CDP_METHODS = Object.freeze({
-  "Accessibility.enable": "adapter-only",
-  "Accessibility.disable": "adapter-only",
+  "Accessibility.enable": "session",
+  "Accessibility.disable": "session",
   "Accessibility.getFullAXTree": "read",
   "Accessibility.getPartialAXTree": "read",
   "Accessibility.getRootAXNode": "read",
-  "Console.enable": "adapter-only",
-  "Console.disable": "adapter-only",
+  "Console.enable": "session",
+  "Console.disable": "session",
   "DOM.getDocument": "read",
   "DOM.describeNode": "read",
   "DOM.resolveNode": "read",
@@ -150,21 +161,21 @@ export const EMBEDDED_BROWSER_CDP_METHODS = Object.freeze({
   "DOM.querySelectorAll": "read",
   "DOM.getAttributes": "read",
   "DOM.getOuterHTML": "read",
-  "DOMSnapshot.enable": "adapter-only",
-  "DOMSnapshot.disable": "adapter-only",
+  "DOMSnapshot.enable": "session",
+  "DOMSnapshot.disable": "session",
   "DOMSnapshot.captureSnapshot": "read",
   "Input.dispatchMouseEvent": "page-write",
   "Input.dispatchKeyEvent": "page-write",
   "Input.dispatchTouchEvent": "page-write",
   "Input.insertText": "page-write",
-  "Log.enable": "adapter-only",
-  "Log.disable": "adapter-only",
-  "Network.enable": "adapter-only",
-  "Network.disable": "adapter-only",
+  "Log.enable": "session",
+  "Log.disable": "session",
+  "Network.enable": "session",
+  "Network.disable": "session",
   "Network.getResponseBody": "read",
   "Network.getRequestPostData": "read",
-  "Page.enable": "adapter-only",
-  "Page.disable": "adapter-only",
+  "Page.enable": "session",
+  "Page.disable": "session",
   "Page.getNavigationHistory": "read",
   "Page.getFrameTree": "read",
   "Page.getLayoutMetrics": "read",
@@ -172,12 +183,13 @@ export const EMBEDDED_BROWSER_CDP_METHODS = Object.freeze({
   "Page.reload": "page-write",
   "Page.stopLoading": "page-write",
   "Page.captureScreenshot": "read",
-  "Runtime.enable": "adapter-only",
-  "Runtime.disable": "adapter-only",
+  "Runtime.enable": "session",
+  "Runtime.disable": "session",
   "Runtime.evaluate": "page-write",
   "Runtime.callFunctionOn": "page-write",
   "Runtime.getProperties": "read",
-  "Runtime.releaseObject": "adapter-only",
+  "Runtime.releaseObject": "session",
+  "Runtime.runIfWaitingForDebugger": "session",
   "Schema.getDomains": "read",
   "Emulation.*": "page-write",
 } satisfies Record<string, EmbeddedBrowserCdpMethodKind>);
@@ -211,10 +223,10 @@ export function embeddedBrowserCdpMethodKind(method: string): EmbeddedBrowserCdp
   return methods[method] ?? methods[`${method.slice(0, method.indexOf("."))}.*`];
 }
 
-export function assertEmbeddedBrowserCdpMethod(method: unknown, options: { adapterOnly?: boolean } = {}): string {
+export function assertEmbeddedBrowserCdpMethod(method: unknown): string {
   const normalized = typeof method === "string" ? method.trim() : "";
   const kind = embeddedBrowserCdpMethodKind(normalized);
-  if (!kind || (kind === "adapter-only" && !options.adapterOnly)) throw embeddedBrowserCdpOperationUnsupported();
+  if (!kind) throw embeddedBrowserCdpOperationUnsupported();
   return normalized;
 }
 
@@ -233,6 +245,7 @@ export const EmbeddedBrowserCdpSessionIdSchema = z.string().trim().min(1).max(24
 export type EmbeddedBrowserCdpSessionId = z.infer<typeof EmbeddedBrowserCdpSessionIdSchema>;
 
 export const EMBEDDED_BROWSER_TARGET_CDP_METHODS = Object.freeze([
+  "Browser.getVersion",
   "Target.getTargets",
   "Target.getTargetInfo",
   "Target.getBrowserContexts",
@@ -241,10 +254,12 @@ export const EMBEDDED_BROWSER_TARGET_CDP_METHODS = Object.freeze([
   "Target.closeTarget",
   "Target.createTarget",
   "Target.setDiscoverTargets",
+  "Target.setAutoAttach",
 ] as const);
 export type EmbeddedBrowserTargetCdpMethod = (typeof EMBEDDED_BROWSER_TARGET_CDP_METHODS)[number];
 
 export const EMBEDDED_BROWSER_TARGET_CDP_EVENTS = Object.freeze([
+  "Target.attachedToTarget",
   "Target.targetCreated",
   "Target.targetDestroyed",
   "Target.targetInfoChanged",
@@ -348,11 +363,82 @@ export type EmbeddedBrowserTargetSetDiscoverTargetsParams = z.infer<typeof Embed
 export const EmbeddedBrowserTargetSetDiscoverTargetsResultSchema = z.object({}).strip();
 export type EmbeddedBrowserTargetSetDiscoverTargetsResult = z.infer<typeof EmbeddedBrowserTargetSetDiscoverTargetsResultSchema>;
 
+export const EmbeddedBrowserTargetFilterSchema = z.object({
+  type: z.string().trim().min(1).max(120).optional(),
+  exclude: z.boolean().optional(),
+}).strip();
+export type EmbeddedBrowserTargetFilter = z.infer<typeof EmbeddedBrowserTargetFilterSchema>;
+
+export const EmbeddedBrowserTargetSetAutoAttachParamsSchema = z.object({
+  autoAttach: z.boolean(),
+  waitForDebuggerOnStart: z.boolean().default(false),
+  flatten: z.boolean().default(true),
+  filter: z.array(EmbeddedBrowserTargetFilterSchema).max(32).optional(),
+}).strip().superRefine((value, context) => {
+  if (value.autoAttach && value.flatten !== true) {
+    context.addIssue({ code: "custom", path: ["flatten"], message: "Target.setAutoAttach only supports flatten=true." });
+  }
+});
+export type EmbeddedBrowserTargetSetAutoAttachParams = z.infer<typeof EmbeddedBrowserTargetSetAutoAttachParamsSchema>;
+export const EmbeddedBrowserTargetSetAutoAttachResultSchema = z.object({}).strip();
+export type EmbeddedBrowserTargetSetAutoAttachResult = z.infer<typeof EmbeddedBrowserTargetSetAutoAttachResultSchema>;
+
+const EMBEDDED_BROWSER_EMULATION_PROTOCOL_COMMANDS = Object.freeze([
+  "clearDeviceMetricsOverride",
+  "setDeviceMetricsOverride",
+  "setEmulatedMedia",
+  "setEmulatedVisionDeficiency",
+  "setFocusEmulationEnabled",
+  "setScriptExecutionDisabled",
+  "setTouchEmulationEnabled",
+  "setUserAgentOverride",
+]);
+
+export function embeddedBrowserCdpProtocolDocument() {
+  const commands = new Map<string, Set<string>>();
+  const events = new Map<string, Set<string>>();
+  const add = (target: Map<string, Set<string>>, method: string) => {
+    const separator = method.indexOf(".");
+    if (separator <= 0) return;
+    const domain = method.slice(0, separator);
+    const name = method.slice(separator + 1);
+    const names = target.get(domain) ?? new Set<string>();
+    names.add(name);
+    target.set(domain, names);
+  };
+  for (const method of Object.keys(EMBEDDED_BROWSER_CDP_METHODS)) {
+    if (!method.endsWith(".*")) add(commands, method);
+  }
+  for (const command of EMBEDDED_BROWSER_EMULATION_PROTOCOL_COMMANDS) add(commands, `Emulation.${command}`);
+  for (const method of EMBEDDED_BROWSER_TARGET_CDP_METHODS) add(commands, method);
+  for (const method of EMBEDDED_BROWSER_CDP_EVENTS) add(events, method);
+  for (const method of EMBEDDED_BROWSER_TARGET_CDP_EVENTS) add(events, method);
+  const domains = [...new Set([...commands.keys(), ...events.keys()])].sort().map((domain) => ({
+    domain,
+    ...(commands.has(domain) ? { commands: [...commands.get(domain)!].sort().map((name) => ({ name })) } : {}),
+    ...(events.has(domain) ? { events: [...events.get(domain)!].sort().map((name) => ({ name })) } : {}),
+  }));
+  return {
+    version: { major: "1", minor: "3" },
+    domains,
+  };
+}
+
 export const EmbeddedBrowserTargetCreatedEventSchema = z.object({
   method: z.literal("Target.targetCreated"),
   params: z.object({ targetInfo: EmbeddedBrowserTargetInfoSchema }).strip(),
 }).strip();
 export type EmbeddedBrowserTargetCreatedEvent = z.infer<typeof EmbeddedBrowserTargetCreatedEventSchema>;
+
+export const EmbeddedBrowserTargetAttachedToTargetEventSchema = z.object({
+  method: z.literal("Target.attachedToTarget"),
+  params: z.object({
+    sessionId: EmbeddedBrowserCdpSessionIdSchema,
+    targetInfo: EmbeddedBrowserTargetInfoSchema,
+    waitingForDebugger: z.boolean().default(false),
+  }).strip(),
+}).strip();
+export type EmbeddedBrowserTargetAttachedToTargetEvent = z.infer<typeof EmbeddedBrowserTargetAttachedToTargetEventSchema>;
 
 export const EmbeddedBrowserTargetInfoChangedEventSchema = z.object({
   method: z.literal("Target.targetInfoChanged"),
@@ -376,6 +462,7 @@ export const EmbeddedBrowserTargetDetachedFromTargetEventSchema = z.object({
 export type EmbeddedBrowserTargetDetachedFromTargetEvent = z.infer<typeof EmbeddedBrowserTargetDetachedFromTargetEventSchema>;
 
 export const EmbeddedBrowserTargetCdpEventSchema = z.discriminatedUnion("method", [
+  EmbeddedBrowserTargetAttachedToTargetEventSchema,
   EmbeddedBrowserTargetCreatedEventSchema,
   EmbeddedBrowserTargetInfoChangedEventSchema,
   EmbeddedBrowserTargetDestroyedEventSchema,
@@ -515,6 +602,16 @@ export const EmbeddedBrowserSourceSchema = z.object({
 }).strip().superRefine(validateEmbeddedBrowserPageHostCapabilities);
 export type EmbeddedBrowserSource = z.infer<typeof EmbeddedBrowserSourceSchema>;
 
+// The desktop host owns the embedded Chromium process, so it is the authority
+// for the browser identity exposed through CDP /json/version.
+export const EmbeddedBrowserCdpIdentitySchema = z.object({
+  chromeVersion: z.string().trim().min(1).max(80),
+  userAgent: z.string().trim().min(1).max(1024),
+  v8Version: z.string().trim().min(1).max(120),
+  webkitVersion: z.string().trim().min(1).max(160),
+}).strip();
+export type EmbeddedBrowserCdpIdentity = z.infer<typeof EmbeddedBrowserCdpIdentitySchema>;
+
 export const EmbeddedBrowserSourceRegistrationRequestSchema = z.object({
   displayName: z.string().trim().min(1).max(160),
   hostLabel: z.string().trim().min(1).max(160).optional(),
@@ -522,6 +619,7 @@ export const EmbeddedBrowserSourceRegistrationRequestSchema = z.object({
   rendererHostBinding: z.string().trim().min(1).max(240).optional(),
   pageHost: EmbeddedBrowserPageHostSchema,
   pageHostCapabilities: EmbeddedBrowserPageHostCapabilitiesSchema.default(defaultPageHostCapabilities()),
+  cdpIdentity: EmbeddedBrowserCdpIdentitySchema.optional(),
 }).strict().superRefine(validateEmbeddedBrowserPageHostCapabilities);
 export type EmbeddedBrowserSourceRegistrationRequest = z.infer<typeof EmbeddedBrowserSourceRegistrationRequestSchema>;
 
@@ -892,6 +990,7 @@ export const EmbeddedBrowserTabsOpenParamsSchema = z.object({
   generation: z.number().int().nonnegative(),
   url: z.string().trim().min(1).max(4_096),
   title: z.string().trim().max(512).optional(),
+  requesterSessionRef: z.string().trim().min(1).max(240).optional(),
 }).strict();
 export type EmbeddedBrowserTabsOpenParams = z.infer<typeof EmbeddedBrowserTabsOpenParamsSchema>;
 

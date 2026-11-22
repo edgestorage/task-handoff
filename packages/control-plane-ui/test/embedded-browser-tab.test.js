@@ -93,8 +93,9 @@ test("browser popup requests create a sibling browser tab with its initial URL",
   const sessions = source("instance-detail/useActiveInstanceSessions.ts");
   const layer = source("instance-detail/EmbeddedBrowserSurfaceLayer.vue");
   const browser = source("instance-detail/EmbeddedBrowserTab.vue");
-  assert.match(workbench, /onBrowserNewTab\?\.\(\(\{ instanceId: sourceInstanceId, url, title, creationRef \}\) =>[\s\S]*?openBrowserTab\(instanceId, url, \{ title, creationRef \}\)/);
-  assert.match(sessions, /function openBrowserTab\(instanceId: string, initialUrl\?: string, options: \{ title\?: string; creationRef\?: string \} = \{\}\)/);
+  assert.match(workbench, /onBrowserNewTab\?\.\(\(\{ instanceId: sourceInstanceId, url, title, creationRef, requesterSessionRef \}\) =>/);
+  assert.match(workbench, /openBrowserTab\(instanceId, url, \{ title, creationRef \}\)/);
+  assert.match(sessions, /function openBrowserTab\(\s*instanceId: string,\s*initialUrl\?: string,\s*options: \{ title\?: string; creationRef\?: string; activate\?: boolean \} = \{\},\s*\)/);
   assert.match(sessions, /input\.creationRef \? \{ creationRef: input\.creationRef \} : \{\}/);
   assert.match(sessions, /status: initialUrl \? "loading" : "running"/);
   assert.match(sessions, /input\.initialUrl \? \{ initialUrl: input\.initialUrl \} : \{\}/);
@@ -107,6 +108,21 @@ test("browser popup requests create a sibling browser tab with its initial URL",
   assert.match(browser, /function handleGuestDomReady\(\)/);
   assert.match(browser, /if \(!removeGuestListeners\) bindGuest\(\)/);
   assert.match(browser, /guest\.value\?\.loadURL\(url\)/);
+});
+
+test("Agent-created pages follow the requester Session without stealing the current view", () => {
+  const workbench = source("ControlPlaneWorkbench.vue");
+  const sidebar = source("story/useStoryResourceSidebar.ts");
+  const sessions = source("instance-detail/useActiveInstanceSessions.ts");
+  const bridge = fs.readFileSync(new URL("../src/lib/desktopBridge.ts", import.meta.url), "utf8");
+  assert.match(workbench, /requesterSessionRef/);
+  assert.match(workbench, /storySessionSelectionForAiSession\(instanceId, requesterSessionRef, boardInstancesWithAiSessions\.value\)/);
+  assert.match(workbench, /storyResourceSidebar\.openBrowserForAiSession\(instanceId, requesterSessionRef, url, \{ title, creationRef \}\)/);
+  assert.match(workbench, /openBrowserTab\(instanceId, url, \{ title, creationRef, activate: false \}\)/);
+  assert.match(sidebar, /function openBrowserForAiSession\(/);
+  assert.match(sidebar, /if \(resourceContextKey === contextKey\.value\) select\(resource\)/);
+  assert.match(sessions, /if \(options\.activate === false\) return;/);
+  assert.match(bridge, /requesterSessionRef\?: string/);
 });
 
 test("browser tabs publish page title and loading state", () => {

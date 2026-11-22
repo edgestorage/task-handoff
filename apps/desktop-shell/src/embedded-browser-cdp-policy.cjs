@@ -9,10 +9,10 @@ function embeddedBrowserCdpMethodKind(value) {
   return ALLOWED_CDP_METHODS.get(method) ?? ALLOWED_CDP_METHODS.get(`${method.slice(0, method.indexOf("."))}.*`);
 }
 
-function assertEmbeddedBrowserCdpMethod(value, options = {}) {
+function assertEmbeddedBrowserCdpMethod(value) {
   const method = typeof value === "string" ? value.trim() : "";
   const kind = embeddedBrowserCdpMethodKind(method);
-  if (!kind || (kind === "adapter-only" && options.adapterOnly !== true)) {
+  if (!kind) {
     throw Object.assign(new Error("BROWSER_OPERATION_UNSUPPORTED"), { code: "BROWSER_OPERATION_UNSUPPORTED" });
   }
   return method;

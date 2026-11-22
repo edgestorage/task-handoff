@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   EMBEDDED_BROWSER_CDP_EVENTS,
   EMBEDDED_BROWSER_CDP_METHODS,
+  EMBEDDED_BROWSER_CHANNEL_FRAMING_PROTOCOL_VERSION,
   EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES,
   EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
   EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES,
@@ -41,10 +42,13 @@ import {
   EmbeddedBrowserStreamOpenOkSchema,
   EmbeddedBrowserTargetAttachToTargetParamsSchema,
   EmbeddedBrowserTargetAttachToTargetResultSchema,
+  EmbeddedBrowserTargetAttachedToTargetEventSchema,
   EmbeddedBrowserTargetCloseTargetParamsSchema,
   EmbeddedBrowserTargetCloseTargetResultSchema,
   EmbeddedBrowserTargetCreateTargetParamsSchema,
   EmbeddedBrowserTargetCreateTargetResultSchema,
+  EmbeddedBrowserTargetSetAutoAttachParamsSchema,
+  EmbeddedBrowserTargetSetAutoAttachResultSchema,
   EmbeddedBrowserTargetDetachedFromTargetEventSchema,
   EmbeddedBrowserTargetDetachFromTargetParamsSchema,
   EmbeddedBrowserTargetGetBrowserContextsResultSchema,
@@ -57,6 +61,7 @@ import {
   EmbeddedBrowserTargetDestroyedEventSchema,
   EmbeddedBrowserTargetInfoChangedEventSchema,
   embeddedBrowserTargetInfoFromPage,
+  embeddedBrowserCdpProtocolDocument,
   encodeEmbeddedBrowserChannelError,
   encodeEmbeddedBrowserControlMessage,
   encodeEmbeddedBrowserFrame,
@@ -178,6 +183,7 @@ const fixture = `${JSON.stringify({
       protocolVersion: EMBEDDED_BROWSER_TARGET_CDP_PROTOCOL_VERSION,
       methods: EMBEDDED_BROWSER_TARGET_CDP_METHODS,
       events: EMBEDDED_BROWSER_TARGET_CDP_EVENTS,
+      protocolDocument: embeddedBrowserCdpProtocolDocument(),
     },
   },
   frames: {
@@ -187,7 +193,7 @@ const fixture = `${JSON.stringify({
       streamId: 1,
       payload: new TextEncoder().encode(JSON.stringify(EmbeddedBrowserStreamOpenOkSchema.parse({
         streamKind: "control",
-        protocolVersion: EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
+        protocolVersion: EMBEDDED_BROWSER_CHANNEL_FRAMING_PROTOCOL_VERSION,
       }))),
     })),
     dataStream3: hex(dataFrame),
@@ -206,7 +212,7 @@ const fixture = `${JSON.stringify({
     streamOpen: { streamKind: "control" },
     openOk: EmbeddedBrowserStreamOpenOkSchema.parse({
       streamKind: "control",
-      protocolVersion: EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
+      protocolVersion: EMBEDDED_BROWSER_CHANNEL_FRAMING_PROTOCOL_VERSION,
     }),
     hello: EmbeddedBrowserControlHelloSchema.parse({
       protocolVersion: EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
@@ -344,7 +350,18 @@ const fixture = `${JSON.stringify({
     targetSetDiscoverParams: EmbeddedBrowserTargetSetDiscoverTargetsParamsSchema.parse({
       discover: true,
     }),
+    targetSetAutoAttachParams: EmbeddedBrowserTargetSetAutoAttachParamsSchema.parse({
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+      filter: [{ type: "page", exclude: true }, {}],
+    }),
+    targetSetAutoAttachResult: EmbeddedBrowserTargetSetAutoAttachResultSchema.parse({}),
     targetUnsupportedMethod: "Target.createBrowserContext",
+    targetAttachedEvent: EmbeddedBrowserTargetAttachedToTargetEventSchema.parse({
+      method: "Target.attachedToTarget",
+      params: { sessionId: "target_session_1", targetInfo: rendererTargetInfo, waitingForDebugger: false },
+    }),
     targetCreatedEvent: EmbeddedBrowserTargetCreatedEventSchema.parse({
       method: "Target.targetCreated",
       params: { targetInfo: mainTargetInfo },

@@ -17476,6 +17476,12 @@ mod tests {
                 renderer_host_binding: None,
                 page_host: EmbeddedBrowserPageHost::MainPagePool,
                 page_host_capabilities: EmbeddedBrowserPageHostCapabilities::default(),
+                cdp_identity: Some(controlled_instance_protocol::EmbeddedBrowserCdpIdentity {
+                    chrome_version: "150.0.7871.47".to_string(),
+                    user_agent: "Mozilla/5.0 Chrome/150.0.7871.47 Safari/537.36".to_string(),
+                    v8_version: "15.0.245.15-electron.0".to_string(),
+                    webkit_version: "537.36".to_string(),
+                }),
             },
             pages,
         )
@@ -17516,6 +17522,7 @@ mod tests {
                 page_host_capabilities: EmbeddedBrowserPageHostCapabilities::for_page_host(
                     EmbeddedBrowserPageHost::MainPagePool,
                 ),
+                cdp_identity: None,
             },
             pages,
         )
@@ -24077,8 +24084,14 @@ mod tests {
         let version = get_json(&app, &format!("/json/version?token={token}")).await;
         assert_eq!(version.status(), StatusCode::OK);
         let version = body_json(version).await;
-        assert_eq!(version["Browser"], "TaskHandoff/EmbeddedBrowser");
+        assert_eq!(version["Browser"], "Chrome/150.0.7871.47");
         assert_eq!(version["Protocol-Version"], "1.3");
+        assert_eq!(
+            version["User-Agent"],
+            "Mozilla/5.0 Chrome/150.0.7871.47 Safari/537.36"
+        );
+        assert_eq!(version["V8-Version"], "15.0.245.15-electron.0");
+        assert_eq!(version["WebKit-Version"], "537.36");
         assert!(version["webSocketDebuggerUrl"]
             .as_str()
             .is_some_and(|url| url.starts_with("ws://127.0.0.1:0/devtools/browser/")));
@@ -24091,6 +24104,13 @@ mod tests {
         assert!(targets
             .iter()
             .all(|target| target["browserContextId"] == source.source_ref));
+
+        let protocol = get_json(&app, "/json/protocol").await;
+        assert_eq!(protocol.status(), StatusCode::OK);
+        let protocol = body_json(protocol).await;
+        assert!(protocol["domains"]
+            .as_array()
+            .is_some_and(|domains| domains.iter().any(|domain| domain["domain"] == "Browser")));
 
         let capabilities = get_json(&app, "/api/instance/capabilities").await;
         assert_eq!(capabilities.status(), StatusCode::OK);
@@ -24163,7 +24183,7 @@ mod tests {
             .issue_cdp_token("ses_0000000000001")
             .expect("token");
         let registry_epoch = state.browser_control.registry_epoch();
-        let app = router(state);
+        let app = router(state.clone());
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind browser CDP");
@@ -24212,6 +24232,74 @@ mod tests {
             source.source_ref
         );
         assert_eq!(targets["result"]["targetInfos"][0]["attached"], false);
+
+        state
+            .browser_control
+            .attach_tab("ses_0000000000001", "browser_tab_a")
+            .expect("auto attach target lease");
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({ "id": 8, "method": "Browser.getVersion" })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("browser version");
+        let browser_version = browser_cdp_response(&mut client, 8).await;
+        assert_eq!(
+            browser_version["result"]["product"],
+            "TaskHandoff/EmbeddedBrowser"
+        );
+        assert_eq!(browser_version["result"]["protocolVersion"], "1.3");
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "id": 9,
+                    "method": "Target.setAutoAttach",
+                    "params": {
+                        "autoAttach": true,
+                        "waitForDebuggerOnStart": true,
+                        "flatten": true,
+                        "filter": [{}]
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("auto attach");
+        let auto_attached = browser_cdp_response(&mut client, 9).await;
+        assert!(auto_attached["result"].is_object());
+        let attached = next_browser_cdp_json(&mut client).await;
+        assert_eq!(attached["method"], "Target.attachedToTarget");
+        assert_eq!(
+            attached["params"]["targetInfo"]["targetId"],
+            "browser_tab_a"
+        );
+        assert_eq!(attached["params"]["targetInfo"]["attached"], true);
+        assert_eq!(attached["params"]["waitingForDebugger"], true);
+        let attached_session = attached["params"]["sessionId"]
+            .as_str()
+            .expect("attached session")
+            .to_string();
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "id": 10,
+                    "sessionId": attached_session,
+                    "method": "Runtime.runIfWaitingForDebugger"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("resume waiting target");
+        let resumed = browser_cdp_response(&mut client, 10).await;
+        assert!(resumed["result"].is_object());
+        assert_eq!(resumed["sessionId"], attached_session);
 
         client
             .send(tokio_tungstenite::tungstenite::Message::Text(

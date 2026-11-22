@@ -10,6 +10,7 @@ import {
   type EmbeddedBrowserSource,
 } from "@task-handoff/protocol/embedded-browser-control";
 import { BrowserControlError, BrowserControlService } from "../src/web/browser-control.ts";
+import { embeddedBrowserTabsOpenParamsForPeer } from "../src/web/browser-control-tab-compat.ts";
 
 test("browser control advertises target CDP support", () => {
   assert.equal(new BrowserControlService().capabilities().targetCdp, true);
@@ -91,14 +92,24 @@ function errorCode(run: () => unknown) {
 }
 
 function recordingDispatcher() {
-  const calls: Array<{ creationRef: string; sourceRef: string; generation: number }> = [];
+  const calls: Array<{
+    creationRef: string;
+    sourceRef: string;
+    generation: number;
+    requesterSessionRef: string;
+  }> = [];
   return {
     calls,
     dispatcher: async (
       creation: { creationRef: string },
-      target: { sourceRef: string; generation: number },
+      target: { sourceRef: string; generation: number; requesterSessionRef: string },
     ) => {
-      calls.push({ creationRef: creation.creationRef, sourceRef: target.sourceRef, generation: target.generation });
+      calls.push({
+        creationRef: creation.creationRef,
+        sourceRef: target.sourceRef,
+        generation: target.generation,
+        requesterSessionRef: target.requesterSessionRef,
+      });
     },
   };
 }
@@ -219,7 +230,7 @@ test("a single creation candidate is bound and dispatched without an approval", 
   assert.equal(creation.state, "creating");
   assert.equal(service.defaultCreationContext()?.sourceRef, source.sourceRef);
   assert.equal(service.creationContextRevisionValue(), 1);
-  assert.deepEqual(recorder.calls, [{ creationRef: creation.creationRef, sourceRef: source.sourceRef, generation: source.generation }]);
+  assert.deepEqual(recorder.calls, [{ creationRef: creation.creationRef, sourceRef: source.sourceRef, generation: source.generation, requesterSessionRef: "session_one" }]);
 
   const waiting = service.waitForCreation("session_one", creation.creationRef, 5_000);
   syncSource(service, source, [page(source, "browser_tab_created")]);
@@ -262,7 +273,7 @@ test("multiple creation candidates stay pending until a panel claims itself", ()
   assert.equal(claimed.browserContextId, first.sourceRef);
   assert.equal(claimed.revision, 1);
   assert.equal(service.getCreation("session_one", creation.creationRef).state, "creating");
-  assert.deepEqual(recorder.calls, [{ creationRef: creation.creationRef, sourceRef: first.sourceRef, generation: first.generation }]);
+  assert.deepEqual(recorder.calls, [{ creationRef: creation.creationRef, sourceRef: first.sourceRef, generation: first.generation, requesterSessionRef: "session_one" }]);
 
   service.claimDefaultContext({ sourceRef: second.sourceRef, expectedRevision: 1, panelId: "panel_b", ownerRef: "user_b" });
   assert.equal(service.getCreation("session_one", creation.creationRef).state, "creating");
@@ -457,4 +468,19 @@ test("browser context and target projections reuse sourceRef and tabRef", () => 
     ["browser_tab_b", second.sourceRef, false],
   ]);
   assert.equal(service.targetInfo("browser_tab_b").targetInfo.browserContextId, second.sourceRef);
+});
+
+test("tabs.open keeps the legacy wire shape for a pre-origin desktop", () => {
+  const params = {
+    creationRef: "bcr_one",
+    sourceRef: "bsr_one",
+    generation: 2,
+    url: "https://example.com/",
+    requesterSessionRef: "session_one",
+  };
+  assert.equal("requesterSessionRef" in embeddedBrowserTabsOpenParamsForPeer(params, "2026-11-22"), false);
+  assert.equal(
+    embeddedBrowserTabsOpenParamsForPeer(params, "2026-11-23").requesterSessionRef,
+    "session_one",
+  );
 });

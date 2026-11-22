@@ -27,6 +27,7 @@ import {
   type EmbeddedBrowserTargetDetachParams,
 } from "@task-handoff/protocol/embedded-browser-control";
 import { BrowserControlError, type BrowserControlService } from "./browser-control";
+import { embeddedBrowserTabsOpenParamsForPeer } from "./browser-control-tab-compat";
 
 const CONTROL_STREAM_ID = 1;
 const RELAY_RESPONSE_TIMEOUT_MS = EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS;
@@ -66,6 +67,7 @@ type RelayConnection = {
   connectionId: number;
   sourceRef: string;
   generation: number;
+  peerProtocolVersion: string;
   ready: boolean;
   synchronized: boolean;
   syncRequiredSent: boolean;
@@ -157,7 +159,9 @@ export class BrowserControlRelayRegistry {
   }
 
   async tabsOpen(params: EmbeddedBrowserTabsOpenParams) {
-    return this.request(params.sourceRef, params.generation, "tabs.open", params, RELAY_RESPONSE_TIMEOUT_MS);
+    const connection = this.connections.get(params.sourceRef);
+    const wireParams = embeddedBrowserTabsOpenParamsForPeer(params, connection?.peerProtocolVersion);
+    return this.request(params.sourceRef, params.generation, "tabs.open", wireParams, RELAY_RESPONSE_TIMEOUT_MS);
   }
 
   async tabsClose(params: EmbeddedBrowserTabsCloseParams) {
@@ -364,12 +368,12 @@ export class BrowserControlRelayRegistry {
       || source.pageHostCapabilities.crossWindowAdopt !== hello.pageHostCapabilities.crossWindowAdopt) {
       throw new BrowserControlError("BROWSER_OPERATION_UNSUPPORTED", "Browser source capabilities do not match its registration.", 409);
     }
-    state.connection = this.registerConnection(state, hello.sourceRef, hello.generation);
+    state.connection = this.registerConnection(state, hello.sourceRef, hello.generation, hello.protocolVersion);
     this.activateConnection(state.connection);
     return {};
   }
 
-  private registerConnection(state: RelaySocketState, sourceRef: string, generation: number): RelayConnection {
+  private registerConnection(state: RelaySocketState, sourceRef: string, generation: number, peerProtocolVersion: string): RelayConnection {
     const previous = this.connections.get(sourceRef);
     if (previous) {
       this.connections.delete(sourceRef);
@@ -385,6 +389,7 @@ export class BrowserControlRelayRegistry {
       connectionId: ++this.nextConnection,
       sourceRef,
       generation,
+      peerProtocolVersion,
       ready: false,
       synchronized: false,
       syncRequiredSent: false,

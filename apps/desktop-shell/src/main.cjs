@@ -37,6 +37,7 @@ const { installDesktopApplicationMenu } = require("./desktop-application-menu.cj
 const { activateExistingDesktopWindow } = require("./desktop-window-activation.cjs");
 const { createDesktopTray } = require("./desktop-tray.cjs");
 const { createDesktopDockMenu } = require("./desktop-dock-menu.cjs");
+const { embeddedBrowserCdpIdentity } = require("./embedded-browser-runtime.cjs");
 const { createDesktopWindowPreferences } = require("./desktop-window-preferences.cjs");
 const { loadDesktopInstanceDirectory } = require("./desktop-instance-directory.cjs");
 const { createDesktopQuitCoordinator } = require("./desktop-quit-coordinator.cjs");
@@ -1323,6 +1324,45 @@ ipcMain.handle("task-handoff:open-app-window", (_event, url) => {
   return { ok: true };
 });
 
+async function ensureDesktopBrowserAgentControl(event, instanceId, senderUrl) {
+  if (desktopBrowserPageHostState?.pageHost === "main-page-pool") {
+    return { ok: false, code: "BROWSER_PAGE_HOST_UNAVAILABLE" };
+  }
+  try {
+    await desktopBrowserChannelManager.ensureSource({
+      controlPlaneUrl: senderUrl,
+      instanceId,
+      senderId: event.sender.id,
+      host: event.sender,
+      hostLabel: BrowserWindow.fromWebContents(event.sender)?.getTitle?.() || `Desktop window ${event.sender.id}`,
+      pageHost: desktopBrowserPageHostState.pageHost,
+      pageHostCapabilities: desktopBrowserPageHostState.capabilities,
+      cdpIdentity: embeddedBrowserCdpIdentity({ userAgent: app.userAgentFallback }),
+    });
+    const source = desktopBrowserChannelManager.infoFor(event.sender.id, instanceId);
+    return {
+      ok: true,
+      ...(source?.sourceRef ? { sourceRef: source.sourceRef } : {}),
+      ...(source?.ready !== undefined ? { ready: source.ready } : {}),
+    };
+  } catch (error) {
+    logError(`[desktop-shell] embedded browser agent control unavailable instanceId=${instanceId} error=${error instanceof Error ? error.message : String(error)}`);
+    return browserControlFailure(error);
+  }
+}
+
+ipcMain.handle("task-handoff:browser-agent-control-ensure", async (event, instanceId) => {
+  try {
+    const senderUrl = trustedControlPlaneSenderUrl(event.sender);
+    const normalized = String(instanceId || "").trim();
+    if (!normalized || normalized.length > 160) return { ok: false, code: "BROWSER_INSTANCE_ID_INVALID" };
+    return await ensureDesktopBrowserAgentControl(event, normalized, senderUrl);
+  } catch (error) {
+    logError(`[desktop-shell] browser agent control ensure rejected sender=${event.sender.id} error=${error instanceof Error ? error.message : String(error)}`);
+    return browserControlFailure(error);
+  }
+});
+
 ipcMain.handle("task-handoff:browser-context-prepare", async (event, instanceId) => {
   const normalized = String(instanceId || "").trim();
   if (!normalized || normalized.length > 160 || !desktopBrowserContexts) {
@@ -1335,26 +1375,7 @@ ipcMain.handle("task-handoff:browser-context-prepare", async (event, instanceId)
       instanceId: normalized,
       senderId: event.sender.id,
     });
-    let agentControl;
-    if (desktopBrowserPageHostState?.pageHost === "main-page-pool") {
-      agentControl = { ok: false, code: "BROWSER_PAGE_HOST_UNAVAILABLE" };
-    } else {
-      try {
-        await desktopBrowserChannelManager.ensureSource({
-          controlPlaneUrl: senderUrl,
-          instanceId: normalized,
-          senderId: event.sender.id,
-          host: event.sender,
-          hostLabel: BrowserWindow.fromWebContents(event.sender)?.getTitle?.() || `Desktop window ${event.sender.id}`,
-          pageHost: desktopBrowserPageHostState.pageHost,
-          pageHostCapabilities: desktopBrowserPageHostState.capabilities,
-        });
-        agentControl = { ok: true };
-      } catch (error) {
-        logError(`[desktop-shell] embedded browser agent control unavailable instanceId=${normalized} error=${error instanceof Error ? error.message : String(error)}`);
-        agentControl = { ok: false, code: error?.code || "BROWSER_CONTROL_UNSUPPORTED" };
-      }
-    }
+    const agentControl = await ensureDesktopBrowserAgentControl(event, normalized, senderUrl);
     return { ok: true, ...context, agentControl };
   } catch (error) {
     logError(`[desktop-shell] browser context prepare failed instanceId=${normalized} error=${error instanceof Error ? error.message : String(error)}`);
