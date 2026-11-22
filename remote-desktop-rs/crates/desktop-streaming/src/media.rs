@@ -159,17 +159,22 @@ impl MediaControl {
     pub fn set_webrtc_ready(&self, ready: bool) {
         self.webrtc_ready.store(ready, Ordering::SeqCst);
     }
-    /// Fallback can start before WebRTC finishes negotiation. The encoder loop
-    /// still needs a codec budget even though no RTP receiver is attached.
-    pub fn ensure_fallback_format(&self) {
+    /// Pin the fallback envelope before the encoder loop starts. WebRTC may
+    /// never have finished negotiating, and its negotiated ceiling can be
+    /// higher than the fallback clients support, so the fallback profile is the
+    /// authority while this transport is active.
+    pub fn set_fallback_format(
+        &self,
+        codec: crate::codec::VideoCodec,
+        limits: crate::codec::Limits,
+    ) {
         let mut format = self.format.lock().unwrap();
-        if format.is_none() {
-            *format = Some(crate::codec::Format {
-                payload_type: 96,
-                codec: crate::codec::VideoCodec::H264,
-                limits: crate::video::FALLBACK_LIMITS,
-            });
-        }
+        let payload_type = format.map_or(96, |format| format.payload_type);
+        *format = Some(crate::codec::Format {
+            payload_type,
+            codec,
+            limits,
+        });
     }
     pub fn video_codec(&self) -> crate::codec::VideoCodec {
         self.format
@@ -700,7 +705,15 @@ impl MediaPeer {
         let format = crate::codec::Format {
             payload_type: codec.payload_type,
             codec: video_codec,
-            limits,
+            // WebRTC may renegotiate while fallback is active. Keep the
+            // fallback codec envelope pinned so the encoder continues to emit
+            // the level advertised in `fallback.configure`; a lower level is
+            // still a valid subset of the SDP answer.
+            limits: if fallback_active {
+                previous_format.map_or(limits, |previous| previous.limits)
+            } else {
+                limits
+            },
         };
         self.control.pacing.set_codec(video_codec);
         {

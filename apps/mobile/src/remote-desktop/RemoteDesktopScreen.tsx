@@ -13,11 +13,12 @@ import {
   subscribeRemoteDesktopTextInput,
 } from '../../modules/task-handoff-remote-desktop/src';
 import { Icon } from '../components/Icon';
+import { useMobileToast } from '../components/MobileToast';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { diagnosticLog } from '../observability/diagnostic-logs';
 import { subscribeToKeyboardState, type MobileKeyboardState } from '../platform/keyboard';
-import { isRemoteDesktopSourceEndedError, remoteDesktopErrorMessage } from './errors';
+import { isRemoteDesktopSourceEndedError, remoteDesktopClipboardErrorMessage, remoteDesktopErrorMessage } from './errors';
 import {
   DEFAULT_REMOTE_DESKTOP_KEYBOARD_DURATION_MS,
   REMOTE_DESKTOP_KEYBOARD_BAR_HEIGHT,
@@ -56,6 +57,7 @@ function keyboardAnimationEasing(easing: MobileKeyboardState['easing']) {
 export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: string; sessionId?: string }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const toast = useMobileToast();
   const insets = useSafeAreaInsets();
   const viewport = useWindowDimensions();
   const landscape = viewport.width > viewport.height;
@@ -117,6 +119,7 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
   const { snapshot } = remote;
   const snapshotRef = useRef(snapshot);
   const controllerRef = useRef(remote.controller);
+  const clipboardErrorShownRef = useRef<string | undefined>(undefined);
   const capability = remote.capability;
   const rememberedTargetKey = useRef<string | undefined>(undefined);
   const stoppedSessionLink = useRef(false);
@@ -150,6 +153,16 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
     snapshotRef.current = snapshot;
     controllerRef.current = remote.controller;
   }, [remote.controller, snapshot]);
+
+  useEffect(() => {
+    if (!snapshot.clipboardError) {
+      clipboardErrorShownRef.current = undefined;
+      return;
+    }
+    if (clipboardErrorShownRef.current === snapshot.clipboardError.code) return;
+    clipboardErrorShownRef.current = snapshot.clipboardError.code;
+    toast.show({ title: remoteDesktopClipboardErrorMessage(snapshot.clipboardError, t), tone: 'error' });
+  }, [snapshot.clipboardError, t, toast]);
   useEffect(() => subscribeToKeyboardState((state) => {
     setKeyboard(state);
     if (remoteDesktopNativeKeyboardReplacesVirtualSurface(keyboardModeRef.current, state.height, state.visible)) {
@@ -395,8 +408,10 @@ export function RemoteDesktopScreen({ instanceId, sessionId }: { instanceId: str
 
   const renderSettingsButton = (rail: boolean) => <RemoteDesktopSettingsMenu
     capturePrecisionSupported={remoteDesktopSupportsCapturePrecision(capability)}
+    clipboardSupported={capability?.features.clipboard === true}
     onDisconnect={disconnect}
     onSetCapturePrecision={remote.setCapturePrecision}
+    onSetClipboardEnabled={remote.setClipboardEnabled}
     onSetInputEnabled={remote.setInputEnabled}
     onSetFrameRate={remote.setFrameRate}
     onSetResolution={remote.setResolution}

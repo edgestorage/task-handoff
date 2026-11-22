@@ -2518,7 +2518,18 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                     .await?;
             }
         }
-        self.arm_title_generation(&forked_id);
+        let inherited_title = source
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty());
+        if let Some(title) = inherited_title {
+            self.client
+                .rename_session(&forked_id, &forked_directory, title)
+                .await?;
+        } else {
+            self.arm_title_generation(&forked_id);
+        }
         let _ = self
             .reconcile_and_emit_existing(&forked_id, &forked_directory)
             .await;
@@ -5190,7 +5201,8 @@ mod tests {
             endpoint,
             roots: vec![root.path().to_path_buf()],
         }));
-        let source = opencode_session("s1", &source_directory.to_string_lossy());
+        let mut source = opencode_session("s1", &source_directory.to_string_lossy());
+        source.title = Some("Source title".to_string());
         let enabled_tool = AI_SESSION_AGENT_TOOL_NAMES[0].to_string();
 
         let created = provider
@@ -5233,8 +5245,21 @@ mod tests {
         );
         let permission = requests
             .iter()
-            .find(|request| request.method == "PATCH" && request.path == "/session/forked")
+            .find(|request| {
+                request.method == "PATCH"
+                    && request.path == "/session/forked"
+                    && request.body.get("permission").is_some()
+            })
             .expect("fork permission request");
+        let title = requests
+            .iter()
+            .find(|request| {
+                request.method == "PATCH"
+                    && request.path == "/session/forked"
+                    && request.body.get("title").is_some()
+            })
+            .expect("fork title request");
+        assert_eq!(title.body["title"], "Source title");
         let rules = permission.body["permission"]
             .as_array()
             .expect("permission rules");

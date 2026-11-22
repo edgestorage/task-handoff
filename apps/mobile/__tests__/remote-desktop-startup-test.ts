@@ -1,4 +1,5 @@
 import type { createControlPlaneRemoteDesktopApi } from '@task-handoff/control-plane-client';
+import * as Clipboard from 'expo-clipboard';
 import { RTCPeerConnection, RTCRtpReceiver } from 'react-native-webrtc';
 
 import type {
@@ -19,6 +20,13 @@ jest.mock('react-native-webrtc', () => ({
   RTCPeerConnection: jest.fn(),
   RTCRtpReceiver: { getCapabilities: jest.fn(() => ({ codecs: [] })) },
 }), { virtual: true });
+
+jest.mock('expo-clipboard', () => ({
+  ContentType: { HTML: 'html', PLAIN_TEXT: 'plain-text' },
+  addClipboardListener: jest.fn(() => ({ remove: jest.fn() })),
+  getStringAsync: jest.fn(async () => ''),
+  setStringAsync: jest.fn(async () => true),
+}));
 
 jest.mock('../modules/task-handoff-remote-desktop/src', () => ({
   closeRemoteDesktopDecoder: jest.fn(async () => undefined),
@@ -41,6 +49,9 @@ jest.mock('../src/observability/diagnostic-logs', () => ({
 beforeEach(() => {
   jest.clearAllMocks();
   (RTCRtpReceiver.getCapabilities as jest.Mock).mockReturnValue({ codecs: [] });
+  (Clipboard.addClipboardListener as jest.Mock).mockImplementation(() => ({ remove: jest.fn() }));
+  (Clipboard.getStringAsync as jest.Mock).mockResolvedValue('');
+  (Clipboard.setStringAsync as jest.Mock).mockResolvedValue(true);
 });
 
 type RemoteDesktopApi = ReturnType<typeof createControlPlaneRemoteDesktopApi>;
@@ -197,6 +208,135 @@ test('WebRTC prefers HEVC Main when the instance advertises H265', async () => {
 async function flushMicrotasks() {
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
 }
+
+async function openFallbackController(options: { clipboardSupported?: boolean } = {}) {
+  const current = setup({ p2p: false, turn: false, websocket: true });
+  current.controller.setClipboardSupported(options.clipboardSupported ?? true);
+  await current.controller.start();
+  current.sockets[0].handlers.onOpen?.();
+  current.sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+  const media = current.sockets[1];
+  const control = current.sockets[2];
+  media.handlers.onOpen?.();
+  control.handlers.onOpen?.();
+  control.handlers.onMessage(JSON.stringify({ type: 'fallback.ready' }));
+  await flushMicrotasks();
+  return { ...current, control, media };
+}
+
+function sentMessages(control: OpenedSocket) {
+  return control.send.mock.calls.map(([data]) => JSON.parse(String(data)));
+}
+
+async function enableClipboard(controller: RemoteDesktopController, control: OpenedSocket) {
+  control.handlers.onMessage(JSON.stringify({ type: 'clipboard.enabled', payload: { enabled: true } }));
+  await flushMicrotasks();
+  expect(controller.getSnapshot().clipboardEnabled).toBe(true);
+}
+
+test('mobile clipboard enables automatically only for a supported capability', async () => {
+  const unsupported = await openFallbackController({ clipboardSupported: false });
+  expect(sentMessages(unsupported.control).some((message) => message.type === 'clipboard.enable')).toBe(false);
+  await unsupported.controller.close();
+
+  const supported = await openFallbackController({ clipboardSupported: true });
+  const requests = sentMessages(supported.control).filter((message) => message.type === 'clipboard.enable');
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.payload).toEqual({ enabled: true });
+  expect(supported.controller.getSnapshot().clipboardPending).toBe(true);
+  await enableClipboard(supported.controller, supported.control);
+  expect(Clipboard.addClipboardListener).toHaveBeenCalledTimes(1);
+  await supported.controller.close();
+});
+
+test('mobile clipboard enables when the WebRTC control channel opens', async () => {
+  const { channels } = installFakePeerConnection();
+  const { controller, sockets } = setup({ p2p: true, turn: false, websocket: true });
+  controller.setClipboardSupported(true);
+  await controller.start();
+  sockets[0].handlers.onOpen?.();
+  sockets[0].handlers.onMessage(JSON.stringify({ type: 'ready' }));
+  await flushMicrotasks();
+
+  const control = channels.get('control');
+  expect(control).toBeDefined();
+  control!.readyState = 'open';
+  control!.onopen?.();
+  await flushMicrotasks();
+
+  expect(control!.send.mock.calls
+    .map(([data]) => JSON.parse(String(data)))
+    .find((message) => message.type === 'clipboard.enable')?.payload).toEqual({ enabled: true });
+  await controller.close();
+});
+
+test('mobile clipboard sends local changes and writes remote changes without echoing them', async () => {
+  const { control, controller } = await openFallbackController();
+  await enableClipboard(controller, control);
+  const listener = (Clipboard.addClipboardListener as jest.Mock).mock.calls[0][0] as (event: { contentTypes: string[] }) => void;
+
+  (Clipboard.getStringAsync as jest.Mock).mockResolvedValueOnce('copied on phone');
+  listener({ contentTypes: [Clipboard.ContentType.PLAIN_TEXT] });
+  await flushMicrotasks();
+  expect(sentMessages(control).find((message) => message.type === 'clipboard.write')?.payload).toEqual({ text: 'copied on phone' });
+
+  control.handlers.onMessage(JSON.stringify({ type: 'clipboard.text', payload: { text: 'copied on host' } }));
+  await flushMicrotasks();
+  expect(Clipboard.setStringAsync).toHaveBeenCalledWith('copied on host');
+
+  control.send.mockClear();
+  (Clipboard.getStringAsync as jest.Mock).mockResolvedValueOnce('copied on host');
+  listener({ contentTypes: [Clipboard.ContentType.PLAIN_TEXT] });
+  await flushMicrotasks();
+  expect(sentMessages(control).some((message) => message.type === 'clipboard.write')).toBe(false);
+
+  await controller.close();
+});
+
+test('mobile clipboard writes the latest remote text after an in-flight write completes', async () => {
+  const { control, controller } = await openFallbackController();
+  await enableClipboard(controller, control);
+
+  let finishFirstWrite!: (written: boolean) => void;
+  const firstWrite = new Promise<boolean>(resolve => { finishFirstWrite = resolve; });
+  (Clipboard.setStringAsync as jest.Mock)
+    .mockImplementationOnce(() => firstWrite)
+    .mockResolvedValueOnce(true);
+
+  control.handlers.onMessage(JSON.stringify({ type: 'clipboard.text', payload: { text: 'first remote copy' } }));
+  control.handlers.onMessage(JSON.stringify({ type: 'clipboard.text', payload: { text: 'latest remote copy' } }));
+  await flushMicrotasks();
+  expect(Clipboard.setStringAsync).toHaveBeenCalledTimes(1);
+  expect(Clipboard.setStringAsync).toHaveBeenNthCalledWith(1, 'first remote copy');
+
+  finishFirstWrite(true);
+  await flushMicrotasks();
+  await flushMicrotasks();
+  expect(Clipboard.setStringAsync).toHaveBeenCalledTimes(2);
+  expect(Clipboard.setStringAsync).toHaveBeenNthCalledWith(2, 'latest remote copy');
+
+  await controller.close();
+});
+
+test('disabling mobile clipboard removes the native listener and sends the disable request', async () => {
+  const { control, controller } = await openFallbackController();
+  await enableClipboard(controller, control);
+  const subscription = (Clipboard.addClipboardListener as jest.Mock).mock.results[0]?.value as { remove: jest.Mock };
+  control.send.mockClear();
+  (Clipboard.setStringAsync as jest.Mock).mockClear();
+
+  controller.setClipboardEnabled(false);
+  await flushMicrotasks();
+  expect(controller.getSnapshot().clipboardEnabled).toBe(false);
+  expect(subscription.remove).toHaveBeenCalledTimes(1);
+  expect(sentMessages(control).find((message) => message.type === 'clipboard.enable')?.payload).toEqual({ enabled: false });
+  control.handlers.onMessage(JSON.stringify({ type: 'clipboard.text', payload: { text: 'late remote text' } }));
+  await flushMicrotasks();
+  expect(Clipboard.setStringAsync).not.toHaveBeenCalled();
+
+  await controller.close();
+});
 
 function fallbackMediaFrame(keyframe = true, payloadBytes = 5, frameId = 1, timestampUs = 1n) {
   const payload = new Uint8Array(payloadBytes);

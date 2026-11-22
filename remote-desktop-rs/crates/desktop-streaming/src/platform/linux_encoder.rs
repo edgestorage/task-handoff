@@ -16,6 +16,7 @@ pub const MAX_PACKET: usize = 16 * 1024 * 1024;
 pub struct Config {
     pub width: usize,
     pub height: usize,
+    pub framerate: u32,
     pub bitrate: u32,
     pub level: u8,
 }
@@ -46,16 +47,24 @@ pub struct Encoder {
     child: Child,
     tx: Option<mpsc::SyncSender<Request>>,
     size: (usize, usize),
+    framerate: u32,
 }
 impl Encoder {
-    pub fn new(width: usize, height: usize, bitrate: u32, limits: Limits) -> anyhow::Result<Self> {
+    pub fn new(
+        width: usize,
+        height: usize,
+        framerate: u32,
+        bitrate: u32,
+        limits: Limits,
+    ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             width > 0
                 && height > 0
                 && width <= 3840
                 && height <= 2160
                 && width.is_multiple_of(2)
-                && height.is_multiple_of(2),
+                && height.is_multiple_of(2)
+                && (1..=120).contains(&framerate),
             "invalid VA dimensions"
         );
         // Resolve only the sibling delivered with this component, never PATH.
@@ -72,6 +81,7 @@ impl Encoder {
         let config = serde_json::to_vec(&Config {
             width,
             height,
+            framerate,
             bitrate: bitrate.min(limits.max_bitrate),
             level: limits.level,
         })?;
@@ -105,6 +115,7 @@ impl Encoder {
             child,
             tx: Some(tx),
             size: (width, height),
+            framerate,
         };
         wait.recv_timeout(Duration::from_secs(3))??;
         Ok(encoder)
@@ -137,7 +148,7 @@ impl Encoder {
         Ok(EncodedFrame {
             keyframe: data[0] == 1,
             annex_b: data[1..].to_vec(),
-            duration: Duration::from_secs_f64(1.0 / 30.0),
+            duration: Duration::from_secs_f64(1.0 / self.framerate as f64),
         })
     }
 }

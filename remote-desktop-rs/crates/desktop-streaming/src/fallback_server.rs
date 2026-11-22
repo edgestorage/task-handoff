@@ -27,7 +27,7 @@ pub struct AttachReply {
     pub height: u32,
     pub fps: u32,
     pub bitrate: u32,
-    pub codec: crate::codec::VideoCodec,
+    pub codec: String,
 }
 
 pub enum FallbackEvent {
@@ -206,7 +206,7 @@ async fn connection(hub: Hub, role: Role, mut socket: WebSocket) {
                     "height": config.height,
                     "fps": config.fps,
                     "bitrate": config.bitrate,
-                    "codec": config.codec.fallback_codec_string()
+                    "codec": config.codec
                 }
             }),
         )

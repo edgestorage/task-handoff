@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { aiSessionFileChanges, parseAiSessionDiff } from "../src/components/ai-session/aiSessionFileChanges.ts";
+import { aiSessionFileChanges, parseAiSessionDiff } from "../src/ai-session-file-changes.ts";
 
 function activity(input = {}) {
   return {

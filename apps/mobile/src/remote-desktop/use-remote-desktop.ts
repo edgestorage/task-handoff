@@ -65,6 +65,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
   const controller = acquired && acquired.key === runtimeKey ? acquired.controller : undefined;
   const instance = state.instances.find((candidate) => candidate.id === instanceId);
   const capability = directoryRemoteDesktopCapabilities(instance?.capabilities);
+  const clipboardSupported = capability?.features.clipboard === true;
   const videoCodecKey = capability?.video.codecs.join(',') ?? '';
   const videoCodecs = useMemo(
     () => videoCodecKey ? videoCodecKey.split(',') : [],
@@ -147,6 +148,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
 
   useEffect(() => {
     if (!controller) return;
+    controller.setClipboardSupported(clipboardSupported);
     const scope = { controlPlaneId, instanceId, sessionId };
     const consumer = controllerConsumerRef.current;
     controller.setConnectionOptions(optionState && optionState.key === runtimeKey ? optionState.value : null);
@@ -156,7 +158,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
     return () => {
       releaseRemoteDesktopControllerConsumer(scope, consumer);
     };
-  }, [active, controlPlaneId, controller, instanceId, interactive, resolution, sessionId, optionState, runtimeKey, optionsReady, effectiveAvailability]);
+  }, [active, clipboardSupported, controlPlaneId, controller, instanceId, interactive, resolution, sessionId, optionState, runtimeKey, optionsReady, effectiveAvailability]);
 
   useEffect(() => {
     void controller?.switchTarget(target);
@@ -213,6 +215,10 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
     else controller?.disableInput();
   }, [controller]);
 
+  const setClipboardEnabled = useCallback((enabled: boolean) => {
+    controller?.setClipboardEnabled(enabled);
+  }, [controller]);
+
   const setTransportAvailability = useCallback((availability: RemoteDesktopTransportAvailability) => {
     updateRemoteDesktopPreferences(controlPlaneId, instanceId, { transportAvailability: { ...availability } });
     controller?.setTransportAvailability({ ...availability, turn: availability.turn && customConfigured });
@@ -253,6 +259,7 @@ export function useRemoteDesktop(instanceId: string, options: UseRemoteDesktopOp
     reconnect,
     disconnect,
     setCapturePrecision,
+    setClipboardEnabled,
     setFrameRate,
     setInputEnabled,
     setMouseMode,

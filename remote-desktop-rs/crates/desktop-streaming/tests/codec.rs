@@ -1,8 +1,34 @@
-use desktop_streaming::{codec::Limits, synthetic::SoftwareEncoder, video::Budget};
+use desktop_streaming::{
+    codec::{Limits, VideoCodec},
+    encoder::{Encoder, Policy},
+    synthetic::SoftwareEncoder,
+    video::{Budget, Frame, FALLBACK_LIMITS},
+};
 use openh264::{
     decoder::Decoder,
     formats::{YUVBuffer, YUVSource},
 };
+
+#[test]
+fn fallback_codec_string_matches_the_encoder_level() {
+    assert_eq!(VideoCodec::H264.fallback_codec_string(40), "avc1.42E028");
+    assert_eq!(VideoCodec::H264.fallback_codec_string(42), "avc1.42E02A");
+    assert_eq!(
+        VideoCodec::H265.fallback_codec_string(120),
+        "hvc1.1.6.L120.90"
+    );
+    assert_eq!(
+        VideoCodec::H265.fallback_codec_string(123),
+        "hvc1.1.6.L123.90"
+    );
+    // N-1 Control Plane probes avc1.42E028 for H.264 fallback. Keep the
+    // default profile on the same level so that combination stays decodable.
+    assert_eq!(
+        VideoCodec::H264.fallback_codec_string(FALLBACK_LIMITS.level),
+        "avc1.42E028"
+    );
+}
+
 #[test]
 fn receiver_level_and_optional_limits_bound_sender_work() {
     for level in [10, 11, 12, 13, 20, 21, 22, 30, 31, 32, 40, 42, 52] {
@@ -150,6 +176,26 @@ fn answer_level_follows_receiver_sdp_capabilities() {
     .unwrap();
     assert_eq!(two_k.limits.level, 50);
     assert!(two_k.answer_fmtp.contains("profile-level-id=42e032"));
+
+    let full_hd_60 = desktop_streaming::codec::negotiate_h264_offer(
+        "m=video 9 UDP/TLS/RTP/SAVPF 108\r\n\
+         a=fmtp:108 packetization-mode=1;profile-level-id=42e01f;max-fs=8160;max-mbps=489600\r\n",
+    )
+    .unwrap();
+    assert_eq!(full_hd_60.limits.level, 42);
+    assert_eq!(
+        (full_hd_60.limits.max_fs, full_hd_60.limits.max_mbps),
+        (8160, 489600)
+    );
+    assert!(full_hd_60.answer_fmtp.contains("profile-level-id=42e02a"));
+    assert_eq!(
+        Budget::select_with_limits(1920, 1080, 8_000_000, full_hd_60.limits),
+        Budget {
+            width: 1920,
+            height: 1080,
+            fps: 60
+        }
+    );
 }
 
 #[test]
@@ -246,4 +292,67 @@ fn level_four_idr_decodes_at_full_hd_with_fresh_decoder_state() {
         })
         .unwrap();
     assert_eq!(sps[3], 40);
+}
+
+#[test]
+fn level_four_two_keeps_full_hd_60_inside_the_negotiated_level() {
+    let limits = Limits::parse("packetization-mode=1;profile-level-id=42e02a").unwrap();
+    let mut encoder = SoftwareEncoder::with_limits(8_000_000, limits).unwrap();
+    let yuv = YUVBuffer::new(1920, 1080);
+    let frame = encoder.encode(&yuv, true).unwrap().unwrap();
+    let mut decoder = Decoder::new().unwrap();
+    let decoded = decoder.decode(&frame.annex_b).unwrap().unwrap();
+    assert_eq!(decoded.dimensions(), (1920, 1080));
+    let sps = openh264::nal_units(&frame.annex_b)
+        .find_map(|nal| {
+            let data = nal
+                .strip_prefix(&[0, 0, 0, 1])
+                .or_else(|| nal.strip_prefix(&[0, 0, 1]))?;
+            (data.first().is_some_and(|b| b & 31 == 7)).then_some(data)
+        })
+        .unwrap();
+    assert_eq!(sps[3], 42);
+}
+
+#[test]
+fn streaming_budget_never_raises_software_sps_above_the_negotiated_level() {
+    for (level, width, height) in [(50, 2560, 1440), (51, 3840, 2160)] {
+        let limits = Limits::parse(&format!(
+            "packetization-mode=1;profile-level-id=42e0{level:02x}"
+        ))
+        .unwrap();
+        let budget = Budget::select_with_limits(width, height, 24_000_000, limits);
+        let mut encoder = Encoder::new(
+            budget.width * budget.height * budget.fps / 4,
+            limits,
+            0,
+            Policy::Software,
+            VideoCodec::H264,
+        )
+        .unwrap();
+        let frame = encoder
+            .encode(
+                Frame::I420(YUVBuffer::new(
+                    budget.width as usize,
+                    budget.height as usize,
+                )),
+                budget,
+                true,
+            )
+            .unwrap()
+            .unwrap();
+        let sps = openh264::nal_units(&frame.annex_b)
+            .find_map(|nal| {
+                let data = nal
+                    .strip_prefix(&[0, 0, 0, 1])
+                    .or_else(|| nal.strip_prefix(&[0, 0, 1]))?;
+                (data.first().is_some_and(|b| b & 31 == 7)).then_some(data)
+            })
+            .unwrap();
+        assert_eq!(
+            sps[3], level,
+            "{}x{}@{}",
+            budget.width, budget.height, budget.fps
+        );
+    }
 }

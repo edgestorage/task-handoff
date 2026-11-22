@@ -103,7 +103,7 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
     capability.video.codecs = codecs.iter().map(|codec| codec.as_str().into()).collect();
     capability.video.max_width = 3840;
     capability.video.max_height = 2160;
-    capability.video.max_frame_rate = 30;
+    capability.video.max_frame_rate = crate::video::MAX_FRAME_RATE as u64;
     capability.features.keyboard = true;
     capability.features.mouse = true;
     capability.features.clipboard = true;
@@ -123,6 +123,10 @@ pub fn probe(mode: Mode, show_cursor: bool) -> RemoteDesktopCapabilities {
     }
     capability.viewer_limit = crate::session::MAX_VIEWERS as u64;
     capability.fallback = controlled_instance_protocol::RemoteDesktopFallbackCapabilities::ready();
+    capability.fallback.max_width = crate::video::FALLBACK_MAX_WIDTH as u64;
+    capability.fallback.max_height = crate::video::FALLBACK_MAX_HEIGHT as u64;
+    capability.fallback.max_frame_rate = crate::video::FALLBACK_MAX_FRAME_RATE as u64;
+    capability.fallback.max_bitrate = crate::video::FALLBACK_MAX_BITRATE as u64;
     capability
 }
 fn check(mode: Mode) -> anyhow::Result<Option<&'static str>> {

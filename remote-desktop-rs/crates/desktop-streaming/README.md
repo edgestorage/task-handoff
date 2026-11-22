@@ -162,6 +162,19 @@ The component replies with `input.resumed`, `input.suspended`, `clipboard.enable
 `clipboard.written`, `clipboard.text` and bounded errors. Clipboard enable carries
 its effective enabled flag; input resume carries the newly issued epoch.
 
+While clipboard access is enabled, each controller adapter reports local text
+changes and sends `clipboard.write` immediately. The component polls the native
+clipboard inside its isolated adapter worker and emits an unsolicited
+`clipboard.text` when remote text changes. The wire protocol is never polled.
+iOS and Android controllers use the native Expo clipboard change events; the
+Electron desktop controller uses a main-process bridge with 250 ms text-change
+detection because Electron exposes no clipboard change event; a plain browser
+falls back to a 750 ms local adapter check. The native component uses a 500 ms
+adapter check because `arboard` likewise has no event API. Both sides suppress
+identical text so a write does not echo back. `clipboard.read` remains in the wire
+contract for compatibility and diagnostics, but the viewer no longer exposes
+manual send/read actions.
+
 Clipboard text is additionally limited to 32 KiB decoded UTF-8. Escaped JSON must
 also fit its wire limit; this draft has no fragmentation or reassembly. The synthetic transport checks its negotiated SCTP maximum before enabling
 clipboard. This replaces the proposal's unsafe 512 KiB envelope assumption; native
@@ -239,7 +252,9 @@ Independent Linux connections verified Chinese/Japanese/accent/emoji ownership.
 The pacer now reuses rtc's maintained token bucket with whole-frame admission,
 100 ms / 256 KiB hard bounds (also rate-derived), GOP reset, IDR/SPS/PPS recovery and
 old-retransmission rejection. Feedback reduces bitrate, fps and even-dimension
-resolution within the negotiated H.264 level and max-fs/max-mbps limits. One blocking capture/convert/encode worker, one latest native sample and bounded
+resolution within the negotiated H.264 level and max-fs/max-mbps limits. The
+product ceiling is 60 fps; 1080p60 negotiates H.264 level 4.2, while 4K remains
+limited by the negotiated macroblock rate. One blocking capture/convert/encode worker, one latest native sample and bounded
 driver buffers limit raw work (SCK requires three OS buffers; WGC uses two). Sparse frames advance RTP time by actual
 monotonic gaps rather than compressing idle seconds into one nominal frame.
 

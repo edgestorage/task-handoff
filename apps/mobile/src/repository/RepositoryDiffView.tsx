@@ -24,7 +24,6 @@ export function RepositoryDiffView({ colors, diff, expandedGaps, onExpandContext
   viewMode: RepositoryDiffViewMode;
 }) {
   const { t } = useI18n();
-  const [viewportWidth, setViewportWidth] = useState(0);
   const rows = useMemo(() => diffPresentationRows(diff, expandedGaps)
     .filter((row) => row.kind === 'context-control' || !isPatchHeader(row))
     .slice(0, maxRenderedLines), [diff, expandedGaps]);
@@ -33,22 +32,32 @@ export function RepositoryDiffView({ colors, diff, expandedGaps, onExpandContext
   if (!rows.length) return <View style={styles.empty}><Text style={[styles.emptyText, { color: colors.textMuted }]}>{t('sessionResources.diff.noText')}</Text></View>;
   const limit = rows.length >= maxRenderedLines ? <Text style={[styles.limit, { backgroundColor: colors.notice, color: colors.noticeText }]}>{t('sessionResources.diff.truncatedLines', { count: maxRenderedLines })}</Text> : null;
 
-  if (viewMode === 'split') return <View onLayout={(event) => setViewportWidth(event.nativeEvent.layout.width)} style={[styles.frame, { backgroundColor: colors.surface }]}>
-    <SplitDiffView colors={colors} language={language} onExpandContext={onExpandContext} rows={rows} viewportWidth={viewportWidth} />
+  return <>
+    <CodeDiffRows colors={colors} language={language} onExpandContext={onExpandContext} rows={rows} viewMode={viewMode} />
     {limit}
-  </View>;
+  </>;
+}
 
+export function CodeDiffRows({ colors, language, onExpandContext, rows, viewMode = 'unified' }: {
+  colors: MobileThemeColors;
+  language: string;
+  onExpandContext?(control: ContextControl): void;
+  rows: readonly DiffPresentationRow[];
+  viewMode?: RepositoryDiffViewMode;
+}) {
+  const [viewportWidth, setViewportWidth] = useState(0);
   return <View onLayout={(event) => setViewportWidth(event.nativeEvent.layout.width)} style={[styles.frame, { backgroundColor: colors.surface }]}>
-    <UnifiedDiffView colors={colors} language={language} onExpandContext={onExpandContext} rows={rows} viewportWidth={viewportWidth} />
-    {limit}
+    {viewMode === 'split' && onExpandContext
+      ? <SplitDiffView colors={colors} language={language} onExpandContext={onExpandContext} rows={rows} viewportWidth={viewportWidth} />
+      : <UnifiedDiffView colors={colors} language={language} onExpandContext={onExpandContext} rows={rows} viewportWidth={viewportWidth} />}
   </View>;
 }
 
 function UnifiedDiffView({ colors, language, onExpandContext, rows, viewportWidth }: {
   colors: MobileThemeColors;
   language: string;
-  onExpandContext(control: ContextControl): void;
-  rows: DiffPresentationRow[];
+  onExpandContext?(control: ContextControl): void;
+  rows: readonly DiffPresentationRow[];
   viewportWidth: number;
 }) {
   return <>
@@ -61,7 +70,7 @@ function UnifiedDiffView({ colors, language, onExpandContext, rows, viewportWidt
     </ScrollView>
     <View pointerEvents="box-none" style={styles.gutter}>
       {rows.map((row, index) => row.kind === 'context-control'
-        ? <ContextControlGutter colors={colors} key={`context-gutter:${index}`} onExpandContext={onExpandContext} row={row} />
+        ? onExpandContext && <ContextControlGutter colors={colors} key={`context-gutter:${index}`} onExpandContext={onExpandContext} row={row} />
         : <DiffLineGutter colors={colors} key={`line-gutter:${index}`} line={row} />)}
     </View>
   </>;
@@ -71,7 +80,7 @@ function SplitDiffView({ colors, language, onExpandContext, rows, viewportWidth 
   colors: MobileThemeColors;
   language: string;
   onExpandContext(control: ContextControl): void;
-  rows: DiffPresentationRow[];
+  rows: readonly DiffPresentationRow[];
   viewportWidth: number;
 }) {
   const splitRows = useMemo(() => createSplitRows(rows), [rows]);

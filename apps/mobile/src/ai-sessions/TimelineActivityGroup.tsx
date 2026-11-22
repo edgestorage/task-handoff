@@ -1,8 +1,8 @@
-import { createElement, useEffect, useRef, useState } from 'react';
-import { PixelRatio, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { createElement, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import type { AiSessionTimelineActivity } from '@task-handoff/protocol/ai-sessions';
-import { localizedAiSessionActivityTitle } from '@task-handoff/control-plane-client';
+import { aiSessionActivityDetailInput, aiSessionFileChanges, localizedAiSessionActivityTitle, parseAiSessionDiff, type AiSessionFileChange } from '@task-handoff/control-plane-client';
 import {
   Bot,
   BookOpen,
@@ -32,7 +32,11 @@ import {
 import { useMobileTheme } from '../components/theme';
 import { useI18n, type Translate } from '../i18n';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
+import { CodeDiffRows } from '../repository/RepositoryDiffView';
+import { sourceLanguageForPath } from '../repository/sourceLanguage';
 import { AnimatedDisclosure, DisclosureChevron, DisclosureChevronDown } from './AnimatedDisclosure';
+
+const maxFileDiffPreviewLines = 300;
 
 export function TimelineActivityGroup({
   activities,
@@ -72,7 +76,9 @@ export function TimelineActivityGroup({
 function TimelineActivity({ activity }: { activity: AiSessionTimelineActivity }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const hasDetails = Boolean(activity.input || activity.output || activity.exitCode !== undefined);
+  const isFileChange = activity.activityKind === 'fileChange';
+  const input = aiSessionActivityDetailInput(activity);
+  const hasDetails = Boolean(input || activity.output || activity.exitCode !== undefined || (isFileChange && activity.paths?.length));
   const [expanded, setExpanded] = useState(false);
   const failed = activity.status === 'failed';
   const ActivityIcon = timelineActivityIcon(activity.activityKind);
@@ -89,6 +95,7 @@ function TimelineActivity({ activity }: { activity: AiSessionTimelineActivity })
     <Text style={[styles.activityTitle, { color: failed ? colors.error : colors.textMuted }]}>{title}</Text>
     {activitySummary(activity) ? <Text numberOfLines={1} style={[styles.activitySummary, { color: colors.textMuted }]}>· {activitySummary(activity)}</Text> : null}
     {status ? <Text style={[styles.activityStatus, { color: failed ? colors.error : colors.textMuted }]}>{status}</Text> : null}
+    {ActivityIcon && hasDetails ? <DisclosureChevron color={colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} /> : null}
   </>;
   return <View style={styles.activity}>
     {hasDetails ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.activityHeader}>{content}</Pressable>
@@ -96,11 +103,8 @@ function TimelineActivity({ activity }: { activity: AiSessionTimelineActivity })
     <AnimatedDisclosure expanded={expanded} spacing={mobileWebMetric(7)}><View style={[styles.details, { borderTopColor: colors.border }]}>
       {activity.activityKind === 'commandExecution'
         ? <TimelineCommandResult command={activity.input} exitCode={activity.exitCode} output={activity.output} />
-        : <>
-          {activity.input ? <TimelineActivityDetail label={t('sessions.timelineInput')} text={activity.input} /> : null}
-          {activity.output ? <TimelineActivityDetail label={t('sessions.timelineOutput')} text={activity.output} /> : null}
-          {activity.exitCode !== undefined ? <Text style={[styles.detailLabel, { color: colors.textMuted }]}>{t('sessions.timelineExitCode', { code: activity.exitCode })}</Text> : null}
-        </>}
+        : isFileChange ? <TimelineFileChanges activity={activity} />
+          : <TimelineTextResult title={title} input={input} output={activity.output} exitCode={activity.exitCode} />}
     </View></AnimatedDisclosure>
   </View>;
 }
@@ -108,14 +112,102 @@ function TimelineActivity({ activity }: { activity: AiSessionTimelineActivity })
 function TimelineCommandResult({ command, exitCode, output }: { command?: string; exitCode?: number; output?: string }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const [copied, setCopied] = useState(false);
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(resetTimer.current), []);
   const commandLine = command ? `$ ${command}` : '';
   const outputText = output || '';
   const content = [commandLine, outputText].filter(Boolean).join('\n');
-  const failed = exitCode !== undefined && exitCode !== 0;
-  const copyOutput = async () => {
+  return <TimelineResultCard>
+    <TimelineResultHeader title={t('sessions.timelineCommandShell')} exitCode={exitCode === 0 ? undefined : exitCode} content={content} copyLabel={t('sessions.timelineCopyOutput')} />
+    {content
+      ? <TimelineResultText content={content} testID="timeline-command-result">
+        {commandLine ? <Text testID="timeline-command-input" style={{ color: colors.textMuted }}>{commandLine}</Text> : null}
+        {outputText ? <Text testID="timeline-command-output" style={{ color: colors.text }}>{`${commandLine ? '\n' : ''}${outputText}`}</Text> : null}
+      </TimelineResultText>
+      : <Text style={[styles.resultEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoCommandOutput')}</Text>}
+  </TimelineResultCard>;
+}
+
+function TimelineResultCard({ children }: { children: ReactNode }) {
+  const { colors } = useMobileTheme();
+  return <View style={[styles.resultCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>{children}</View>;
+}
+
+function TimelineResultHeader({ title, exitCode, content, copyLabel, touchSized }: {
+  title: string; exitCode?: number; content: string; copyLabel: string; touchSized?: boolean;
+}) {
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  return <View style={[styles.resultHeader, { borderBottomColor: colors.border }]}>
+    <Text numberOfLines={2} style={[styles.resultHeaderText, styles.resultTitle, { color: colors.textMuted }]}>{title}</Text>
+    {exitCode !== undefined ? <Text style={[styles.resultHeaderText, { color: exitCode === 0 ? colors.textMuted : colors.error }]}>{t('sessions.timelineExitCode', { code: exitCode })}</Text> : null}
+    {content ? <TimelineCopyButton content={content} label={copyLabel} touchSized={touchSized} /> : null}
+  </View>;
+}
+
+function TimelineResultText({ content, children, testID }: { content: string; children?: ReactNode; testID?: string }) {
+  const { colors } = useMobileTheme();
+  const contentHeight = Math.ceil(
+    content.split('\n').length * mobileWebMetric(12 * 1.55) * PixelRatio.getFontScale()
+      + mobileWebMetric(9) + mobileWebMetric(18),
+  );
+  return <ScrollView nestedScrollEnabled style={styles.resultBody} testID={testID}>
+    <ScrollView contentContainerStyle={styles.resultContent} horizontal showsHorizontalScrollIndicator={false} style={{ height: contentHeight }} testID={testID ? `${testID}-content` : undefined}>
+      <Text selectable style={[styles.resultText, { color: colors.text }]}>{children ?? content}</Text>
+    </ScrollView>
+  </ScrollView>;
+}
+
+function TimelineFileChanges({ activity }: { activity: AiSessionTimelineActivity }) {
+  const changes = useMemo(() => aiSessionFileChanges(activity), [activity]);
+  const { t } = useI18n();
+  if (!changes.length && (activity.input || activity.output || activity.exitCode !== undefined)) {
+    return <TimelineTextResult title={activityLabel(activity, t)} input={activity.input} output={activity.output} exitCode={activity.exitCode} />;
+  }
+  const files = changes.length ? changes : (activity.paths ?? []).map((path) => ({ path, diff: '' }));
+  return <TimelineResultCard>
+    {files.map((change, index) => <TimelineFileChange change={change} divided={index > 0} key={JSON.stringify([change.path, index])} />)}
+  </TimelineResultCard>;
+}
+
+function TimelineFileChange({ change, divided }: { change: AiSessionFileChange; divided: boolean }) {
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const lines = useMemo(() => parseAiSessionDiff(change.diff), [change.diff]);
+  const path = change.movePath ? `${change.path} → ${change.movePath}` : change.path;
+  const additions = lines.filter((line) => line.kind === 'addition').length;
+  const deletions = lines.filter((line) => line.kind === 'deletion').length;
+  return <View style={divided && [styles.fileChangeDivider, { borderColor: colors.border }]}>
+    <View style={styles.fileChangeHeader}>
+      <Pressable accessibilityLabel={path} accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={({ pressed }) => [styles.fileChangeToggle, pressed && styles.pressed]}>
+        <DisclosureChevron color={colors.textMuted} expanded={expanded} size={mobileWebMetric(15)} />
+        <Text ellipsizeMode="middle" numberOfLines={2} style={[styles.resultHeaderText, styles.filePath, { color: colors.text }]}>{path}</Text>
+        {additions ? <Text style={[styles.resultHeaderText, { color: colors.sessionActive }]}>+{additions}</Text> : null}
+        {deletions ? <Text style={[styles.resultHeaderText, { color: colors.error }]}>-{deletions}</Text> : null}
+      </Pressable>
+      {change.diff ? <TimelineCopyButton content={change.diff} label={t('sessions.timelineCopyDiff', { path })} touchSized /> : null}
+    </View>
+    <AnimatedDisclosure expanded={expanded}>
+      <View style={[styles.fileChangeDivider, { borderColor: colors.border }]}>
+        {lines.length ? <>
+          <ScrollView nestedScrollEnabled style={styles.fileDiffBody}>
+            <CodeDiffRows colors={colors} language={sourceLanguageForPath(change.movePath ?? change.path)} rows={lines.slice(0, maxFileDiffPreviewLines)} />
+          </ScrollView>
+          {lines.length > maxFileDiffPreviewLines ? <Text style={[styles.resultEmpty, { color: colors.textMuted }]}>{t('sessionResources.diff.truncatedLines', { count: maxFileDiffPreviewLines })}</Text> : null}
+        </> : change.diff
+          ? <TimelineResultText content={change.diff} />
+          : <Text style={[styles.resultEmpty, { color: colors.textMuted }]}>{t('sessionResources.diff.noText')}</Text>}
+      </View>
+    </AnimatedDisclosure>
+  </View>;
+}
+
+function TimelineCopyButton({ content, label, touchSized }: { content: string; label: string; touchSized?: boolean }) {
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(resetTimer.current), []);
+  const copy = async () => {
     try {
       await Clipboard.setStringAsync(content);
     } catch {
@@ -125,40 +217,24 @@ function TimelineCommandResult({ command, exitCode, output }: { command?: string
     clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(() => setCopied(false), 1_500);
   };
-  // A horizontal ScrollView needs an explicit height inside the virtualized timeline, mirroring Web's non-wrapping pre.
-  const contentHeight = Math.ceil(
-    Math.max(1, content.split('\n').length) * mobileWebMetric(12 * 1.55) * PixelRatio.getFontScale()
-      + mobileWebMetric(9) + mobileWebMetric(18),
-  );
-  return <View style={[styles.commandResult, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-    <View style={[styles.commandResultHeader, { borderBottomColor: colors.border }]}>
-      <Text style={[styles.commandResultHeaderText, { color: colors.textMuted }]}>{t('sessions.timelineCommandShell')}</Text>
-      {failed ? <Text style={[styles.commandResultHeaderText, { color: colors.error }]}>{t('sessions.timelineExitCode', { code: exitCode })}</Text> : null}
-      {content ? <Pressable accessibilityLabel={copied ? t('sessions.codeCopied') : t('sessions.timelineCopyOutput')} accessibilityRole="button" hitSlop={6} onPress={() => void copyOutput()} style={({ pressed }) => [styles.commandResultCopy, pressed && { backgroundColor: colors.surface }]}>
-        {copied ? <Check color={colors.textMuted} size={mobileWebMetric(14)} /> : <Copy color={colors.textMuted} size={mobileWebMetric(14)} />}
-      </Pressable> : null}
-    </View>
-    {content
-      ? <ScrollView nestedScrollEnabled style={[styles.commandResultBody, { maxHeight: mobileWebMetric(320) }]} testID="timeline-command-result">
-        <ScrollView contentContainerStyle={styles.commandResultContent} horizontal showsHorizontalScrollIndicator={false} style={{ height: contentHeight }} testID="timeline-command-result-content">
-          <Text selectable style={[styles.commandResultText, { color: colors.text }]}>
-            {commandLine ? <Text testID="timeline-command-input" style={{ color: colors.textMuted }}>{commandLine}</Text> : null}
-            {outputText ? <Text testID="timeline-command-output" style={{ color: colors.text }}>{`${commandLine ? '\n' : ''}${outputText}`}</Text> : null}
-          </Text>
-        </ScrollView>
-      </ScrollView>
-      : <Text style={[styles.commandResultEmpty, { color: colors.textMuted }]}>{t('sessions.timelineNoCommandOutput')}</Text>}
-  </View>;
+  return <Pressable accessibilityLabel={copied ? t('sessions.codeCopied') : label} accessibilityRole="button" hitSlop={touchSized ? undefined : 6} onPress={() => void copy()} style={({ pressed }) => [styles.resultCopy, touchSized && styles.resultCopyTouch, pressed && styles.pressed]}>
+    {copied ? <Check color={colors.textMuted} size={mobileWebMetric(14)} /> : <Copy color={colors.textMuted} size={mobileWebMetric(14)} />}
+  </Pressable>;
 }
 
-function TimelineActivityDetail({ label, text }: { label: string; text: string }) {
+function TimelineTextResult({ title, input, output, exitCode }: { title: string; input?: string; output?: string; exitCode?: number }) {
   const { colors } = useMobileTheme();
-  return <View style={styles.detailSection}>
-    <Text style={[styles.detailLabel, { color: colors.textMuted }]}>{label}</Text>
-    <ScrollView nestedScrollEnabled style={[styles.detailScroll, { borderLeftColor: colors.border }]}>
-      <Text selectable style={[styles.detailText, { color: colors.text }]}>{text}</Text>
-    </ScrollView>
-  </View>;
+  const { t } = useI18n();
+  const content = [input, output].filter(Boolean).join('\n\n');
+  const inputLabel = t('sessions.timelineInput');
+  const outputLabel = t('sessions.timelineOutput');
+  return <TimelineResultCard>
+    <TimelineResultHeader title={title} exitCode={exitCode} content={content} copyLabel={t('sessions.timelineCopyDetails')} touchSized />
+    {input && output ? <TimelineResultText content={`${inputLabel}\n${input}\n\n${outputLabel}\n${output}`} testID="timeline-text-result">
+      <Text style={{ color: colors.textMuted }}>{inputLabel}</Text>{'\n'}<Text>{input}</Text>{'\n\n'}
+      <Text style={{ color: colors.textMuted }}>{outputLabel}</Text>{'\n'}<Text>{output}</Text>
+    </TimelineResultText> : content ? <TimelineResultText content={content} testID="timeline-text-result" /> : null}
+  </TimelineResultCard>;
 }
 
 function activitySummary(activity: AiSessionTimelineActivity) {
@@ -218,16 +294,20 @@ const styles = StyleSheet.create({
   activitySummary: { flex: 1, fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine },
   activityStatus: { fontSize: mobileWebType.body, lineHeight: mobileWebType.bodyLine, marginLeft: 'auto' },
   details: { borderTopWidth: StyleSheet.hairlineWidth, gap: mobileWebMetric(8), paddingTop: mobileWebMetric(7) },
-  detailSection: { gap: mobileWebMetric(4) },
-  detailLabel: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
-  detailScroll: { borderLeftWidth: StyleSheet.hairlineWidth, maxHeight: mobileWebMetric(280), paddingLeft: mobileWebMetric(10) },
-  detailText: { fontFamily: 'monospace', fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, paddingVertical: mobileWebMetric(7) },
-  commandResult: { borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, minWidth: 0, overflow: 'hidden' },
-  commandResultHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: mobileWebMetric(6), minHeight: mobileWebMetric(30), paddingLeft: mobileWebMetric(10), paddingRight: mobileWebMetric(6) },
-  commandResultHeaderText: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
-  commandResultCopy: { alignItems: 'center', borderRadius: mobileWebMetric(4), height: mobileWebMetric(24), justifyContent: 'center', marginLeft: 'auto', width: mobileWebMetric(24) },
-  commandResultBody: { minWidth: 0 },
-  commandResultContent: { paddingBottom: mobileWebMetric(18), paddingHorizontal: mobileWebMetric(12), paddingTop: mobileWebMetric(9) },
-  commandResultText: { fontFamily: 'monospace', fontSize: mobileWebType.small, lineHeight: mobileWebMetric(12 * 1.55) },
-  commandResultEmpty: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, paddingHorizontal: mobileWebMetric(11), paddingVertical: mobileWebMetric(13) },
+  resultCard: { borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, minWidth: 0, overflow: 'hidden' },
+  resultHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: mobileWebMetric(6), minHeight: mobileWebMetric(30), paddingLeft: mobileWebMetric(10), paddingRight: mobileWebMetric(6) },
+  resultHeaderText: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
+  resultTitle: { flexShrink: 1, minWidth: 0 },
+  resultCopy: { alignItems: 'center', borderRadius: mobileWebMetric(4), height: mobileWebMetric(24), justifyContent: 'center', marginLeft: 'auto', width: mobileWebMetric(24) },
+  resultCopyTouch: { height: Platform.OS === 'android' ? 48 : 44, width: Platform.OS === 'android' ? 48 : 44 },
+  resultBody: { maxHeight: mobileWebMetric(320), minWidth: 0 },
+  resultContent: { paddingBottom: mobileWebMetric(18), paddingHorizontal: mobileWebMetric(12), paddingTop: mobileWebMetric(9) },
+  resultText: { fontFamily: 'monospace', fontSize: mobileWebType.small, lineHeight: mobileWebMetric(12 * 1.55) },
+  resultEmpty: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, paddingHorizontal: mobileWebMetric(11), paddingVertical: mobileWebMetric(13) },
+  fileChangeHeader: { alignItems: 'center', flexDirection: 'row' },
+  fileChangeDivider: { borderTopWidth: StyleSheet.hairlineWidth },
+  fileChangeToggle: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: mobileWebMetric(6), minHeight: Platform.OS === 'android' ? 48 : 44, paddingHorizontal: mobileWebMetric(10) },
+  filePath: { flex: 1, minWidth: 0 },
+  fileDiffBody: { maxHeight: mobileWebMetric(300) },
+  pressed: { opacity: 0.65 },
 });

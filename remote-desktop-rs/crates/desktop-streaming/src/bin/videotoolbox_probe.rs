@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         VideoCodec::H264
     };
-    let mut encoder = Encoder::new(640, 360, 2_000_000, Limits::default(), codec)?;
+    let mut encoder = Encoder::new(640, 360, 60, 2_000_000, Limits::default(), codec)?;
     let mut samples = Vec::new();
     let mut packetized = 0usize;
     let mut payload_bytes = 0usize;

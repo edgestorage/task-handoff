@@ -67,7 +67,7 @@ jest.mock('../src/remote-desktop/RemoteDesktopVirtualKeyboard', () => ({
 jest.mock('../src/remote-desktop/use-remote-desktop', () => {
   const { emptyRemoteDesktopSnapshot } = require('../src/remote-desktop/types');
   return { useRemoteDesktop: () => ({
-    capability: { available: true, capture: { precisionModes: [] }, sourceProviders: [] },
+    capability: { available: true, capture: { precisionModes: [] }, features: { clipboard: false }, sourceProviders: [] },
     controller: undefined,
     disconnect: jest.fn(),
     instance: { id: 'instance-1' },
@@ -76,6 +76,7 @@ jest.mock('../src/remote-desktop/use-remote-desktop', () => {
     ready: true,
     reconnect: jest.fn(),
     setCapturePrecision: jest.fn(),
+    setClipboardEnabled: jest.fn(),
     setFrameRate: jest.fn(),
     setInputEnabled: jest.fn(),
     setMouseMode: jest.fn(),

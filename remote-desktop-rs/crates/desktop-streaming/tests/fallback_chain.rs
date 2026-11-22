@@ -123,9 +123,8 @@ async fn synthetic_component_delivers_fallback_media_and_recovers_on_keyframe_re
     };
     let configure: serde_json::Value = serde_json::from_str(&configure).unwrap();
     assert_eq!(configure["type"], "fallback.configure");
-    assert!(configure["payload"]["codec"]
-        .as_str()
-        .is_some_and(|codec| codec.starts_with("avc1") || codec.starts_with("hvc1")));
+    assert_eq!(configure["payload"]["fps"], 30);
+    assert_eq!(configure["payload"]["codec"], "avc1.42E028");
 
     let mut control = connect_fallback(&host, "control", CONTROL_PROTOCOL, &viewer, "fgen_e2e")
         .await

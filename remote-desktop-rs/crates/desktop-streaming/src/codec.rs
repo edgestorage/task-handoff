@@ -40,12 +40,14 @@ impl VideoCodec {
     /// RFC 6381 string used by the WebSocket fallback decoder. The compressed
     /// bitstream remains the authority; this tells native/WebCodecs decoders how
     /// to interpret parameter sets and NAL headers.
-    pub fn fallback_codec_string(self) -> &'static str {
+    pub fn fallback_codec_string(self, level: u8) -> String {
         match self {
-            Self::H264 => "avc1.42E028",
-            // Main profile, Main tier, level 4.0, 8-bit. Fallback is capped at
-            // 1080p30, so level 4.0 is sufficient for its product envelope.
-            Self::H265 => "hvc1.1.6.L120.90",
+            // Baseline profile, no B frames. The level must match the encoder
+            // limits: 1080p30 fits 4.0, while 1080p60 needs 4.2.
+            Self::H264 => format!("avc1.42E0{level:02X}"),
+            // Main profile, Main tier, 8-bit. HEVC level 4.0 covers 1080p30;
+            // 1080p60 needs level 4.1.
+            Self::H265 => format!("hvc1.1.6.L{level}.90"),
         }
     }
 }
@@ -63,12 +65,12 @@ pub fn local_video_codecs() -> Vec<VideoCodec> {
     vec![VideoCodec::H264]
 }
 
-/// Local WebRTC ceiling. A 4K30 H.264 stream fits level 5.1 without exceeding
-/// its macroblock rate; receiver SDP constraints may still lower this.
+/// Local WebRTC ceiling. A 4K30 or 1080p60 H.264 stream fits level 5.1 without
+/// exceeding its macroblock rate; receiver SDP constraints may still lower this.
 pub const MAX_H264_LEVEL: u8 = 51;
 pub const MAX_H264_BITRATE: u32 = 24_000_000;
 pub const MAX_H265_BITRATE: u32 = 24_000_000;
-const NEGOTIABLE_LEVELS: [u8; 4] = [31, 40, 50, 51];
+const NEGOTIABLE_LEVELS: [u8; 5] = [31, 40, 42, 50, 51];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {

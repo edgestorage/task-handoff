@@ -185,7 +185,7 @@ impl RemoteDesktopFallbackCapabilities {
             control_subprotocol: REMOTE_DESKTOP_FALLBACK_CONTROL_SUBPROTOCOL.into(),
             max_width: 1920,
             max_height: 1080,
-            max_frame_rate: 30,
+            max_frame_rate: 60,
             max_bitrate: 8_000_000,
         }
     }

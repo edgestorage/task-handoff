@@ -35,7 +35,7 @@ import { useI18n } from "vue-i18n";
 import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
 import { sourceLanguageForPath } from "../source-code/sourceLanguage";
 import { ScrollArea } from "../ui/scroll-area";
-import { parseAiSessionDiff, type AiSessionFileChange } from "./aiSessionFileChanges";
+import { parseAiSessionDiff, type AiSessionFileChange } from "@task-handoff/control-plane-client";
 
 const props = defineProps<{ changes: AiSessionFileChange[] }>();
 const { t } = useI18n();

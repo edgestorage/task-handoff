@@ -1095,8 +1095,11 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
     { info: { id: "msg_b", sessionID: "ses_created", role: "assistant", parentID: "msg_a", time: { created: 2, completed: 3 } }, parts: [] },
     { info: { id: "msg_c", sessionID: "ses_created", role: "user", time: { created: 4 } }, parts: [] },
   ]);
-  const fork = await bridge.forkSession({ source: session, throughTurnId: "msg_a", providerThroughTurnId: "msg_a" });
+  const forkSource = registry.getByProviderSessionId("opencode", "ses_created");
+  const fork = await bridge.forkSession({ source: forkSource, throughTurnId: "msg_a", providerThroughTurnId: "msg_a" });
   assert.deepEqual(calls.find((call) => call[0] === "fork"), ["fork", "ses_created", "/workspace/project", "msg_c"]);
+  assert.deepEqual(calls.find((call) => call[0] === "rename" && call[1] === "ses_fork"), ["rename", "ses_fork", "/workspace/project", "Renamed OpenCode"]);
+  assert.equal(registry.getByProviderSessionId("opencode", fork.providerSessionId).title, "Renamed OpenCode");
   assert.equal(registry.getByProviderSessionId("opencode", fork.providerSessionId).lineage.throughTurnId, "msg_a");
   await bridge.readSession(fork.providerSessionId);
   assert.equal(registry.getByProviderSessionId("opencode", fork.providerSessionId).lineage.throughTurnId, "msg_a");

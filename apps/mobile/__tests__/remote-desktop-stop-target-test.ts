@@ -42,6 +42,7 @@ const mockController = {
   setCapturePrecision: jest.fn(),
   setConnectionOptions: jest.fn(),
   setTransportAvailability: jest.fn(),
+  setClipboardSupported: jest.fn(),
   close: jest.fn(async () => undefined),
 };
 

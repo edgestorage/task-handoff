@@ -33,6 +33,7 @@ pub fn hevc_supported() -> bool {
 pub struct Encoder {
     session: CompressionSession,
     size: (usize, usize),
+    fps: u32,
     started: Instant,
     codec: VideoCodec,
 }
@@ -40,6 +41,7 @@ impl Encoder {
     pub fn new(
         width: usize,
         height: usize,
+        fps: u32,
         bitrate: u32,
         limits: Limits,
         codec: VideoCodec,
@@ -69,7 +71,8 @@ impl Encoder {
                 && width <= 3840
                 && height <= 2160
                 && width.is_multiple_of(2)
-                && height.is_multiple_of(2),
+                && height.is_multiple_of(2)
+                && (1..=120).contains(&fps),
             "invalid VT dimensions"
         );
         let native_codec = match codec {
@@ -83,7 +86,7 @@ impl Encoder {
             .with_low_latency_rate_control(true)
             .with_profile_level(profile)
             .with_average_bit_rate(bitrate.min(limits.max_bitrate) as i32)
-            .with_expected_frame_rate(30.0)
+            .with_expected_frame_rate(fps as f64)
             .build()?;
         // SDK documented compression property names and ITU-R709 value. Keep
         // the encoded VUI consistent with the shared BGRA conversion matrix.
@@ -100,6 +103,7 @@ impl Encoder {
         Ok(Self {
             session,
             size: (width, height),
+            fps,
             started: Instant::now(),
             codec,
         })
@@ -214,7 +218,7 @@ impl Encoder {
         Ok(EncodedFrame {
             annex_b,
             keyframe,
-            duration: Duration::from_secs_f64(1.0 / 30.0),
+            duration: Duration::from_secs_f64(1.0 / self.fps as f64),
         })
     }
 }

@@ -180,6 +180,7 @@ pub fn run() -> anyhow::Result<()> {
             && h <= 2160
             && w.is_multiple_of(2)
             && h.is_multiple_of(2)
+            && (1..=120).contains(&config.framerate)
             && config.bitrate > 0,
         "invalid VA configuration"
     );
@@ -201,7 +202,7 @@ pub fn run() -> anyhow::Result<()> {
             pred_structure: PredictionStructure::LowDelay { limit: 60 },
             initial_tunings: Tunings {
                 rate_control: RateControl::ConstantBitrate(config.bitrate.into()),
-                framerate: 30,
+                framerate: config.framerate,
                 min_quality: 0,
                 max_quality: 51,
             },

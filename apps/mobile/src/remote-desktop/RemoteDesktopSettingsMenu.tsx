@@ -20,7 +20,9 @@ import type { RemoteDesktopSnapshot } from './types';
 type Props = {
   children?: ReactNode;
   capturePrecisionSupported?: boolean;
+  clipboardSupported?: boolean;
   onDisconnect(): void;
+  onSetClipboardEnabled(enabled: boolean): void;
   onSetCapturePrecision(value: RemoteDesktopCapturePrecision): void;
   onSetInputEnabled(enabled: boolean): void;
   onSetFrameRate(value: RemoteDesktopFrameRate): void;
@@ -58,6 +60,13 @@ export function RemoteDesktopSettingsMenu(props: Props) {
       image: snapshot.inputRequested ? 'hand.raised.slash' : 'hand.raised',
       attributes: { disabled: snapshot.inputPending || snapshot.controlRequestPending || snapshot.phase === 'stopped' || snapshot.phase === 'error' },
     },
+    ...(props.clipboardSupported ? [{
+      id: 'clipboard',
+      title: snapshot.clipboardEnabled ? t('remoteDesktop.clipboardDisable') : t('remoteDesktop.clipboardEnable'),
+      image: 'doc.on.clipboard' as const,
+      state: snapshot.clipboardEnabled ? 'on' as const : 'off' as const,
+      attributes: { disabled: snapshot.clipboardPending || snapshot.phase === 'stopped' || snapshot.phase === 'error' },
+    }] : []),
     {
       id: 'resolution',
       title: t('remoteDesktop.resolution'),
@@ -103,6 +112,7 @@ export function RemoteDesktopSettingsMenu(props: Props) {
   ];
   const select = (event: string) => {
     if (event === 'input') props.onSetInputEnabled(!snapshot.inputRequested);
+    else if (event === 'clipboard') props.onSetClipboardEnabled(!snapshot.clipboardEnabled);
     else if (event === 'disconnect') props.onDisconnect();
     else if (event.startsWith('resolution:')) props.onSetResolution(event.slice('resolution:'.length) as RemoteDesktopResolution);
     else if (event.startsWith('frame-rate:')) props.onSetFrameRate(event.slice('frame-rate:'.length) as RemoteDesktopFrameRate);

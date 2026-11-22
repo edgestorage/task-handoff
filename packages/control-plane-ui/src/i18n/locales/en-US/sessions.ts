@@ -142,6 +142,7 @@ export const sessions = {
     noFileDiff: "No textual diff is available",
     commandShell: "Shell",
     copyOutput: "Copy output",
+    copyDetails: "Copy details",
     noCommandOutput: "No output",
     exitCode: "Exit code: {code}",
     status: { running: "Running", completed: "Completed", failed: "Failed", waiting: "Waiting" },

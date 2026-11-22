@@ -170,6 +170,7 @@ struct PopupCapture {
 struct CompositeWindow {
     window: Window,
     pixmap: Pixmap,
+    depth: u8,
     x: i32,
     y: i32,
     width: u16,
@@ -276,7 +277,7 @@ impl Capture {
             }
             None => window_pid(&conn, window)?,
         };
-        let geometry = window_geometry(&conn, root, window)?;
+        let geometry = window_frame_geometry(&conn, root, window)?;
         let depth = conn.get_geometry(window)?.reply()?.depth;
         validate_geometry(geometry)?;
         validate_visual(&conn, screen_index, depth, attributes.visual)?;
@@ -374,7 +375,9 @@ impl Capture {
                     })
                 }
             },
-            DrawableTarget::Window(handle) => window_geometry(&self.conn, self.root, handle.window),
+            DrawableTarget::Window(handle) => {
+                window_frame_geometry(&self.conn, self.root, handle.window)
+            }
         }
     }
     fn apply_geometry(&mut self, geometry: Geometry) -> anyhow::Result<()> {
@@ -451,20 +454,7 @@ impl Capture {
                 self.disable_composite();
             }
             if self.composite.is_none() {
-                self.conn
-                    .shm_get_image(
-                        self.drawable(),
-                        self.capture_origin.0,
-                        self.capture_origin.1,
-                        self.geometry.width as u16,
-                        self.geometry.height as u16,
-                        u32::MAX,
-                        ImageFormat::Z_PIXMAP.into(),
-                        self.segment,
-                        0,
-                    )?
-                    .reply()?;
-                self.file.read_exact_at(&mut self.base, 0)?;
+                self.read_direct_frame()?;
             }
             self.dirty = false;
         }
@@ -561,6 +551,7 @@ impl Capture {
                         Err(_) => continue,
                     }
                 };
+                let depth = conn.get_geometry(window)?.reply()?.depth;
                 let existing = previous.iter().position(|capture| capture.window == window);
                 let reused = existing.is_some();
                 let entry =
@@ -569,6 +560,7 @@ impl Capture {
                         .unwrap_or(CompositeWindow {
                             window,
                             pixmap: 0,
+                            depth,
                             x: geometry.x,
                             y: geometry.y,
                             width: geometry.width as u16,
@@ -586,6 +578,7 @@ impl Capture {
                 entry.pixmap = conn.generate_id()?;
                 conn.composite_name_window_pixmap(window, entry.pixmap)?
                     .check()?;
+                entry.depth = depth;
                 entry.x = geometry.x;
                 entry.y = geometry.y;
                 entry.width = geometry.width as u16;
@@ -629,6 +622,7 @@ impl Capture {
             .map(|window| {
                 (
                     window.pixmap,
+                    window.depth,
                     window.x,
                     window.y,
                     window.width,
@@ -638,7 +632,7 @@ impl Capture {
             .collect();
         let target_right = geometry.x + geometry.width as i32;
         let target_bottom = geometry.y + geometry.height as i32;
-        for (index, (pixmap, x, y, width, height)) in windows.into_iter().enumerate() {
+        for (index, (pixmap, depth, x, y, width, height)) in windows.into_iter().enumerate() {
             let left = geometry.x.max(x);
             let top = geometry.y.max(y);
             let right = target_right.min(x + width as i32);
@@ -659,20 +653,90 @@ impl Capture {
                 Err(error) if index == 0 => return Err(error),
                 Err(_) => continue,
             };
-            let source_stride = width as usize * 4;
             let destination_x = (left - geometry.x) as usize;
             let destination_y = (top - geometry.y) as usize;
-            for row in 0..height as usize {
-                let source = row * source_stride;
-                let destination = (destination_y + row) * stride + destination_x * 4;
-                frame[destination..destination + source_stride]
-                    .copy_from_slice(&pixels[source..source + source_stride]);
-                for alpha in (destination + 3..destination + source_stride).step_by(4) {
-                    frame[alpha] = 255;
-                }
+            if index == 0 || depth != 32 {
+                copy_bgra_rect(
+                    &mut frame,
+                    stride,
+                    destination_x,
+                    destination_y,
+                    &pixels,
+                    width as usize,
+                    height as usize,
+                );
+            } else {
+                blend_bgra_rect(
+                    &mut frame,
+                    stride,
+                    destination_x,
+                    destination_y,
+                    &pixels,
+                    width as usize,
+                    height as usize,
+                );
             }
         }
         self.base = frame;
+        Ok(())
+    }
+    fn read_direct_frame(&mut self) -> anyhow::Result<()> {
+        let DrawableTarget::Window(handle) = &self.target else {
+            self.conn
+                .shm_get_image(
+                    self.drawable(),
+                    self.capture_origin.0,
+                    self.capture_origin.1,
+                    self.geometry.width as u16,
+                    self.geometry.height as u16,
+                    u32::MAX,
+                    ImageFormat::Z_PIXMAP.into(),
+                    self.segment,
+                    0,
+                )?
+                .reply()?;
+            self.file.read_exact_at(&mut self.base, 0)?;
+            return Ok(());
+        };
+        // Without XComposite only the client drawable is available. Keep the
+        // visible window rectangle and place the client at its frame-relative
+        // origin so geometry and pointer input remain aligned.
+        let frame = self.geometry;
+        let client = window_geometry(&self.conn, self.root, handle.window)?;
+        self.base.fill(0);
+        let target_right = frame.x.saturating_add(frame.width as i32);
+        let target_bottom = frame.y.saturating_add(frame.height as i32);
+        let client_right = client.x.saturating_add(client.width as i32);
+        let client_bottom = client.y.saturating_add(client.height as i32);
+        let left = frame.x.max(client.x);
+        let top = frame.y.max(client.y);
+        let right = target_right.min(client_right);
+        let bottom = target_bottom.min(client_bottom);
+        if left >= right || top >= bottom {
+            return Ok(());
+        }
+        let width = (right - left) as u16;
+        let height = (bottom - top) as u16;
+        let pixels = self.read_pixels(
+            handle.window,
+            (left - client.x) as i16,
+            (top - client.y) as i16,
+            width,
+            height,
+        )?;
+        let frame_stride = frame.width as usize * 4;
+        let source_stride = width as usize * 4;
+        let destination_x = (left - frame.x) as usize;
+        let destination_y = (top - frame.y) as usize;
+        for row in 0..height as usize {
+            let source = row * source_stride;
+            let destination = (destination_y + row) * frame_stride + destination_x * 4;
+            self.base[destination..destination + source_stride]
+                .copy_from_slice(&pixels[source..source + source_stride]);
+            for alpha in (destination + 3..destination + source_stride).step_by(4) {
+                self.base[alpha] = 255;
+            }
+        }
         Ok(())
     }
     fn handle_structure_event(&mut self, window: Window) -> anyhow::Result<()> {
@@ -756,6 +820,9 @@ impl Capture {
             let Ok(popup) = window_geometry(&self.conn, self.root, window) else {
                 continue;
             };
+            let Ok(popup_depth) = window_depth(&self.conn, window) else {
+                continue;
+            };
             let left = target.x.max(popup.x);
             let top = target.y.max(popup.y);
             let right = target_right.min(popup.x + popup.width as i32);
@@ -774,17 +841,28 @@ impl Capture {
             ) else {
                 continue;
             };
-            let source_stride = width as usize * 4;
             let destination_x = (left - target.x) as usize;
             let destination_y = (top - target.y) as usize;
-            for row in 0..height as usize {
-                let source = row * source_stride;
-                let destination = (destination_y + row) * target_stride + destination_x * 4;
-                bgra[destination..destination + source_stride]
-                    .copy_from_slice(&pixels[source..source + source_stride]);
-                for alpha in (destination + 3..destination + source_stride).step_by(4) {
-                    bgra[alpha] = 255;
-                }
+            if popup_depth == 32 {
+                blend_bgra_rect(
+                    bgra,
+                    target_stride,
+                    destination_x,
+                    destination_y,
+                    &pixels,
+                    width as usize,
+                    height as usize,
+                );
+            } else {
+                copy_bgra_rect(
+                    bgra,
+                    target_stride,
+                    destination_x,
+                    destination_y,
+                    &pixels,
+                    width as usize,
+                    height as usize,
+                );
             }
         }
         Ok(())
@@ -940,7 +1018,7 @@ impl WindowLease {
         Ok(lease)
     }
     pub fn geometry(&self) -> anyhow::Result<Geometry> {
-        window_geometry(&self.conn, self.root, self.window)
+        window_frame_geometry(&self.conn, self.root, self.window)
     }
     pub fn resize(&mut self, target: WindowResizeTarget) -> anyhow::Result<Geometry> {
         const CONFIRM_TIMEOUT: Duration = Duration::from_millis(1_500);
@@ -961,9 +1039,12 @@ impl WindowLease {
         if desired == before {
             return Ok(before);
         }
+        let insets = window_frame_insets(&self.conn, self.root, self.window)?;
+        let (client_width, client_height) =
+            client_size_for_frame(desired.width, desired.height, insets);
         let mut configure = ConfigureWindowAux::new()
-            .width(desired.width)
-            .height(desired.height);
+            .width(client_width)
+            .height(client_height);
         if desired.x != before.x {
             configure = configure.x(desired.x);
         }
@@ -1257,6 +1338,63 @@ fn frame_bytes(geometry: Geometry) -> anyhow::Result<usize> {
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or_else(|| anyhow::anyhow!(BackendError::InvalidGeometry))
 }
+fn copy_bgra_rect(
+    destination: &mut [u8],
+    destination_stride: usize,
+    destination_x: usize,
+    destination_y: usize,
+    source: &[u8],
+    width: usize,
+    height: usize,
+) {
+    let source_stride = width * 4;
+    for row in 0..height {
+        let source_start = row * source_stride;
+        let destination_start = (destination_y + row) * destination_stride + destination_x * 4;
+        destination[destination_start..destination_start + source_stride]
+            .copy_from_slice(&source[source_start..source_start + source_stride]);
+        for alpha in (destination_start + 3..destination_start + source_stride).step_by(4) {
+            destination[alpha] = 255;
+        }
+    }
+}
+fn blend_bgra_rect(
+    destination: &mut [u8],
+    destination_stride: usize,
+    destination_x: usize,
+    destination_y: usize,
+    source: &[u8],
+    width: usize,
+    height: usize,
+) {
+    let source_stride = width * 4;
+    for row in 0..height {
+        for column in 0..width {
+            let source_offset = row * source_stride + column * 4;
+            let destination_offset =
+                (destination_y + row) * destination_stride + (destination_x + column) * 4;
+            let alpha = source[source_offset + 3] as u32;
+            if alpha == 0 {
+                continue;
+            }
+            if alpha == 255 {
+                destination[destination_offset..destination_offset + 4]
+                    .copy_from_slice(&source[source_offset..source_offset + 4]);
+                destination[destination_offset + 3] = 255;
+                continue;
+            }
+            // XRender ARGB32 windows (including GTK menus) store premultiplied
+            // color channels. Composite the source as-is over the opaque frame.
+            for channel in 0..3 {
+                let source_value = source[source_offset + channel] as u32;
+                let destination_value = destination[destination_offset + channel] as u32;
+                destination[destination_offset + channel] =
+                    (source_value + (destination_value * (255 - alpha) + 127) / 255).min(255) as u8;
+            }
+            destination[destination_offset + 3] = 255;
+        }
+    }
+}
 fn validate_geometry(geometry: Geometry) -> anyhow::Result<()> {
     anyhow::ensure!(
         geometry.width > 0
@@ -1327,6 +1465,59 @@ fn window_geometry(
         height: geometry.height.into(),
         scale: 1.0,
     })
+}
+fn window_depth(conn: &RustConnection, window: Window) -> anyhow::Result<u8> {
+    Ok(conn.get_geometry(window)?.reply()?.depth)
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WindowFrameInsets {
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+}
+fn window_frame_geometry(
+    conn: &RustConnection,
+    root: Window,
+    window: Window,
+) -> anyhow::Result<Geometry> {
+    let frame = top_level_window(conn, root, window)?;
+    window_geometry(conn, root, frame)
+}
+fn window_frame_insets(
+    conn: &RustConnection,
+    root: Window,
+    window: Window,
+) -> anyhow::Result<WindowFrameInsets> {
+    let client = window_geometry(conn, root, window)?;
+    let frame = window_frame_geometry(conn, root, window)?;
+    let client_right = client.x.saturating_add(client.width as i32);
+    let client_bottom = client.y.saturating_add(client.height as i32);
+    let frame_right = frame.x.saturating_add(frame.width as i32);
+    let frame_bottom = frame.y.saturating_add(frame.height as i32);
+    anyhow::ensure!(
+        client.x >= frame.x
+            && client.y >= frame.y
+            && client_right <= frame_right
+            && client_bottom <= frame_bottom,
+        BackendError::InvalidGeometry
+    );
+    Ok(WindowFrameInsets {
+        left: (client.x - frame.x) as u32,
+        top: (client.y - frame.y) as u32,
+        right: (frame_right - client_right) as u32,
+        bottom: (frame_bottom - client_bottom) as u32,
+    })
+}
+fn client_size_for_frame(width: u32, height: u32, insets: WindowFrameInsets) -> (u32, u32) {
+    (
+        width
+            .saturating_sub(insets.left.saturating_add(insets.right))
+            .max(1),
+        height
+            .saturating_sub(insets.top.saturating_add(insets.bottom))
+            .max(1),
+    )
 }
 fn top_level_window(conn: &RustConnection, root: Window, window: Window) -> anyhow::Result<Window> {
     let mut current = window;
@@ -1450,13 +1641,9 @@ fn inspect_window(
     let hidden = attributes.map_state != MapState::VIEWABLE
         || property_atoms(conn, window, atoms.wm_state, AtomEnum::ATOM)
             .is_some_and(|values| values.contains(&atoms.wm_state_hidden));
-    let geometry = conn.get_geometry(window).ok()?.reply().ok()?;
-    let position = conn
-        .translate_coordinates(window, root, 0, 0)
-        .ok()?
-        .reply()
-        .ok()?;
-    if geometry.width == 0 || geometry.height == 0 || !position.same_screen {
+    let client_geometry = conn.get_geometry(window).ok()?.reply().ok()?;
+    let geometry = window_frame_geometry(conn, root, window).ok()?;
+    if geometry.width == 0 || geometry.height == 0 {
         return None;
     }
     let title = window_title(conn, window, atoms);
@@ -1466,7 +1653,8 @@ fn inspect_window(
         .and_then(|v| v.first().copied());
     let unavailable_reason = if hidden {
         Some(BackendError::WindowUnavailable.to_string())
-    } else if validate_visual(conn, screen_index, geometry.depth, attributes.visual).is_err() {
+    } else if validate_visual(conn, screen_index, client_geometry.depth, attributes.visual).is_err()
+    {
         Some(BackendError::WindowUnsupported.to_string())
     } else {
         None
@@ -1478,8 +1666,8 @@ fn inspect_window(
         kind: "window".into(),
         title,
         subtitle,
-        width: geometry.width.into(),
-        height: geometry.height.into(),
+        width: geometry.width,
+        height: geometry.height,
     })
 }
 fn window_type_skipped(conn: &RustConnection, window: Window, atoms: &Atoms) -> bool {
@@ -1560,4 +1748,43 @@ fn truncate(value: String, maximum_bytes: usize) -> String {
         result.push(character);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{blend_bgra_rect, client_size_for_frame, copy_bgra_rect, WindowFrameInsets};
+
+    #[test]
+    fn frame_resize_removes_window_manager_insets_from_the_client_request() {
+        let insets = WindowFrameInsets {
+            left: 5,
+            top: 29,
+            right: 5,
+            bottom: 5,
+        };
+        assert_eq!(client_size_for_frame(917, 664, insets), (907, 630));
+        assert_eq!(client_size_for_frame(100, 40, insets), (90, 6));
+        assert_eq!(client_size_for_frame(8, 20, insets), (1, 1));
+    }
+
+    #[test]
+    fn popup_blend_preserves_transparency_and_composites_premultiplied_shadow() {
+        let mut destination = vec![255; 3 * 4];
+        let source = [
+            10, 20, 30, 0, // transparent popup shadow
+            10, 20, 30, 128, // premultiplied semi-transparent popup shadow
+            40, 50, 60, 255, // opaque popup content
+        ];
+        blend_bgra_rect(&mut destination, 12, 0, 0, &source, 3, 1);
+        assert_eq!(&destination[0..4], &[255, 255, 255, 255]);
+        assert_eq!(&destination[4..8], &[137, 147, 157, 255]);
+        assert_eq!(&destination[8..12], &[40, 50, 60, 255]);
+    }
+
+    #[test]
+    fn opaque_window_copy_forces_the_published_alpha_channel() {
+        let mut destination = vec![0; 4];
+        copy_bgra_rect(&mut destination, 4, 0, 0, &[1, 2, 3, 0], 1, 1);
+        assert_eq!(destination, vec![1, 2, 3, 255]);
+    }
 }

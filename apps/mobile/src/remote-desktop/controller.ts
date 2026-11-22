@@ -4,10 +4,13 @@ import {
   DesktopFallbackFrameAssembler,
   DesktopViewerSourcesSchema,
   REMOTE_DESKTOP_CHANNEL_VERSION,
+  REMOTE_DESKTOP_MAX_CLIPBOARD_TEXT_BYTES,
+  REMOTE_DESKTOP_MAX_CLIPBOARD_WIRE_BYTES,
   REMOTE_DESKTOP_MAX_MESSAGE_BYTES,
   REMOTE_DESKTOP_SIGNAL_SUBPROTOCOL,
   decodeDesktopFallbackFrame,
 } from '@task-handoff/protocol/remote-desktop';
+import * as Clipboard from 'expo-clipboard';
 import type {
   DesktopCreated,
   DesktopFallbackSession,
@@ -142,6 +145,20 @@ export class RemoteDesktopController {
   private sessionRecovery?: Promise<void>;
   private signalOpen = false;
   private inputEpoch = 0;
+  private clipboardSupported = false;
+  private clipboardAutoEnableAttempted = false;
+  private clipboardRequestAutomatic = false;
+  private clipboardRequestedEnabled = false;
+  private clipboardSubscription?: { remove(): void };
+  private clipboardReadInFlight = false;
+  private clipboardReadPending = false;
+  private clipboardReadFailed = false;
+  private clipboardWriteInFlight = false;
+  private clipboardWriteGeneration = 0;
+  private clipboardWriteFailed = false;
+  private lastLocalClipboardText = '';
+  private lastRemoteClipboardText = '';
+  private pendingRemoteClipboardText?: string;
   private inputAliveTimer?: ReturnType<typeof setInterval>;
   private inputResumeAckTimer?: ReturnType<typeof setTimeout>;
   private inputResumeRetryTimer?: ReturnType<typeof setTimeout>;
@@ -258,7 +275,7 @@ export class RemoteDesktopController {
   private async startSession() {
     if (this.destroyed || this.session) return;
     const epoch = this.epoch;
-    this.update({ phase: 'connecting', error: undefined, inputRequested: this.interactive, transportDiagnostics: undefined, videoCodec: undefined, videoFrameRate: undefined });
+    this.update({ phase: 'connecting', error: undefined, inputRequested: this.interactive, transportDiagnostics: undefined, videoCodec: undefined, videoFrameRate: undefined, clipboardError: undefined });
     this.armStartupTimeout();
     try {
       const selection = await this.resolveCaptureSelection();
@@ -368,6 +385,8 @@ export class RemoteDesktopController {
     if (this.snapshotValue.phase === 'connecting' || this.snapshotValue.phase === 'reconnecting') this.armStartupTimeout();
     this.requestKeyframe();
     if (this.snapshotValue.inputRequested) this.resumeWanted();
+    this.enableClipboardByDefault();
+    if (this.snapshotValue.clipboardEnabled) void this.syncClipboardAfterActive();
   }
 
   setInteractive(interactive: boolean) {
@@ -414,6 +433,58 @@ export class RemoteDesktopController {
     if (capturePrecision === this.snapshotValue.capturePrecision) return;
     this.update({ capturePrecision });
     this.applyStreamResolution();
+  }
+
+  setClipboardEnabled(enabled: boolean) {
+    if (this.destroyed) return;
+    if (enabled && !this.clipboardSupported) return;
+    if (!enabled) {
+      this.stopClipboardSync(true);
+      this.update({ clipboardEnabled: false });
+    }
+    this.requestClipboardEnabled(enabled);
+  }
+
+  setClipboardSupported(supported: boolean) {
+    if (this.destroyed || this.clipboardSupported === supported) return;
+    this.clipboardSupported = supported;
+    if (supported) {
+      this.enableClipboardByDefault();
+    } else if (this.snapshotValue.clipboardEnabled || this.snapshotValue.clipboardPending) {
+      this.setClipboardEnabled(false);
+    }
+  }
+
+  private requestClipboardEnabled(enabled: boolean, automatic = false) {
+    this.clipboardRequestAutomatic = automatic;
+    this.clipboardRequestedEnabled = enabled;
+    if (!this.wire('control', 'clipboard.enable', { enabled })) {
+      this.clipboardRequestAutomatic = false;
+      this.clipboardRequestedEnabled = false;
+      this.update({
+        clipboardPending: false,
+        ...(!automatic && enabled
+          ? { clipboardError: { code: 'REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE', message: 'Clipboard channel unavailable.' } }
+          : {}),
+      });
+      return false;
+    }
+    this.update({ clipboardPending: true, clipboardError: undefined });
+    return true;
+  }
+
+  private enableClipboardByDefault() {
+    if (
+      this.destroyed
+      || !this.clipboardSupported
+      || !this.active
+      || this.snapshotValue.paused
+      || this.clipboardAutoEnableAttempted
+      || this.snapshotValue.clipboardEnabled
+      || this.snapshotValue.clipboardPending
+    ) return;
+    this.clipboardAutoEnableAttempted = true;
+    if (!this.requestClipboardEnabled(true, true)) this.clipboardAutoEnableAttempted = false;
   }
 
   setVideoCodecs(codecs: readonly string[]) {
@@ -714,10 +785,11 @@ export class RemoteDesktopController {
         channel.onopen = () => {
           this.sendVisibility();
           this.applyStreamResolution();
+          this.enableClipboardByDefault();
           if (this.snapshotValue.inputRequested) this.resumeWanted();
         };
       } else if (label === 'clipboard') {
-        channel.onmessage = (event: any) => this.handleControlMessage(event?.data);
+        channel.onmessage = (event: any) => this.handleControlMessage(event?.data, 'clipboard');
       }
     }
     peer.addEventListener('track', (event: any) => {
@@ -1132,6 +1204,7 @@ export class RemoteDesktopController {
     this.startFallbackDiagnostics();
     this.sendVisibility();
     this.applyStreamResolution();
+    this.enableClipboardByDefault();
     this.requestFallbackKeyframe();
     if (this.active && this.snapshotValue.inputRequested) this.resumeWanted();
     if (this.peer && (this.peer.connectionState === 'connected' || this.peer.iceConnectionState === 'connected' || this.peer.iceConnectionState === 'completed')) {
@@ -1306,13 +1379,38 @@ export class RemoteDesktopController {
     try { media.send(JSON.stringify({ type: 'fallback.keyframe-request' })); } catch { /* reconnect owns the failure */ }
   }
 
-  private handleControlMessage(data: unknown) {
+  private handleControlMessage(data: unknown, channel: 'control' | 'clipboard' = 'control') {
     if (typeof data !== 'string') return;
-    try { this.handleControlValue(JSON.parse(data)); } catch { /* channel-level malformed messages are ignored */ }
+    try { this.handleControlValue(JSON.parse(data), channel); } catch { /* channel-level malformed messages are ignored */ }
   }
 
-  private handleControlValue(value: any) {
-    if (value?.type === 'input.resumed') {
+  private handleControlValue(value: any, channel: 'control' | 'clipboard' = 'control') {
+    if (value?.type === 'clipboard.enabled') {
+      const enabled = value.payload?.enabled === true;
+      const wasPending = this.snapshotValue.clipboardPending;
+      const requestedEnabled = this.clipboardRequestedEnabled;
+      const automatic = this.clipboardRequestAutomatic;
+      this.clipboardRequestAutomatic = false;
+      this.clipboardRequestedEnabled = false;
+      const failedExplicitRequest = wasPending && requestedEnabled && !automatic && !this.snapshotValue.clipboardError;
+      this.update({
+        clipboardEnabled: enabled,
+        clipboardPending: false,
+        ...(enabled ? { clipboardError: undefined } : {}),
+        ...(failedExplicitRequest ? { clipboardError: { code: 'REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE', message: 'Clipboard unavailable.' } } : {}),
+      });
+      if (enabled) this.startClipboardSync();
+      else this.stopClipboardSync(true);
+    } else if (value?.type === 'clipboard.text') {
+      const text = typeof value.payload?.text === 'string' ? value.payload.text : '';
+      if (utf8Length(text) > REMOTE_DESKTOP_MAX_CLIPBOARD_TEXT_BYTES) {
+        this.update({ clipboardError: { code: 'REMOTE_DESKTOP_CLIPBOARD_TOO_LARGE', message: 'Remote clipboard text is too large.' } });
+        return;
+      }
+      this.queueRemoteClipboardText(text);
+    } else if (value?.type === 'clipboard.written') {
+      return;
+    } else if (value?.type === 'input.resumed') {
       this.inputEpoch = Number(value.payload?.inputEpoch) || 0;
       this.clearInputResumeTimers();
       this.inputResumeRetryCount = 0;
@@ -1365,6 +1463,10 @@ export class RemoteDesktopController {
       }
     } else if (value?.type === 'error') {
       const code = typeof value.payload?.code === 'string' ? value.payload.code : 'REMOTE_DESKTOP_MESSAGE_INVALID';
+      if (channel === 'clipboard' || code.startsWith('REMOTE_DESKTOP_CLIPBOARD')) {
+        this.update({ clipboardPending: false, clipboardError: { code, message: code } });
+        return;
+      }
       if (code === 'REMOTE_DESKTOP_WEBRTC_NOT_READY') return;
       if (code === 'REMOTE_DESKTOP_INVALID_STATE' && this.snapshotValue.inputEnabled) {
         diagnosticLog.info('remote.desktop.input.late-error.ignored', { code });
@@ -1555,6 +1657,129 @@ export class RemoteDesktopController {
 
   private sendVisibility() {
     this.wire('control', 'visibility', { hidden: !this.active });
+  }
+
+  private startClipboardSync() {
+    if (this.destroyed || this.clipboardSubscription || !this.snapshotValue.clipboardEnabled) return;
+    try {
+      this.clipboardSubscription = Clipboard.addClipboardListener(({ contentTypes }) => {
+        if (!contentTypes.includes(Clipboard.ContentType.PLAIN_TEXT) && !contentTypes.includes(Clipboard.ContentType.HTML)) return;
+        void this.syncLocalClipboard();
+      });
+    } catch (cause) {
+      diagnosticLog.warn('remote.desktop.clipboard.listener.failed', { message: errorMessage(cause) });
+      this.update({ clipboardError: { code: 'REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE', message: 'Clipboard unavailable.' } });
+    }
+  }
+
+  private stopClipboardSync(reset = false) {
+    this.clipboardSubscription?.remove();
+    this.clipboardSubscription = undefined;
+    this.clipboardWriteGeneration += 1;
+    this.clipboardReadInFlight = false;
+    this.clipboardReadPending = false;
+    this.clipboardReadFailed = false;
+    this.clipboardWriteInFlight = false;
+    this.clipboardWriteFailed = false;
+    if (!reset) return;
+    this.lastLocalClipboardText = '';
+    this.lastRemoteClipboardText = '';
+    this.pendingRemoteClipboardText = undefined;
+  }
+
+  private async syncClipboardAfterActive() {
+    await this.flushPendingRemoteClipboard();
+    await this.syncLocalClipboard();
+  }
+
+  private async syncLocalClipboard() {
+    if (this.destroyed || !this.active || this.snapshotValue.paused || !this.snapshotValue.clipboardEnabled) return;
+    if (this.clipboardReadInFlight) {
+      this.clipboardReadPending = true;
+      return;
+    }
+    if (this.pendingRemoteClipboardText !== undefined) {
+      await this.flushPendingRemoteClipboard();
+      return;
+    }
+    this.clipboardReadInFlight = true;
+    try {
+      const text = await Clipboard.getStringAsync();
+      this.clipboardReadFailed = false;
+      this.sendLocalClipboardText(text);
+    } catch (cause) {
+      if (!this.clipboardReadFailed) {
+        this.clipboardReadFailed = true;
+        this.update({ clipboardError: { code: 'REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE', message: errorMessage(cause) } });
+      }
+    } finally {
+      this.clipboardReadInFlight = false;
+      if (this.clipboardReadPending) {
+        this.clipboardReadPending = false;
+        void this.syncLocalClipboard();
+      }
+    }
+  }
+
+  private sendLocalClipboardText(text: string) {
+    if (this.destroyed || !this.snapshotValue.clipboardEnabled) return;
+    if (text === this.lastLocalClipboardText) return;
+    this.lastLocalClipboardText = text;
+    if (!text || text === this.lastRemoteClipboardText) return;
+    if (utf8Length(text) > REMOTE_DESKTOP_MAX_CLIPBOARD_TEXT_BYTES) {
+      this.update({ clipboardError: { code: 'REMOTE_DESKTOP_CLIPBOARD_TOO_LARGE', message: 'Clipboard text is too large.' } });
+      return;
+    }
+    if (!this.wire('clipboard', 'clipboard.write', { text }, REMOTE_DESKTOP_MAX_CLIPBOARD_WIRE_BYTES)) {
+      this.update({ clipboardError: { code: 'REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE', message: 'Clipboard channel unavailable.' } });
+      return;
+    }
+    this.lastRemoteClipboardText = text;
+    this.update({ clipboardError: undefined });
+  }
+
+  private queueRemoteClipboardText(text: string) {
+    if (!this.snapshotValue.clipboardEnabled) return;
+    this.lastRemoteClipboardText = text;
+    if (text === this.lastLocalClipboardText) {
+      this.pendingRemoteClipboardText = undefined;
+      return;
+    }
+    this.lastLocalClipboardText = text;
+    this.pendingRemoteClipboardText = text;
+    void this.flushPendingRemoteClipboard();
+  }
+
+  private async flushPendingRemoteClipboard() {
+    const text = this.pendingRemoteClipboardText;
+    if (text === undefined || !this.active || this.snapshotValue.paused || !this.snapshotValue.clipboardEnabled || this.clipboardWriteInFlight) return;
+    const generation = this.clipboardWriteGeneration;
+    this.clipboardWriteInFlight = true;
+    let written = false;
+    try {
+      const applied = await Clipboard.setStringAsync(text);
+      if (!applied) throw new Error('REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE');
+      if (generation !== this.clipboardWriteGeneration) return;
+      if (this.pendingRemoteClipboardText === text) this.pendingRemoteClipboardText = undefined;
+      this.clipboardWriteFailed = false;
+      this.update({ clipboardError: undefined });
+      written = true;
+    } catch (cause) {
+      if (generation !== this.clipboardWriteGeneration) return;
+      if (!this.clipboardWriteFailed) {
+        this.clipboardWriteFailed = true;
+        this.update({ clipboardError: { code: 'REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE', message: errorMessage(cause) } });
+      }
+    } finally {
+      if (generation === this.clipboardWriteGeneration) {
+        this.clipboardWriteInFlight = false;
+        // A newer clipboard.text may have arrived while the native write was
+        // pending. Keep only one write at a time, then drain the latest value.
+        if (written && this.pendingRemoteClipboardText !== undefined) {
+          void this.flushPendingRemoteClipboard();
+        }
+      }
+    }
   }
 
   private applyStreamResolution() {
@@ -1871,6 +2096,10 @@ export class RemoteDesktopController {
   private async stopCurrentSession(stopRemote: boolean) {
     this.stopping = true;
     this.epoch += 1;
+    this.stopClipboardSync(true);
+    this.clipboardAutoEnableAttempted = false;
+    this.clipboardRequestAutomatic = false;
+    this.clipboardRequestedEnabled = false;
     this.clearAllTimers();
     this.stopInputAlive();
     this.stopSignalAlive();
@@ -1904,6 +2133,9 @@ export class RemoteDesktopController {
       signalingReady: false,
       inputEnabled: false,
       inputPending: false,
+      clipboardEnabled: false,
+      clipboardPending: false,
+      clipboardError: undefined,
       controlRequestPending: false,
       transportStates: { p2p: 'idle', turn: 'idle', websocket: 'idle' },
     });
@@ -2022,6 +2254,10 @@ export class RemoteDesktopController {
   private async fail(code: string, message: string) {
     if (this.destroyed) return;
     diagnosticLog.warn('remote.desktop.fail', { code, message });
+    this.stopClipboardSync(true);
+    this.clipboardAutoEnableAttempted = false;
+    this.clipboardRequestAutomatic = false;
+    this.clipboardRequestedEnabled = false;
     const session = this.session;
     this.epoch += 1;
     this.clearAllTimers();
@@ -2036,7 +2272,7 @@ export class RemoteDesktopController {
     await resetRemoteDesktopDecoder().catch(() => undefined);
     this.session = undefined;
     this.fallbackState = 'failed';
-    this.update({ phase: 'error', error: { code, message }, inputEnabled: false, inputRequested: false, inputPending: false, signalingReady: false, streamURL: undefined, transportDiagnostics: undefined, videoCodec: undefined, videoFrameRate: undefined });
+    this.update({ phase: 'error', error: { code, message }, inputEnabled: false, inputRequested: false, inputPending: false, clipboardEnabled: false, clipboardPending: false, signalingReady: false, streamURL: undefined, transportDiagnostics: undefined, videoCodec: undefined, videoFrameRate: undefined });
     if (session) await this.input.api.stop(this.input.instanceId, session.snapshot.viewerSessionId).catch(() => undefined);
   }
 

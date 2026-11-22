@@ -4,7 +4,7 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
-const { app, BrowserView, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net: electronNet, Notification, session, shell, Tray } = require("electron");
+const { app, BrowserView, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net: electronNet, Notification, session, shell, Tray } = require("electron");
 const WebSocket = require("ws");
 const { autoUpdater } = require("electron-updater");
 const {
@@ -55,6 +55,7 @@ const { appendRotatingLog } = require("./rotating-log.cjs");
 const { markLogStreamUnavailable, writeLogLine } = require("./log-sink.cjs");
 const { DesktopBrowserContextManager } = require("./desktop-browser-contexts.cjs");
 const { externalNavigationUrl, isAllowedControlPlaneNavigation } = require("./navigation-policy.cjs");
+const { createDesktopClipboardBridge } = require("./desktop-clipboard.cjs");
 
 let mainWindow;
 let controlPlaneProcess;
@@ -71,6 +72,10 @@ let desktopBrowserContexts;
 const desktopBrowserGuests = new Map();
 const desktopServiceSupervisor = createDesktopServiceSupervisor();
 const controlPlaneWindows = createControlPlaneWindowRegistry();
+const desktopClipboard = createDesktopClipboardBridge({
+  clipboard,
+  broadcast: input => broadcastDesktopClipboardChange(input),
+});
 const windowsTitleBarOverlayHeights = new WeakMap();
 const childProcessSpawnErrors = new WeakMap();
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
@@ -505,6 +510,14 @@ function broadcastBrowserLoadFailure(failure) {
   for (const browserWindow of BrowserWindow.getAllWindows()) {
     if (browserWindow.isDestroyed()) continue;
     try { browserWindow.webContents.send("task-handoff:browser-load-failure", failure); } catch { /* window is going away */ }
+  }
+}
+
+function broadcastDesktopClipboardChange(input) {
+  const targets = new Set([mainWindow, ...controlPlaneWindows.windows()]);
+  for (const target of targets) {
+    if (!target || target.isDestroyed()) continue;
+    try { target.webContents.send("task-handoff:clipboard-changed", input); } catch { /* window is going away */ }
   }
 }
 
@@ -1212,6 +1225,25 @@ ipcMain.handle("task-handoff:open-external-url", async (_event, value) => {
   return error ? { ok: false, code: "open-external-url-failed", error } : { ok: true };
 });
 
+function trustedDesktopClipboardSender(event) {
+  try {
+    trustedControlPlaneSenderUrl(event.sender);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+ipcMain.handle("task-handoff:clipboard-read-text", (event) => {
+  if (!trustedDesktopClipboardSender(event)) return { ok: false, code: "desktop-clipboard-untrusted" };
+  return { ok: true, text: desktopClipboard.readText() };
+});
+
+ipcMain.handle("task-handoff:clipboard-write-text", (event, value) => {
+  if (!trustedDesktopClipboardSender(event)) return { ok: false, code: "desktop-clipboard-untrusted" };
+  return desktopClipboard.writeText(value);
+});
+
 ipcMain.handle("task-handoff:open-app-window", (_event, url) => {
   createAppWindow(url);
   return { ok: true };
@@ -1425,6 +1457,7 @@ if (!ownsDesktopInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    desktopClipboard.start();
     desktopBrowserContexts = new DesktopBrowserContextManager({
       fetch: (url, init) => fetchControlPlaneWithSessionCookies(url, init),
       WebSocket,

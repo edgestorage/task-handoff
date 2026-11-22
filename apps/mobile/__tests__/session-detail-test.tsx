@@ -376,6 +376,100 @@ test('expanded command activities render the Web command card with copy support'
   await screen.unmount();
 });
 
+test('file change activities show the same inline diff after a live event and snapshot recovery', async () => {
+  const write = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+  const store = new MobileAiSessionStore();
+  const turn = { id: 'turn-1', providerTurnId: 'provider-turn-1' };
+  const diff = '@@ -3 +3 @@\n-before\n+after';
+  const activity = {
+    id: 'file-change', turnId: turn.providerTurnId, type: 'activity', activityKind: 'fileChange', title: 'File change',
+    status: 'completed', paths: ['/workspace/old.ts', '/workspace/empty.ts'],
+    output: JSON.stringify([
+      { path: '/workspace/old.ts', kind: { type: 'move', move_path: '/workspace/new.ts' }, diff },
+      { path: '/workspace/empty.ts', kind: { type: 'update' } },
+    ]),
+  } as const;
+  const items = () => store.timelineTurnState('cp-files', 'instance-1', session.id, turn).items.filter((item) => item.type === 'activity');
+  store.applyTimelineItem('cp-files', {
+    instanceId: 'instance-1', sessionId: session.id, providerSessionId: 'provider-session', generatedAt: '2026-08-05T00:01:00.000Z',
+    item: { ...activity, paths: [...activity.paths] },
+  });
+  const screen = await render(<TimelineActivityGroup activities={items()} />);
+  const path = '/workspace/old.ts → /workspace/new.ts';
+  expect(screen.queryByRole('button', { name: path })).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: /File change/ }));
+  screen.getByText('+1');
+  screen.getByText('-1');
+  expect(screen.queryByTestId('repository-diff-addition')).toBeNull();
+  expect(screen.queryByText('Output')).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: path }));
+  screen.getByTestId('repository-diff-deletion');
+  screen.getByTestId('repository-diff-addition');
+  await fireEvent.press(screen.getByRole('button', { name: `Copy diff: ${path}` }));
+  expect(write).toHaveBeenCalledWith(diff);
+  await fireEvent.press(screen.getByRole('button', { name: '/workspace/empty.ts' }));
+  screen.getByText('No textual diff is available');
+
+  store.recoverTimelines('cp-files');
+  store.resolveTurnTimeline('cp-files', 'instance-1', session.id, turn, [{ ...activity, paths: [...activity.paths] }], 'timeline-r1');
+  expect(items()).toEqual([{ ...activity, paths: [...activity.paths] }]);
+  await screen.rerender(<TimelineActivityGroup activities={items()} />);
+  screen.getByRole('button', { name: path, expanded: true });
+  screen.getByTestId('repository-diff-addition');
+  expect(screen.queryByText('Output')).toBeNull();
+  write.mockRestore();
+  await screen.unmount();
+});
+
+test('file change activities retain path-only and unparsed details', async () => {
+  const activity = { id: 'paths', turnId: 'turn-1', type: 'activity', activityKind: 'fileChange', title: 'File change' } as const;
+  const screen = await render(<TimelineActivityGroup activities={[{ ...activity, paths: ['/workspace/a.ts'] }]} />);
+  await fireEvent.press(screen.getByRole('button', { name: /File change/ }));
+  await fireEvent.press(screen.getByRole('button', { name: '/workspace/a.ts' }));
+  screen.getByText('No textual diff is available');
+
+  await screen.rerender(<TimelineActivityGroup activities={[{ ...activity, output: 'Unstructured provider output' }]} />);
+  screen.getByText('Unstructured provider output');
+  expect(screen.queryByRole('button', { name: '/workspace/a.ts' })).toBeNull();
+  await screen.unmount();
+});
+
+test.each([
+  { kind: 'fileRead', title: 'Read', input: 'sed -n 1,4p src/app.ts', output: 'export const ready = true;' },
+  { kind: 'fileSearch', title: 'Search', input: 'rg ready src', output: 'src/app.ts:1:export const ready = true;' },
+  { kind: 'fileList', title: 'List', input: 'ls src', output: 'app.ts\nindex.ts' },
+  { kind: 'explore', title: 'Explored', input: 'ls src && rg ready src', output: 'app.ts\nsrc/app.ts:1:export const ready = true;' },
+])('$title details use the Shell text surface and copy the original fields', async ({ kind, title, input, output }) => {
+  const write = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
+  const screen = await render(<TimelineActivityGroup activities={[{
+    id: kind, turnId: 'turn-1', type: 'activity', activityKind: kind, title, input, output,
+  }]} />);
+
+  expect(screen.queryByTestId('timeline-text-result')).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: title }));
+  const body = within(screen.getByTestId('timeline-text-result-content'));
+  body.getByText('Input');
+  body.getByText(input);
+  body.getByText('Output');
+  body.getByText(output);
+  expect(screen.getByTestId('timeline-text-result-content').props.horizontal).toBe(true);
+  await fireEvent.press(screen.getByRole('button', { name: 'Copy details' }));
+  expect(write).toHaveBeenCalledWith(`${input}\n\n${output}`);
+  write.mockRestore();
+  await screen.unmount();
+});
+
+test('a path-only directory activity can expand without inventing output', async () => {
+  const path = '/workspace/src/a/long/directory';
+  const screen = await render(<TimelineActivityGroup activities={[{
+    id: 'list', turnId: 'turn-1', type: 'activity', activityKind: 'fileList', title: 'List', paths: [path],
+  }]} />);
+  await fireEvent.press(screen.getByRole('button', { name: /List/ }));
+  within(screen.getByTestId('timeline-text-result-content')).getByText(path);
+  expect(screen.queryByText('Output')).toBeNull();
+  await screen.unmount();
+});
+
 test('failed command activities keep the exit code in the command card header', async () => {
   const screen = await render(<TimelineActivityGroup activities={[{
     id: 'failed-command',

@@ -1199,7 +1199,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /\.ai-session-activity-group \{[\s\S]*gap: var\(--ai-session-activity-gap\);/);
   assert.match(group, /\.ai-session-activity-list-content \{[\s\S]*gap: var\(--ai-session-activity-gap\);/);
   assert.doesNotMatch(group, /ai-session-activity-list-inline/);
-  assert.match(group, /\.ai-session-activity-details section \{[^}]*margin-top: 4px;/);
+  assert.match(group, /\.ai-session-activity-details-content \{[^}]*gap: 4px;/);
   assert.match(group, /\.ai-session-activity-details :deep\(\.markdown-content > :first-child\) \{ margin-top: 0; \}/);
   assert.match(group, /\.ai-session-activity-group-summary small \{[\s\S]*font-size: inherit;[\s\S]*line-height: inherit;/);
   assert.doesNotMatch(group, /sessions\.timeline\.details/);
@@ -1208,8 +1208,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /FilePenLine,[\s\S]*Image as ImageIcon,[\s\S]*SquareTerminal,/);
   assert.match(group, /FileSearch,[\s\S]*FolderOpen,[\s\S]*Search,/);
   assert.match(group, /activity\.activityKind === "commandExecution"/);
-  assert.match(group, /<AiSessionCommandResult v-else-if="isCommandActivity\(activity\)" :command="activity\.input" :output="activity\.output" :exit-code="activity\.exitCode"/);
-  assert.match(group, /if \(isCommandActivity\(activity\)\) return Boolean\(activity\.input \|\| activity\.output \|\| activity\.exitCode !== undefined\)/);
+  assert.match(group, /return Boolean\(aiSessionActivityDetailInput\(activity\) \|\| activity\.output \|\| activity\.exitCode !== undefined\)/);
   assert.match(group, /if \(isCommandActivity\(activity\)\) return activity\.input\?\.trim\(\) \|\| undefined/);
   assert.doesNotMatch(group, /ai-session-activity-item-head-command/);
   assert.match(group, /\.ai-session-activity-item-head > \.ai-session-activity-summary \{[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
@@ -1235,7 +1234,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.doesNotMatch(group, /activity\.title === "Command"/);
   assert.match(group, /:title="activityHoverText\(activity\)"/);
   assert.doesNotMatch(group, /ai-session-activity-dot/);
-  assert.match(group, /border-left: 1px solid var\(--line-subtle\)/);
+  assert.doesNotMatch(group, /ai-session-activity-pre-scroll/);
   assert.match(history, /\.ai-session-turn-history-disclosure \{[\s\S]*padding-left: 7px; \}/);
   assert.match(history, /\.ai-session-turn-history-content \{[\s\S]*gap: 12px;[\s\S]*padding: 12px 0 0 12px;[\s\S]*border-left: 1px solid var\(--line-subtle\);/);
   assert.doesNotMatch(history, /\.ai-session-turn-history-content \{[\s\S]*margin: 12px 0 0 7px;/);
@@ -1251,12 +1250,17 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(appStyles, /--ai-session-user-message-bg: #e5e5ea;/);
 });
 
-test("command cards mute the command input separately from the output", () => {
-  const commandResult = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCommandResult.vue", import.meta.url), "utf8");
-  assert.match(commandResult, /class="ai-session-command-result-input">\{\{ commandLine \}\}/);
-  assert.match(commandResult, /class="ai-session-command-result-output">\{\{ outputText \}\}/);
-  assert.match(commandResult, /\.ai-session-command-result-input \{ display: block; color: var\(--text-muted\); \}/);
-  assert.match(commandResult, /\.ai-session-command-result-output \{ display: block; color: var\(--text\); \}/);
+test("command and ordinary activity details share the Shell card while diff and reasoning keep their renderers", () => {
+  const group = fs.readFileSync(new URL("../src/components/ai-session/AiSessionActivityGroup.vue", import.meta.url), "utf8");
+  const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionActivityResult.vue", import.meta.url), "utf8");
+  assert.match(group, /<AiSessionFileChanges v-if="fileChanges\(activity\).length"/);
+  assert.match(group, /v-else-if="activity.activityKind === 'reasoning' && activity.output"[\s\S]*<MarkdownContent :content="activity.output"/);
+  assert.match(group, /<AiSessionActivityResult v-else[^>]*:shell="isCommandActivity\(activity\)"[^>]*:input="aiSessionActivityDetailInput\(activity\)"/);
+  assert.match(result, /<ScrollArea v-if="content"/);
+  assert.match(result, /\.ai-session-activity-result \{[^}]*border: 1px solid var\(--line-subtle\)/);
+  assert.match(result, /sessions.timeline.input[\s\S]*<code>\{\{ inputText \}\}[\s\S]*sessions.timeline.output[\s\S]*<code>\{\{ output \}\}/);
+  assert.match(result, /\.ai-session-activity-result pre\.ai-session-activity-result-command \{ color: var\(--text-muted\); \}/);
+  assert.match(result, /navigator.clipboard.writeText\(content.value\)/);
 });
 
 test("conversation Timeline keeps only the final AI message visible for every turn", () => {

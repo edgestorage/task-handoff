@@ -41,7 +41,7 @@ struct FrameCadence {
     dirty_rects_observed: bool,
 }
 impl FrameCadence {
-    /// ScreenCaptureKit may deliver callbacks at 30 fps even when the captured
+    /// ScreenCaptureKit may deliver callbacks at the capture frame rate even when the captured
     /// surface did not change. Window capture on supported macOS releases can
     /// omit dirtyRects, so the native plane signature is the primary detector.
     /// Display time remains available as a conservative last resort.
@@ -324,7 +324,7 @@ impl Capture {
             .with_pixel_format(PixelFormat::YCbCr_420v)
             .with_shows_cursor(show_cursor)
             .with_captures_audio(false)
-            .with_minimum_frame_interval(&CMTime::new(1, 30))
+            .with_minimum_frame_interval(&CMTime::new(1, 60))
             // SCK requires >=3 OS driver buffers. The application retains only
             // latest sample + one in flight (no raw-frame queue); never bypass
             // the maintained binding's documented native minimum.

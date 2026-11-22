@@ -95,8 +95,13 @@ test('websocket fallback uses the same resolution and bitrate budget as WebRTC',
   assert.doesNotMatch(routes, /maxBitrate: Math\.min\([^\n]*4_000_000/);
   assert.doesNotMatch(routes, /Math\.min\(capability\.fallback\.maxWidth \|\| 1280, 1280\)/);
   assert.match(protocolCapability, /max_width: 1920,\s*\n\s*max_height: 1080/);
-  assert.match(streaming, /crate::video::FALLBACK_LIMITS/);
+  assert.match(protocolCapability, /max_frame_rate: 60/);
+  assert.match(streaming, /crate::video::fallback_limits/);
+  assert.match(streaming, /crate::video::FALLBACK_DEFAULT_FRAME_RATE/);
   assert.match(streaming, /crate::video::FALLBACK_MAX_WIDTH/);
+  assert.match(streaming, /crate::video::FALLBACK_MAX_FRAME_RATE/);
+  assert.match(viewer, /avc1\.42E02A/);
+  assert.match(viewer, /hvc1\.1\.6\.L123\.90/);
 });
 
 test('remote desktop UI does not reuse AppSession/VNC frame URLs', () => {
@@ -366,6 +371,25 @@ test('remote desktop enables clipboard once per session without overriding a man
   assert.match(viewer, /!clipboard\.value && !automatic/);
 });
 
+test('remote desktop clipboard syncs automatically in both directions', () => {
+  assert.doesNotMatch(viewer, /sendLocalClipboard|readRemoteClipboard|ClipboardCopy|ClipboardPaste/);
+  assert.doesNotMatch(viewer, /"clipboard\.read"/);
+  assert.match(viewer, /const CLIPBOARD_SYNC_INTERVAL_MS = 750/);
+  assert.match(viewer, /clipboardSyncTimer = setInterval\(\(\) => \{[\s\S]*?syncLocalClipboard\(\)/);
+  assert.match(viewer, /async function syncLocalClipboard\(\)[\s\S]*?navigator\.clipboard\.readText\(\)[\s\S]*?wire\(channel, "clipboard\.write"/);
+  assert.match(viewer, /function queueRemoteClipboardText\(text: string\)/);
+  assert.match(viewer, /navigator\.clipboard\.writeText\(text\)/);
+  assert.match(viewer, /let clipboardRemoteWriteGeneration = 0/);
+  assert.match(viewer, /if \(written && pendingRemoteClipboardText !== undefined\) \{\s*void flushPendingRemoteClipboard\(\)/);
+  assert.match(viewer, /if \(canUseDesktopClipboard\(\)\) \{[\s\S]*?onDesktopClipboardChanged\(text =>/);
+  assert.match(viewer, /function readLocalClipboardText\(\): Promise<string> \{[\s\S]*?readDesktopClipboardText\(\)/);
+  assert.match(viewer, /function writeLocalClipboardText\(text: string\): Promise<void> \{[\s\S]*?writeDesktopClipboardText\(text\)/);
+  assert.match(viewer, /if \(clipboard\.value\) startClipboardSync\(\);\s*else stopClipboardSync\(true\)/);
+  assert.match(viewer, /function windowFocus\(\) \{[\s\S]*?syncClipboardAfterFocus\(\)/);
+  assert.match(viewer, /function visibility\(\) \{[\s\S]*?syncClipboardAfterFocus\(\)/);
+  assert.match(viewer, /clipboardRequestAutomatic = false;\s*stopClipboardSync\(true\)/);
+});
+
 test('remote desktop waits for the foreground visibility snapshot before resuming window input', () => {
   assert.match(viewer, /let visibilityResumePending = false/);
   assert.match(viewer, /let visibilityResumeRevision: number \| undefined/);
@@ -510,6 +534,18 @@ test('remote desktop fit mode follows viewer size changes instead of fitting onc
 
   const preset = viewer.slice(viewer.indexOf('function resizeRemoteWindowPreset'), viewer.indexOf('function handleWindowResizedValue'));
   assert.match(preset, /setWindowResizeFit\(false\)/);
+});
+
+test('remote desktop fit sends are throttled while retaining the latest size', () => {
+  assert.match(viewer, /const WINDOW_RESIZE_FIT_THROTTLE_MS = 120/);
+  assert.match(viewer, /let windowResizeFitLastSentAt = 0/);
+  assert.match(viewer, /function clearWindowResizeFitThrottle\(\)/);
+  assert.match(viewer, /function scheduleWindowResizeFitThrottle\(delay: number\)/);
+  assert.match(viewer, /function stopWindowResizeFitScheduling\(\)[\s\S]*?clearWindowResizeFitThrottle\(\)/);
+  const flush = viewer.slice(viewer.indexOf('function flushWindowResizeFit'), viewer.indexOf('function queueWindowResizeFitFlush'));
+  assert.match(flush, /WINDOW_RESIZE_FIT_THROTTLE_MS - \(Date\.now\(\) - windowResizeFitLastSentAt\)/);
+  assert.match(flush, /windowResizeFitPendingTarget = target;[\s\S]*?scheduleWindowResizeFitThrottle\(remainingThrottleMs\)/);
+  assert.match(flush, /windowResizeFitLastSentAt = Date\.now\(\)[\s\S]*?requestWindowResize\(\{ mode: "viewport"/);
 });
 
 test('remote desktop window resize prevents duplicate requests and correlates actual-size responses', () => {

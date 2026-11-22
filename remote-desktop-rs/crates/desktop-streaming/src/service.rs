@@ -27,6 +27,9 @@ struct FallbackRuntime {
     viewer: String,
     media: Option<mpsc::Sender<remote_desktop_protocol::fallback::EncodedFrame>>,
     control: Option<mpsc::Sender<String>>,
+    codec: Option<crate::codec::VideoCodec>,
+    limits: Option<crate::codec::Limits>,
+    budget: Option<crate::video::Budget>,
     media_started: bool,
     active: bool,
 }
@@ -56,6 +59,7 @@ struct LivePeer {
     reply_seq: u64,
     clipboard_enabled: bool,
     clipboard: String,
+    clipboard_baseline_ready: bool,
     native_clipboard: Option<crate::clipboard::Client>,
     ice_expires_at: Option<Instant>,
     pending_ice_expires_at: Option<Instant>,
@@ -74,6 +78,34 @@ struct LivePeer {
     expected_window_geometry: Option<(crate::traits::Geometry, Instant)>,
 }
 impl LivePeer {
+    /// Seed the remote baseline without emitting it. Enabling clipboard must
+    /// not overwrite either side with content that predates the session.
+    async fn seed_clipboard_baseline(&mut self) {
+        self.clipboard.clear();
+        self.clipboard_baseline_ready = false;
+        let Some(mut native) = self.native_clipboard.take() else {
+            self.clipboard_baseline_ready = true;
+            return;
+        };
+        match native.call(&crate::clipboard::Command::Read).await {
+            Ok(crate::clipboard::Reply::Text { text }) => {
+                self.clipboard = text;
+                self.clipboard_baseline_ready = true;
+                self.native_clipboard = Some(native);
+            }
+            // An empty or non-text clipboard is still a valid baseline.
+            Ok(crate::clipboard::Reply::Unavailable) => {
+                self.clipboard_baseline_ready = true;
+                self.native_clipboard = Some(native);
+            }
+            Ok(_) => self.native_clipboard = Some(native),
+            Err(error) => {
+                eprintln!("REMOTE_DESKTOP_CLIPBOARD_BASELINE_FAILED {error}");
+                self.clipboard_enabled = false;
+            }
+        }
+    }
+
     async fn reply(&mut self, kind: Channel, message: serde_json::Value) -> anyhow::Result<()> {
         self.reply_seq += 1;
         let mut envelope = message;
@@ -364,6 +396,9 @@ impl Service {
                             viewer: viewer.clone(),
                             media: None,
                             control: None,
+                            codec: None,
+                            limits: None,
+                            budget: None,
                             media_started: false,
                             active: false,
                         });
@@ -379,30 +414,77 @@ impl Service {
                         return Ok(());
                     }
                 }
-                let geometry = self
-                    .registry
-                    .snapshot(&viewer, &owner)?
-                    .capture_geometry
-                    .unwrap_or(crate::session::CaptureGeometry {
-                        width: 1280,
-                        height: 720,
-                    });
-                let budget = crate::video::Budget::select_with_limits_and_resolution(
-                    geometry.width,
-                    geometry.height,
-                    crate::video::INITIAL_BITRATE,
-                    crate::video::FALLBACK_LIMITS,
-                    Some((
-                        crate::video::FALLBACK_MAX_WIDTH,
-                        crate::video::FALLBACK_MAX_HEIGHT,
-                    )),
-                );
+                let profile = self
+                    .fallbacks
+                    .get(&generation)
+                    .and_then(|pair| Some((pair.codec?, pair.limits?, pair.budget?)));
+                let (codec, limits, budget) = match profile {
+                    Some(profile) => profile,
+                    None => {
+                        let Some(live) = self.live.get(&viewer) else {
+                            let _ = reply.send(Err("REMOTE_DESKTOP_NOT_FOUND"));
+                            return Ok(());
+                        };
+                        let geometry = self
+                            .registry
+                            .snapshot(&viewer, &owner)?
+                            .capture_geometry
+                            .unwrap_or(crate::session::CaptureGeometry {
+                                width: 1280,
+                                height: 720,
+                            });
+                        let codec = live.control.video_codec();
+                        // No explicit limit means the fallback default, not the
+                        // WebRTC 60 fps ceiling. This keeps old viewers on level
+                        // 4.0 while an explicit 60 fps request opts into 4.2.
+                        let frame_rate = live
+                            .control
+                            .frame_rate_limit()
+                            .map_or(crate::video::FALLBACK_DEFAULT_FRAME_RATE, |frame_rate| {
+                                frame_rate.clamp(1, crate::video::FALLBACK_MAX_FRAME_RATE)
+                            });
+                        let resolution = live.control.resolution_limit().map_or(
+                            (
+                                crate::video::FALLBACK_MAX_WIDTH,
+                                crate::video::FALLBACK_MAX_HEIGHT,
+                            ),
+                            |(width, height)| {
+                                (
+                                    width.min(crate::video::FALLBACK_MAX_WIDTH),
+                                    height.min(crate::video::FALLBACK_MAX_HEIGHT),
+                                )
+                            },
+                        );
+                        let level_width = resolution.0.min(geometry.width);
+                        let level_height = resolution.1.min(geometry.height);
+                        let limits = crate::video::fallback_limits(
+                            codec,
+                            level_width,
+                            level_height,
+                            frame_rate,
+                        );
+                        let budget = crate::video::Budget::select_with_limits_resolution_and_fps(
+                            geometry.width,
+                            geometry.height,
+                            crate::video::INITIAL_BITRATE,
+                            limits,
+                            Some(resolution),
+                            Some(frame_rate),
+                        );
+                        (codec, limits, budget)
+                    }
+                };
+                if let Some(pair) = self.fallbacks.get_mut(&generation) {
+                    pair.codec.get_or_insert(codec);
+                    pair.limits.get_or_insert(limits);
+                    pair.budget.get_or_insert(budget);
+                }
                 let _ = reply.send(Ok(AttachReply {
                     width: budget.width,
                     height: budget.height,
                     fps: budget.fps,
                     bitrate: crate::video::INITIAL_BITRATE,
-                    codec: live.control.video_codec(),
+                    codec: codec.fallback_codec_string(limits.level),
                 }));
                 self.activate_fallback(&generation).await?;
             }
@@ -452,6 +534,13 @@ impl Service {
         Ok(())
     }
     async fn activate_fallback(&mut self, generation: &str) -> anyhow::Result<()> {
+        let Some((codec, limits, budget)) = self
+            .fallbacks
+            .get(generation)
+            .and_then(|pair| Some((pair.codec?, pair.limits?, pair.budget?)))
+        else {
+            return Ok(());
+        };
         let Some(pair) = self.fallbacks.get_mut(generation) else {
             return Ok(());
         };
@@ -470,27 +559,9 @@ impl Service {
             live.fallback_generation = Some(generation.into());
             live.fallback_active = true;
             live.fallback_control = Some(control);
-            let fallback_limit = live.control.resolution_limit().map_or(
-                (
-                    crate::video::FALLBACK_MAX_WIDTH,
-                    crate::video::FALLBACK_MAX_HEIGHT,
-                ),
-                |(width, height)| {
-                    (
-                        width.min(crate::video::FALLBACK_MAX_WIDTH),
-                        height.min(crate::video::FALLBACK_MAX_HEIGHT),
-                    )
-                },
-            );
-            let fallback_frame_rate = live
-                .control
-                .frame_rate_limit()
-                .map_or(crate::video::FALLBACK_MAX_FRAME_RATE, |frame_rate| {
-                    frame_rate.min(crate::video::FALLBACK_MAX_FRAME_RATE)
-                });
+            live.control.set_fallback_format(codec, limits);
             live.control
-                .set_stream_limits(Some(fallback_limit), Some(fallback_frame_rate));
-            live.control.ensure_fallback_format();
+                .set_stream_limits(Some((budget.width, budget.height)), Some(budget.fps));
             live.control.set_fallback(Some(media));
             live.control.pause(false);
             live.control.idr.store(true, Ordering::SeqCst);
@@ -940,6 +1011,7 @@ impl Service {
                             reply_seq: 0,
                             clipboard_enabled: false,
                             clipboard: String::new(),
+                            clipboard_baseline_ready: false,
                             native_clipboard: None,
                             ice_expires_at: None,
                             pending_ice_expires_at: None,
@@ -2415,8 +2487,11 @@ impl Service {
                     live.clipboard_enabled = enabled
                         && (self.mode == crate::capture::Mode::Synthetic || native.is_some());
                     live.native_clipboard = if live.clipboard_enabled { native } else { None };
-                    if !live.clipboard_enabled {
+                    if live.clipboard_enabled {
+                        live.seed_clipboard_baseline().await;
+                    } else {
                         live.clipboard.clear();
+                        live.clipboard_baseline_ready = false;
                     }
                     live.reply(Channel::Control, serde_json::json!({"type":"clipboard.enabled","payload":{"enabled":live.clipboard_enabled}})).await?;
                 }
@@ -2559,17 +2634,40 @@ impl Service {
                 if !live.clipboard_enabled {
                     return Ok(());
                 }
-                let response = if let Some(native) = live.native_clipboard.as_mut() {
-                    let command = match clipboard {
-                        Clipboard::Write { text } => crate::clipboard::Command::Write { text },
-                        Clipboard::Read => crate::clipboard::Command::Read,
-                    };
-                    match native.call(&command).await {
+                let command = match &clipboard {
+                    Clipboard::Write { text } => {
+                        crate::clipboard::Command::Write { text: text.clone() }
+                    }
+                    Clipboard::Read => crate::clipboard::Command::Read,
+                };
+                let native_reply = if let Some(native) = live.native_clipboard.as_mut() {
+                    Some(native.call(&command).await)
+                } else {
+                    None
+                };
+                let mut worker_failed = false;
+                let response = if let Some(reply) = native_reply {
+                    match reply {
                         Ok(crate::clipboard::Reply::Written) => {
+                            if let Clipboard::Write { text } = &clipboard {
+                                live.clipboard = text.clone();
+                            }
+                            live.clipboard_baseline_ready = true;
                             serde_json::json!({"type":"clipboard.written"})
                         }
                         Ok(crate::clipboard::Reply::Text { text }) => {
+                            live.clipboard = text.clone();
+                            live.clipboard_baseline_ready = true;
                             serde_json::json!({"type":"clipboard.text","payload":{"text":text}})
+                        }
+                        Err(error) => {
+                            eprintln!("REMOTE_DESKTOP_CLIPBOARD_COMMAND_FAILED {error}");
+                            live.clipboard_enabled = false;
+                            live.native_clipboard = None;
+                            live.clipboard.clear();
+                            live.clipboard_baseline_ready = false;
+                            worker_failed = true;
+                            serde_json::json!({"type":"error","payload":{"code":"REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE"}})
                         }
                         _ => {
                             serde_json::json!({"type":"error","payload":{"code":"REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE"}})
@@ -2587,9 +2685,81 @@ impl Service {
                     }
                 };
                 live.reply(Channel::Clipboard, response).await?;
+                if worker_failed {
+                    live.reply(
+                        Channel::Control,
+                        serde_json::json!({"type":"clipboard.enabled","payload":{"enabled":false}}),
+                    )
+                    .await?;
+                }
             }
         }
         Ok(())
+    }
+
+    /// The browser and OS clipboard APIs do not expose portable change events.
+    /// Poll only this native adapter boundary so unchanged text never crosses
+    /// the wire and a write from the controller does not echo back.
+    async fn poll_clipboards(&mut self) {
+        let ids = self.live.keys().cloned().collect::<Vec<_>>();
+        for id in ids {
+            let Some(live) = self.live.get_mut(&id) else {
+                continue;
+            };
+            if !live.clipboard_enabled || live.native_clipboard.is_none() {
+                continue;
+            }
+            let reply = match live.native_clipboard.as_mut() {
+                Some(native) => native.call(&crate::clipboard::Command::Read).await,
+                None => continue,
+            };
+            let text = match reply {
+                Ok(crate::clipboard::Reply::Text { text }) => text,
+                Ok(_) => continue,
+                Err(error) => {
+                    eprintln!("REMOTE_DESKTOP_CLIPBOARD_POLL_FAILED {error}");
+                    live.clipboard_enabled = false;
+                    live.native_clipboard = None;
+                    live.clipboard.clear();
+                    live.clipboard_baseline_ready = false;
+                    let _ = live
+                        .reply(
+                            Channel::Clipboard,
+                            serde_json::json!({"type":"error","payload":{"code":"REMOTE_DESKTOP_CLIPBOARD_UNAVAILABLE"}}),
+                        )
+                        .await;
+                    let _ = live
+                        .reply(
+                            Channel::Control,
+                            serde_json::json!({"type":"clipboard.enabled","payload":{"enabled":false}}),
+                        )
+                        .await;
+                    continue;
+                }
+            };
+            if !live.clipboard_baseline_ready {
+                live.clipboard = text;
+                live.clipboard_baseline_ready = true;
+                continue;
+            };
+            let Some(text) = changed_clipboard_text(&live.clipboard, &text) else {
+                continue;
+            };
+            if live.fallback_control.is_none() && !live.channels.contains_key(&Channel::Clipboard) {
+                continue;
+            }
+            if let Err(error) = live
+                .reply(
+                    Channel::Clipboard,
+                    serde_json::json!({"type":"clipboard.text","payload":{"text":text}}),
+                )
+                .await
+            {
+                eprintln!("REMOTE_DESKTOP_CLIPBOARD_POLL_FAILED {error}");
+            } else {
+                live.clipboard = text;
+            }
+        }
     }
     /// A renewed credential is committed only after the component observes the
     /// replacement ICE generation connected. Ordinary recoveries keep the old
@@ -2716,6 +2886,9 @@ pub async fn serve_mode_with_cursor_and_source_salt(
         let _ = writer_done.send(());
     });
     let result = async {
+        let mut clipboard_poll = tokio::time::interval(Duration::from_millis(500));
+        clipboard_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        clipboard_poll.tick().await;
         loop {
             let deadline = [
                 service.registry.next_deadline(),
@@ -2742,6 +2915,7 @@ pub async fn serve_mode_with_cursor_and_source_salt(
                 Closed,
                 GuardDead,
                 Fallback(FallbackEvent),
+                ClipboardPoll,
                 #[cfg(target_os = "linux")]
                 SurfaceDead,
             }
@@ -2773,6 +2947,7 @@ pub async fn serve_mode_with_cursor_and_source_salt(
                 _=guard_exit=>Input::GuardDead,
                 Some(event)=peer_events.recv()=>Input::Peer(event),
                 Some(event)=fallback_events.recv()=>Input::Fallback(event),
+                _=clipboard_poll.tick()=>Input::ClipboardPoll,
                 _=wait=>Input::Deadline,
                 _=out.closed()=>Input::Closed,
             };
@@ -2807,6 +2982,7 @@ pub async fn serve_mode_with_cursor_and_source_salt(
                 Input::Fallback(event) => {
                     service.fallback_event(event).await?;
                 }
+                Input::ClipboardPoll => service.poll_clipboards().await,
                 Input::Peer(event) => {
                     let id = match &event {
                         PeerEvent::Connected(id)
@@ -3032,6 +3208,10 @@ fn window_resize_busy(
     inflight || expected.is_some_and(|(_, expires_at)| expires_at >= now)
 }
 
+fn changed_clipboard_text(previous: &str, current: &str) -> Option<String> {
+    (previous != current).then(|| current.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3123,6 +3303,16 @@ mod tests {
             now,
         ));
         assert!(!window_resize_busy(false, None, now));
+    }
+
+    #[test]
+    fn clipboard_poll_only_emits_changed_native_text() {
+        assert_eq!(changed_clipboard_text("same", "same"), None);
+        assert_eq!(
+            changed_clipboard_text("old", "new"),
+            Some("new".to_string())
+        );
+        assert_eq!(changed_clipboard_text("old", ""), Some(String::new()));
     }
 
     #[test]
@@ -3305,6 +3495,7 @@ mod tests {
                 reply_seq: 0,
                 clipboard_enabled: false,
                 clipboard: String::new(),
+                clipboard_baseline_ready: false,
                 native_clipboard: None,
                 ice_expires_at: None,
                 pending_ice_expires_at: None,
@@ -3418,6 +3609,7 @@ mod tests {
                 reply_seq: 0,
                 clipboard_enabled: false,
                 clipboard: String::new(),
+                clipboard_baseline_ready: false,
                 native_clipboard: None,
                 ice_expires_at: None,
                 pending_ice_expires_at: None,
@@ -3530,6 +3722,7 @@ mod tests {
                 reply_seq: 0,
                 clipboard_enabled: false,
                 clipboard: String::new(),
+                clipboard_baseline_ready: false,
                 native_clipboard: None,
                 ice_expires_at: None,
                 pending_ice_expires_at: None,
@@ -3778,6 +3971,7 @@ mod tests {
                 reply_seq: 0,
                 clipboard_enabled: false,
                 clipboard: String::new(),
+                clipboard_baseline_ready: false,
                 native_clipboard: None,
                 ice_expires_at: None,
                 pending_ice_expires_at: None,

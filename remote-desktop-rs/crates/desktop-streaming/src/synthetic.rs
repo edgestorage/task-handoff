@@ -2,6 +2,7 @@
 use crate::{
     channel::{Input, Pointer},
     traits::EncodedFrame,
+    video::MAX_FRAME_RATE,
 };
 use openh264::{
     encoder::{
@@ -15,7 +16,7 @@ use std::{collections::HashSet, time::Duration};
 
 pub const WIDTH: usize = 640;
 pub const HEIGHT: usize = 360;
-pub const FRAME_TIME: Duration = Duration::from_millis(33);
+pub const FRAME_TIME: Duration = Duration::from_micros(16_667);
 #[derive(Default, Clone)]
 pub struct SyntheticInput {
     pub pointer: (f64, f64),
@@ -69,6 +70,7 @@ pub struct SoftwareEncoder {
     encoder: Encoder,
     bitrate: u32,
     min_qp: u8,
+    frame_rate: u32,
     started: std::time::Instant,
 }
 impl SoftwareEncoder {
@@ -83,11 +85,31 @@ impl SoftwareEncoder {
         limits: crate::codec::Limits,
         min_qp: u8,
     ) -> anyhow::Result<Self> {
+        // Direct software-encoder users do not have a live budget. Advertise
+        // the highest rate the negotiated level can sustain at the product
+        // envelope; the streaming wrapper rebuilds with its exact budget rate.
+        let frame_rate = if limits.level >= 42 {
+            MAX_FRAME_RATE
+        } else {
+            30
+        };
+        Self::with_quality_at_frame_rate(bitrate, limits, min_qp, frame_rate)
+    }
+    pub fn with_quality_at_frame_rate(
+        bitrate: u32,
+        limits: crate::codec::Limits,
+        min_qp: u8,
+        frame_rate: u32,
+    ) -> anyhow::Result<Self> {
         anyhow::ensure!(min_qp <= 51, "invalid encoder quantizer");
+        anyhow::ensure!(
+            (1..=120).contains(&frame_rate),
+            "invalid encoder frame rate"
+        );
         let bitrate = bitrate.min(limits.max_bitrate);
         let config = EncoderConfig::new()
             .bitrate(BitRate::from_bps(bitrate))
-            .max_frame_rate(FrameRate::from_hz(30.0))
+            .max_frame_rate(FrameRate::from_hz(frame_rate as f32))
             .profile(Profile::Baseline)
             .level(limits.encoder_level())
             .usage_type(UsageType::ScreenContentRealTime)
@@ -101,6 +123,7 @@ impl SoftwareEncoder {
             encoder: Encoder::with_api_config(OpenH264API::from_source(), config)?,
             bitrate,
             min_qp,
+            frame_rate,
             started: std::time::Instant::now(),
         })
     }
@@ -109,6 +132,9 @@ impl SoftwareEncoder {
     }
     pub fn bitrate(&self) -> u32 {
         self.bitrate
+    }
+    pub fn frame_rate(&self) -> u32 {
+        self.frame_rate
     }
     pub fn encode(&mut self, yuv: &YUVBuffer, idr: bool) -> anyhow::Result<Option<EncodedFrame>> {
         if idr {

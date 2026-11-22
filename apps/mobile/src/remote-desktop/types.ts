@@ -33,6 +33,9 @@ export type RemoteDesktopSnapshot = {
   inputEnabled: boolean;
   inputRequested: boolean;
   inputPending: boolean;
+  clipboardEnabled: boolean;
+  clipboardPending: boolean;
+  clipboardError?: RemoteDesktopError;
   controlRequestPending: boolean;
   isController: boolean;
   hasController: boolean;
@@ -57,6 +60,8 @@ export const emptyRemoteDesktopSnapshot: RemoteDesktopSnapshot = {
   inputEnabled: false,
   inputRequested: true,
   inputPending: false,
+  clipboardEnabled: false,
+  clipboardPending: false,
   controlRequestPending: false,
   isController: true,
   hasController: true,

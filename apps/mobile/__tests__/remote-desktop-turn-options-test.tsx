@@ -13,7 +13,7 @@ test.each([[false, false], [true, false], [false, true], [true, true]])('TURN so
     snapshot={{ ...emptyRemoteDesktopSnapshot, transportAvailability: { p2p: true, websocket: false, turn: configured },
       connectionOptions: { customTurn: { configured }, cloudTurn: { signedIn, available: false } },
     }}
-    onDisconnect={jest.fn()} onSetCapturePrecision={jest.fn()} onSetInputEnabled={jest.fn()}
+    onDisconnect={jest.fn()} onSetCapturePrecision={jest.fn()} onSetClipboardEnabled={jest.fn()} onSetInputEnabled={jest.fn()}
     onSetFrameRate={jest.fn()} onSetResolution={jest.fn()} onToggleTransport={jest.fn()}
   />);
   const methods = mockActions.find(action => action.id === 'connection-methods')!.subactions!;
@@ -23,5 +23,37 @@ test.each([[false, false], [true, false], [false, true], [true, true]])('TURN so
   // A hidden TURN preference and an unavailable cloud grant cannot count as
   // another usable path when guarding the last enabled transport.
   expect(methods.find(action => action.id === 'transport:p2p')!.attributes?.disabled).toBe(!configured);
+  await screen.unmount();
+});
+
+test('clipboard menu action is capability-gated and describes the next action', async () => {
+  const baseProps = {
+    onDisconnect: jest.fn(),
+    onSetCapturePrecision: jest.fn(),
+    onSetClipboardEnabled: jest.fn(),
+    onSetFrameRate: jest.fn(),
+    onSetInputEnabled: jest.fn(),
+    onSetResolution: jest.fn(),
+    onToggleTransport: jest.fn(),
+    snapshot: emptyRemoteDesktopSnapshot,
+  };
+  const screen = await render(<RemoteDesktopSettingsMenu {...baseProps} clipboardSupported={false} />);
+  expect(mockActions.some(action => action.id === 'clipboard')).toBe(false);
+
+  await screen.rerender(<RemoteDesktopSettingsMenu {...baseProps} clipboardSupported />);
+  expect(mockActions.find(action => action.id === 'clipboard')).toMatchObject({
+    state: 'off',
+    title: 'remoteDesktop.clipboardEnable',
+  });
+
+  await screen.rerender(<RemoteDesktopSettingsMenu
+    {...baseProps}
+    clipboardSupported
+    snapshot={{ ...emptyRemoteDesktopSnapshot, clipboardEnabled: true }}
+  />);
+  expect(mockActions.find(action => action.id === 'clipboard')).toMatchObject({
+    state: 'on',
+    title: 'remoteDesktop.clipboardDisable',
+  });
   await screen.unmount();
 });

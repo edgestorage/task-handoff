@@ -15,6 +15,8 @@ export * from "./app-inventory.ts";
 export * from "./instance-shell.ts";
 export * from "./ai-session-state.ts";
 export * from "./ai-session-activity-labels.ts";
+export * from "./ai-session-activity-details.ts";
+export * from "./ai-session-file-changes.ts";
 export * from "./approval-center.ts";
 export * from "./ai-session-conversation-cache.ts";
 export * from "./ai-session-paste.ts";

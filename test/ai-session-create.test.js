@@ -495,6 +495,7 @@ test("AI session Fork creates an independent Direct session and deduplicates the
     providerSessionId: "thread-source",
     cwd: "/workspace",
     cwdFolderId: "folder-project",
+    title: "Source title",
     actions: { send: true, fork: true },
     status: "idle",
   });
@@ -511,6 +512,7 @@ test("AI session Fork creates an independent Direct session and deduplicates the
         appId: "codex-app-server",
         providerSessionId,
         cwd: input.cwd,
+        title: "Fork provider title",
         lineage,
         actions: { send: true, fork: true },
         status: "idle",
@@ -531,6 +533,7 @@ test("AI session Fork creates an independent Direct session and deduplicates the
   assert.equal(calls[0].providerThroughTurnId, undefined);
   assert.equal(registry.get(first.aiSessionId).appSessionId, undefined);
   assert.equal(registry.get(first.aiSessionId).cwdFolderId, "folder-project");
+  assert.equal(registry.get(first.aiSessionId).title, "Source title");
   assert.deepEqual(registry.get(first.aiSessionId).lineage, { kind: "fork", parentProviderSessionId: "thread-source" });
   assert.equal(registry.get(source.id).providerSessionId, "thread-source");
   assert.throws(

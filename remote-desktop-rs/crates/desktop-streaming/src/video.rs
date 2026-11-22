@@ -43,19 +43,77 @@ impl Frame {
 
 /// Initial content budget; congestion feedback can reduce below this default.
 pub const INITIAL_BITRATE: u32 = 8_000_000;
-/// WebSocket fallback uses the same product resolution, frame rate and initial
-/// encoder budget as WebRTC. The fallback has no receiver congestion feedback,
-/// so it must not be held at a lower fixed bitrate than the WebRTC start budget.
+/// Product frame-rate ceiling shared by WebRTC and WebSocket fallback. The
+/// bitrate/level budget may reduce below this value for constrained receivers.
+pub const MAX_FRAME_RATE: u32 = 60;
+/// WebSocket fallback shares the product resolution cap and initial encoder
+/// budget with WebRTC, but defaults to 30 fps because N-1 viewers only probe
+/// level 4.0. An explicit frame-rate request may raise it to the product
+/// ceiling. The fallback has no receiver congestion feedback, so its bitrate
+/// must not be held below the WebRTC start budget.
 pub const FALLBACK_MAX_WIDTH: u32 = 1920;
 pub const FALLBACK_MAX_HEIGHT: u32 = 1080;
-pub const FALLBACK_MAX_FRAME_RATE: u32 = 30;
+pub const FALLBACK_MAX_FRAME_RATE: u32 = MAX_FRAME_RATE;
+/// Fallback has no congestion feedback and old clients probe level 4.0, so its
+/// default envelope stays at 1080p30. An explicit 60 fps request opts into the
+/// higher level.
+pub const FALLBACK_DEFAULT_FRAME_RATE: u32 = 30;
 pub const FALLBACK_MAX_BITRATE: u32 = INITIAL_BITRATE;
-pub const FALLBACK_LIMITS: crate::codec::Limits = crate::codec::Limits {
-    level: 40,
-    max_fs: 8160,
-    max_mbps: 244_800,
-    max_bitrate: FALLBACK_MAX_BITRATE,
-};
+
+/// Derive the fallback codec envelope from the actual frame-rate request.
+/// 1080p30 and 720p60 fit H.264/HEVC level 4.0; 1080p60 exceeds both and needs
+/// H.264 level 4.2 or HEVC level 4.1. The encoder, SPS and
+/// `fallback.configure.codec` all consume this single projection.
+pub const fn fallback_limits(
+    codec: crate::codec::VideoCodec,
+    width: u32,
+    height: u32,
+    frame_rate: u32,
+) -> crate::codec::Limits {
+    // The level must cover the macroblock rate of the actual capture cap, not
+    // just the requested frame rate: 720p60 fits level 4.0 while 1080p60 does
+    // not.
+    let macroblocks = width.div_ceil(16) * height.div_ceil(16);
+    let frame_rate = if frame_rate == 0 { 1 } else { frame_rate };
+    let macroblocks_per_second = macroblocks * frame_rate;
+    match codec {
+        crate::codec::VideoCodec::H264 => crate::codec::Limits {
+            level: if macroblocks_per_second > 245_760 {
+                42
+            } else {
+                40
+            },
+            max_fs: 8160,
+            max_mbps: if macroblocks_per_second > 245_760 {
+                522_240
+            } else {
+                245_760
+            },
+            max_bitrate: FALLBACK_MAX_BITRATE,
+        },
+        crate::codec::VideoCodec::H265 => crate::codec::Limits {
+            level: if macroblocks_per_second > 261_120 {
+                123
+            } else {
+                120
+            },
+            max_fs: 8160,
+            max_mbps: if macroblocks_per_second > 261_120 {
+                522_240
+            } else {
+                261_120
+            },
+            max_bitrate: FALLBACK_MAX_BITRATE,
+        },
+    }
+}
+
+pub const FALLBACK_LIMITS: crate::codec::Limits = fallback_limits(
+    crate::codec::VideoCodec::H264,
+    FALLBACK_MAX_WIDTH,
+    FALLBACK_MAX_HEIGHT,
+    FALLBACK_DEFAULT_FRAME_RATE,
+);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
     pub width: u32,
@@ -97,9 +155,11 @@ impl Budget {
             0..250_000 => (320, 180, 10),
             250_000..750_000 => (640, 360, 15),
             750_000..2_000_000 => (1280, 720, 24),
+            2_000_000..12_000_000 if limits.level >= 42 => (1920, 1080, MAX_FRAME_RATE),
             2_000_000..12_000_000 if limits.level >= 40 => (1920, 1080, 30),
-            12_000_000..24_000_000 if limits.level >= 51 => (2560, 1440, 30),
-            24_000_000.. if limits.level >= 51 => (3840, 2160, 30),
+            12_000_000..24_000_000 if limits.level >= 51 => (2560, 1440, MAX_FRAME_RATE),
+            12_000_000..24_000_000 if limits.level >= 50 => (2560, 1440, 30),
+            24_000_000.. if limits.level >= 51 => (3840, 2160, MAX_FRAME_RATE),
             _ => (1280, 720, 30),
         };
         // An explicit user quality target controls pixel dimensions. The bitrate

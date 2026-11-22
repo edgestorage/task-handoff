@@ -1946,7 +1946,12 @@ impl AiSessionController {
             app_binding_keys: None,
             actions: Some(self.actions_for_agent(&source.agent, None)),
             active_turn_id: None,
-            title: None,
+            title: source
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .map(ToString::to_string),
             cwd: Some(created.cwd.display().to_string()),
             cwd_folder_id: source.cwd_folder_id.clone(),
             user_prompt: None,
@@ -4611,6 +4616,7 @@ mod tests {
         session.phase = "unknown".to_string();
         session.active_turn_id = None;
         session.actions = Some(json!({ "fork": true }));
+        session.title = Some("Fork source title".to_string());
         session.turns = Some(vec![json!({
             "id": "turn-public",
             "providerTurnId": "provider-turn-1",
@@ -4735,6 +4741,10 @@ mod tests {
             .expect("fork session");
 
         assert_eq!(result.provider_session_id, "forked-provider-session");
+        let forked = runtime
+            .get(&result.ai_session_id)
+            .expect("forked AI session");
+        assert_eq!(forked.title.as_deref(), Some("Fork source title"));
         assert_eq!(
             provider
                 .through_turn_ids

@@ -750,6 +750,21 @@ async fn window_catalog_consumes_real_window_and_capture_uses_window_drawable() 
     conn.map_window(window).unwrap().check().unwrap();
     conn.flush().unwrap();
     tokio::time::sleep(Duration::from_millis(350)).await;
+    let frame_window = conn.query_tree(window).unwrap().reply().unwrap().parent;
+    assert_ne!(frame_window, root, "Openbox must reparent the fixture");
+    let frame_geometry = conn.get_geometry(frame_window).unwrap().reply().unwrap();
+    let frame_position = conn
+        .translate_coordinates(frame_window, root, 0, 0)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let client_position = conn
+        .translate_coordinates(window, root, 0, 0)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let client_x = (client_position.dst_x - frame_position.dst_x) as usize;
+    let client_y = (client_position.dst_y - frame_position.dst_y) as usize;
 
     let owner = Owner {
         actor_id: "actor-window-test".into(),
@@ -762,13 +777,37 @@ async fn window_catalog_consumes_real_window_and_capture_uses_window_drawable() 
         .find(|entry| entry.title == "Window Capture Fixture")
         .expect("mapped client window must be catalogued");
     assert!(entry.capturable, "catalogued window must be capturable");
-    assert_eq!((entry.width, entry.height), (320, 200));
+    assert_eq!(
+        (entry.width, entry.height),
+        (frame_geometry.width.into(), frame_geometry.height.into())
+    );
     assert_eq!(entry.subtitle.as_deref(), Some("WindowCaptureFixture"));
 
     let target = catalog.consume(&entry.source_ref, &owner).await.unwrap();
     let mut capture = target.open(false).unwrap();
     let frame = capture.frame(true).unwrap().unwrap();
-    assert_eq!((frame.geometry.width, frame.geometry.height), (320, 200));
+    assert_eq!(
+        (frame.geometry.width, frame.geometry.height),
+        (frame_geometry.width.into(), frame_geometry.height.into())
+    );
+    let pixel = |x: usize, y: usize| {
+        let offset = (y * frame.geometry.width as usize + x) * 4;
+        [
+            frame.bgra[offset],
+            frame.bgra[offset + 1],
+            frame.bgra[offset + 2],
+        ]
+    };
+    assert_eq!(
+        pixel(client_x, client_y),
+        [0, 0, 255],
+        "the captured frame must begin at the window-manager frame origin"
+    );
+    assert_eq!(
+        pixel(client_x + 319, client_y + 199),
+        [0, 0, 255],
+        "the client's right and bottom edges must remain visible"
+    );
     assert!(
         frame
             .bgra

@@ -8,6 +8,14 @@ export type DesktopBrowserContextResult = { ok: boolean; code?: string; message?
 
 export type DesktopBrowserLoadFailure = { instanceId?: string; host?: string; port?: number; code?: string; message?: string };
 
+type DesktopClipboardResult = { ok: boolean; code?: string; text?: string };
+
+type DesktopClipboardBridge = {
+  readText?: () => Promise<DesktopClipboardResult>;
+  writeText?: (text: string) => Promise<DesktopClipboardResult>;
+  onChanged?: (listener: (input: { text?: string }) => void) => () => void;
+};
+
 type DesktopBridge = {
   openLocalPath?: (path: string) => Promise<OpenLocalPathResult>;
   revealLocalPath?: (path: string) => Promise<OpenLocalPathResult>;
@@ -20,6 +28,7 @@ type DesktopBridge = {
   onBrowserFocusAddress?: (listener: (input: { webContentsId?: number }) => void) => () => void;
   onBrowserLoadFailure?: (listener: (input: DesktopBrowserLoadFailure) => void) => () => void;
   logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
+  clipboard?: DesktopClipboardBridge;
 };
 
 function desktopBridge() {
@@ -88,4 +97,29 @@ export function onDesktopBrowserLoadFailure(listener: (input: DesktopBrowserLoad
 
 export function logDesktopBrowserDiagnostic(message: string, instanceId?: string) {
   desktopBridge()?.logBrowserDiagnostic?.({ message, ...(instanceId ? { instanceId } : {}) });
+}
+
+export function canUseDesktopClipboard() {
+  const bridge = desktopBridge()?.clipboard;
+  return typeof bridge?.readText === "function"
+    && typeof bridge.writeText === "function"
+    && typeof bridge.onChanged === "function";
+}
+
+export async function readDesktopClipboardText() {
+  const bridge = desktopBridge()?.clipboard;
+  if (!bridge?.readText) return { ok: false, code: "desktop-bridge-unavailable" } satisfies DesktopClipboardResult;
+  return bridge.readText();
+}
+
+export async function writeDesktopClipboardText(text: string) {
+  const bridge = desktopBridge()?.clipboard;
+  if (!bridge?.writeText) return { ok: false, code: "desktop-bridge-unavailable" } satisfies DesktopClipboardResult;
+  return bridge.writeText(text);
+}
+
+export function onDesktopClipboardChanged(listener: (text: string) => void) {
+  return desktopBridge()?.clipboard?.onChanged?.(input => {
+    if (typeof input?.text === "string") listener(input.text);
+  });
 }

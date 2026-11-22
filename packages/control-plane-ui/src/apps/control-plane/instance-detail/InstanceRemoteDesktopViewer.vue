@@ -308,14 +308,6 @@
                       <Power v-else :size="14" aria-hidden="true" />
                       <span>{{ clipboard ? t("instances.remoteDesktop.clipboardDisable") : t("instances.remoteDesktop.clipboardEnable") }}</span>
                     </DropdownMenuItem>
-                    <DropdownMenuItem :disabled="!clipboard || clipboardBusy" @select="sendLocalClipboard">
-                      <ClipboardCopy :size="14" aria-hidden="true" />
-                      <span>{{ t("instances.remoteDesktop.clipboardSend") }}</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem :disabled="!clipboard || clipboardBusy" @select="readRemoteClipboard">
-                      <ClipboardPaste :size="14" aria-hidden="true" />
-                      <span>{{ t("instances.remoteDesktop.clipboardRead") }}</span>
-                    </DropdownMenuItem>
                     <p v-if="clipboardStatus" class="remote-desktop-clipboard-status" role="status">{{ clipboardStatus }}</p>
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
@@ -640,8 +632,6 @@ import {
   ChevronDown,
   CircleAlert,
   Clipboard,
-  ClipboardCopy,
-  ClipboardPaste,
   Clock3,
   Gauge,
   LoaderCircle,
@@ -686,6 +676,7 @@ import {
 import { isRemoteDesktopSourceEndedError } from "@task-handoff/control-plane-client";
 import { createRemoteDesktopSession, forceStopRemoteDesktopSession, listRemoteDesktopSources, recoverRemoteDesktopSession, requestRemoteDesktopFallback, resumeRemoteDesktopSignal, stopRemoteDesktopSession, type RemoteDesktopCreated, type RemoteDesktopSource } from "../../../api/remoteDesktop";
 import { useControlPlaneSettingsQuery } from "../../../api/queries";
+import { canUseDesktopClipboard, onDesktopClipboardChanged, readDesktopClipboardText, writeDesktopClipboardText } from "../../../lib/desktopBridge";
 import { translateApiError } from "../../../i18n/apiError";
 import { parseInputSuspension, remoteDesktopSurfaceOwnsFocus, shouldResumeAfterInputError, shouldResumeAfterInputSuspension } from "./remoteDesktopInputSuspension";
 import { isLostRemoteDesktopSessionError, isRetryableRemoteDesktopSignalResumeError, remoteDesktopSignalResumeRetryDelayMs, REMOTE_DESKTOP_SIGNAL_RESUME_WINDOW_MS } from "./remoteDesktopSignalRecovery";
@@ -867,12 +858,16 @@ const windowResizeTimedOut = ref(false);
 const windowResizeNoticeText = ref("");
 const WINDOW_RESIZE_RESPONSE_TIMEOUT_MS = 6_000;
 const WINDOW_RESIZE_NOTICE_DURATION_MS = 3_000;
+const WINDOW_RESIZE_FIT_THROTTLE_MS = 120;
+const CLIPBOARD_SYNC_INTERVAL_MS = 750;
 let windowResizeTimer: ReturnType<typeof setTimeout> | undefined;
 let windowResizeNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 let windowResizeFitObserver: ResizeObserver | undefined;
 let windowResizeFitFrame: number | undefined;
+let windowResizeFitThrottleTimer: ReturnType<typeof setTimeout> | undefined;
 let windowResizeFitPendingTarget: { width: number; height: number } | undefined;
 let windowResizeFitLastAttempt: { width: number; height: number } | undefined;
+let windowResizeFitLastSentAt = 0;
 
 function persistViewerPreferences() {
   if (props.preview || typeof window === "undefined") return;
@@ -931,6 +926,16 @@ const pressedButtons = new Set<number>();
 let clipboardRequested = false;
 let clipboardAutoEnableAttempted = false;
 let clipboardRequestAutomatic = false;
+let clipboardSyncTimer: ReturnType<typeof setInterval> | undefined;
+let clipboardDesktopUnsubscribe: (() => void) | undefined;
+let clipboardSyncInFlight = false;
+let clipboardRemoteWriteInFlight = false;
+let clipboardRemoteWriteGeneration = 0;
+let clipboardLocalReadFailed = false;
+let clipboardRemoteWriteFailed = false;
+let lastLocalClipboardText = "";
+let lastRemoteClipboardText = "";
+let pendingRemoteClipboardText: string | undefined;
 let negotiationPending = false;
 const inputRequested = ref(true);
 let inputResumePending = false;
@@ -2247,7 +2252,7 @@ async function detectWebCodecs() {
   }
   try {
     const checks = await Promise.all(
-      ["avc1.42E028", "hvc1.1.6.L120.90"].map(codec =>
+      ["avc1.42E028", "avc1.42E02A", "hvc1.1.6.L120.90", "hvc1.1.6.L123.90"].map(codec =>
         VideoDecoder.isConfigSupported({ codec, optimizeForLatency: true })
           .then(result => result.supported === true)
           .catch(() => false),
@@ -2893,6 +2898,8 @@ function handleControlValue(value: any, channel = "control") {
     clipboardRequestAutomatic = false;
     clipboard.value = value.payload.enabled === true;
     clipboardBusy.value = false;
+    if (clipboard.value) startClipboardSync();
+    else stopClipboardSync(true);
     if (clipboardRequested && !clipboard.value && !automatic) error.value = t("instances.remoteDesktop.clipboardUnavailable");
     clipboardRequested = false;
   } else if (value.type === "error") {
@@ -2937,16 +2944,14 @@ function handleControlValue(value: any, channel = "control") {
 
 function handleClipboardValue(value: any) {
   if (value.type === "clipboard.written") {
-    clipboardStatus.value = t("instances.remoteDesktop.clipboardSent");
+    return;
   } else if (value.type === "clipboard.text") {
     const text = typeof value.payload?.text === "string" ? value.payload.text : "";
     if (new TextEncoder().encode(text).byteLength > REMOTE_DESKTOP_MAX_CLIPBOARD_TEXT_BYTES) {
       clipboardStatus.value = t("instances.remoteDesktop.clipboardTooLarge");
       return;
     }
-    void navigator.clipboard?.writeText(text)
-      .then(() => { clipboardStatus.value = t("instances.remoteDesktop.clipboardReceived"); })
-      .catch(() => { clipboardStatus.value = t("instances.remoteDesktop.clipboardLocalUnavailable"); });
+    queueRemoteClipboardText(text);
   } else if (value.type === "error") {
     clipboardStatus.value = t("instances.remoteDesktop.clipboardRemoteError");
   }
@@ -3459,6 +3464,7 @@ function surfaceFocus() {
 
 function windowFocus() {
   resumeWanted();
+  void syncClipboardAfterFocus();
 }
 
 function windowBlur() {
@@ -3501,6 +3507,7 @@ function updateResolution() {
 function visibility() {
   documentVisible.value = document.visibilityState !== "hidden";
   if (!documentVisible.value) recordRemoteDesktopDiagnostic("input.local.suspend", { reason: "document-hidden" });
+  else void syncClipboardAfterFocus();
   syncVisibility();
 }
 
@@ -3575,6 +3582,8 @@ function enableClipboardByDefault() {
 }
 
 function setClipboard(enabled: boolean) {
+  if (enabled) void probeLocalClipboardAccess();
+  else stopClipboardSync(true);
   requestClipboardEnabled(enabled);
 }
 
@@ -3666,14 +3675,29 @@ function sameWindowResizeSize(a?: { width: number; height: number }, b?: { width
   return Boolean(a && b && a.width === b.width && a.height === b.height);
 }
 
+function clearWindowResizeFitThrottle() {
+  if (windowResizeFitThrottleTimer !== undefined) clearTimeout(windowResizeFitThrottleTimer);
+  windowResizeFitThrottleTimer = undefined;
+}
+
+function scheduleWindowResizeFitThrottle(delay: number) {
+  if (windowResizeFitThrottleTimer !== undefined) return;
+  windowResizeFitThrottleTimer = setTimeout(() => {
+    windowResizeFitThrottleTimer = undefined;
+    queueWindowResizeFitFlush();
+  }, delay);
+}
+
 function stopWindowResizeFitScheduling() {
   windowResizeFitObserver?.disconnect();
   windowResizeFitObserver = undefined;
+  clearWindowResizeFitThrottle();
   if (typeof window !== "undefined") {
     if (windowResizeFitFrame !== undefined) window.cancelAnimationFrame(windowResizeFitFrame);
     window.removeEventListener("resize", scheduleWindowResizeFit);
   }
   windowResizeFitFrame = undefined;
+  windowResizeFitLastSentAt = 0;
   windowResizeFitPendingTarget = undefined;
 }
 
@@ -3681,9 +3705,19 @@ function flushWindowResizeFit() {
   if (!windowResizeFitActive.value || !windowResizeMenuVisible.value || windowResizePending.value) return;
   const target = windowResizeFitPendingTarget ?? windowResizeViewportTarget();
   if (!target) return;
+  if (sameWindowResizeSize(target, windowResizeFitLastAttempt)) {
+    windowResizeFitPendingTarget = undefined;
+    return;
+  }
+  const remainingThrottleMs = WINDOW_RESIZE_FIT_THROTTLE_MS - (Date.now() - windowResizeFitLastSentAt);
+  if (remainingThrottleMs > 0) {
+    windowResizeFitPendingTarget = target;
+    scheduleWindowResizeFitThrottle(remainingThrottleMs);
+    return;
+  }
   windowResizeFitPendingTarget = undefined;
-  if (sameWindowResizeSize(target, windowResizeFitLastAttempt)) return;
   windowResizeFitLastAttempt = { ...target };
+  windowResizeFitLastSentAt = Date.now();
   requestWindowResize({ mode: "viewport", width: target.width, height: target.height });
 }
 
@@ -3721,6 +3755,7 @@ function setWindowResizeFit(active: boolean) {
     return;
   }
   windowResizeFitLastAttempt = undefined;
+  windowResizeFitLastSentAt = 0;
   ensureWindowResizeFitObserver();
   scheduleWindowResizeFit();
 }
@@ -3847,29 +3882,161 @@ function handleWindowResizeFailedValue(value: any) {
   failWindowResize(parsed.data.code, false, "remote");
 }
 
-async function sendLocalClipboard() {
-  if (!clipboard.value || clipboardBusy.value) return;
+function clipboardTextBytes(text: string) {
+  return new TextEncoder().encode(text).byteLength;
+}
+
+function stopClipboardSync(reset = false) {
+  if (clipboardSyncTimer !== undefined) clearInterval(clipboardSyncTimer);
+  clipboardSyncTimer = undefined;
+  clipboardDesktopUnsubscribe?.();
+  clipboardDesktopUnsubscribe = undefined;
+  clipboardRemoteWriteGeneration += 1;
+  clipboardSyncInFlight = false;
+  clipboardRemoteWriteInFlight = false;
+  clipboardLocalReadFailed = false;
+  clipboardRemoteWriteFailed = false;
+  if (!reset) return;
+  lastLocalClipboardText = "";
+  lastRemoteClipboardText = "";
+  pendingRemoteClipboardText = undefined;
+}
+
+function startClipboardSync() {
+  if (props.preview || !clipboard.value || clipboardSyncTimer !== undefined || clipboardDesktopUnsubscribe) return;
+  if (canUseDesktopClipboard()) {
+    clipboardDesktopUnsubscribe = onDesktopClipboardChanged(text => {
+      if (!clipboard.value || clipboardBusy.value || surfacePaused() || !document.hasFocus()) return;
+      void syncLocalClipboardText(text);
+    });
+    void probeLocalClipboardAccess();
+    return;
+  }
+  clipboardSyncTimer = setInterval(() => {
+    void syncLocalClipboard();
+  }, CLIPBOARD_SYNC_INTERVAL_MS);
+  // Establish a baseline without uploading the clipboard that happened to be
+  // present when the session connected. Only later local changes propagate.
+  void probeLocalClipboardAccess();
+}
+
+async function probeLocalClipboardAccess() {
   try {
-    const text = await navigator.clipboard.readText();
-    if (new TextEncoder().encode(text).byteLength > REMOTE_DESKTOP_MAX_CLIPBOARD_TEXT_BYTES) {
-      clipboardStatus.value = t("instances.remoteDesktop.clipboardTooLarge");
-      return;
-    }
-    const channel = outputChannel("clipboard");
-    if (!channel || !wire(channel, "clipboard.write", { text }, REMOTE_DESKTOP_MAX_CLIPBOARD_WIRE_BYTES)) {
-      clipboardStatus.value = t("instances.remoteDesktop.clipboardTooLarge");
+    const text = await readLocalClipboardText();
+    if (
+      !lastRemoteClipboardText
+      && pendingRemoteClipboardText === undefined
+      && clipboardTextBytes(text) <= REMOTE_DESKTOP_MAX_CLIPBOARD_TEXT_BYTES
+    ) {
+      lastLocalClipboardText = text;
     }
   } catch {
-    clipboardStatus.value = t("instances.remoteDesktop.clipboardLocalUnavailable");
+    // Permission may be granted on a later explicit read from the same viewer.
   }
 }
 
-function readRemoteClipboard() {
-  if (!clipboard.value || clipboardBusy.value) return;
-  const channel = outputChannel("clipboard");
-  if (!channel || !wire(channel, "clipboard.read", {})) {
-    clipboardStatus.value = t("instances.remoteDesktop.clipboardUnavailable");
+async function flushPendingRemoteClipboard() {
+  const text = pendingRemoteClipboardText;
+  if (text === undefined || surfacePaused() || clipboardRemoteWriteInFlight) return;
+  const generation = clipboardRemoteWriteGeneration;
+  clipboardRemoteWriteInFlight = true;
+  let written = false;
+  try {
+    await writeLocalClipboardText(text);
+    if (generation !== clipboardRemoteWriteGeneration) return;
+    if (pendingRemoteClipboardText === text) pendingRemoteClipboardText = undefined;
+    clipboardLocalReadFailed = false;
+    clipboardRemoteWriteFailed = false;
+    written = true;
+  } catch {
+    if (generation !== clipboardRemoteWriteGeneration) return;
+    if (!clipboardRemoteWriteFailed) {
+      clipboardRemoteWriteFailed = true;
+      clipboardStatus.value = t("instances.remoteDesktop.clipboardLocalUnavailable");
+    }
+  } finally {
+    if (generation === clipboardRemoteWriteGeneration) {
+      clipboardRemoteWriteInFlight = false;
+      // Continuous remote copies may replace the pending value while the
+      // native write is pending. Serialize the writes and drain the latest.
+      if (written && pendingRemoteClipboardText !== undefined) {
+        void flushPendingRemoteClipboard();
+      }
+    }
   }
+}
+
+function queueRemoteClipboardText(text: string) {
+  lastRemoteClipboardText = text;
+  if (text === lastLocalClipboardText) {
+    pendingRemoteClipboardText = undefined;
+    return;
+  }
+  lastLocalClipboardText = text;
+  pendingRemoteClipboardText = text;
+  void flushPendingRemoteClipboard();
+}
+
+async function syncLocalClipboard() {
+  if (!clipboard.value || clipboardBusy.value || clipboardSyncInFlight || surfacePaused() || !document.hasFocus()) return;
+  if (pendingRemoteClipboardText !== undefined) {
+    await flushPendingRemoteClipboard();
+    return;
+  }
+  clipboardSyncInFlight = true;
+  try {
+    const text = await readLocalClipboardText();
+    clipboardLocalReadFailed = false;
+    syncLocalClipboardText(text);
+  } catch {
+    if (!clipboardLocalReadFailed) {
+      clipboardLocalReadFailed = true;
+      clipboardStatus.value = t("instances.remoteDesktop.clipboardLocalUnavailable");
+    }
+  } finally {
+    clipboardSyncInFlight = false;
+  }
+}
+
+function readLocalClipboardText(): Promise<string> {
+  if (canUseDesktopClipboard()) {
+    return readDesktopClipboardText().then(result => {
+      if (!result.ok || typeof result.text !== "string") throw new Error(result.code || "desktop-clipboard-unavailable");
+      return result.text;
+    });
+  }
+  return navigator.clipboard.readText();
+}
+
+function writeLocalClipboardText(text: string): Promise<void> {
+  if (canUseDesktopClipboard()) {
+    return writeDesktopClipboardText(text).then(result => {
+      if (!result.ok) throw new Error(result.code || "desktop-clipboard-unavailable");
+    });
+  }
+  return navigator.clipboard.writeText(text);
+}
+
+function syncLocalClipboardText(text: string) {
+  if (text === lastLocalClipboardText) return;
+  lastLocalClipboardText = text;
+  if (!text || text === lastRemoteClipboardText) return;
+  if (clipboardTextBytes(text) > REMOTE_DESKTOP_MAX_CLIPBOARD_TEXT_BYTES) {
+    clipboardStatus.value = t("instances.remoteDesktop.clipboardTooLarge");
+    return;
+  }
+  const channel = outputChannel("clipboard");
+  if (!channel || !wire(channel, "clipboard.write", { text }, REMOTE_DESKTOP_MAX_CLIPBOARD_WIRE_BYTES)) {
+    clipboardStatus.value = t("instances.remoteDesktop.clipboardUnavailable");
+    return;
+  }
+  lastRemoteClipboardText = text;
+}
+
+async function syncClipboardAfterFocus() {
+  if (!clipboard.value) return;
+  await flushPendingRemoteClipboard();
+  await syncLocalClipboard();
 }
 
 async function closeCurrentSession() {
@@ -3946,6 +4113,7 @@ function cleanup() {
   clipboardRequested = false;
   clipboardAutoEnableAttempted = false;
   clipboardRequestAutomatic = false;
+  stopClipboardSync(true);
   inputEnabled.value = false;
   controlHintVisible.value = false;
   if (controlHintTimer !== undefined) clearTimeout(controlHintTimer);

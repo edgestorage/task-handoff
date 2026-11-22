@@ -22,3 +22,8 @@ export function remoteDesktopErrorMessage(error: RemoteDesktopError | undefined,
   if (code === 'REMOTE_DESKTOP_ATTACH_FAILED' || code === 'REMOTE_DESKTOP_ATTACH_TIMEOUT') return t('remoteDesktop.errorGeneric');
   return error.message || t('remoteDesktop.errorGeneric');
 }
+
+export function remoteDesktopClipboardErrorMessage(error: RemoteDesktopError, t: Translate) {
+  if (error.code === 'REMOTE_DESKTOP_CLIPBOARD_TOO_LARGE') return t('remoteDesktop.clipboardTooLarge');
+  return t('remoteDesktop.clipboardUnavailable');
+}

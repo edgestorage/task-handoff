@@ -141,6 +141,10 @@ export class AiSessionForkCoordinator {
       if (source.storyId && session.storyId !== source.storyId) {
         session = this.options.registry.patch(session.id, { storyId: source.storyId });
       }
+      const inheritedTitle = source.title?.trim();
+      if (inheritedTitle && session.title !== inheritedTitle) {
+        session = this.options.registry.patch(session.id, { title: inheritedTitle });
+      }
       operation.aiSessionId = session.id;
       operation.stage = "materialized";
       this.persist();

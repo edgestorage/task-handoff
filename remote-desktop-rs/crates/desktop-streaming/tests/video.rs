@@ -1,9 +1,11 @@
+use desktop_streaming::codec::VideoCodec;
 use desktop_streaming::{
     codec::Limits,
     traits::{Geometry, RawFrame},
     video::{
-        from_bgra, Budget, FALLBACK_LIMITS, FALLBACK_MAX_BITRATE, FALLBACK_MAX_HEIGHT,
-        FALLBACK_MAX_WIDTH, INITIAL_BITRATE,
+        fallback_limits, from_bgra, Budget, FALLBACK_DEFAULT_FRAME_RATE, FALLBACK_LIMITS,
+        FALLBACK_MAX_BITRATE, FALLBACK_MAX_FRAME_RATE, FALLBACK_MAX_HEIGHT, FALLBACK_MAX_WIDTH,
+        INITIAL_BITRATE,
     },
 };
 use openh264::formats::YUVSource;
@@ -82,20 +84,60 @@ fn truncated_frames_fail_and_budgets_keep_aspect_ratio_even_dimensions_and_codec
 }
 
 #[test]
-fn websocket_fallback_budget_reaches_full_hd_and_still_respects_explicit_resolution_caps() {
+fn websocket_fallback_defaults_to_full_hd_30_and_opts_into_full_hd_60() {
     assert_eq!(FALLBACK_MAX_BITRATE, INITIAL_BITRATE);
     assert_eq!(FALLBACK_LIMITS.max_bitrate, FALLBACK_MAX_BITRATE);
-    let full_hd = Budget::select_with_limits_and_resolution(
+    assert_eq!(FALLBACK_LIMITS.level, 40);
+    assert_eq!(FALLBACK_DEFAULT_FRAME_RATE, 30);
+    let full_hd_30 = Budget::select_with_limits_resolution_and_fps(
         1920,
         1080,
         FALLBACK_MAX_BITRATE,
         FALLBACK_LIMITS,
         Some((FALLBACK_MAX_WIDTH, FALLBACK_MAX_HEIGHT)),
+        Some(FALLBACK_DEFAULT_FRAME_RATE),
     );
     assert_eq!(
-        (full_hd.width, full_hd.height, full_hd.fps),
+        (full_hd_30.width, full_hd_30.height, full_hd_30.fps),
         (1920, 1080, 30)
     );
+    let sixty_limits = fallback_limits(
+        VideoCodec::H264,
+        FALLBACK_MAX_WIDTH,
+        FALLBACK_MAX_HEIGHT,
+        FALLBACK_MAX_FRAME_RATE,
+    );
+    assert_eq!(sixty_limits.level, 42);
+    let full_hd_60 = Budget::select_with_limits_resolution_and_fps(
+        1920,
+        1080,
+        FALLBACK_MAX_BITRATE,
+        sixty_limits,
+        Some((FALLBACK_MAX_WIDTH, FALLBACK_MAX_HEIGHT)),
+        Some(FALLBACK_MAX_FRAME_RATE),
+    );
+    assert_eq!(
+        (full_hd_60.width, full_hd_60.height, full_hd_60.fps),
+        (1920, 1080, 60)
+    );
+    let hevc_60 = fallback_limits(
+        VideoCodec::H265,
+        FALLBACK_MAX_WIDTH,
+        FALLBACK_MAX_HEIGHT,
+        FALLBACK_MAX_FRAME_RATE,
+    );
+    assert_eq!(hevc_60.level, 123);
+    let hevc_default = fallback_limits(
+        VideoCodec::H265,
+        FALLBACK_MAX_WIDTH,
+        FALLBACK_MAX_HEIGHT,
+        FALLBACK_DEFAULT_FRAME_RATE,
+    );
+    assert_eq!(hevc_default.level, 120);
+    let hd_60 = fallback_limits(VideoCodec::H264, 1280, 720, FALLBACK_MAX_FRAME_RATE);
+    assert_eq!(hd_60.level, 40);
+    let hevc_hd_60 = fallback_limits(VideoCodec::H265, 1280, 720, FALLBACK_MAX_FRAME_RATE);
+    assert_eq!(hevc_hd_60.level, 120);
     let capped = Budget::select_with_limits_and_resolution(
         1920,
         1080,
@@ -110,7 +152,7 @@ fn websocket_fallback_budget_reaches_full_hd_and_still_respects_explicit_resolut
 fn explicit_two_k_and_four_k_targets_follow_the_negotiated_level() {
     let level_five_one = Limits::parse("packetization-mode=1;profile-level-id=42e033").unwrap();
     for (requested, expected) in [
-        ((2560, 1440), (2560, 1440, 30)),
+        ((2560, 1440), (2560, 1440, 60)),
         ((3840, 2160), (3840, 2160, 30)),
     ] {
         let budget = Budget::select_with_limits_resolution_and_fps(
@@ -126,6 +168,9 @@ fn explicit_two_k_and_four_k_targets_follow_the_negotiated_level() {
         assert!(macroblocks <= level_five_one.max_fs);
         assert!(macroblocks * budget.fps <= level_five_one.max_mbps);
     }
+    let level_five_zero = Limits::parse("packetization-mode=1;profile-level-id=42e032").unwrap();
+    let two_k = Budget::select_with_limits(2560, 1440, 20_000_000, level_five_zero);
+    assert_eq!((two_k.width, two_k.height, two_k.fps), (2560, 1440, 30));
 }
 
 #[test]

@@ -145,6 +145,7 @@ export const sessions = {
     noFileDiff: "没有可用的文本差异",
     commandShell: "Shell",
     copyOutput: "复制输出",
+    copyDetails: "复制详情",
     noCommandOutput: "没有输出",
     exitCode: "退出码：{code}",
     status: { running: "运行中", completed: "已完成", failed: "失败", waiting: "等待中" },

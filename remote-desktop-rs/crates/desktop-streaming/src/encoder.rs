@@ -26,8 +26,10 @@ pub struct Encoder {
     automatic: bool,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     hardware_failed: bool,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     limits: Limits,
+    software_frame_rate: u32,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    hardware_frame_rate: Option<u32>,
 }
 impl Encoder {
     pub fn new(
@@ -51,7 +53,7 @@ impl Encoder {
             "HEVC has no software encoder"
         );
         Ok(Self {
-            software: SoftwareEncoder::with_quality(bitrate, limits, min_qp)?,
+            software: SoftwareEncoder::with_quality_at_frame_rate(bitrate, limits, min_qp, 30)?,
             codec,
             policy,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -60,8 +62,10 @@ impl Encoder {
             automatic: matches!(policy, Policy::Automatic),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             hardware_failed: false,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
             limits,
+            software_frame_rate: 30,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            hardware_frame_rate: None,
         })
     }
     pub fn bitrate(&self) -> u32 {
@@ -106,11 +110,17 @@ impl Encoder {
             *self = Self::new(bitrate, limits, min_qp, policy, codec)?;
             return Ok(());
         }
-        self.software = SoftwareEncoder::with_quality(bitrate, limits, min_qp)?;
+        self.software = SoftwareEncoder::with_quality_at_frame_rate(
+            bitrate,
+            limits,
+            min_qp,
+            self.software_frame_rate,
+        )?;
+        self.limits = limits;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            self.limits = limits;
             self.hardware = None;
+            self.hardware_frame_rate = None;
         }
         Ok(())
     }
@@ -122,6 +132,16 @@ impl Encoder {
     ) -> anyhow::Result<Option<EncodedFrame>> {
         #[allow(unused_mut)]
         let mut idr = idr;
+        if self.software_frame_rate != budget.fps {
+            self.software = SoftwareEncoder::with_quality_at_frame_rate(
+                self.bitrate(),
+                self.limits,
+                self.min_qp(),
+                budget.fps,
+            )?;
+            self.software_frame_rate = budget.fps;
+            idr = true;
+        }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self.automatic && !self.hardware_failed {
             let result = (|| -> anyhow::Result<EncodedFrame> {
@@ -130,13 +150,16 @@ impl Encoder {
                     .hardware
                     .as_ref()
                     .is_none_or(|hardware| hardware.size() != size)
+                    || self.hardware_frame_rate != Some(budget.fps)
                 {
                     self.hardware = None;
+                    self.hardware_frame_rate = None;
                     #[cfg(target_os = "macos")]
                     {
                         self.hardware = Some(crate::platform::macos_encoder::Encoder::new(
                             size.0,
                             size.1,
+                            budget.fps,
                             self.bitrate(),
                             self.limits,
                             self.codec,
@@ -147,10 +170,12 @@ impl Encoder {
                         self.hardware = Some(crate::platform::linux_encoder::Encoder::new(
                             size.0,
                             size.1,
+                            budget.fps,
                             self.bitrate(),
                             self.limits,
                         )?);
                     }
+                    self.hardware_frame_rate = Some(budget.fps);
                     idr = true;
                 }
                 match &frame {
@@ -187,6 +212,7 @@ impl Encoder {
                     // failed device every frame or carry its GOP into fallback.
                     eprintln!("desktop encoder: hardware unavailable; stream uses OpenH264");
                     self.hardware = None;
+                    self.hardware_frame_rate = None;
                     self.hardware_failed = true;
                     idr = true;
                 }

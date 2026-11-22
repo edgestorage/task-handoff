@@ -43,15 +43,9 @@
               <div v-if="hasDetails(activity) && activityOpen(activity)" class="ai-session-activity-details">
                 <div class="ai-session-activity-details-content">
                   <AiSessionFileChanges v-if="fileChanges(activity).length" :changes="fileChanges(activity)" />
-                  <AiSessionCommandResult v-else-if="isCommandActivity(activity)" :command="activity.input" :output="activity.output" :exit-code="activity.exitCode" />
-                  <section v-else-if="activity.input">
-                    <small>{{ t("sessions.timeline.input") }}</small>
-                    <ScrollArea type="auto" :horizontal="false" class="ai-session-activity-pre-scroll">
-                      <pre>{{ activity.input }}</pre>
-                    </ScrollArea>
-                  </section>
-                  <section v-if="activity.output && !isCommandActivity(activity) && !fileChanges(activity).length">
-                    <ContextMenu v-if="activity.activityKind === 'reasoning'" v-model:open="reasoningMenuOpen">
+                  <template v-else-if="activity.activityKind === 'reasoning' && activity.output">
+                    <AiSessionActivityResult v-if="activity.input || activity.exitCode !== undefined" :title="activityLabel(activity)" :input="activity.input" :exit-code="activity.exitCode" />
+                    <ContextMenu v-model:open="reasoningMenuOpen">
                       <ContextMenuTrigger as-child>
                         <div @contextmenu="handleReasoningContextMenu">
                           <MarkdownContent :content="activity.output" :code-tools="markdownCodeTools" />
@@ -66,14 +60,8 @@
                         </ContextMenuItem>
                       </ContextMenuContent>
                     </ContextMenu>
-                    <template v-else>
-                      <small>{{ t("sessions.timeline.output") }}</small>
-                      <ScrollArea type="auto" :horizontal="false" class="ai-session-activity-pre-scroll">
-                        <pre>{{ activity.output }}</pre>
-                      </ScrollArea>
-                    </template>
-                  </section>
-                  <small v-if="activity.exitCode !== undefined && !isCommandActivity(activity)">{{ t("sessions.timeline.exitCode", { code: activity.exitCode }) }}</small>
+                  </template>
+                  <AiSessionActivityResult v-else :title="activityLabel(activity)" :shell="isCommandActivity(activity)" :input="aiSessionActivityDetailInput(activity)" :output="activity.output" :exit-code="activity.exitCode" />
                 </div>
               </div>
             </Transition>
@@ -114,12 +102,10 @@ import {
   Wrench,
 } from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
-import { localizedAiSessionActivityTitle } from "@task-handoff/control-plane-client";
-import { ScrollArea } from "../ui/scroll-area";
+import { aiSessionActivityDetailInput, aiSessionFileChanges, localizedAiSessionActivityTitle } from "@task-handoff/control-plane-client";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
-import AiSessionCommandResult from "./AiSessionCommandResult.vue";
+import AiSessionActivityResult from "./AiSessionActivityResult.vue";
 import AiSessionFileChanges from "./AiSessionFileChanges.vue";
-import { aiSessionFileChanges } from "./aiSessionFileChanges";
 import {
   beginDisclosureTransition,
   cancelDisclosureTransition,
@@ -200,8 +186,7 @@ async function copyReasoningText() {
   if (selectedReasoningText.value) await navigator.clipboard?.writeText(selectedReasoningText.value);
 }
 function hasDetails(activity: AiSessionTimelineActivity) {
-  if (isCommandActivity(activity)) return Boolean(activity.input || activity.output || activity.exitCode !== undefined);
-  return Boolean(activity.input || activity.output || activity.exitCode !== undefined);
+  return Boolean(aiSessionActivityDetailInput(activity) || activity.output || activity.exitCode !== undefined);
 }
 function fileChanges(activity: AiSessionTimelineActivity) {
   return fileChangesByActivityId.value.get(activity.id) || [];
@@ -353,13 +338,15 @@ function runtimePathBasename(path: string) {
   min-width: 0;
 }
 .ai-session-activity-details-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
   padding-top: 9px;
   background-image: linear-gradient(var(--line-subtle), var(--line-subtle));
   background-repeat: no-repeat;
   background-position: 0 4px;
   background-size: 100% 1px;
 }
-.ai-session-activity-details section { display: grid; gap: 4px; margin-top: 4px; }
 .ai-session-activity-details :deep(.markdown-content) {
   font-size: 14px;
   line-height: 1.55;
@@ -368,27 +355,6 @@ function runtimePathBasename(path: string) {
 }
 .ai-session-activity-details :deep(.markdown-content > :first-child) { margin-top: 0; }
 .ai-session-activity-details :deep(.markdown-content > :last-child) { margin-bottom: 0; }
-.ai-session-activity-pre-scroll {
-  max-width: 100%;
-  min-width: 0;
-  border-left: 1px solid var(--line-subtle);
-}
-.ai-session-activity-pre-scroll :deep([data-reka-scroll-area-viewport]) {
-  max-height: 280px;
-}
-.ai-session-activity-details pre {
-  margin: 0;
-  padding: 7px 0 7px 10px;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: 12px/1.45 var(--font-mono, monospace);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  cursor: text;
-  -webkit-user-select: text;
-  user-select: text;
-}
 .activity-disclosure-enter-active,
 .activity-disclosure-leave-active { overflow: hidden; transition: height 180ms ease, opacity 180ms ease; will-change: height; }
 .activity-disclosure-enter-from,

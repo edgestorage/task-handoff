@@ -272,23 +272,27 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     const messages = await this.client.messages(providerSessionId, input.source.cwd || directory);
     const messageID = input.providerThroughTurnId ? nextUserMessageId(messages, input.providerThroughTurnId) : undefined;
     const forked = await this.client.forkSession(providerSessionId, directory, messageID);
+    const inheritedTitle = input.source.title?.trim();
+    const projected = inheritedTitle
+      ? await this.client.renameSession(forked.id, forked.directory, inheritedTitle)
+      : forked;
     if (input.storyAgentTools !== undefined) {
       const sourceSession = await this.client.getSession(providerSessionId, input.source.cwd || directory);
-      await this.client.setPermission(forked.id, forked.directory, openCodeSessionPermissionRules(undefined, input.storyAgentTools, sourceSession.permission)!);
+      await this.client.setPermission(projected.id, projected.directory, openCodeSessionPermissionRules(undefined, input.storyAgentTools, sourceSession.permission)!);
     }
     const lineage = { kind: "fork" as const, parentProviderSessionId: providerSessionId, throughTurnId: input.throughTurnId };
-    this.lineageBySession.set(forked.id, lineage);
-    this.armTitleGeneration(forked.id);
+    this.lineageBySession.set(projected.id, lineage);
+    if (!inheritedTitle) this.armTitleGeneration(projected.id);
     try {
-      await this.reconcile(forked.id, forked.directory, forked, "ai-session", { persistence: "strict" });
+      await this.reconcile(projected.id, projected.directory, projected, "ai-session", { persistence: "strict" });
     } catch (error) {
-      this.forget(forked.id);
-      try { await this.client.deleteSession(forked.id, forked.directory); } catch {}
+      this.forget(projected.id);
+      try { await this.client.deleteSession(projected.id, projected.directory); } catch {}
       throw error;
     }
     return {
-      providerSessionId: forked.id,
-      cwd: forked.directory,
+      providerSessionId: projected.id,
+      cwd: projected.directory,
       creationSource: "ai-session" as const,
       lineage,
     };

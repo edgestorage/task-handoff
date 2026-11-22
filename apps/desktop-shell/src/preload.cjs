@@ -18,6 +18,15 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   revealLocalPath: (localPath) => ipcRenderer.invoke("task-handoff:reveal-local-path", localPath),
   openExternalUrl: (url) => ipcRenderer.invoke("task-handoff:open-external-url", url),
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  clipboard: {
+    readText: () => ipcRenderer.invoke("task-handoff:clipboard-read-text"),
+    writeText: (text) => ipcRenderer.invoke("task-handoff:clipboard-write-text", text),
+    onChanged: (listener) => {
+      const handler = (_event, input) => listener(input);
+      ipcRenderer.on("task-handoff:clipboard-changed", handler);
+      return () => ipcRenderer.removeListener("task-handoff:clipboard-changed", handler);
+    },
+  },
   openAppWindow: (url) => ipcRenderer.invoke("task-handoff:open-app-window", url),
   prepareBrowserContext: (instanceId) => ipcRenderer.invoke("task-handoff:browser-context-prepare", instanceId),
   releaseBrowserContext: (contextId) => ipcRenderer.invoke("task-handoff:browser-context-release", contextId),
