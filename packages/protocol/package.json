@@ -106,6 +106,10 @@
       "types": "./src/browser-tunnel.ts",
       "default": "./src/browser-tunnel.ts"
     },
+    "./browser-agent-tools": {
+      "types": "./src/browser-agent-tools.ts",
+      "default": "./src/browser-agent-tools.ts"
+    },
     "./relay-body": {
       "types": "./src/relay-body.ts",
       "default": "./src/relay-body.ts"
@@ -113,6 +117,10 @@
     "./browser-access": {
       "types": "./src/browser-access.ts",
       "default": "./src/browser-access.ts"
+    },
+    "./embedded-browser-control": {
+      "types": "./src/embedded-browser-control.ts",
+      "default": "./src/embedded-browser-control.ts"
     },
     "./repository": {
       "types": "./src/repository.ts",
@@ -179,6 +187,8 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "check": "pnpm run build",
     "generate:browser-tunnel-native": "node scripts/generate-browser-tunnel-native-fixtures.mjs",
+    "generate:embedded-browser-control": "node scripts/generate-embedded-browser-control-fixtures.mjs",
+    "check:embedded-browser-control-fixtures": "node scripts/generate-embedded-browser-control-fixtures.mjs --check",
     "test": "node --test"
   },
   "dependencies": {

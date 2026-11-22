@@ -4,9 +4,44 @@ type OpenLocalPathResult = {
   error?: string;
 };
 
-export type DesktopBrowserContextResult = { ok: boolean; code?: string; message?: string; contextId?: string; partition?: string };
+export type DesktopBrowserAgentControl = { ok: boolean; code?: string };
+
+export type DesktopBrowserContextResult = { ok: boolean; code?: string; message?: string; contextId?: string; partition?: string; agentControl?: DesktopBrowserAgentControl };
 
 export type DesktopBrowserLoadFailure = { instanceId?: string; host?: string; port?: number; code?: string; message?: string };
+
+export type DesktopBrowserPageHost = "renderer-webview" | "main-page-pool";
+
+export type DesktopBrowserPageHostCapabilities = {
+  backgroundCreation: boolean;
+  surviveHostWindowClose: boolean;
+  crossWindowAdopt: boolean;
+};
+
+export type DesktopBrowserControlInfo = {
+  ok: boolean;
+  code?: string;
+  pageHost?: DesktopBrowserPageHost;
+  pageHostCapabilities?: DesktopBrowserPageHostCapabilities;
+  requestedPageHost?: DesktopBrowserPageHost;
+  degraded?: boolean;
+  degradedReason?: string;
+  sourceRef?: string;
+  generation?: number;
+  ready?: boolean;
+};
+
+export type DesktopBrowserTab = {
+  tabRef: string;
+  instanceId: string;
+  pageHost: DesktopBrowserPageHost;
+  pageHostCapabilities: DesktopBrowserPageHostCapabilities;
+  url: string;
+  title: string;
+  state: string;
+};
+
+export type DesktopBrowserTabResult = { ok: boolean; code?: string; message?: string; tab?: DesktopBrowserTab };
 
 type DesktopBridge = {
   openLocalPath?: (path: string) => Promise<OpenLocalPathResult>;
@@ -15,10 +50,20 @@ type DesktopBridge = {
   prepareBrowserContext?: (instanceId: string) => Promise<DesktopBrowserContextResult>;
   releaseBrowserContext?: (contextId: string) => Promise<{ ok: boolean }>;
   touchBrowserContext?: (contextId: string) => Promise<{ ok: boolean }>;
+  getBrowserControlInfo?: (instanceId?: string) => Promise<DesktopBrowserControlInfo>;
+  registerBrowserTab?: (input: { webContentsId: number; instanceId: string; sessionKey: string; creationRef?: string; title?: string; url?: string; state?: string }) => Promise<DesktopBrowserTabResult>;
+  updateBrowserTab?: (input: { tabRef: string; title?: string; url?: string; state?: string }) => Promise<DesktopBrowserTabResult>;
+  unregisterBrowserTab?: (webContentsId: number) => Promise<{ ok: boolean }>;
+  listBrowserTabs?: (instanceId?: string) => Promise<{ ok: boolean; code?: string; tabs?: DesktopBrowserTab[] }>;
+  closeBrowserTab?: (tabRef: string) => Promise<{ ok: boolean; code?: string }>;
+  attachBrowserTarget?: (tabRef: string) => Promise<DesktopBrowserTabResult>;
+  detachBrowserTarget?: (tabRef: string) => Promise<{ ok: boolean; code?: string }>;
+  sendBrowserCdpCommand?: (input: { tabRef: string; method: string; params?: unknown }) => Promise<{ ok: boolean; code?: string; message?: string; result?: unknown }>;
   setBrowserTabThrottled?: (webContentsId: number, throttled: boolean) => Promise<{ ok: boolean }>;
-  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string }) => void) => () => void;
+  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string; title?: string; creationRef?: string }) => void) => () => void;
   onBrowserFocusAddress?: (listener: (input: { webContentsId?: number }) => void) => () => void;
   onBrowserLoadFailure?: (listener: (input: DesktopBrowserLoadFailure) => void) => () => void;
+  onBrowserTabClosed?: (listener: (input: { tabRef: string; instanceId?: string }) => void) => () => void;
   logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
 };
 
@@ -70,6 +115,49 @@ export function touchDesktopBrowserContext(contextId: string) {
   return desktopBridge()?.touchBrowserContext?.(contextId) ?? Promise.resolve({ ok: false });
 }
 
+export function canUseDesktopBrowserControl() {
+  const bridge = desktopBridge();
+  return typeof bridge?.registerBrowserTab === "function"
+    && typeof bridge.updateBrowserTab === "function"
+    && typeof bridge.unregisterBrowserTab === "function";
+}
+
+export function getDesktopBrowserControlInfo(instanceId?: string): Promise<DesktopBrowserControlInfo> {
+  return desktopBridge()?.getBrowserControlInfo?.(instanceId) ?? Promise.resolve({ ok: false, code: "desktop-bridge-unavailable" });
+}
+
+export function registerDesktopBrowserTab(input: { webContentsId: number; instanceId: string; sessionKey: string; creationRef?: string; title?: string; url?: string; state?: string }): Promise<DesktopBrowserTabResult> {
+  return desktopBridge()?.registerBrowserTab?.(input) ?? Promise.resolve({ ok: false, code: "desktop-bridge-unavailable" });
+}
+
+export function updateDesktopBrowserTab(input: { tabRef: string; title?: string; url?: string; state?: string }): Promise<DesktopBrowserTabResult> {
+  return desktopBridge()?.updateBrowserTab?.(input) ?? Promise.resolve({ ok: false, code: "desktop-bridge-unavailable" });
+}
+
+export function unregisterDesktopBrowserTab(webContentsId: number) {
+  return desktopBridge()?.unregisterBrowserTab?.(webContentsId) ?? Promise.resolve({ ok: false });
+}
+
+export function listDesktopBrowserTabs(instanceId?: string) {
+  return desktopBridge()?.listBrowserTabs?.(instanceId) ?? Promise.resolve({ ok: false, tabs: [] });
+}
+
+export function closeDesktopBrowserTab(tabRef: string) {
+  return desktopBridge()?.closeBrowserTab?.(tabRef) ?? Promise.resolve({ ok: false, code: "desktop-bridge-unavailable" });
+}
+
+export function attachDesktopBrowserTarget(tabRef: string) {
+  return desktopBridge()?.attachBrowserTarget?.(tabRef) ?? Promise.resolve({ ok: false, code: "desktop-bridge-unavailable" });
+}
+
+export function detachDesktopBrowserTarget(tabRef: string) {
+  return desktopBridge()?.detachBrowserTarget?.(tabRef) ?? Promise.resolve({ ok: false, code: "desktop-bridge-unavailable" });
+}
+
+export function sendDesktopBrowserCdpCommand(input: { tabRef: string; method: string; params?: unknown }) {
+  return desktopBridge()?.sendBrowserCdpCommand?.(input) ?? Promise.resolve({ ok: false, code: "desktop-bridge-unavailable" });
+}
+
 export function setDesktopBrowserTabThrottled(webContentsId: number, throttled: boolean) {
   return desktopBridge()?.setBrowserTabThrottled?.(webContentsId, throttled) ?? Promise.resolve({ ok: false });
 }
@@ -84,6 +172,10 @@ export function onDesktopBrowserFocusAddress(listener: (input: { webContentsId?:
 
 export function onDesktopBrowserLoadFailure(listener: (input: DesktopBrowserLoadFailure) => void) {
   return desktopBridge()?.onBrowserLoadFailure?.(listener);
+}
+
+export function onDesktopBrowserTabClosed(listener: (input: { tabRef: string; instanceId?: string }) => void) {
+  return desktopBridge()?.onBrowserTabClosed?.(listener);
 }
 
 export function logDesktopBrowserDiagnostic(message: string, instanceId?: string) {

@@ -12,6 +12,7 @@ export type AiSessionCloseCoordinatorOptions = {
   stopApp: (appSessionId: string) => void | Promise<void>;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
   releaseSessionResources?: (sessionId: string) => void;
+  onSessionClosed?: (sessionId: string) => void | Promise<void>;
 };
 
 export class AiSessionCloseCoordinator {
@@ -231,6 +232,7 @@ export class AiSessionCloseCoordinator {
       if (!item) throw new Error("AI session could not be converted to resumable history.");
       this.options.history.upsert(item, aiSessionHistoryTurns(session));
       this.options.registry.discard(session.id);
+      await this.releaseClosedSession(session.id);
     } catch (error: unknown) {
       try { await provider.resumeSession?.(session.providerSessionId, session.modelSelection, session.reasoningEffort); } catch (resumeError: unknown) {
         this.options.onDiagnostic?.({
@@ -281,6 +283,7 @@ export class AiSessionCloseCoordinator {
         if (active) this.options.registry.discard(active.id);
         const removedHistory = this.options.history.remove(session.id);
         if (!removedHistory) this.options.releaseSessionResources?.(session.id);
+        await this.releaseClosedSession(session.id);
         clearedSessionIds.push(session.id);
       } catch (error: unknown) {
         firstError ||= error;
@@ -305,6 +308,18 @@ export class AiSessionCloseCoordinator {
       409,
     );
     return AiSessionClearResultSchema.parse({ disposition: "cleared", aiSessionId: target.id, clearedSessionIds });
+  }
+
+  private async releaseClosedSession(sessionId: string) {
+    try {
+      await this.options.onSessionClosed?.(sessionId);
+    } catch (error: unknown) {
+      this.options.onDiagnostic?.({
+        code: "AI_SESSION_RESOURCE_RELEASE_FAILED",
+        aiSessionId: sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private keys(session: AiSessionStatus) {

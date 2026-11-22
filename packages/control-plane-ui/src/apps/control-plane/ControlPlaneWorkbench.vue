@@ -622,6 +622,7 @@
         :browser-session-tabs="combinedBrowserSessionTabs"
         :browser-surface-state="combinedBrowserSurfaceState"
         @update-browser-tab="updateCombinedBrowserTab"
+        @close-browser-tab="closeCombinedBrowserTab"
       />
       <RemoteDesktopSurfaceLayer
         :active-instance-id="storyMode || settingsMode || agentMode || boardMode ? '' : activeInstanceId"
@@ -750,6 +751,7 @@ import { allNodesVisible, nodeIsVisible, nodeIsSelected, normalizeNodeVisibility
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
+import { BROWSER_CREATION_REFRESH_EVENT, dispatchBrowserCreationEvent } from "./instance-detail/browserCreationEvents.ts";
 import SessionRemoteDesktopSurfaceHost from "../../components/remote-desktop/SessionRemoteDesktopSurfaceHost.vue";
 import { createSessionRemoteDesktopSurfaces, sessionRemoteDesktopSurfacesKey } from "./instance-detail/sessionRemoteDesktopSurfaces";
 import { CLOSE_SESSION_REMOTE_DESKTOP_EVENT, type CloseSessionRemoteDesktopDetail, type OpenSessionRemoteDesktopDetail } from "./instance-detail/sessionRemoteDesktopEvents";
@@ -802,7 +804,7 @@ type DesktopBridge = {
   openInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: string; code?: string }>;
   switchInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: "switched" | "focused" | "error"; code?: string }>;
   onOpenSettings?: (listener: () => void) => () => void;
-  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string }) => void) => () => void;
+  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string; title?: string; creationRef?: string }) => void) => () => void;
   logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
   windowChrome?: { mode: "custom" | "macos-overlay" | "windows-overlay"; supportsDensity?: boolean };
   setWindowChromeDensity?: (density: "compact" | "normal") => Promise<{ ok: boolean }>;
@@ -1726,6 +1728,7 @@ useControlPlaneEvents({
   onAuthoritativeState(authoritative) {
     if (!authoritative) deviceTrustStore.reset();
     instanceDirectoryEventsAuthoritative.value = authoritative;
+    if (authoritative) dispatchBrowserCreationEvent(BROWSER_CREATION_REFRESH_EVENT, { instanceId: sessionQueryInstanceId.value });
   },
 });
 const lastRefreshLabel = computed(() => formatTime(lastRefreshAt.value, locale.value as SupportedLocale));
@@ -1862,6 +1865,19 @@ function updateCombinedBrowserTab(instanceId: string, sessionKey: string, patch:
   }
   updateBrowserTab(instanceId, sessionKey, patch);
 }
+
+function closeCombinedBrowserTab(instanceId: string, sessionKey: string) {
+  const storyResource = storyResourceSidebar.allBrowserResources.value.find((resource) => (
+    resource.instanceId === instanceId && storyResourceKey(resource) === sessionKey
+  ));
+  if (storyResource) {
+    storyResourceSidebar.removeBrowser(storyResource);
+    return;
+  }
+  const session = browserSessionTabs[instanceId]?.find((candidate) => candidate.key === sessionKey);
+  const instance = sortedInstances.value.find((candidate) => candidate.id === instanceId) || (activeInstance.value?.id === instanceId ? activeInstance.value : undefined);
+  if (session && instance) void stopSelectedAppSession(instance, session);
+}
 const authoritativeInstanceIds = computed<ReadonlySet<string> | undefined>(() => {
   if (standaloneMode.value) {
     return instanceDirectory.isSuccess.value
@@ -1875,13 +1891,15 @@ const authoritativeInstanceIds = computed<ReadonlySet<string> | undefined>(() =>
 watch(authoritativeInstanceIds, (instanceIds) => {
   if (instanceIds) pruneBrowserInstances(instanceIds);
 }, { immediate: true });
-const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId: sourceInstanceId, url }) => {
+const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId: sourceInstanceId, url, title, creationRef }) => {
   const instanceId = sourceInstanceId || activeStoryBrowserResource.value?.instanceId || activeInstanceId.value;
   desktopBridge?.logBrowserDiagnostic?.({ message: `popup event received url=${String(url || "").slice(0, 200)}`, instanceId: instanceId || undefined });
   if (!instanceId || typeof url !== "string" || !url.trim()) return;
   if (storyMode.value) {
-    if (storyResourceTargetAiSessionId.value && storyResourceTargetInstanceId.value === instanceId) storyResourceSidebar.openBrowser(instanceId, url);
-  } else openBrowserTab(instanceId, url);
+    if (storyResourceTargetAiSessionId.value && storyResourceTargetInstanceId.value === instanceId) {
+      storyResourceSidebar.openBrowser(instanceId, url, { title, creationRef });
+    }
+  } else openBrowserTab(instanceId, url, { title, creationRef });
   desktopBridge?.logBrowserDiagnostic?.({ message: `popup browser tab created url=${url.slice(0, 200)}`, instanceId });
 });
 

@@ -157,7 +157,7 @@ export function useStoryResourceSidebar(input: {
     );
   }
 
-  function openBrowser(instanceId: string, initialUrl?: string) {
+  function openBrowser(instanceId: string, initialUrl?: string, options: { title?: string; creationRef?: string } = {}) {
     const aiSessionId = input.aiSessionId.value;
     if (!aiSessionId || instanceId !== input.instanceId.value) return;
     const resource = {
@@ -165,6 +165,8 @@ export function useStoryResourceSidebar(input: {
       aiSessionId,
       instanceId,
       browserTabId: `story-browser:${createBrowserUuid()}`,
+      ...(options.creationRef ? { creationRef: options.creationRef } : {}),
+      ...(options.title?.trim() ? { title: options.title.trim().slice(0, 120) } : {}),
       status: initialUrl ? "loading" : "running",
       ...(initialUrl ? { initialUrl } : {}),
     };

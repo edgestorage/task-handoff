@@ -3,6 +3,7 @@ import test from "node:test";
 import { createOpenCodeStoryPlugin } from "./src/opencode-story-plugin.ts";
 import { STORY_AGENT_TOOL_NAMES } from "@task-handoff/protocol/story-agent-tools";
 import { AGENT_INVOCATION_TOOL_NAMES } from "@task-handoff/protocol/agent-invocation-tools";
+import { BROWSER_AGENT_TOOL_NAMES } from "@task-handoff/protocol/browser-agent-tools";
 
 test("OpenCode Story plugin forwards the host-provided session identity", async () => {
   let request;
@@ -36,7 +37,7 @@ test("OpenCode Story plugin forwards the host-provided session identity", async 
 
 test("OpenCode Story plugin does not expose session identity as a model argument", async () => {
   const hooks = await createOpenCodeStoryPlugin()();
-  assert.deepEqual(Object.keys(hooks.tool), [...STORY_AGENT_TOOL_NAMES, ...AGENT_INVOCATION_TOOL_NAMES]);
+  assert.deepEqual(Object.keys(hooks.tool), [...STORY_AGENT_TOOL_NAMES, ...AGENT_INVOCATION_TOOL_NAMES, ...BROWSER_AGENT_TOOL_NAMES]);
   assert.deepEqual(Object.keys(hooks.tool.story_get_content.args), ["storyPaths", "destinationPath"]);
   assert.deepEqual(Object.keys(hooks.tool.story_delete_content.args), ["storyPath", "expectedRevision"]);
   assert.equal("sessionID" in hooks.tool.story_get_content.args, false);

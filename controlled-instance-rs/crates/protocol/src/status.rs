@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::{
     AiSessionsSnapshot, ControlledInstanceAppInstallEnvironmentCapabilities,
-    InstanceShellCapabilities, CONTROL_PLANE_PROTOCOL_VERSION,
+    EmbeddedBrowserChannelCapabilities, InstanceShellCapabilities, CONTROL_PLANE_PROTOCOL_VERSION,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -182,6 +182,12 @@ pub struct FeatureCapabilities {
         deserialize_with = "crate::deserialize_remote_desktop"
     )]
     pub remote_desktop: Option<crate::RemoteDesktopCapabilities>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::deserialize_embedded_browser_channel"
+    )]
+    pub embedded_browser_channel: Option<EmbeddedBrowserChannelCapabilities>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

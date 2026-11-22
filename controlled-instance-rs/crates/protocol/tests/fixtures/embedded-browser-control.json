@@ -1,0 +1,362 @@
+{
+  "protocolVersion": "2026-11-22",
+  "limits": {
+    "frameHeaderBytes": 9,
+    "controlMaxMessageBytes": 262144,
+    "channelMaxBufferedBytes": 2097152,
+    "requestTimeoutMs": 10000,
+    "snapshotMaxPagesPerChunk": 100,
+    "maxPagesPerSource": 256,
+    "maxSources": 32,
+    "httpResultMaxBytes": 16777216,
+    "httpResultTotalBytes": 67108864,
+    "resultTtlMs": 120000
+  },
+  "frameTypes": {
+    "open": 1,
+    "openOk": 2,
+    "data": 3,
+    "halfClose": 4,
+    "close": 5,
+    "error": 6,
+    "windowUpdate": 7
+  },
+  "cdp": {
+    "profile": "electron-page-cdp",
+    "methods": {
+      "Accessibility.enable": "adapter-only",
+      "Accessibility.disable": "adapter-only",
+      "Accessibility.getFullAXTree": "read",
+      "Accessibility.getPartialAXTree": "read",
+      "Accessibility.getRootAXNode": "read",
+      "Console.enable": "adapter-only",
+      "Console.disable": "adapter-only",
+      "DOM.getDocument": "read",
+      "DOM.describeNode": "read",
+      "DOM.resolveNode": "read",
+      "DOM.getBoxModel": "read",
+      "DOM.getContentQuads": "read",
+      "DOM.getNodeForLocation": "read",
+      "DOM.querySelector": "read",
+      "DOM.querySelectorAll": "read",
+      "DOM.getAttributes": "read",
+      "DOM.getOuterHTML": "read",
+      "DOMSnapshot.enable": "adapter-only",
+      "DOMSnapshot.disable": "adapter-only",
+      "DOMSnapshot.captureSnapshot": "read",
+      "Input.dispatchMouseEvent": "page-write",
+      "Input.dispatchKeyEvent": "page-write",
+      "Input.dispatchTouchEvent": "page-write",
+      "Input.insertText": "page-write",
+      "Log.enable": "adapter-only",
+      "Log.disable": "adapter-only",
+      "Network.enable": "adapter-only",
+      "Network.disable": "adapter-only",
+      "Network.getResponseBody": "read",
+      "Network.getRequestPostData": "read",
+      "Page.enable": "adapter-only",
+      "Page.disable": "adapter-only",
+      "Page.getNavigationHistory": "read",
+      "Page.getFrameTree": "read",
+      "Page.getLayoutMetrics": "read",
+      "Page.navigate": "page-write",
+      "Page.reload": "page-write",
+      "Page.stopLoading": "page-write",
+      "Page.captureScreenshot": "read",
+      "Runtime.enable": "adapter-only",
+      "Runtime.disable": "adapter-only",
+      "Runtime.evaluate": "page-write",
+      "Runtime.callFunctionOn": "page-write",
+      "Runtime.getProperties": "read",
+      "Runtime.releaseObject": "adapter-only",
+      "Schema.getDomains": "read"
+    },
+    "events": [
+      "Console.messageAdded",
+      "Log.entryAdded",
+      "Network.loadingFailed",
+      "Network.loadingFinished",
+      "Network.requestServedFromCache",
+      "Network.requestWillBeSent",
+      "Network.responseReceived",
+      "Page.domContentEventFired",
+      "Page.frameNavigated",
+      "Page.frameStartedLoading",
+      "Page.frameStoppedLoading",
+      "Page.javascriptDialogClosed",
+      "Page.javascriptDialogOpening",
+      "Page.lifecycleEvent",
+      "Page.loadEventFired",
+      "Runtime.consoleAPICalled",
+      "Runtime.exceptionThrown",
+      "Runtime.executionContextCreated",
+      "Runtime.executionContextDestroyed",
+      "Runtime.executionContextsCleared"
+    ]
+  },
+  "frames": {
+    "openControlStream": "0100000001000000187b2273747265616d4b696e64223a22636f6e74726f6c227d",
+    "openOkControlStream": "0200000001000000377b2273747265616d4b696e64223a22636f6e74726f6c222c2270726f746f636f6c56657273696f6e223a22323032362d31312d3232227d",
+    "dataStream3": "0300000003000000030001ff",
+    "errorUnsupportedStreamKind": "06000000010000004a7b22636f6465223a2242524f575345525f4348414e4e454c5f53545245414d5f4b494e445f554e535550504f52544544222c226d657373616765223a22756e737570706f72746564227d",
+    "coalesced": "0100000001000000187b2273747265616d4b696e64223a22636f6e74726f6c227d0300000003000000030001ff",
+    "controlRequest": "03000000010000003b000000377b226a736f6e727063223a22322e30222c226964223a22726571756573745f31222c226d6574686f64223a22746162732e6c697374227d"
+  },
+  "messages": {
+    "streamOpen": {
+      "streamKind": "control"
+    },
+    "openOk": {
+      "streamKind": "control",
+      "protocolVersion": "2026-11-22"
+    },
+    "hello": {
+      "protocolVersion": "2026-11-22",
+      "sourceRef": "source_renderer",
+      "generation": 1,
+      "pageHost": "renderer-webview",
+      "pageHostCapabilities": {
+        "backgroundCreation": false,
+        "surviveHostWindowClose": false,
+        "crossWindowAdopt": false
+      },
+      "registryEpoch": "epoch_1",
+      "registryRevision": 7
+    },
+    "source": {
+      "sourceRef": "source_renderer",
+      "generation": 1,
+      "panelId": "control_plane_1",
+      "displayName": "Desktop A",
+      "pageHost": "renderer-webview",
+      "pageHostCapabilities": {
+        "backgroundCreation": false,
+        "surviveHostWindowClose": false,
+        "crossWindowAdopt": false
+      },
+      "revision": 3
+    },
+    "page": {
+      "sourceRef": "source_main_pool",
+      "generation": 2,
+      "tabRef": "browser_tab_1",
+      "instanceId": "instance_1",
+      "pageHost": "main-page-pool",
+      "pageHostCapabilities": {
+        "backgroundCreation": true,
+        "surviveHostWindowClose": true,
+        "crossWindowAdopt": true
+      },
+      "title": "Example",
+      "url": "https://example.com/",
+      "state": "ready",
+      "revision": 7
+    },
+    "pageList": {
+      "registryEpoch": "epoch_1",
+      "registryRevision": 8,
+      "items": [
+        {
+          "sourceRef": "source_main_pool",
+          "generation": 2,
+          "tabRef": "browser_tab_1",
+          "instanceId": "instance_1",
+          "pageHost": "main-page-pool",
+          "pageHostCapabilities": {
+            "backgroundCreation": true,
+            "surviveHostWindowClose": true,
+            "crossWindowAdopt": true
+          },
+          "title": "Example",
+          "url": "https://example.com/",
+          "state": "ready",
+          "revision": 7
+        }
+      ],
+      "cursor": "cursor_1"
+    },
+    "snapshot": {
+      "sourceRef": "source_main_pool",
+      "generation": 2,
+      "sourceRevision": 7,
+      "registryEpoch": "epoch_1",
+      "snapshotRef": "snapshot_1",
+      "chunkIndex": 0,
+      "chunkCount": 1,
+      "complete": true,
+      "pages": [
+        {
+          "sourceRef": "source_main_pool",
+          "generation": 2,
+          "tabRef": "browser_tab_1",
+          "instanceId": "instance_1",
+          "pageHost": "main-page-pool",
+          "pageHostCapabilities": {
+            "backgroundCreation": true,
+            "surviveHostWindowClose": true,
+            "crossWindowAdopt": true
+          },
+          "title": "Example",
+          "url": "https://example.com/",
+          "state": "ready",
+          "revision": 7
+        }
+      ]
+    },
+    "delta": {
+      "sourceRef": "source_main_pool",
+      "generation": 2,
+      "baseRevision": 7,
+      "revision": 8,
+      "upserts": [
+        {
+          "sourceRef": "source_main_pool",
+          "generation": 2,
+          "tabRef": "browser_tab_1",
+          "instanceId": "instance_1",
+          "pageHost": "main-page-pool",
+          "pageHostCapabilities": {
+            "backgroundCreation": true,
+            "surviveHostWindowClose": true,
+            "crossWindowAdopt": true
+          },
+          "title": "Example updated",
+          "url": "https://example.com/",
+          "state": "ready",
+          "revision": 8
+        }
+      ],
+      "removes": []
+    },
+    "registryDelta": {
+      "registryEpoch": "epoch_1",
+      "baseRevision": 8,
+      "revision": 9,
+      "upserts": [
+        {
+          "sourceRef": "source_main_pool",
+          "generation": 2,
+          "tabRef": "browser_tab_1",
+          "instanceId": "instance_1",
+          "pageHost": "main-page-pool",
+          "pageHostCapabilities": {
+            "backgroundCreation": true,
+            "surviveHostWindowClose": true,
+            "crossWindowAdopt": true
+          },
+          "title": "Example",
+          "url": "https://example.com/",
+          "state": "ready",
+          "revision": 8
+        }
+      ],
+      "removes": [
+        "browser_tab_old"
+      ],
+      "cursor": "cursor_2"
+    },
+    "creationView": {
+      "creationRef": "creation_1",
+      "requestedUrl": "https://example.com/",
+      "title": "Example",
+      "state": "pending",
+      "expiresAt": "2026-11-22T12:02:00.000Z",
+      "candidates": [
+        {
+          "sourceRef": "source_renderer",
+          "panelLabel": "Panel A",
+          "desktopLabel": "Desktop A",
+          "hostLabel": "Window 1",
+          "pageHost": "renderer-webview",
+          "state": "ready",
+          "canCreate": true
+        }
+      ],
+      "revision": 1
+    },
+    "lease": {
+      "leaseRef": "lease_1",
+      "tabRef": "browser_tab_1",
+      "sourceRef": "source_main_pool",
+      "generation": 2,
+      "expiresAt": "2026-11-22T12:02:00.000Z"
+    },
+    "access": {
+      "active": true,
+      "revision": 1
+    },
+    "cdpAccess": {
+      "httpEndpoint": "http://127.0.0.1:49221",
+      "token": "cdp_access_token",
+      "expiresAt": "2026-11-22T12:02:00.000Z",
+      "protocolVersion": "2026-11-22"
+    },
+    "cdpCommand": {
+      "leaseRef": "lease_1",
+      "method": "Page.navigate",
+      "params": {
+        "url": "https://example.com/"
+      },
+      "requestId": "request_1",
+      "timeoutMs": 10000
+    },
+    "cdpEvent": {
+      "generation": 2,
+      "leaseRef": "lease_1",
+      "tabRef": "browser_tab_1",
+      "method": "Page.loadEventFired",
+      "params": {
+        "timestamp": 1
+      }
+    },
+    "externalResult": {
+      "delivery": "http",
+      "resultRef": "result_1",
+      "mediaType": "application/json",
+      "byteLength": 640000
+    },
+    "channelError": {
+      "code": "BROWSER_CHANNEL_STREAM_KIND_UNSUPPORTED",
+      "message": "unsupported"
+    }
+  },
+  "capabilities": {
+    "supported": {
+      "supported": true,
+      "transports": [
+        "reverse-websocket"
+      ],
+      "streamKinds": [
+        "control"
+      ],
+      "drivers": [
+        "electron-page-cdp"
+      ],
+      "pageHosts": [
+        "renderer-webview",
+        "main-page-pool"
+      ]
+    },
+    "withUnknownExtensions": {
+      "supported": true,
+      "transports": [
+        "reverse-websocket",
+        "future-transport"
+      ],
+      "streamKinds": [
+        "control",
+        "tcp"
+      ],
+      "drivers": [
+        "electron-page-cdp",
+        "future-driver"
+      ],
+      "pageHosts": [
+        "renderer-webview",
+        "future-page-host",
+        "main-page-pool"
+      ],
+      "futureField": true
+    }
+  }
+}

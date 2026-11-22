@@ -30,6 +30,7 @@ import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import { getControlledInstanceTriggers } from "../../api/queries.ts";
 import { controlPlaneDomainQueryKeys, type ControlPlaneQueryDomain } from "../../api/queryInvalidation.ts";
 import { createAuthoritativeQueryRecovery } from "./authoritativeQueryRecovery.ts";
+import { BROWSER_ACCESS_CHANGED_EVENT, BROWSER_CREATION_CHANGED_EVENT, dispatchBrowserCreationEvent } from "./instance-detail/browserCreationEvents.ts";
 import { recordAiSessionRead } from "./aiSessionReadDiagnostics.ts";
 import { applyInstanceAppInventory, applyInstanceLifecycle, applyInstanceLifecycleHeartbeat, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
 import { removeInstanceTriggerBinding, replaceInstanceTriggerSnapshot, upsertInstanceTriggerBinding } from "./instanceTriggerCache.ts";
@@ -246,6 +247,20 @@ export function useControlPlaneEvents(input: {
   }
 
   function applyToCache(event: EventMessage) {
+    if (event.type === "browser.creation.changed") {
+      dispatchBrowserCreationEvent(BROWSER_CREATION_CHANGED_EVENT, {
+        instanceId: eventInstanceId(event),
+        payload: event.payload,
+      });
+      return true;
+    }
+    if (event.type === "browser.access.changed") {
+      dispatchBrowserCreationEvent(BROWSER_ACCESS_CHANGED_EVENT, {
+        instanceId: eventInstanceId(event),
+        payload: event.payload,
+      });
+      return true;
+    }
     if (event.type === "operation-approval.changed") {
       input.operationApprovals?.applyEvent(event.payload);
       return true;

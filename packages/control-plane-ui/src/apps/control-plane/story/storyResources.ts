@@ -31,6 +31,7 @@ export const StoryRepositoryResourceRefSchema = AiSessionResourceIdentitySchema.
 export const StoryEmbeddedBrowserResourceRefSchema = AiSessionResourceIdentitySchema.extend({
   kind: z.literal("embedded-browser"),
   browserTabId: z.string().trim().min(1).max(240),
+  creationRef: z.string().trim().min(1).max(240).optional(),
   title: z.string().trim().min(1).max(120).optional(),
   initialUrl: z.string().trim().min(1).max(2000).optional(),
   currentUrl: z.string().trim().min(1).max(2000).optional(),

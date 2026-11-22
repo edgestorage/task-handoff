@@ -6,6 +6,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { StoryAgentToolBridge } from "./src/web/story-agent-tool-bridge.ts";
 import { STORY_AGENT_TOOL_NAMES } from "@task-handoff/protocol/story-agent-tools";
 import { AGENT_INVOCATION_TOOL_NAMES } from "@task-handoff/protocol/agent-invocation-tools";
+import { BROWSER_AGENT_TOOL_NAMES } from "@task-handoff/protocol/browser-agent-tools";
 
 function testBridge(invocations) {
   return new StoryAgentToolBridge({
@@ -97,7 +98,7 @@ test("Codex MCP bridge uses trusted request metadata to resolve an existing AI S
   try {
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...STORY_AGENT_TOOL_NAMES, ...AGENT_INVOCATION_TOOL_NAMES].sort());
+    assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...STORY_AGENT_TOOL_NAMES, ...AGENT_INVOCATION_TOOL_NAMES, ...BROWSER_AGENT_TOOL_NAMES].sort());
     const readOnlyTools = listed.tools
       .filter((tool) => tool.annotations?.readOnlyHint === true)
       .map((tool) => tool.name)

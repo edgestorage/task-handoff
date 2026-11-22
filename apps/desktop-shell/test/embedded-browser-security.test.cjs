@@ -33,3 +33,15 @@ test("guest address shortcuts are routed to the owning browser tab", () => {
   assert.match(main, /guest\.on\("before-input-event"[\s\S]*?input\.key\?\.toLowerCase\(\) !== "l"[\s\S]*?event\.preventDefault\(\)[\s\S]*?!host\.isDestroyed\(\)[\s\S]*?host\.send\("task-handoff:browser-focus-address", \{ webContentsId: guest\.id \}\)/);
   assert.match(preload, /onBrowserFocusAddress[\s\S]*?task-handoff:browser-focus-address/);
 });
+
+test("browser tab control is scoped to a trusted renderer, partition, and opaque tabRef", () => {
+  assert.match(main, /desktopBrowserRegistry\?\.addGuest\(\{ host, guest, partition \}\)/);
+  assert.match(main, /desktopBrowserRegistry\.getByGuestId\(webContentsId, event\.sender\.id\)/);
+  assert.match(main, /instanceIdForPartition\(event\.sender\.id, entry\.partition\)/);
+  assert.match(main, /task-handoff:browser-tab-register[\s\S]*?trustedControlPlaneSenderUrl\(event\.sender\)/);
+  assert.match(main, /task-handoff:browser-target-attach[\s\S]*?trustedControlPlaneSenderUrl\(event\.sender\)/);
+  assert.match(main, /task-handoff:browser-cdp-send[\s\S]*?trustedControlPlaneSenderUrl\(event\.sender\)/);
+  assert.match(preload, /registerBrowserTab[\s\S]*?task-handoff:browser-tab-register/);
+  assert.match(preload, /sendBrowserCdpCommand[\s\S]*?task-handoff:browser-cdp-send/);
+  assert.doesNotMatch(preload, /partition.*ipcRenderer|ipcRenderer.*partition/);
+});

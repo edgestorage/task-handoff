@@ -8,6 +8,7 @@ mod app;
 mod app_management;
 mod browser_tunnel;
 mod config_sync;
+mod embedded_browser_control;
 mod event;
 mod git_credentials;
 mod id;
@@ -31,6 +32,7 @@ pub use app::*;
 pub use app_management::*;
 pub use browser_tunnel::*;
 pub use config_sync::*;
+pub use embedded_browser_control::*;
 pub use event::{
     ai_session_transient_subscription_accepts, encode_event, event_topic,
     AiSessionMessageDeltaSubscription, AiSessionTimelineSubscription,

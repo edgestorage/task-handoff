@@ -17,11 +17,13 @@ import {
   AGENT_INVOCATION_TOOL_SCHEMA,
   AgentInvocationToolNameSchema,
 } from "@task-handoff/protocol/agent-invocation-tools";
+import { BROWSER_AGENT_TOOL_NAMES, BrowserAgentToolNameSchema } from "@task-handoff/protocol/browser-agent-tools";
+import { EmbeddedBrowserCdpAccessSchema, type EmbeddedBrowserCdpAccess } from "@task-handoff/protocol/embedded-browser-control";
 
 const InvocationSchema = z.object({
   provider: z.literal("opencode"),
   providerSessionId: z.string().min(1).max(240),
-  tool: z.union([StoryAgentToolNameSchema, AgentInvocationToolNameSchema]),
+  tool: z.union([StoryAgentToolNameSchema, AgentInvocationToolNameSchema, BrowserAgentToolNameSchema]),
   arguments: z.unknown().optional(),
   callId: z.string().trim().min(1).max(240).optional(),
 }).strict();
@@ -42,7 +44,10 @@ type StoryAgentToolBridgeOptions = {
   endpoint: string;
   pluginPath?: string;
   token?: string;
+  issueBrowserCdpAccess?: (session: AiSessionStatus) => EmbeddedBrowserCdpAccess;
 };
+
+const BROWSER_CDP_ACCESS_DESCRIPTION = "Return a short-lived standard CDP endpoint and token for this controlled instance. Send Authorization: Bearer <token> or ?token=<token> on HTTP requests. Use GET /json/list to discover all open pages, PUT /json/new?url=... to request a new page, GET /json/close/{tabRef} to close a page, and connect to each page's webSocketDebuggerUrl for raw CDP JSON. Only one writer may control the same tab at a time.";
 
 function sameToken(actual: string | undefined, expected: string) {
   if (!actual) return false;
@@ -117,7 +122,9 @@ export class StoryAgentToolBridge {
             input.arguments,
             invocationRequestId(input.provider, input.providerSessionId, input.callId),
           )
-          : await this.options.service.invoke(session, input.tool, input.arguments);
+          : input.tool === "browser_cdp_access"
+            ? this.browserCdpAccess(session)
+            : await this.options.service.invoke(session, input.tool, input.arguments);
         return { data };
       } catch (error) {
         const details = errorDetails(error);
@@ -176,6 +183,20 @@ export class StoryAgentToolBridge {
         ...(STORY_AGENT_READ_ONLY_TOOLS.has(name) ? { annotations: { readOnlyHint: true } } : {}),
       }, (args, extra) => invoke(name, args, extra));
     }
+    for (const name of BROWSER_AGENT_TOOL_NAMES) {
+      server.registerTool(name, {
+        description: BROWSER_CDP_ACCESS_DESCRIPTION,
+        inputSchema: z.object({}).strict(),
+        outputSchema: EmbeddedBrowserCdpAccessSchema,
+      }, async (_args, extra) => {
+        const threadId = typeof extra._meta?.threadId === "string" ? extra._meta.threadId : undefined;
+        if (!threadId) throw Object.assign(new Error("Codex did not provide a thread identity for the Browser tool call."), { code: "AI_SESSION_IDENTITY_REQUIRED", statusCode: 400 });
+        const session = this.options.resolveSession("codex", threadId);
+        if (!session) throw Object.assign(new Error("AI Session was not found for the Browser tool call."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+        const result = this.browserCdpAccess(session);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result };
+      });
+    }
     server.registerTool("agent_run", {
       description: AGENT_INVOCATION_TOOL_DESCRIPTION,
       inputSchema: AGENT_INVOCATION_TOOL_SCHEMA.input,
@@ -194,5 +215,12 @@ export class StoryAgentToolBridge {
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result };
     });
     return server;
+  }
+
+  private browserCdpAccess(session: AiSessionStatus): EmbeddedBrowserCdpAccess {
+    if (!this.options.issueBrowserCdpAccess) {
+      throw Object.assign(new Error("Browser control is not available in this controlled instance."), { code: "BROWSER_CONTROL_UNSUPPORTED", statusCode: 409 });
+    }
+    return EmbeddedBrowserCdpAccessSchema.parse(this.options.issueBrowserCdpAccess(session));
   }
 }
