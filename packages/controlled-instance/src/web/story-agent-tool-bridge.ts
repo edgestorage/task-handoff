@@ -18,7 +18,7 @@ import {
   AgentInvocationToolNameSchema,
 } from "@task-handoff/protocol/agent-invocation-tools";
 import { BROWSER_AGENT_TOOL_NAMES, BrowserAgentToolNameSchema } from "@task-handoff/protocol/browser-agent-tools";
-import { EmbeddedBrowserCdpAccessSchema, type EmbeddedBrowserCdpAccess } from "@task-handoff/protocol/embedded-browser-control";
+import { EmbeddedBrowserCdpAccessResultSchema, type EmbeddedBrowserCdpAccessResult } from "@task-handoff/protocol/embedded-browser-control";
 
 const InvocationSchema = z.object({
   provider: z.literal("opencode"),
@@ -44,10 +44,22 @@ type StoryAgentToolBridgeOptions = {
   endpoint: string;
   pluginPath?: string;
   token?: string;
-  issueBrowserCdpAccess?: (session: AiSessionStatus) => EmbeddedBrowserCdpAccess;
+  issueBrowserCdpAccess?: (session: AiSessionStatus) => Promise<EmbeddedBrowserCdpAccessResult>;
 };
 
-const BROWSER_CDP_ACCESS_DESCRIPTION = "Return a short-lived standard CDP endpoint and token for this controlled instance. Send Authorization: Bearer <token> or ?token=<token> on HTTP requests. Use GET /json/list to discover all open pages, PUT /json/new?url=... to request a new page, GET /json/close/{tabRef} to close a page, and connect to each page's webSocketDebuggerUrl for raw CDP JSON. Only one writer may control the same tab at a time.";
+const BROWSER_CDP_ACCESS_DESCRIPTION = "Return a short-lived standard CDP endpoint and token for this controlled instance. If Agent browser access is disabled, this call asks the user for approval: it returns status=pending with a requestRef when the approval is still waiting, status=denied when the user denies it, and status=expired when the approval window closes. Tell the user to approve it in the approval center, then call this tool again; never loop on this tool while status is pending. When status=granted, send Authorization: Bearer <token> or ?token=<token> on HTTP requests. Use GET /json/list to discover all open pages, PUT /json/new?url=... to request a new page, GET /json/close/{tabRef} to close a page, and connect to each page's webSocketDebuggerUrl for raw CDP JSON. The full Emulation domain is available for viewport, touch, user-agent, media, and other page-scoped device simulation. Only one writer may control the same tab at a time.";
+
+// MCP tool output schemas must be a single object shape. The strict union is
+// still enforced by EmbeddedBrowserCdpAccessResultSchema before responding.
+const BrowserCdpAccessToolOutputSchema = z.object({
+  status: z.enum(["granted", "pending", "denied", "expired"]),
+  httpEndpoint: z.string().optional(),
+  token: z.string().optional(),
+  expiresAt: z.string().optional(),
+  protocolVersion: z.string().optional(),
+  requestRef: z.string().optional(),
+  message: z.string().optional(),
+}).strip();
 
 function sameToken(actual: string | undefined, expected: string) {
   if (!actual) return false;
@@ -123,7 +135,7 @@ export class StoryAgentToolBridge {
             invocationRequestId(input.provider, input.providerSessionId, input.callId),
           )
           : input.tool === "browser_cdp_access"
-            ? this.browserCdpAccess(session)
+            ? await this.browserCdpAccess(session)
             : await this.options.service.invoke(session, input.tool, input.arguments);
         return { data };
       } catch (error) {
@@ -187,13 +199,13 @@ export class StoryAgentToolBridge {
       server.registerTool(name, {
         description: BROWSER_CDP_ACCESS_DESCRIPTION,
         inputSchema: z.object({}).strict(),
-        outputSchema: EmbeddedBrowserCdpAccessSchema,
+        outputSchema: BrowserCdpAccessToolOutputSchema,
       }, async (_args, extra) => {
         const threadId = typeof extra._meta?.threadId === "string" ? extra._meta.threadId : undefined;
         if (!threadId) throw Object.assign(new Error("Codex did not provide a thread identity for the Browser tool call."), { code: "AI_SESSION_IDENTITY_REQUIRED", statusCode: 400 });
         const session = this.options.resolveSession("codex", threadId);
         if (!session) throw Object.assign(new Error("AI Session was not found for the Browser tool call."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
-        const result = this.browserCdpAccess(session);
+        const result = await this.browserCdpAccess(session);
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result };
       });
     }
@@ -217,10 +229,10 @@ export class StoryAgentToolBridge {
     return server;
   }
 
-  private browserCdpAccess(session: AiSessionStatus): EmbeddedBrowserCdpAccess {
+  private async browserCdpAccess(session: AiSessionStatus): Promise<EmbeddedBrowserCdpAccessResult> {
     if (!this.options.issueBrowserCdpAccess) {
       throw Object.assign(new Error("Browser control is not available in this controlled instance."), { code: "BROWSER_CONTROL_UNSUPPORTED", statusCode: 409 });
     }
-    return EmbeddedBrowserCdpAccessSchema.parse(this.options.issueBrowserCdpAccess(session));
+    return EmbeddedBrowserCdpAccessResultSchema.parse(await this.options.issueBrowserCdpAccess(session));
   }
 }

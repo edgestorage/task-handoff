@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { InstanceWithAiSessions } from "../../../api/types";
+import type { StorySelection } from "./storySelection";
 
 export const StoryRepositoryPageSchema = z.enum(["files", "changes-review", "worktrees"]);
 export type StoryRepositoryPage = z.infer<typeof StoryRepositoryPageSchema>;
@@ -54,6 +55,34 @@ export type StoryAppResourceRef = z.infer<typeof StoryAppResourceRefSchema>;
 export type StoryRepositoryResourceRef = z.infer<typeof StoryRepositoryResourceRefSchema>;
 export type StoryEmbeddedBrowserResourceRef = z.infer<typeof StoryEmbeddedBrowserResourceRefSchema>;
 export type StoryResourceRef = z.infer<typeof StoryResourceRefSchema>;
+
+type StoryBrowserSessionOwner = {
+  id: string;
+  nodeId: string;
+  aiSessions: { sessions: readonly { id: string; storyId?: string }[] };
+};
+
+/**
+ * Browser resources are owned by the AI Session that opened them. The instance
+ * page list intentionally spans Sessions, so activating one of those pages must
+ * first move the Story selection to its owner instead of silently failing the
+ * sidebar's current-context guard.
+ */
+export function storyBrowserSessionSelection(
+  resource: StoryEmbeddedBrowserResourceRef,
+  instances: readonly StoryBrowserSessionOwner[],
+): Extract<StorySelection, { kind: "session" }> | undefined {
+  const instance = instances.find((candidate) => candidate.id === resource.instanceId);
+  const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === resource.aiSessionId);
+  if (!instance || !session?.storyId) return undefined;
+  return {
+    kind: "session",
+    ownerNodeId: instance.nodeId,
+    storyId: session.storyId,
+    instanceId: resource.instanceId,
+    sessionId: resource.aiSessionId,
+  };
+}
 
 export function aiSessionResourceContextKey(instanceId: string, aiSessionId: string) {
   return instanceId && aiSessionId ? JSON.stringify([instanceId, aiSessionId]) : "";

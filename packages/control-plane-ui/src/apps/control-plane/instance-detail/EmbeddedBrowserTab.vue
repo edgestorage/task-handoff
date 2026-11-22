@@ -70,6 +70,77 @@
           </ScrollArea>
         </PopoverContent>
       </Popover>
+      <Popover :open="pagesOpen" @update:open="pagesOpen = $event">
+        <PopoverAnchor as-child>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="embedded-browser-pages"
+            :class="{ 'embedded-browser-pages-active': pagesOpen }"
+            :title="t('sessions.browser.allPages')"
+            :aria-label="t('sessions.browser.allPages')"
+            @click="pagesOpen = !pagesOpen"
+          >
+            <Layers :size="15" />
+            <span v-if="openPages.length" class="embedded-browser-pages-count" aria-hidden="true">{{ openPages.length }}</span>
+          </Button>
+        </PopoverAnchor>
+        <PopoverContent class="embedded-browser-pages-menu p-0" align="end" side="bottom" :side-offset="6" :collision-padding="10">
+          <div v-if="creationPanels.length && !creationContextUnsupported" class="embedded-browser-pages-context">
+            <div class="embedded-browser-pages-menu-head">
+              <strong>{{ t("sessions.browser.browserContexts") }}</strong>
+              <span>{{ creationPanels.length }}</span>
+            </div>
+            <div class="embedded-browser-context-compact-list">
+              <div v-for="panel in creationPanels" :key="`pages-context:${panel.sourceRef}`" class="embedded-browser-context-compact">
+                <span class="embedded-browser-context-dot" :class="{ default: panel.isDefault }" aria-hidden="true" />
+                <span class="embedded-browser-page-copy">
+                  <span>{{ panel.panelLabel }}</span>
+                  <small>{{ panel.hostLabel || panel.panelLabel }} · {{ pageHostLabel(panel.pageHost) }}</small>
+                </span>
+                <span v-if="panel.isDefault" class="embedded-browser-context-badge">{{ t("sessions.browser.creationContextDefault") }}</span>
+                <span v-if="panel.isDefault && !panel.canCreate" class="embedded-browser-context-badge offline">{{ t("sessions.browser.creationContextCannotCreate") }}</span>
+              </div>
+            </div>
+          </div>
+          <section class="embedded-browser-pages-section">
+            <div class="embedded-browser-pages-menu-head">
+              <strong>{{ t("sessions.browser.openPages") }}</strong>
+              <span>{{ openPages.length }}</span>
+            </div>
+            <ScrollArea class="embedded-browser-pages-scroll" :horizontal="false">
+              <div class="embedded-browser-pages-list">
+                <button
+                  v-for="page in openPages"
+                  :key="page.key"
+                  type="button"
+                  class="embedded-browser-page-row"
+                  :class="{ active: page.key === currentPageKey }"
+                  :aria-current="page.key === currentPageKey ? 'page' : undefined"
+                  @click="activatePage(page.key)"
+                >
+                  <Globe2 :size="14" />
+                  <span class="embedded-browser-page-copy"><span>{{ pageTitle(page) }}</span><small>{{ pageAddress(page) }}</small></span>
+                  <span v-if="page.key === currentPageKey" class="embedded-browser-page-current">{{ t("sessions.browser.currentPage") }}</span>
+                </button>
+              </div>
+            </ScrollArea>
+          </section>
+        </PopoverContent>
+      </Popover>
+      <Button
+        variant="ghost"
+        size="icon"
+        class="embedded-browser-device-toggle"
+        :class="{ 'embedded-browser-device-toggle-active': deviceMode }"
+        :disabled="deviceControlBusy || !browserTabReady"
+        :title="t(deviceMode ? 'sessions.browser.exitDeviceMode' : 'sessions.browser.deviceMode')"
+        :aria-label="t(deviceMode ? 'sessions.browser.exitDeviceMode' : 'sessions.browser.deviceMode')"
+        :aria-pressed="deviceMode"
+        @click="toggleDeviceMode"
+      >
+        <MonitorSmartphone :size="15" />
+      </Button>
       <Popover :open="agentAccessOpen" @update:open="handleAgentAccessOpenChange">
         <PopoverAnchor as-child>
           <Button
@@ -84,40 +155,159 @@
             <Bot :size="15" />
           </Button>
         </PopoverAnchor>
-        <PopoverContent class="embedded-browser-agent-access-menu" align="end" side="bottom" :side-offset="5" :collision-padding="8">
-          <strong>{{ t("sessions.browser.agentAccess") }}</strong>
-          <p>{{ agentAccessHint }}</p>
-          <div class="embedded-browser-agent-access-actions">
-            <Button
-              size="sm"
-              :variant="browserControlAccess.active ? 'ghost' : 'default'"
-              :disabled="agentAccessBusy || agentAccessLoading"
-              @click="browserControlAccess.active ? revokeBrowserControlAccessForInstance() : grantBrowserControlAccessForInstance()"
-            >
-              {{ t(browserControlAccess.active ? "sessions.browser.agentAccessRevoke" : "sessions.browser.agentAccessGrant") }}
-            </Button>
+        <PopoverContent class="embedded-browser-agent-access-menu p-0" align="end" side="bottom" :side-offset="6" :collision-padding="10">
+          <div class="embedded-browser-agent-access-summary">
+            <div class="embedded-browser-agent-access-head">
+              <strong>{{ t("sessions.browser.agentAccess") }}</strong>
+              <span class="embedded-browser-agent-access-state" :class="{ active: browserControlAccess.active }">
+                {{ t(browserControlAccess.active ? "sessions.browser.agentAccessActive" : "sessions.browser.agentAccessInactive") }}
+              </span>
+            </div>
+            <p>{{ agentAccessHint }}</p>
+            <div class="embedded-browser-agent-access-actions">
+              <Button
+                size="sm"
+                :variant="browserControlAccess.active ? 'ghost' : 'default'"
+                :disabled="agentAccessBusy || agentAccessLoading"
+                @click="browserControlAccess.active ? revokeBrowserControlAccessForInstance() : grantBrowserControlAccessForInstance()"
+              >
+                {{ t(browserControlAccess.active ? "sessions.browser.agentAccessRevoke" : "sessions.browser.agentAccessGrant") }}
+              </Button>
+            </div>
           </div>
+          <section v-if="!creationContextUnsupported" class="embedded-browser-creation-context">
+            <div class="embedded-browser-creation-context-head">
+              <span>{{ t("sessions.browser.creationContextLabel") }}</span>
+              <div class="embedded-browser-creation-context-value">
+                <strong>{{ hasDefaultCreationContext ? defaultCreationLabel : t("sessions.browser.creationContextNoDefault") }}</strong>
+                <span v-if="defaultCreationOffline" class="embedded-browser-context-badge offline">{{ t("sessions.browser.creationContextCannotCreate") }}</span>
+              </div>
+            </div>
+            <p v-if="creationContextNotice" class="embedded-browser-creation-context-notice" role="status">{{ creationContextNotice }}</p>
+            <p v-if="creationContextError" class="embedded-browser-creation-context-error" role="alert">
+              {{ creationContextError }}
+              <button type="button" @click="refreshBrowserCreationContext">{{ t("sessions.browser.retry") }}</button>
+            </p>
+            <p v-else-if="creationContextLoading && !creationContext" class="embedded-browser-creation-context-empty">{{ t("sessions.browser.creationContextLoading") }}</p>
+            <ScrollArea v-else-if="creationPanels.length" class="embedded-browser-creation-panel-scroll" :horizontal="false">
+              <div class="embedded-browser-creation-panel-list">
+                <article
+                  v-for="panel in creationPanels"
+                  :key="panel.sourceRef"
+                  class="embedded-browser-creation-panel"
+                  :class="{ default: panel.isDefault, own: isOwnCreationPanel(panel) }"
+                >
+                  <div class="embedded-browser-creation-panel-head">
+                    <span class="embedded-browser-creation-panel-name">{{ panel.panelLabel }}</span>
+                    <span v-if="isOwnCreationPanel(panel)" class="embedded-browser-context-badge">{{ t("sessions.browser.creationContextThisPanel") }}</span>
+                    <span v-if="panel.isDefault" class="embedded-browser-context-badge default">{{ t("sessions.browser.creationContextDefault") }}</span>
+                    <span v-if="panel.isDefault && !panel.canCreate" class="embedded-browser-context-badge offline">{{ t("sessions.browser.creationContextCannotCreate") }}</span>
+                  </div>
+                  <p>{{ panel.hostLabel || panel.panelLabel }} · {{ pageHostLabel(panel.pageHost) }} · {{ panel.canCreate ? t("sessions.browser.creationContextCanCreate") : t("sessions.browser.creationContextCannotCreate") }}</p>
+                  <div v-if="canClaimCreationPanel(panel)" class="embedded-browser-creation-panel-actions">
+                    <Button size="sm" :disabled="creationContextBusy" @click="claimCreationContextForPanel(panel)">
+                      {{ t(hasDefaultCreationContext ? "sessions.browser.creationContextTakeOver" : "sessions.browser.creationContextRequestDefault") }}
+                    </Button>
+                  </div>
+                  <div v-else-if="canRevokeCreationPanel(panel)" class="embedded-browser-creation-panel-actions">
+                    <Button size="sm" variant="ghost" :disabled="creationContextBusy" @click="revokeCreationContextForOwnPanel(panel)">
+                      {{ t("sessions.browser.creationContextRevoke") }}
+                    </Button>
+                  </div>
+                </article>
+              </div>
+            </ScrollArea>
+            <p v-else class="embedded-browser-creation-context-empty">{{ t("sessions.browser.creationContextNoPanels") }}</p>
+            <div v-if="creationContext?.pendingCreation" class="embedded-browser-creation-pending">
+              <span>{{ t("sessions.browser.creationContextPending") }}</span>
+              <small :title="creationContext.pendingCreation.url">{{ creationContext.pendingCreation.url }}</small>
+            </div>
+            <p v-if="browserSourceRef && ownCreationPanel?.canCreate && !hasDefaultCreationContext" class="embedded-browser-creation-context-hint">
+              {{ t("sessions.browser.creationContextClaimHint") }}
+            </p>
+            <p v-else-if="!browserSourceRef" class="embedded-browser-creation-context-hint">
+              {{ t("sessions.browser.creationContextWebReadOnly") }}
+            </p>
+          </section>
         </PopoverContent>
       </Popover>
     </div>
-    <div class="embedded-browser-surface">
+    <div class="embedded-browser-surface" :class="{ 'device-mode': deviceMode }">
       <p v-if="pageHostNotice" class="embedded-browser-host-notice" role="status">{{ pageHostNotice }}</p>
-      <section v-if="creationApprovals.length" class="embedded-browser-creation-approvals" aria-live="polite">
-        <article v-for="approval in creationApprovals" :key="approval.request.creationRef" class="embedded-browser-creation-card">
-          <div class="embedded-browser-creation-copy">
-            <strong>{{ t("sessions.browser.creationTitle") }}</strong>
-            <span :title="approval.request.requestedUrl">{{ approval.request.requestedUrl }}</span>
-            <small>{{ t("sessions.browser.creationMeta", { session: shortSessionRef(approval.requesterSessionRef), host: creationHostLabel(approval) }) }}</small>
+      <div v-if="deviceMode" class="embedded-browser-device-toolbar">
+        <MonitorSmartphone :size="15" aria-hidden="true" />
+        <ControlPlaneSelect
+          :model-value="selectedDevicePresetId"
+          trigger-class="embedded-browser-device-select"
+          :aria-label="t('sessions.browser.devicePreset')"
+          @update:model-value="selectDevicePreset"
+        >
+          <ControlPlaneSelectItem v-for="preset in BROWSER_DEVICE_PRESETS" :key="preset.id" :value="preset.id">{{ t(preset.labelKey) }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem :value="CUSTOM_BROWSER_DEVICE_ID">{{ t("sessions.browser.customDevice") }}</ControlPlaneSelectItem>
+        </ControlPlaneSelect>
+        <label class="embedded-browser-device-field">
+          <span>{{ t("sessions.browser.deviceWidth") }}</span>
+          <input
+            type="number"
+            inputmode="numeric"
+            min="1"
+            :max="BROWSER_DEVICE_MAX_DIMENSION"
+            :value="deviceMetrics.width"
+            :disabled="deviceControlBusy"
+            :aria-label="t('sessions.browser.deviceWidth')"
+            @change="commitDeviceDimension('width', $event)"
+          />
+        </label>
+        <span class="embedded-browser-device-times" aria-hidden="true">×</span>
+        <label class="embedded-browser-device-field">
+          <span>{{ t("sessions.browser.deviceHeight") }}</span>
+          <input
+            type="number"
+            inputmode="numeric"
+            min="1"
+            :max="BROWSER_DEVICE_MAX_DIMENSION"
+            :value="deviceMetrics.height"
+            :disabled="deviceControlBusy"
+            :aria-label="t('sessions.browser.deviceHeight')"
+            @change="commitDeviceDimension('height', $event)"
+          />
+        </label>
+        <Button variant="ghost" size="icon" :disabled="deviceControlBusy" :title="t('sessions.browser.rotateDevice')" :aria-label="t('sessions.browser.rotateDevice')" @click="rotateDevice">
+          <RotateCcw :size="15" />
+        </Button>
+        <Button variant="ghost" size="icon" :disabled="deviceControlBusy" :title="t('sessions.browser.exitDeviceMode')" :aria-label="t('sessions.browser.exitDeviceMode')" @click="exitDeviceMode">
+          <X :size="15" />
+        </Button>
+      </div>
+      <div ref="deviceStage" class="embedded-browser-device-stage">
+        <div class="embedded-browser-device-scaler" :style="deviceScalerStyle">
+          <div class="embedded-browser-device-frame" :style="deviceFrameStyle">
+            <webview
+              v-if="context?.partition"
+              ref="guest"
+              src="about:blank"
+              :partition="context.partition"
+              allowpopups
+              @did-attach="scheduleGuestRegistration('did-attach')"
+              @dom-ready="handleGuestDomReady"
+            />
+            <div v-if="showStartPage" class="embedded-browser-start-page">
+        <section v-if="openPages.length" class="embedded-browser-start-section">
+          <div class="embedded-browser-start-heading"><h2>{{ t("sessions.browser.openPages") }}</h2><span class="embedded-browser-start-count">{{ openPages.length }}</span></div>
+          <div class="embedded-browser-start-list">
+            <button
+              v-for="page in openPages"
+              :key="`start:${page.key}`"
+              type="button"
+              class="embedded-browser-recent-item embedded-browser-open-page-row"
+              :class="{ active: page.key === currentPageKey }"
+              @click="activatePage(page.key)"
+            >
+              <span>{{ pageTitle(page) }}<em v-if="page.key === currentPageKey" class="embedded-browser-open-page-current">{{ t("sessions.browser.currentPage") }}</em></span>
+              <small>{{ pageAddress(page) }}</small>
+            </button>
           </div>
-          <div class="embedded-browser-creation-actions">
-            <Button size="sm" variant="outline" :disabled="Boolean(creationActionRef)" @click="resolveCreation(approval, 'claim')">{{ t("sessions.browser.creationApprove") }}</Button>
-            <Button size="sm" variant="ghost" :disabled="Boolean(creationActionRef)" @click="resolveCreation(approval, 'decline')">{{ t("sessions.browser.creationDecline") }}</Button>
-          </div>
-        </article>
-        <p v-if="creationError" class="embedded-browser-creation-error" role="alert">{{ creationError }}</p>
-      </section>
-      <webview v-if="context?.partition" ref="guest" src="about:blank" :partition="context.partition" allowpopups @dom-ready="handleGuestDomReady" />
-      <div v-if="showStartPage" class="embedded-browser-start-page">
+        </section>
         <section class="embedded-browser-start-section">
           <div class="embedded-browser-start-heading"><h2>{{ t("sessions.browser.pinned") }}</h2><button type="button" class="embedded-browser-add" :aria-label="t('sessions.browser.addPinned')" @pointerdown.stop @click.stop="addPinned"><Plus :size="14" /></button></div>
           <div v-if="pinned.length" class="embedded-browser-start-grid">
@@ -130,13 +320,16 @@
           <div v-if="recent.length" class="embedded-browser-start-list"><button v-for="item in recent" :key="item.url" type="button" class="embedded-browser-recent-item" @click="navigate(item.url)"><span>{{ item.title || item.url }}</span><small>{{ item.url }}</small></button></div>
           <p v-else class="embedded-browser-start-empty">{{ t("sessions.browser.noRecent") }}</p>
         </section>
-      </div>
-      <div v-if="state === 'preparing' || state === 'error'" class="embedded-browser-state">
-        <LoaderCircle v-if="state === 'preparing'" :size="24" />
-        <CircleAlert v-else :size="24" />
-        <p class="embedded-browser-state-message">{{ state === "preparing" ? t("sessions.browser.connecting") : error }}</p>
-        <p v-if="state === 'error' && errorDetail" class="embedded-browser-state-detail">{{ errorDetail }}</p>
-        <Button v-if="state === 'error'" variant="outline" size="sm" @click="retry"><RotateCw :size="14" />{{ t("sessions.browser.retry") }}</Button>
+            </div>
+            <div v-if="state === 'preparing' || state === 'error'" class="embedded-browser-state">
+              <LoaderCircle v-if="state === 'preparing'" :size="24" />
+              <CircleAlert v-else :size="24" />
+              <p class="embedded-browser-state-message">{{ state === "preparing" ? t("sessions.browser.connecting") : error }}</p>
+              <p v-if="state === 'error' && errorDetail" class="embedded-browser-state-detail">{{ errorDetail }}</p>
+              <Button v-if="state === 'error'" variant="outline" size="sm" @click="retry"><RotateCw :size="14" />{{ t("sessions.browser.retry") }}</Button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -162,20 +355,39 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
-import { ArrowLeft, ArrowRight, Bot, CircleAlert, Globe2, History, LoaderCircle, Pin, Plus, RotateCw, X } from "@lucide/vue";
+import { ArrowLeft, ArrowRight, Bot, CircleAlert, Globe2, History, Layers, LoaderCircle, MonitorSmartphone, Pin, Plus, RotateCcw, RotateCw, X } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
-import type { EmbeddedBrowserAccessView, EmbeddedBrowserCreationApprovalView } from "@task-handoff/protocol/embedded-browser-control";
-import { claimBrowserCreation, declineBrowserCreation, getBrowserControlAccess, grantBrowserControlAccess, listBrowserCreationApprovals, revokeBrowserControlAccess } from "../../../api/browserControl";
-import { canRenewDesktopBrowserContext, getDesktopBrowserControlInfo, logDesktopBrowserDiagnostic, onDesktopBrowserFocusAddress, onDesktopBrowserLoadFailure, onDesktopBrowserTabClosed, prepareDesktopBrowserContext, registerDesktopBrowserTab, releaseDesktopBrowserContext, setDesktopBrowserTabThrottled, touchDesktopBrowserContext, unregisterDesktopBrowserTab, updateDesktopBrowserTab } from "../../../lib/desktopBridge";
-import { BROWSER_ACCESS_CHANGED_EVENT, BROWSER_CREATION_CHANGED_EVENT, BROWSER_CREATION_REFRESH_EVENT, type BrowserCreationEventDetail } from "./browserCreationEvents";
+import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
+import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
+import {
+  EmbeddedBrowserCreationContextChangedEventSchema,
+  type EmbeddedBrowserAccessView,
+  type EmbeddedBrowserCreationContextSnapshot,
+  type EmbeddedBrowserCreationPanel,
+} from "@task-handoff/protocol/embedded-browser-control";
+import {
+  claimBrowserCreationContext,
+  getBrowserControlAccess,
+  getBrowserCreationContext,
+  grantBrowserControlAccess,
+  revokeBrowserControlAccess,
+  revokeBrowserCreationContext,
+} from "../../../api/browserControl";
+import { attachDesktopBrowserTarget, canRenewDesktopBrowserContext, getDesktopBrowserControlInfo, logDesktopBrowserDiagnostic, onDesktopBrowserDeviceMetricsChanged, onDesktopBrowserFocusAddress, onDesktopBrowserLoadFailure, onDesktopBrowserTabClosed, prepareDesktopBrowserContext, registerDesktopBrowserTab, releaseDesktopBrowserContext, sendDesktopBrowserCdpCommand, setDesktopBrowserTabThrottled, touchDesktopBrowserContext, unregisterDesktopBrowserTab, updateDesktopBrowserTab } from "../../../lib/desktopBridge";
+import {
+  BROWSER_ACCESS_CHANGED_EVENT,
+  BROWSER_CREATION_CONTEXT_CHANGED_EVENT,
+  type BrowserCreationEventDetail,
+} from "./browserCreationEvents";
 import { createBrowserUuid } from "../../../lib/random-id";
 import { browserFailureTarget, browserLoadFailureKey } from "./browserLoadFailure";
+import { browserDeviceEmulationParams, browserDevicePreset, browserDevicePresetForMetrics, BROWSER_DEVICE_MAX_DIMENSION, BROWSER_DEVICE_PRESETS, CUSTOM_BROWSER_DEVICE_ID, DEFAULT_BROWSER_DEVICE_PRESET, normalizeBrowserDeviceDimension, rotateBrowserDeviceMetrics, type BrowserDeviceMetrics } from "./browserDeviceMetrics";
 import { browserAddressSuggestions, normalizeDesktopBrowserUrl, sanitizeBrowserStartPageData, type BrowserAddressSuggestion, type PinnedBrowserShortcut, type RecentBrowserPage } from "./browserAddressSuggestions";
 import { translateApiError } from "../../../i18n/apiError";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -193,13 +405,17 @@ type GuestWebView = HTMLElement & {
   stop(): void;
 };
 
-const props = defineProps<{ instanceId: string; sessionKey?: string; initialUrl?: string; creationRef?: string; backgroundThrottled?: boolean }>();
+export type BrowserOpenPage = { key: string; title?: string; url?: string; status?: string };
+
+const props = defineProps<{ instanceId: string; pageKey?: string; initialUrl?: string; creationRef?: string; backgroundThrottled?: boolean; openPages?: BrowserOpenPage[] }>();
 const emit = defineEmits<{
   updateTab: [patch: { title?: string; url?: string; status?: string }];
   closeTab: [];
+  movePage: [pageKey: string];
 }>();
 const { t } = useI18n();
 const guest = ref<GuestWebView>();
+const deviceStage = ref<HTMLElement>();
 const addressAnchor = ref<HTMLFormElement>();
 const addressInput = ref<HTMLInputElement>();
 const context = ref<{ contextId: string; partition: string }>();
@@ -207,31 +423,76 @@ const address = ref("");
 const error = ref("");
 const errorDetail = ref("");
 const state = ref<"preparing" | "ready" | "error">("preparing");
+const browserTabReady = ref(false);
+const deviceMode = ref(false);
+const deviceControlBusy = ref(false);
+const selectedDevicePresetId = ref(DEFAULT_BROWSER_DEVICE_PRESET.id);
+const deviceScale = ref(1);
+const deviceMetrics = reactive<BrowserDeviceMetrics>({
+  width: DEFAULT_BROWSER_DEVICE_PRESET.width,
+  height: DEFAULT_BROWSER_DEVICE_PRESET.height,
+  deviceScaleFactor: DEFAULT_BROWSER_DEVICE_PRESET.deviceScaleFactor,
+  mobile: DEFAULT_BROWSER_DEVICE_PRESET.mobile,
+});
+const DEVICE_FRAME_BEZEL = 6;
+const DEVICE_STAGE_PADDING = 24;
+let deviceStageResizeObserver: ResizeObserver | undefined;
+let removeDeviceMetricsListener: (() => void) | undefined;
+let deviceCommandSequence = 0;
 const pageHostNotice = ref("");
 const browserSourceRef = ref<string>();
-const creationApprovals = ref<EmbeddedBrowserCreationApprovalView[]>([]);
-const creationActionRef = ref("");
-const creationError = ref("");
+const pagesOpen = ref(false);
 const agentAccessOpen = ref(false);
 const browserControlAccess = ref<EmbeddedBrowserAccessView>({ active: false, revision: 0 });
 const agentAccessLoading = ref(false);
 const agentAccessBusy = ref(false);
 let agentAccessRequestRevision = 0;
+const creationContext = ref<EmbeddedBrowserCreationContextSnapshot>();
+const creationContextLoading = ref(false);
+const creationContextBusy = ref(false);
+const creationContextUnsupported = ref(false);
+const creationContextError = ref("");
+const creationContextNotice = ref("");
+let creationContextRequestRevision = 0;
 const agentAccessTitle = computed(() => t("sessions.browser.agentAccess"));
 const agentAccessHint = computed(() => t(
   browserControlAccess.value.active
     ? "sessions.browser.agentAccessRevokeHint"
     : "sessions.browser.agentAccessGrantHint",
 ));
+const openPages = computed(() => props.openPages || []);
+const creationPanels = computed(() => creationContext.value?.panels || []);
+const ownCreationPanel = computed(() => creationPanels.value.find((panel) => panel.sourceRef === browserSourceRef.value));
+const defaultCreationPanel = computed(() => creationPanels.value.find((panel) => panel.isDefault));
+const defaultCreationLabel = computed(() => defaultCreationPanel.value?.panelLabel || creationContext.value?.defaultContext?.sourceRef || "");
+const hasDefaultCreationContext = computed(() => Boolean(creationContext.value?.defaultContext));
+const defaultCreationOffline = computed(() => Boolean(creationContext.value?.defaultContext)
+  && (!defaultCreationPanel.value || !defaultCreationPanel.value.canCreate));
+const currentPageKey = computed(() => props.pageKey || "");
 const loading = ref(false);
 const pinned = ref<PinnedBrowserShortcut[]>([]);
 const recent = ref<RecentBrowserPage[]>([]);
 const suggestionsOpen = ref(false);
 const activeSuggestionIndex = ref(-1);
 const suggestionsListId = `embedded-browser-suggestions-${createBrowserUuid()}`;
-const localSessionKey = props.sessionKey?.trim() || `embedded-browser:${createBrowserUuid()}`;
+const localSessionKey = props.pageKey?.trim() || `embedded-browser:${createBrowserUuid()}`;
 const suggestions = computed(() => browserAddressSuggestions(pinned.value, recent.value, address.value));
 const activeSuggestionId = computed(() => activeSuggestionIndex.value >= 0 ? suggestionOptionId(activeSuggestionIndex.value) : undefined);
+const deviceScalerStyle = computed(() => deviceMode.value
+  ? {
+      width: `${(deviceMetrics.width + DEVICE_FRAME_BEZEL * 2) * deviceScale.value}px`,
+      height: `${(deviceMetrics.height + DEVICE_FRAME_BEZEL * 2) * deviceScale.value}px`,
+    }
+  : { width: "100%", height: "100%" });
+const deviceFrameStyle = computed<CSSProperties>(() => deviceMode.value
+  ? {
+      boxSizing: "content-box",
+      width: `${deviceMetrics.width}px`,
+      height: `${deviceMetrics.height}px`,
+      transform: `scale(${deviceScale.value})`,
+      transformOrigin: "top left",
+    }
+  : { boxSizing: "border-box", width: "100%", height: "100%" });
 const showStartPage = ref(true);
 const pinnedDialogOpen = ref(false);
 const pinnedName = ref("");
@@ -252,14 +513,15 @@ let resolveGuestDomReady: (() => void) | undefined;
 let guestDomReadyPromise: Promise<void>;
 let removeLoadFailureListener: (() => void) | undefined;
 let removeTabClosedListener: (() => void) | undefined;
-let removeCreationChangedListener: (() => void) | undefined;
-let removeCreationRefreshListener: (() => void) | undefined;
 let removeAccessChangedListener: (() => void) | undefined;
+let removeCreationContextChangedListener: (() => void) | undefined;
 let lastChromiumError: { code?: number; description?: string } | undefined;
 let tunnelFailure: { host?: string; port?: number; code?: string; message?: string } | undefined;
 let lastFailureUrl = "";
 let registeredTabRef: string | undefined;
 let registeringTab = false;
+let guestRegistrationRetryTimer: number | undefined;
+let guestRegistrationAttempts = 0;
 function resetGuestReady() {
   guestDomReady = false;
   guestDomReadyPromise = new Promise<void>((resolve) => { resolveGuestDomReady = resolve; });
@@ -283,10 +545,40 @@ function publishTabPatch(patch: { title?: string; url?: string; status?: string 
   });
 }
 
-async function registerGuestTab() {
+function resolveGuestWebContentsId() {
+  try {
+    const webContentsId = guest.value?.getWebContentsId?.();
+    return Number.isInteger(webContentsId) ? webContentsId : undefined;
+  } catch (cause) {
+    logDesktopBrowserDiagnostic(`browser webview id unavailable error=${cause instanceof Error ? cause.message : String(cause)}`, props.instanceId);
+    return undefined;
+  }
+}
+
+function scheduleGuestRegistration(reason: string) {
+  if (disposed || registeredTabRef || registeringTab || guestRegistrationRetryTimer !== undefined) return;
+  const attempt = () => {
+    guestRegistrationRetryTimer = undefined;
+    if (disposed || registeredTabRef || registeringTab) return;
+    const webContentsId = resolveGuestWebContentsId();
+    if (webContentsId === undefined) {
+      guestRegistrationAttempts += 1;
+      if (guestRegistrationAttempts <= 20) {
+        logDesktopBrowserDiagnostic(`browser tab registration waiting for webContentsId attempt=${guestRegistrationAttempts} reason=${reason}`, props.instanceId);
+        guestRegistrationRetryTimer = window.setTimeout(attempt, 100);
+      } else {
+        logDesktopBrowserDiagnostic(`browser tab registration skipped webContentsId unavailable reason=${reason}`, props.instanceId);
+      }
+      return;
+    }
+    void registerGuestTab(webContentsId);
+  };
+  attempt();
+}
+
+async function registerGuestTab(webContentsId: number) {
   const view = guest.value;
-  const webContentsId = view?.getWebContentsId?.();
-  if (!Number.isInteger(webContentsId) || registeringTab) return;
+  if (!Number.isInteger(webContentsId) || disposed || registeredTabRef || registeringTab) return;
   registeringTab = true;
   try {
     const result = await registerDesktopBrowserTab({
@@ -304,10 +596,20 @@ async function registerGuestTab() {
     }
     if (!result.ok || !result.tab) {
       logDesktopBrowserDiagnostic(`browser tab registration rejected code=${result.code || ""}`, props.instanceId);
+      if (result.code === "BROWSER_GUEST_NOT_FOUND" && guestRegistrationAttempts < 20) {
+        guestRegistrationAttempts += 1;
+        guestRegistrationRetryTimer = window.setTimeout(() => {
+          guestRegistrationRetryTimer = undefined;
+          scheduleGuestRegistration("guest-not-found");
+        }, 100);
+      }
       return;
     }
+    guestRegistrationAttempts = 0;
     registeredTabRef = result.tab.tabRef;
+    browserTabReady.value = true;
     logDesktopBrowserDiagnostic(`browser tab registered tabRef=${registeredTabRef} pageHost=${result.tab.pageHost}`, props.instanceId);
+    if (deviceMode.value) void applyDeviceMetrics();
   } catch (cause) {
     logDesktopBrowserDiagnostic(`browser tab registration failed error=${cause instanceof Error ? cause.message : String(cause)}`, props.instanceId);
   } finally {
@@ -318,7 +620,158 @@ async function registerGuestTab() {
 function unregisterGuestTab() {
   const webContentsId = guest.value?.getWebContentsId?.();
   registeredTabRef = undefined;
+  browserTabReady.value = false;
+  if (guestRegistrationRetryTimer !== undefined) {
+    window.clearTimeout(guestRegistrationRetryTimer);
+    guestRegistrationRetryTimer = undefined;
+  }
   if (Number.isInteger(webContentsId)) void unregisterDesktopBrowserTab(webContentsId!).catch(() => undefined);
+}
+
+function updateDeviceScale() {
+  if (!deviceMode.value || !deviceStage.value) {
+    deviceScale.value = 1;
+    return;
+  }
+  const availableWidth = deviceStage.value.clientWidth - DEVICE_STAGE_PADDING * 2;
+  const availableHeight = deviceStage.value.clientHeight - DEVICE_STAGE_PADDING * 2;
+  const frameWidth = deviceMetrics.width + DEVICE_FRAME_BEZEL * 2;
+  const frameHeight = deviceMetrics.height + DEVICE_FRAME_BEZEL * 2;
+  if (availableWidth <= 0 || availableHeight <= 0) {
+    deviceScale.value = 1;
+    return;
+  }
+  deviceScale.value = Math.min(1, availableWidth / frameWidth, availableHeight / frameHeight);
+}
+
+async function sendDeviceCdp(method: string, params?: unknown) {
+  const tabRef = registeredTabRef;
+  if (!tabRef) return false;
+  const attached = await attachDesktopBrowserTarget(tabRef);
+  if (!attached.ok) {
+    const message = "message" in attached && attached.message ? attached.message : attached.code || "Browser target attach failed.";
+    throw Object.assign(new Error(message), { code: attached.code });
+  }
+  const result = await sendDesktopBrowserCdpCommand({ tabRef, method, ...(params === undefined ? {} : { params }) });
+  if (!result.ok) {
+    const message = "message" in result && result.message ? result.message : result.code || "Browser device command failed.";
+    throw Object.assign(new Error(message), { code: result.code });
+  }
+  return true;
+}
+
+async function runDeviceCommand(method: string, params?: unknown) {
+  if (!registeredTabRef) return false;
+  const sequence = ++deviceCommandSequence;
+  deviceControlBusy.value = true;
+  try {
+    await sendDeviceCdp(method, params);
+    return true;
+  } catch (cause) {
+    if (sequence === deviceCommandSequence) {
+      logDesktopBrowserDiagnostic(`browser device command failed method=${method} error=${cause instanceof Error ? cause.message : String(cause)}`, props.instanceId);
+      showControlPlaneToast(t("sessions.browser.deviceApplyFailed"), "error");
+    }
+    return false;
+  } finally {
+    if (sequence === deviceCommandSequence) deviceControlBusy.value = false;
+  }
+}
+
+async function applyDeviceMetrics() {
+  return runDeviceCommand("Emulation.setDeviceMetricsOverride", browserDeviceEmulationParams(deviceMetrics));
+}
+
+function syncSelectedDevicePreset() {
+  selectedDevicePresetId.value = browserDevicePresetForMetrics(deviceMetrics)?.id || CUSTOM_BROWSER_DEVICE_ID;
+}
+
+async function toggleDeviceMode() {
+  if (deviceControlBusy.value) return;
+  if (deviceMode.value) {
+    await exitDeviceMode();
+    return;
+  }
+  if (!browserTabReady.value) {
+    showControlPlaneToast(t("sessions.browser.deviceApplyFailed"), "error");
+    return;
+  }
+  deviceMode.value = true;
+  await nextTick();
+  updateDeviceScale();
+  if (!(await applyDeviceMetrics())) deviceMode.value = false;
+}
+
+async function exitDeviceMode() {
+  if (!deviceMode.value || deviceControlBusy.value) return;
+  if (!registeredTabRef) {
+    deviceMode.value = false;
+    return;
+  }
+  if (await runDeviceCommand("Emulation.clearDeviceMetricsOverride")) {
+    deviceMode.value = false;
+    logDesktopBrowserDiagnostic("browser device mode cleared", props.instanceId);
+  }
+}
+
+async function selectDevicePreset(id: string) {
+  if (!id || deviceControlBusy.value) return;
+  if (id === CUSTOM_BROWSER_DEVICE_ID) {
+    selectedDevicePresetId.value = id;
+    return;
+  }
+  const preset = browserDevicePreset(id);
+  if (!preset) return;
+  selectedDevicePresetId.value = id;
+  Object.assign(deviceMetrics, {
+    width: preset.width,
+    height: preset.height,
+    deviceScaleFactor: preset.deviceScaleFactor,
+    mobile: preset.mobile,
+  });
+  await applyDeviceMetrics();
+}
+
+async function commitDeviceDimension(axis: "width" | "height", event: Event) {
+  const input = event.currentTarget as HTMLInputElement;
+  const value = normalizeBrowserDeviceDimension(input.value);
+  if (!value) {
+    input.value = String(deviceMetrics[axis]);
+    return;
+  }
+  if (value === deviceMetrics[axis]) return;
+  deviceMetrics[axis] = value;
+  syncSelectedDevicePreset();
+  await applyDeviceMetrics();
+}
+
+async function rotateDevice() {
+  if (deviceControlBusy.value) return;
+  Object.assign(deviceMetrics, rotateBrowserDeviceMetrics(deviceMetrics));
+  syncSelectedDevicePreset();
+  await applyDeviceMetrics();
+}
+
+function handleDeviceMetricsChanged(input: { tabRef?: string; instanceId?: string; source?: string; active?: boolean; width?: number; height?: number; deviceScaleFactor?: number; mobile?: boolean }) {
+  if (input.instanceId !== props.instanceId || input.tabRef !== registeredTabRef || input.source !== "agent") return;
+  if (!input.active) {
+    deviceMode.value = false;
+    logDesktopBrowserDiagnostic("browser device mode cleared by agent", props.instanceId);
+    return;
+  }
+  const width = normalizeBrowserDeviceDimension(input.width);
+  const height = normalizeBrowserDeviceDimension(input.height);
+  if (!width || !height) return;
+  deviceMetrics.width = width;
+  deviceMetrics.height = height;
+  deviceMetrics.deviceScaleFactor = typeof input.deviceScaleFactor === "number" && Number.isFinite(input.deviceScaleFactor) && input.deviceScaleFactor > 0
+    ? Math.min(input.deviceScaleFactor, 10)
+    : 1;
+  deviceMetrics.mobile = input.mobile === true;
+  syncSelectedDevicePreset();
+  deviceMode.value = true;
+  void nextTick(updateDeviceScale);
+  logDesktopBrowserDiagnostic(`browser device mode mirrored from agent width=${width} height=${height} mobile=${deviceMetrics.mobile}`, props.instanceId);
 }
 
 function clearLoadFailure() {
@@ -408,56 +861,23 @@ async function loadPageHostDiagnostic() {
   logDesktopBrowserDiagnostic(`browser pageHost degraded requested=${info.requestedPageHost || ""} actual=${info.pageHost || ""} reason=${info.degradedReason || ""}`, props.instanceId);
 }
 
-function creationCandidate(approval: EmbeddedBrowserCreationApprovalView) {
-  return approval.request.candidates.find((candidate) => candidate.sourceRef === browserSourceRef.value && candidate.canCreate);
+function pageTitle(page: BrowserOpenPage) {
+  return page.title?.trim() || pageAddress(page);
 }
 
-function creationHostLabel(approval: EmbeddedBrowserCreationApprovalView) {
-  const candidate = creationCandidate(approval);
-  return candidate?.hostLabel || candidate?.desktopLabel || candidate?.panelLabel || "";
+function pageAddress(page: BrowserOpenPage) {
+  return page.url?.trim() || t("sessions.browser.newTab");
 }
 
-function shortSessionRef(value: string) {
-  return value.length > 20 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
-}
-
-async function refreshCreationApprovals() {
-  try {
-    const info = await getDesktopBrowserControlInfo(props.instanceId);
-    if (disposed) return;
-    browserSourceRef.value = info.sourceRef;
-    if (!info.ok || !browserSourceRef.value) {
-      creationApprovals.value = [];
-      return;
-    }
-    const snapshot = await listBrowserCreationApprovals(props.instanceId);
-    if (disposed || snapshot.items.length === 0) {
-      if (!disposed) creationApprovals.value = [];
-      return;
-    }
-    creationApprovals.value = snapshot.items.filter((approval) => Boolean(creationCandidate(approval)));
-  } catch (cause) {
-    if (!disposed) logDesktopBrowserDiagnostic(`browser creation approvals failed error=${cause instanceof Error ? cause.message : String(cause)}`, props.instanceId);
+function activatePage(pageKey: string) {
+  pagesOpen.value = false;
+  if (!pageKey) return;
+  if (pageKey === currentPageKey.value) {
+    logDesktopBrowserDiagnostic("browser page activate ignored current", props.instanceId);
+    return;
   }
-}
-
-async function resolveCreation(approval: EmbeddedBrowserCreationApprovalView, decision: "claim" | "decline") {
-  if (!browserSourceRef.value || creationActionRef.value) return;
-  creationActionRef.value = approval.request.creationRef;
-  creationError.value = "";
-  try {
-    if (decision === "claim") {
-      await claimBrowserCreation(props.instanceId, browserSourceRef.value, approval.request.creationRef, approval.request.revision);
-    } else {
-      await declineBrowserCreation(props.instanceId, browserSourceRef.value, approval.request.creationRef, approval.request.revision);
-    }
-    await refreshCreationApprovals();
-  } catch (cause) {
-    creationError.value = t("sessions.browser.creationActionFailed");
-    logDesktopBrowserDiagnostic(`browser creation ${decision} failed error=${cause instanceof Error ? cause.message : String(cause)}`, props.instanceId);
-  } finally {
-    creationActionRef.value = "";
-  }
+  logDesktopBrowserDiagnostic(`browser page move requested target=${pageKey.slice(0, 160)}`, props.instanceId);
+  emit("movePage", pageKey);
 }
 
 function stopContextHeartbeat() {
@@ -508,7 +928,11 @@ async function recoverContext(lostContextId: string) {
 
 onMounted(async () => {
   loadStartPageData();
-  void loadPageHostDiagnostic();
+  removeDeviceMetricsListener = onDesktopBrowserDeviceMetricsChanged((input) => handleDeviceMetricsChanged(input));
+  if (deviceStage.value && typeof ResizeObserver !== "undefined") {
+    deviceStageResizeObserver = new ResizeObserver(() => updateDeviceScale());
+    deviceStageResizeObserver.observe(deviceStage.value);
+  }
   stopBrowserFocusAddress = onDesktopBrowserFocusAddress(({ webContentsId }) => {
     if (guest.value?.getWebContentsId?.() !== webContentsId) return;
     focusAddress();
@@ -519,31 +943,46 @@ onMounted(async () => {
     if (!tabRef || tabRef !== registeredTabRef) return;
     emit("closeTab");
   });
-  const handleCreationChanged = (event: Event) => {
-    const detail = (event as CustomEvent<BrowserCreationEventDetail>).detail;
-    if (detail?.instanceId && detail.instanceId !== props.instanceId) return;
-    void refreshCreationApprovals();
-  };
-  const handleCreationRefresh = (event: Event) => {
-    const detail = (event as CustomEvent<BrowserCreationEventDetail>).detail;
-    if (detail?.instanceId && detail.instanceId !== props.instanceId) return;
-    void refreshCreationApprovals();
-  };
   const handleAccessChanged = (event: Event) => {
     const detail = (event as CustomEvent<BrowserCreationEventDetail>).detail;
     if (detail?.instanceId && detail.instanceId !== props.instanceId) return;
     void refreshBrowserControlAccess();
   };
-  window.addEventListener(BROWSER_CREATION_CHANGED_EVENT, handleCreationChanged);
-  window.addEventListener(BROWSER_CREATION_REFRESH_EVENT, handleCreationRefresh);
   window.addEventListener(BROWSER_ACCESS_CHANGED_EVENT, handleAccessChanged);
-  removeCreationChangedListener = () => window.removeEventListener(BROWSER_CREATION_CHANGED_EVENT, handleCreationChanged);
-  removeCreationRefreshListener = () => window.removeEventListener(BROWSER_CREATION_REFRESH_EVENT, handleCreationRefresh);
   removeAccessChangedListener = () => window.removeEventListener(BROWSER_ACCESS_CHANGED_EVENT, handleAccessChanged);
-  logDesktopBrowserDiagnostic(`browser tab mounted sessionKey=${props.sessionKey || ""}`, props.instanceId);
+  const handleCreationContextChanged = (event: Event) => {
+    const detail = (event as CustomEvent<BrowserCreationEventDetail>).detail;
+    if (detail?.instanceId && detail.instanceId !== props.instanceId) return;
+    creationContextNotice.value = "";
+    const payload = detail?.payload;
+    const changed = EmbeddedBrowserCreationContextChangedEventSchema.safeParse(
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? { ...payload, type: "browser.creation-context.changed" }
+        : payload,
+    );
+    const ownDefaultWasTakenOver = Boolean(
+      changed.success
+      && browserSourceRef.value
+      && changed.data.previousBrowserContextId === browserSourceRef.value
+      && Boolean(changed.data.defaultBrowserContextId)
+      && changed.data.defaultBrowserContextId !== browserSourceRef.value,
+    );
+    void refreshBrowserCreationContext().then(() => {
+      if (!ownDefaultWasTakenOver || disposed) return;
+      const nextLabel = defaultCreationLabel.value
+        || (changed.success ? changed.data.defaultBrowserContextId : "")
+        || t("sessions.browser.creationContextNoDefault");
+      creationContextNotice.value = t("sessions.browser.creationContextTakenOver", {
+        panel: nextLabel,
+      });
+    });
+  };
+  window.addEventListener(BROWSER_CREATION_CONTEXT_CHANGED_EVENT, handleCreationContextChanged);
+  removeCreationContextChangedListener = () => window.removeEventListener(BROWSER_CREATION_CONTEXT_CHANGED_EVENT, handleCreationContextChanged);
+  logDesktopBrowserDiagnostic(`browser tab mounted pageKey=${props.pageKey || ""}`, props.instanceId);
   await establishContext();
-  await refreshCreationApprovals();
-  await refreshBrowserControlAccess();
+  await loadPageHostDiagnostic();
+  await Promise.all([refreshBrowserControlAccess(), refreshBrowserCreationContext()]);
 });
 
 watch(() => [context.value?.partition, showStartPage.value] as const, async ([partition, startPage]) => {
@@ -552,16 +991,23 @@ watch(() => [context.value?.partition, showStartPage.value] as const, async ([pa
   await dispatchPendingNavigation(navigationSequence);
 });
 
+watch(() => [deviceMode.value, deviceMetrics.width, deviceMetrics.height] as const, async () => {
+  await nextTick();
+  updateDeviceScale();
+});
+
 onBeforeUnmount(() => {
   disposed = true;
-  logDesktopBrowserDiagnostic(`browser tab unmounted sessionKey=${props.sessionKey || ""} contextId=${context.value?.contextId || ""}`, props.instanceId);
+  logDesktopBrowserDiagnostic(`browser tab unmounted pageKey=${props.pageKey || ""} contextId=${context.value?.contextId || ""}`, props.instanceId);
   stopContextHeartbeat();
+  deviceStageResizeObserver?.disconnect();
+  deviceStageResizeObserver = undefined;
+  removeDeviceMetricsListener?.();
   stopBrowserFocusAddress?.();
   removeLoadFailureListener?.();
   removeTabClosedListener?.();
-  removeCreationChangedListener?.();
-  removeCreationRefreshListener?.();
   removeAccessChangedListener?.();
+  removeCreationContextChangedListener?.();
   unregisterGuestTab();
   removeGuestListeners?.();
   if (context.value) void releaseDesktopBrowserContext(context.value.contextId);
@@ -591,6 +1037,7 @@ function bindGuest() {
   const finishLoading = () => {
     loading.value = false;
     sync();
+    if (!registeredTabRef) scheduleGuestRegistration("did-finish-load");
     const url = view.getURL();
     const title = view.getTitle?.()?.trim();
     if (url && url !== "about:blank") addRecent(url, title || url);
@@ -651,7 +1098,7 @@ function waitForGuestReady() {
 
 function handleGuestDomReady() {
   applyBackgroundThrottling();
-  void registerGuestTab();
+  scheduleGuestRegistration("dom-ready");
   if (guestDomReady) return;
   guestDomReady = true;
   // Popup tabs mount their webview after the initial component tick. Bind here
@@ -816,7 +1263,7 @@ function retry() { reload(); }
 
 function handleAgentAccessOpenChange(open: boolean) {
   agentAccessOpen.value = open;
-  if (open) void refreshBrowserControlAccess();
+  if (open) void Promise.all([refreshBrowserControlAccess(), refreshBrowserCreationContext()]);
 }
 
 async function refreshBrowserControlAccess() {
@@ -839,6 +1286,7 @@ async function grantBrowserControlAccessForInstance() {
   agentAccessBusy.value = true;
   try {
     browserControlAccess.value = await grantBrowserControlAccess(props.instanceId);
+    await refreshBrowserCreationContext();
     showControlPlaneToast(t("sessions.browser.agentAccessGranted"), "success");
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.browser.agentAccessFailed")), "error");
@@ -853,11 +1301,111 @@ async function revokeBrowserControlAccessForInstance() {
   try {
     await revokeBrowserControlAccess(props.instanceId);
     browserControlAccess.value = { active: false, revision: browserControlAccess.value.revision + 1 };
+    await refreshBrowserCreationContext();
     showControlPlaneToast(t("sessions.browser.agentAccessRevoked"), "success");
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.browser.agentAccessFailed")), "error");
   } finally {
     agentAccessBusy.value = false;
+  }
+}
+
+function pageHostLabel(pageHost: EmbeddedBrowserCreationPanel["pageHost"]) {
+  return pageHost === "main-page-pool"
+    ? t("sessions.browser.pageHostMainPool")
+    : t("sessions.browser.pageHostRenderer");
+}
+
+function isOwnCreationPanel(panel: EmbeddedBrowserCreationPanel) {
+  return Boolean(browserSourceRef.value && panel.sourceRef === browserSourceRef.value);
+}
+
+function canClaimCreationPanel(panel: EmbeddedBrowserCreationPanel) {
+  return isOwnCreationPanel(panel) && panel.canClaim && panel.canCreate && !panel.isDefault;
+}
+
+function canRevokeCreationPanel(panel: EmbeddedBrowserCreationPanel) {
+  return isOwnCreationPanel(panel) && panel.isDefault;
+}
+
+function apiErrorCode(error: unknown) {
+  return error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code || "") : "";
+}
+
+async function refreshBrowserCreationContext() {
+  const revision = ++creationContextRequestRevision;
+  creationContextLoading.value = true;
+  try {
+    const snapshot = await getBrowserCreationContext(props.instanceId, browserSourceRef.value);
+    if (revision !== creationContextRequestRevision) return;
+    creationContext.value = snapshot;
+    creationContextUnsupported.value = false;
+    creationContextError.value = "";
+  } catch (cause) {
+    if (revision !== creationContextRequestRevision) return;
+    const code = apiErrorCode(cause);
+    if (code === "BROWSER_OPERATION_UNSUPPORTED" || code === "BROWSER_CHANNEL_UNSUPPORTED") {
+      creationContext.value = undefined;
+      creationContextUnsupported.value = true;
+      creationContextError.value = "";
+    } else {
+      creationContextError.value = translateApiError(cause, t, t("sessions.browser.creationContextLoadFailed"));
+    }
+  } finally {
+    if (revision === creationContextRequestRevision) creationContextLoading.value = false;
+  }
+}
+
+async function claimCreationContextForPanel(panel: EmbeddedBrowserCreationPanel) {
+  const snapshot = creationContext.value;
+  if (creationContextBusy.value || !snapshot || !canClaimCreationPanel(panel)) return;
+  creationContextBusy.value = true;
+  creationContextError.value = "";
+  try {
+    await claimBrowserCreationContext(props.instanceId, panel.sourceRef, snapshot.revision);
+    creationContextNotice.value = "";
+    await refreshBrowserCreationContext();
+    // Choosing a default creation panel is the same user decision as allowing
+    // Agent browser access: one click grants both, while revocation stays a
+    // separate explicit action.
+    if (!browserControlAccess.value.active) {
+      try {
+        browserControlAccess.value = await grantBrowserControlAccess(props.instanceId);
+      } catch {
+        // The default panel claim already succeeded. Access can still be
+        // granted from the same popover without repeating the claim.
+      }
+    }
+    showControlPlaneToast(t("sessions.browser.creationContextClaimed", { panel: panel.panelLabel }), "success");
+  } catch (cause) {
+    const conflict = apiErrorCode(cause) === "BROWSER_DEFAULT_CONTEXT_CONFLICT";
+    showControlPlaneToast(
+      conflict
+        ? t("sessions.browser.creationContextConflict")
+        : translateApiError(cause, t, t("sessions.browser.creationContextClaimFailed")),
+      "error",
+    );
+    await refreshBrowserCreationContext();
+  } finally {
+    creationContextBusy.value = false;
+  }
+}
+
+async function revokeCreationContextForOwnPanel(panel: EmbeddedBrowserCreationPanel) {
+  const snapshot = creationContext.value;
+  if (creationContextBusy.value || !snapshot || !canRevokeCreationPanel(panel)) return;
+  creationContextBusy.value = true;
+  creationContextError.value = "";
+  try {
+    await revokeBrowserCreationContext(props.instanceId, panel.sourceRef, snapshot.revision);
+    creationContextNotice.value = "";
+    await refreshBrowserCreationContext();
+    showControlPlaneToast(t("sessions.browser.creationContextRevoked"), "success");
+  } catch (cause) {
+    showControlPlaneToast(translateApiError(cause, t, t("sessions.browser.creationContextRevokeFailed")), "error");
+    await refreshBrowserCreationContext();
+  } finally {
+    creationContextBusy.value = false;
   }
 }
 </script>
@@ -867,11 +1415,60 @@ async function revokeBrowserControlAccessForInstance() {
 .embedded-browser-toolbar { display: flex; align-items: center; gap: 2px; min-width: 0; border-bottom: 1px solid var(--line); padding: 4px 6px; }
 .embedded-browser-toolbar button { width: 30px; height: 30px; flex: 0 0 30px; }
 .embedded-browser-address { display: flex; min-width: 0; height: 30px; flex: 1; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-inset); padding: 0 9px; color: var(--text-muted); }
-.embedded-browser-agent-access-active { color: var(--brand-accent); background: var(--brand-accent-soft); }
-.embedded-browser-agent-access-menu { display: grid; width: min(320px, calc(100vw - 24px)); gap: 8px; }
+.embedded-browser-pages { position: relative; }
+.embedded-browser-pages-active { color: var(--brand-accent); background: var(--brand-accent-soft); }
+.embedded-browser-device-toggle-active { color: var(--brand-accent); background: var(--brand-accent-soft); }
+.embedded-browser-pages-count { position: absolute; top: 1px; right: 0; min-width: 13px; height: 13px; border-radius: 999px; background: var(--brand-accent); color: var(--surface); font-size: 9px; font-weight: 500; line-height: 13px; text-align: center; }
+.embedded-browser-pages-menu { display: flex; width: min(360px, var(--reka-popover-content-available-width)); max-height: min(480px, var(--reka-popover-content-available-height)); flex-direction: column; overflow: hidden; }
+.embedded-browser-pages-context { display: grid; flex: 0 0 auto; gap: 2px; padding-bottom: 5px; }
+.embedded-browser-pages-section { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; border-top: 1px solid var(--line); }
+.embedded-browser-pages-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 6px; color: var(--text-muted); font-size: 12px; }
+.embedded-browser-pages-menu-head strong { color: var(--text); font-size: 13px; font-weight: 500; }
+.embedded-browser-pages-scroll { min-height: 0; flex: 1 1 auto; }
+.embedded-browser-pages-list { display: grid; gap: 2px; padding: 0 5px 5px; }
+.embedded-browser-page-row { display: flex; min-height: 46px; align-items: center; width: 100%; min-width: 0; gap: 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; padding: 7px 8px; text-align: left; }
+.embedded-browser-page-row:hover, .embedded-browser-page-row.active { background: var(--surface-hover); }
+.embedded-browser-page-row > svg { flex: 0 0 auto; color: var(--text-muted); }
+.embedded-browser-page-copy { display: grid; min-width: 0; flex: 1; gap: 1px; }
+.embedded-browser-page-copy > span, .embedded-browser-page-copy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.embedded-browser-page-copy > span { font-size: 13px; line-height: 18px; }
+.embedded-browser-page-copy > small { color: var(--text-muted); font-size: 12px; line-height: 17px; }
+.embedded-browser-page-current { flex: 0 0 auto; border-radius: 999px; background: var(--brand-accent-soft); color: var(--brand-accent); font-size: 11px; padding: 1px 6px; }
+.embedded-browser-context-compact-list { display: grid; gap: 2px; padding: 0 5px; }
+.embedded-browser-context-compact { display: flex; min-height: 44px; min-width: 0; align-items: center; gap: 9px; border-radius: 6px; padding: 6px 8px; }
+.embedded-browser-context-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 999px; background: var(--text-muted); opacity: .45; }
+.embedded-browser-context-dot.default { background: var(--brand-accent); opacity: 1; }
+.embedded-browser-context-badge { flex: 0 0 auto; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); font-size: 11px; font-weight: 400; padding: 1px 6px; }
+.embedded-browser-context-badge.default { background: var(--brand-accent-soft); color: var(--brand-accent); }
+.embedded-browser-context-badge.offline { background: var(--status-danger-bg); color: var(--status-danger); }
+.embedded-browser-agent-access-active { color: var(--text); background: var(--surface-hover); }
+.embedded-browser-agent-access-menu { display: flex; width: min(380px, var(--reka-popover-content-available-width)); max-height: min(560px, var(--reka-popover-content-available-height)); flex-direction: column; overflow: hidden; }
+.embedded-browser-agent-access-summary { display: grid; flex: 0 0 auto; gap: 7px; padding: 11px 12px 10px; }
 .embedded-browser-agent-access-menu strong { color: var(--text); font-size: 13px; font-weight: 500; }
-.embedded-browser-agent-access-menu p { margin: 0; color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 1.45; }
-.embedded-browser-agent-access-actions { display: flex; justify-content: flex-end; }
+.embedded-browser-agent-access-menu p { margin: 0; color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 17px; }
+.embedded-browser-agent-access-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.embedded-browser-agent-access-state { flex: 0 0 auto; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); font-size: 11px; font-weight: 400; padding: 1px 7px; }
+.embedded-browser-agent-access-state.active { background: var(--brand-accent-soft); color: var(--brand-accent); }
+.embedded-browser-agent-access-actions { display: flex; justify-content: flex-end; padding-top: 1px; }
+.embedded-browser-creation-context { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding: 10px 12px 12px; }
+.embedded-browser-creation-context-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-muted); font-size: 12px; line-height: 17px; }
+.embedded-browser-creation-context-value { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 5px; }
+.embedded-browser-creation-context-value strong { min-width: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.embedded-browser-agent-access-menu .embedded-browser-creation-context-notice { border-radius: 6px; background: var(--brand-accent-soft); padding: 6px 8px; color: var(--text); }
+.embedded-browser-agent-access-menu .embedded-browser-creation-context-error { color: var(--status-danger); }
+.embedded-browser-creation-context-error button { border: 0; background: transparent; color: var(--brand-accent); cursor: pointer; font-size: 12px; font-weight: 400; padding: 0 2px; }
+.embedded-browser-creation-context-empty, .embedded-browser-creation-context-hint { color: var(--text-muted); }
+.embedded-browser-creation-panel-scroll { min-height: 0; flex: 1 1 auto; max-height: min(320px, 45vh); }
+.embedded-browser-creation-panel-list { display: grid; gap: 6px; }
+.embedded-browser-creation-panel { display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-inset); padding: 8px 9px; }
+.embedded-browser-creation-panel.own { border-color: var(--brand-accent); }
+.embedded-browser-creation-panel.default { background: var(--brand-accent-soft); }
+.embedded-browser-creation-panel-head { display: flex; min-width: 0; align-items: center; gap: 5px; }
+.embedded-browser-creation-panel-name { min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.embedded-browser-creation-panel p { margin: 0; }
+.embedded-browser-creation-panel-actions { display: flex; justify-content: flex-end; padding-top: 2px; }
+.embedded-browser-creation-pending { display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; color: var(--text); font-size: 12px; }
+.embedded-browser-creation-pending small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .embedded-browser-address:focus-within { border-color: var(--brand-accent); box-shadow: 0 0 0 2px var(--brand-accent-soft); }
 .embedded-browser-address input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; font-weight: 400; }
 .embedded-browser-suggestions { max-height: var(--reka-popover-content-available-height); overflow: hidden; background: var(--surface); }
@@ -883,9 +1480,21 @@ async function revokeBrowserControlAccessForInstance() {
 .embedded-browser-suggestion-copy > span, .embedded-browser-suggestion-copy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; letter-spacing: 0; }
 .embedded-browser-suggestion-copy > span { color: var(--text); font-size: 13px; }
 .embedded-browser-suggestion-copy > small { color: var(--text-muted); font-size: 12px; }
-.embedded-browser-surface { position: relative; min-width: 0; min-height: 0; overflow: hidden; pointer-events: auto; background: #fff; }
+.embedded-browser-surface { position: relative; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; pointer-events: auto; background: #fff; }
 .embedded-browser-surface webview { display: flex; width: 100%; height: 100%; }
 .embedded-browser.start-page-active .embedded-browser-surface webview { visibility: hidden; }
+.embedded-browser-device-toolbar { display: flex; flex: 0 0 auto; align-items: center; min-height: 38px; gap: 7px; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 4px 8px; background: var(--surface-inset); color: var(--text-muted); }
+.embedded-browser-device-toolbar > button { width: 28px; height: 28px; flex: 0 0 28px; }
+.embedded-browser-device-toolbar :deep(.embedded-browser-device-select) { width: 160px; min-height: 28px; height: 28px; padding: 0 7px; font-size: 12px; }
+.embedded-browser-device-field { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; font-size: 12px; }
+.embedded-browser-device-field input { width: 56px; height: 28px; border: 1px solid var(--line); border-radius: 5px; outline: 0; background: var(--surface); padding: 0 5px; color: var(--text); font-size: 12px; }
+.embedded-browser-device-field input:focus { border-color: var(--brand-accent); box-shadow: 0 0 0 2px var(--brand-accent-soft); }
+.embedded-browser-device-times { flex: 0 0 auto; font-size: 12px; }
+.embedded-browser-device-stage { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; align-items: center; justify-content: center; overflow: hidden; background: #fff; }
+.embedded-browser.device-mode .embedded-browser-device-stage { padding: 24px; background: #16181d; }
+.embedded-browser-device-scaler { position: relative; flex: none; width: 100%; height: 100%; }
+.embedded-browser-device-frame { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: #fff; }
+.embedded-browser.device-mode .embedded-browser-device-frame { border: 6px solid #0b0d10; border-radius: 18px; box-shadow: 0 20px 60px rgb(0 0 0 / 32%); }
 .embedded-browser-state { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; background: var(--surface); color: var(--text-muted); font-size: 12px; }
 .embedded-browser-state > svg { color: var(--status-danger); }
 .embedded-browser-state-message { max-width: 420px; margin: 0; text-align: center; color: var(--text); font-size: 13px; }
@@ -894,6 +1503,7 @@ async function revokeBrowserControlAccessForInstance() {
 .embedded-browser-start-section { max-width: 920px; margin: 0 auto 30px; }
 .embedded-browser-start-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .embedded-browser-start-heading h2 { margin: 0; color: var(--text); font-size: 14px; font-weight: 500; }
+.embedded-browser-start-count { color: var(--text-muted); font-size: 12px; }
 .embedded-browser-add, .embedded-browser-clear, .embedded-browser-unpin { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; pointer-events: auto; }
 .embedded-browser-add { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 6px; }
 .embedded-browser-clear { font-size: 12px; }
@@ -907,15 +1517,10 @@ async function revokeBrowserControlAccessForInstance() {
 .embedded-browser-recent-item { flex-direction: column; gap: 3px; padding: 9px 11px; }
 .embedded-browser-recent-item span { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .embedded-browser-recent-item small { overflow: hidden; max-width: 100%; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.embedded-browser-open-page-row.active { border-color: var(--brand-accent); background: var(--brand-accent-soft); }
+.embedded-browser-open-page-current { margin-left: 6px; color: var(--brand-accent); font-size: 11px; font-style: normal; }
 .embedded-browser-start-empty { margin: 0; color: var(--text-muted); font-size: 12px; }
 .embedded-browser-host-notice { position: absolute; z-index: 2; right: 10px; bottom: 10px; max-width: min(420px, calc(100% - 20px)); margin: 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-raised); color: var(--text-muted); font-size: 12px; pointer-events: none; }
-.embedded-browser-creation-approvals { position: absolute; z-index: 3; top: 10px; right: 10px; display: grid; gap: 8px; width: min(420px, calc(100% - 20px)); }
-.embedded-browser-creation-card { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); box-shadow: 0 8px 24px rgb(0 0 0 / 16%); }
-.embedded-browser-creation-copy { display: grid; flex: 1; min-width: 0; gap: 3px; }
-.embedded-browser-creation-copy strong { font-size: 12px; font-weight: 500; }
-.embedded-browser-creation-copy span, .embedded-browser-creation-copy small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.embedded-browser-creation-actions { display: flex; flex: none; gap: 4px; }
-.embedded-browser-creation-error { margin: 0; padding: 8px 10px; border: 1px solid var(--status-danger); border-radius: 6px; background: var(--surface-raised); color: var(--status-danger); font-size: 12px; }
 .embedded-browser-pinned-form { display: grid; gap: 8px; }
 .embedded-browser-pinned-form > label { color: var(--text-muted); font-size: 12px; font-weight: 500; }
 .embedded-browser-pinned-error { margin: 0; color: var(--status-danger); font-size: 12px; }

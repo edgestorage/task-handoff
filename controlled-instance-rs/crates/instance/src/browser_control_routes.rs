@@ -1,16 +1,18 @@
 use axum::{
-    extract::{ws::WebSocketUpgrade, Path, State},
+    body::Bytes,
+    extract::{ws::WebSocketUpgrade, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
 };
 use controlled_instance_protocol::{
-    ApiEnvelope, EmbeddedBrowserCreationClaim, EmbeddedBrowserCreationDecline,
-    EmbeddedBrowserSourceDelta, EmbeddedBrowserSourceRegistrationRequest,
-    EmbeddedBrowserSourceRegistrationView, EmbeddedBrowserSourceSnapshot,
-    EmbeddedBrowserSourceSnapshotCommit, EmbeddedBrowserTargetDetachParams,
+    ApiEnvelope, EmbeddedBrowserDefaultContextClaimRequest, EmbeddedBrowserSourceDelta,
+    EmbeddedBrowserSourceRegistrationRequest, EmbeddedBrowserSourceRegistrationView,
+    EmbeddedBrowserSourceSnapshot, EmbeddedBrowserSourceSnapshotCommit,
+    EmbeddedBrowserTargetDetachParams,
 };
+use serde::Deserialize;
 use std::time::Duration;
 
 use crate::{
@@ -27,6 +29,31 @@ const USER_HEADER: &str = "x-task-handoff-user-id";
 struct BrowserProxyContext {
     panel_id: String,
     user_id: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreationContextQuery {
+    #[serde(default)]
+    source_ref: Option<String>,
+    #[serde(default)]
+    expected_revision: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GrantAccessRequest {
+    #[serde(default)]
+    request_ref: Option<String>,
+    #[serde(default)]
+    expected_revision: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DenyAccessRequest {
+    #[serde(default)]
+    expected_revision: Option<u64>,
 }
 
 pub(crate) fn is_browser_control_path(path: &str) -> bool {
@@ -49,8 +76,10 @@ pub fn routes() -> Router<AppState> {
             delete(revoke_source),
         )
         .route(
-            "/api/browser-control/creation-requests",
-            get(list_creation_approvals),
+            "/api/browser-control/creation-context",
+            get(get_creation_context)
+                .put(claim_creation_context)
+                .delete(revoke_creation_context),
         )
         .route(
             "/api/browser-control/access",
@@ -59,12 +88,8 @@ pub fn routes() -> Router<AppState> {
                 .delete(revoke_instance_access),
         )
         .route(
-            "/api/browser-control/sources/{source_ref}/creation-requests/{creation_ref}/claim",
-            post(claim_creation),
-        )
-        .route(
-            "/api/browser-control/sources/{source_ref}/creation-requests/{creation_ref}/decline",
-            post(decline_creation),
+            "/api/browser-control/access-requests/{request_ref}/deny",
+            post(deny_instance_access_request),
         )
         .route(
             "/api/browser-control/relay",
@@ -98,15 +123,172 @@ async fn browser_control_relay_socket(
         .into_response()
 }
 
-async fn list_creation_approvals(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn get_creation_context(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<CreationContextQuery>,
+) -> Response {
     let context = match browser_proxy_context(&state, &headers) {
         Ok(context) => context,
         Err(response) => return response,
     };
-    let approvals = state
+    let claim_source_ref = query
+        .source_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|source_ref| !source_ref.is_empty());
+    if let Some(source_ref) = claim_source_ref {
+        if let Some((panel_id, owner_ref)) = state.browser_control.source_owner(source_ref) {
+            if panel_id != context.panel_id || owner_ref != context.user_id {
+                return api_error(
+                    StatusCode::FORBIDDEN,
+                    "BROWSER_CREATION_CONTEXT_NOT_OWNED",
+                    "A panel can only inspect its own browser source.",
+                );
+            }
+        }
+    }
+    Json(ApiEnvelope {
+        data: state
+            .browser_control
+            .creation_context_snapshot(claim_source_ref),
+    })
+    .into_response()
+}
+
+async fn claim_creation_context(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<EmbeddedBrowserDefaultContextClaimRequest>,
+) -> Response {
+    let context = match browser_proxy_context(&state, &headers) {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let owns_source = state
         .browser_control
-        .list_creation_approvals_for_source_owner(&context.panel_id, &context.user_id);
-    Json(ApiEnvelope { data: approvals }).into_response()
+        .source_owner(&body.source_ref)
+        .is_some_and(|(panel_id, owner_ref)| {
+            panel_id == context.panel_id && owner_ref == context.user_id
+        });
+    if !owns_source {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "BROWSER_CREATION_CONTEXT_NOT_OWNED",
+            "A desktop source can only request itself as the default creation context.",
+        );
+    }
+    let outcome = match state.browser_control.claim_default_context(
+        &body.source_ref,
+        body.expected_revision,
+        &context.panel_id,
+        &context.user_id,
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => return browser_error(error),
+    };
+    for pending in &outcome.pending_creations {
+        if let Err(error) = dispatch_creation(&state, &pending.creation_ref).await {
+            tracing::warn!(
+                code = error.code,
+                creation_ref = %pending.creation_ref,
+                "Pending browser creation could not be dispatched after default context claim"
+            );
+        }
+    }
+    publish_browser_events(&state);
+    Json(ApiEnvelope {
+        data: outcome.result,
+    })
+    .into_response()
+}
+
+async fn revoke_creation_context(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<CreationContextQuery>,
+    body: Bytes,
+) -> Response {
+    let context = match browser_proxy_context(&state, &headers) {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let request = match serde_json::from_slice::<serde_json::Value>(&body) {
+        Ok(serde_json::Value::Object(value)) if value.is_empty() => None,
+        Ok(value) => {
+            match serde_json::from_value::<EmbeddedBrowserDefaultContextClaimRequest>(value) {
+                Ok(request) => Some(request),
+                Err(_) => {
+                    return api_error(
+                    StatusCode::BAD_REQUEST,
+                    "BROWSER_REQUEST_INVALID",
+                    "sourceRef and expectedRevision are required to revoke the default browser context.",
+                );
+                }
+            }
+        }
+        Err(_) if body.iter().all(u8::is_ascii_whitespace) => None,
+        Err(_) => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "BROWSER_REQUEST_INVALID",
+                "sourceRef and expectedRevision are required to revoke the default browser context.",
+            );
+        }
+    };
+    let request = match request {
+        Some(request) => request,
+        None => {
+            let source_ref = query
+                .source_ref
+                .as_deref()
+                .map(str::trim)
+                .filter(|source_ref| !source_ref.is_empty());
+            let Some(source_ref) = source_ref else {
+                return api_error(
+                    StatusCode::BAD_REQUEST,
+                    "BROWSER_REQUEST_INVALID",
+                    "sourceRef and expectedRevision are required to revoke the default browser context.",
+                );
+            };
+            let Some(expected_revision) = query.expected_revision else {
+                return api_error(
+                    StatusCode::BAD_REQUEST,
+                    "BROWSER_REQUEST_INVALID",
+                    "expectedRevision is required to revoke the default browser context.",
+                );
+            };
+            EmbeddedBrowserDefaultContextClaimRequest {
+                source_ref: source_ref.to_string(),
+                expected_revision,
+            }
+        }
+    };
+    let source_ref = request.source_ref.trim();
+    if source_ref.is_empty() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "BROWSER_REQUEST_INVALID",
+            "sourceRef is required to revoke the default browser context.",
+        );
+    }
+    let result = match state.browser_control.clear_default_context(
+        source_ref,
+        request.expected_revision,
+        &context.panel_id,
+        &context.user_id,
+    ) {
+        Ok(result) => result,
+        Err(error) => return browser_error(error),
+    };
+    publish_browser_events(&state);
+    Json(ApiEnvelope {
+        data: serde_json::json!({
+            "cleared": result.cleared,
+            "revision": result.revision,
+        }),
+    })
+    .into_response()
 }
 
 async fn register_source(
@@ -238,13 +420,47 @@ async fn get_instance_access(State(state): State<AppState>, headers: HeaderMap) 
     .into_response()
 }
 
-async fn grant_instance_access(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn grant_instance_access(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<GrantAccessRequest>>,
+) -> Response {
     if let Err(response) = require_browser_proxy(&state, &headers) {
         return response;
     }
-    let access = state.browser_control.grant_instance_access();
-    publish_browser_events(&state);
-    Json(ApiEnvelope { data: access }).into_response()
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    match state
+        .browser_control
+        .grant_instance_access_with(body.request_ref.as_deref(), body.expected_revision)
+    {
+        Ok(access) => {
+            publish_browser_events(&state);
+            Json(ApiEnvelope { data: access }).into_response()
+        }
+        Err(error) => browser_error(error),
+    }
+}
+
+async fn deny_instance_access_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(request_ref): Path<String>,
+    body: Option<Json<DenyAccessRequest>>,
+) -> Response {
+    if let Err(response) = require_browser_proxy(&state, &headers) {
+        return response;
+    }
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    match state
+        .browser_control
+        .deny_instance_access_request(&request_ref, body.expected_revision)
+    {
+        Ok(view) => {
+            publish_browser_events(&state);
+            Json(ApiEnvelope { data: view }).into_response()
+        }
+        Err(error) => browser_error(error),
+    }
 }
 
 async fn revoke_instance_access(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -278,95 +494,6 @@ async fn revoke_instance_access(State(state): State<AppState>, headers: HeaderMa
         data: serde_json::json!({ "revokedLeases": revoked_leases }),
     })
     .into_response()
-}
-
-async fn claim_creation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((source_ref, creation_ref)): Path<(String, String)>,
-    Json(body): Json<EmbeddedBrowserCreationClaim>,
-) -> Response {
-    if let Err(response) = require_source_owner(&state, &headers, &source_ref) {
-        return response;
-    }
-    if body.source_ref != source_ref {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            "BROWSER_SOURCE_MISMATCH",
-            "Creation claim sourceRef does not match the request path.",
-        );
-    }
-    match state
-        .browser_control
-        .claim_creation(&source_ref, &creation_ref, body.expected_revision)
-    {
-        Ok(_claimed) => {
-            let creating = match state
-                .browser_control
-                .mark_creation_creating(&source_ref, &creation_ref)
-            {
-                Ok(creating) => creating,
-                Err(error) => return browser_error(error),
-            };
-            publish_browser_events(&state);
-            let generation = match state.browser_control.source_generation(&source_ref) {
-                Some(generation) => generation,
-                None => {
-                    return browser_error(BrowserControlError::new(
-                        "BROWSER_SOURCE_UNAVAILABLE",
-                        "Browser source disconnected before creation dispatch.",
-                        409,
-                    ))
-                }
-            };
-            let open = controlled_instance_protocol::EmbeddedBrowserTabsOpenParams {
-                creation_ref: creating.creation_ref.clone(),
-                source_ref: source_ref.clone(),
-                generation,
-                url: creating.requested_url.clone(),
-                title: creating.title.clone(),
-            };
-            if let Err(error) = state.browser_control_relay.tabs_open(open).await {
-                let _ =
-                    state
-                        .browser_control
-                        .fail_creation(&source_ref, &creation_ref, &error.message);
-                publish_browser_events(&state);
-                return browser_error(error);
-            }
-            publish_browser_events(&state);
-            Json(ApiEnvelope { data: creating }).into_response()
-        }
-        Err(error) => browser_error(error),
-    }
-}
-
-async fn decline_creation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((source_ref, creation_ref)): Path<(String, String)>,
-    Json(body): Json<EmbeddedBrowserCreationDecline>,
-) -> Response {
-    if let Err(response) = require_source_owner(&state, &headers, &source_ref) {
-        return response;
-    }
-    if body.source_ref != source_ref {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            "BROWSER_SOURCE_MISMATCH",
-            "Creation decline sourceRef does not match the request path.",
-        );
-    }
-    match state
-        .browser_control
-        .decline_creation(&source_ref, &creation_ref, body.expected_revision)
-    {
-        Ok(creation) => {
-            publish_browser_events(&state);
-            Json(ApiEnvelope { data: creation }).into_response()
-        }
-        Err(error) => browser_error(error),
-    }
 }
 
 fn require_browser_proxy(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
@@ -452,6 +579,54 @@ pub(crate) fn publish_browser_events(state: &AppState) {
     for event in state.browser_control.take_events() {
         let _ = state.events.publish(event.event_type, event.payload);
     }
+}
+
+pub(crate) async fn dispatch_creation(
+    state: &AppState,
+    creation_ref: &str,
+) -> Result<Option<controlled_instance_protocol::EmbeddedBrowserCreationView>, BrowserControlError>
+{
+    let Some(dispatch) = state.browser_control.take_creation_dispatch(creation_ref)? else {
+        return Ok(None);
+    };
+    let open = controlled_instance_protocol::EmbeddedBrowserTabsOpenParams {
+        creation_ref: dispatch.creation.creation_ref.clone(),
+        source_ref: dispatch.source_ref.clone(),
+        generation: dispatch.generation,
+        url: dispatch.creation.requested_url.clone(),
+        title: dispatch.creation.title.clone(),
+    };
+    if let Err(error) = state.browser_control_relay.tabs_open(open).await {
+        let _ = state.browser_control.fail_creation(
+            &dispatch.source_ref,
+            &dispatch.creation.creation_ref,
+            &error.message,
+        );
+        publish_browser_events(state);
+        return Err(error);
+    }
+    publish_browser_events(state);
+    Ok(Some(dispatch.creation))
+}
+
+pub(crate) async fn dispatch_claimed_creations(
+    state: &AppState,
+    primary_ref: &str,
+) -> Result<(), BrowserControlError> {
+    for creation_ref in state.browser_control.claimed_creation_refs() {
+        match dispatch_creation(state, &creation_ref).await {
+            Ok(_) => {}
+            Err(error) if creation_ref == primary_ref => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code,
+                    creation_ref = %creation_ref,
+                    "Claimed browser creation could not be dispatched"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn browser_error(error: BrowserControlError) -> Response {

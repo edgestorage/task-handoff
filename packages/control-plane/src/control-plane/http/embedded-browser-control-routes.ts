@@ -1,7 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { z } from "zod";
 import {
-  EmbeddedBrowserCreationClaimSchema,
-  EmbeddedBrowserCreationDeclineSchema,
+  EmbeddedBrowserAccessRequestViewSchema,
+  EmbeddedBrowserCreationContextSnapshotSchema,
+  EmbeddedBrowserDefaultContextClaimRequestSchema,
+  EmbeddedBrowserDefaultContextClaimResultSchema,
   EmbeddedBrowserAccessViewSchema,
   EmbeddedBrowserSourceDeltaSchema,
   EmbeddedBrowserSourceRegistrationRequestSchema,
@@ -10,7 +13,10 @@ import {
   EmbeddedBrowserSourceSnapshotCommitSchema,
   type EmbeddedBrowserSource,
 } from "@task-handoff/protocol/embedded-browser-control";
-import { supportsControlledInstanceEmbeddedBrowserChannel } from "@task-handoff/protocol/control-plane";
+import {
+  controlledInstanceEmbeddedBrowserChannelCapabilities,
+  supportsControlledInstanceEmbeddedBrowserChannel,
+} from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneService } from "../application/service.ts";
 import { assertCan, instanceScopeAllows, type ControlPlaneUserAuthorizationContext } from "../auth/authorization.ts";
 import type { ControlPlaneAuth } from "../auth/service.ts";
@@ -23,6 +29,18 @@ import {
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
 import { IdParamsSchema } from "./route-params.ts";
+
+const BrowserAccessGrantRequestSchema = z.object({
+  requestRef: z.string().trim().min(1).max(240).optional(),
+  expectedRevision: z.number().int().nonnegative().optional(),
+}).strip();
+const BrowserAccessRequestDecisionSchema = z.object({
+  expectedRevision: z.number().int().nonnegative().optional(),
+}).strip();
+const BrowserAccessRequestParamsSchema = z.object({
+  id: z.string().trim().min(1),
+  requestRef: z.string().trim().min(1).max(240),
+}).strip();
 
 export type RegisterEmbeddedBrowserControlRoutesOptions = {
   app: FastifyInstance;
@@ -56,6 +74,17 @@ export function registerEmbeddedBrowserControlRoutes(options: RegisterEmbeddedBr
     assertCan(actor, "interactive-access", { type: "instance", id: instanceId, instanceId, nodeId: instance.nodeId });
     if (!supportsControlledInstanceEmbeddedBrowserChannel(instance.capabilities)) {
       throw Object.assign(new Error("Embedded browser control is not supported by this instance."), { statusCode: 409, code: "BROWSER_CHANNEL_UNSUPPORTED" });
+    }
+    return instance;
+  };
+
+  const authorizeTargetCdpInstance = async (actor: ControlPlaneUserAuthorizationContext, instanceId: string) => {
+    const instance = await authorizeInstance(actor, instanceId);
+    if (!controlledInstanceEmbeddedBrowserChannelCapabilities(instance.capabilities).targetCdp) {
+      throw Object.assign(new Error("Browser Target CDP is not supported by this instance."), {
+        statusCode: 409,
+        code: "BROWSER_OPERATION_UNSUPPORTED",
+      });
     }
     return instance;
   };
@@ -122,39 +151,6 @@ export function registerEmbeddedBrowserControlRoutes(options: RegisterEmbeddedBr
     return { data: {} };
   });
 
-  app.get("/api/controlled-instances/:id/browser-control/creation-requests", async (request) => {
-    const { id } = IdParamsSchema.parse(request.params);
-    const actor = requireUserActor(request);
-    await authorizeInstance(actor, id);
-    return { data: await proxyData(id, actor, "/api/browser-control/creation-requests") };
-  });
-
-  app.post("/api/controlled-instances/:id/browser-control/sources/:sourceRef/creation-requests/:creationRef/claim", async (request) => {
-    const { id, sourceRef, creationRef } = sourceCreationParams(request.params);
-    const actor = requireUserActor(request);
-    await authorizeInstance(actor, id);
-    const body = EmbeddedBrowserCreationClaimSchema.parse(request.body);
-    if (body.sourceRef !== sourceRef) throw sourceMismatch();
-    const creation = await proxyData(id, actor, `/api/browser-control/sources/${encodeURIComponent(sourceRef)}/creation-requests/${encodeURIComponent(creationRef)}/claim`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    return { data: creation };
-  });
-
-  app.post("/api/controlled-instances/:id/browser-control/sources/:sourceRef/creation-requests/:creationRef/decline", async (request) => {
-    const { id, sourceRef, creationRef } = sourceCreationParams(request.params);
-    const actor = requireUserActor(request);
-    await authorizeInstance(actor, id);
-    const body = EmbeddedBrowserCreationDeclineSchema.parse(request.body);
-    if (body.sourceRef !== sourceRef) throw sourceMismatch();
-    const creation = await proxyData(id, actor, `/api/browser-control/sources/${encodeURIComponent(sourceRef)}/creation-requests/${encodeURIComponent(creationRef)}/decline`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    return { data: creation };
-  });
-
   app.get("/api/controlled-instances/:id/browser-control/access", async (request) => {
     const { id } = IdParamsSchema.parse(request.params);
     const actor = requireUserActor(request);
@@ -166,7 +162,20 @@ export function registerEmbeddedBrowserControlRoutes(options: RegisterEmbeddedBr
     const { id } = IdParamsSchema.parse(request.params);
     const actor = requireUserActor(request);
     await authorizeInstance(actor, id);
-    return { data: EmbeddedBrowserAccessViewSchema.parse(await proxyData(id, actor, "/api/browser-control/access", { method: "POST", body: "{}" })) };
+    const body = BrowserAccessGrantRequestSchema.parse(request.body ?? {});
+    return { data: EmbeddedBrowserAccessViewSchema.parse(await proxyData(id, actor, "/api/browser-control/access", { method: "POST", body: JSON.stringify(body) })) };
+  });
+
+  app.post("/api/controlled-instances/:id/browser-control/access-requests/:requestRef/deny", async (request) => {
+    const { id, requestRef } = BrowserAccessRequestParamsSchema.parse(request.params);
+    const actor = requireUserActor(request);
+    await authorizeInstance(actor, id);
+    const body = BrowserAccessRequestDecisionSchema.parse(request.body ?? {});
+    const result = await proxyData(id, actor, `/api/browser-control/access-requests/${encodeURIComponent(requestRef)}/deny`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    return { data: EmbeddedBrowserAccessRequestViewSchema.parse(result) };
   });
 
   app.delete("/api/controlled-instances/:id/browser-control/access", async (request) => {
@@ -174,6 +183,39 @@ export function registerEmbeddedBrowserControlRoutes(options: RegisterEmbeddedBr
     const actor = requireUserActor(request);
     await authorizeInstance(actor, id);
     return { data: await proxyData(id, actor, "/api/browser-control/access", { method: "DELETE" }) };
+  });
+
+  app.get("/api/controlled-instances/:id/browser-control/creation-context", async (request) => {
+    const { id } = IdParamsSchema.parse(request.params);
+    const actor = requireUserActor(request);
+    await authorizeTargetCdpInstance(actor, id);
+    const sourceRef = optionalQueryParam(request.query, "sourceRef");
+    const snapshot = await proxyData(id, actor, creationContextPath(sourceRef));
+    return { data: EmbeddedBrowserCreationContextSnapshotSchema.parse(snapshot) };
+  });
+
+  app.put("/api/controlled-instances/:id/browser-control/creation-context", async (request) => {
+    const { id } = IdParamsSchema.parse(request.params);
+    const actor = requireUserActor(request);
+    await authorizeTargetCdpInstance(actor, id);
+    const body = EmbeddedBrowserDefaultContextClaimRequestSchema.parse(request.body ?? {});
+    const result = await proxyData(id, actor, creationContextPath(body.sourceRef, body.expectedRevision), {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    return { data: EmbeddedBrowserDefaultContextClaimResultSchema.parse(result) };
+  });
+
+  app.delete("/api/controlled-instances/:id/browser-control/creation-context", async (request) => {
+    const { id } = IdParamsSchema.parse(request.params);
+    const actor = requireUserActor(request);
+    await authorizeTargetCdpInstance(actor, id);
+    const body = deleteCreationContextRequest(request);
+    const result = await proxyData(id, actor, creationContextPath(body.sourceRef, body.expectedRevision), {
+      method: "DELETE",
+      body: JSON.stringify(body),
+    });
+    return { data: result };
   });
 
   app.get("/browser-channel-relay", { websocket: true, config: PUBLIC_CONTROL_PLANE_ROUTE }, async (socket, request) => {
@@ -241,14 +283,41 @@ function instanceChannelHeaders(
 }
 
 async function readProxyData(response: { status: number; body: ReadableStream<Uint8Array> | null }) {
-  let payload: { data?: unknown; error?: { code?: string; message?: string } } = {};
+  let payload: {
+    data?: unknown;
+    error?: {
+      code?: string;
+      message?: string;
+      details?: unknown;
+      retryable?: boolean;
+      execution?: string;
+      creationRef?: string;
+      expiresAt?: string;
+      revision?: number;
+      defaultBrowserContextId?: string;
+    };
+  } = {};
   if (response.body) {
     try { payload = await new Response(response.body).json() as typeof payload; } catch {}
   }
   if (response.status < 200 || response.status >= 300) {
+    const error = payload.error || {};
+    const upstreamDetails = error.details && typeof error.details === "object" && !Array.isArray(error.details)
+      ? error.details as Record<string, unknown>
+      : undefined;
+    const details = {
+      ...(upstreamDetails || {}),
+      ...(error.execution ? { execution: error.execution } : {}),
+      ...(error.creationRef ? { creationRef: error.creationRef } : {}),
+      ...(error.expiresAt ? { expiresAt: error.expiresAt } : {}),
+      ...(error.revision !== undefined ? { revision: error.revision } : {}),
+      ...(error.defaultBrowserContextId ? { defaultBrowserContextId: error.defaultBrowserContextId } : {}),
+    };
     throw Object.assign(new Error(payload.error?.message || `Controlled instance browser channel request failed with HTTP ${response.status}.`), {
       statusCode: response.status,
       code: payload.error?.code || "BROWSER_CHANNEL_REQUEST_FAILED",
+      ...(Object.keys(details).length ? { details } : {}),
+      ...(error.retryable !== undefined ? { retryable: error.retryable } : {}),
     });
   }
   return payload.data;
@@ -284,14 +353,37 @@ function sourceParams(params: unknown) {
   return { id, sourceRef: requiredParam(value.sourceRef, "sourceRef") };
 }
 
-function sourceCreationParams(params: unknown) {
-  const value = params as { id: string; sourceRef: string; creationRef: string };
-  return { ...sourceParams(params), creationRef: requiredParam(value.creationRef, "creationRef") };
-}
-
 function requiredParam(value: unknown, name: string) {
   if (typeof value !== "string" || !value.trim()) throw Object.assign(new Error(`${name} is invalid.`), { statusCode: 400, code: "BROWSER_CHANNEL_INPUT_INVALID" });
   return value.trim();
+}
+
+function optionalQueryParam(query: unknown, name: string) {
+  if (!query || typeof query !== "object" || Array.isArray(query)) return undefined;
+  const value = (query as Record<string, unknown>)[name];
+  return value === undefined ? undefined : requiredParam(value, name);
+}
+
+function deleteCreationContextRequest(request: FastifyRequest) {
+  const body = request.body;
+  if (body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).length) {
+    return EmbeddedBrowserDefaultContextClaimRequestSchema.parse(body);
+  }
+  const sourceRef = optionalQueryParam(request.query, "sourceRef");
+  const expectedRevision = optionalQueryParam(request.query, "expectedRevision");
+  if (!sourceRef) throw Object.assign(new Error("sourceRef is required."), { statusCode: 400, code: "BROWSER_CHANNEL_INPUT_INVALID" });
+  if (!expectedRevision || !/^(0|[1-9]\d*)$/.test(expectedRevision)) {
+    throw Object.assign(new Error("expectedRevision is invalid."), { statusCode: 400, code: "BROWSER_CHANNEL_INPUT_INVALID" });
+  }
+  return { sourceRef, expectedRevision: Number(expectedRevision) };
+}
+
+function creationContextPath(sourceRef?: string, expectedRevision?: number) {
+  const params = new URLSearchParams();
+  if (sourceRef) params.set("sourceRef", sourceRef);
+  if (expectedRevision !== undefined) params.set("expectedRevision", String(expectedRevision));
+  const query = params.toString();
+  return `/api/browser-control/creation-context${query ? `?${query}` : ""}`;
 }
 
 function sourceMismatch() {

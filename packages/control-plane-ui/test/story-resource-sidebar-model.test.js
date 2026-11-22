@@ -7,6 +7,7 @@ import {
   instanceAppResourceRefs,
   parseStoryResourceKey,
   repositoryResource,
+  storyBrowserSessionSelection,
   storyResourceKey,
   upsertAiSessionRepositoryResource,
 } from "../src/apps/control-plane/story/storyResources.ts";
@@ -307,6 +308,131 @@ test("browser resources survive AI Session switches and remain session scoped", 
   assert.equal(sidebar.resources.value.some((resource) => resource.kind === "embedded-browser"), true);
   sidebar.removeBrowser(browser);
   assert.equal(sidebar.allBrowserResources.value.length, 0);
+  scope.stop();
+  delete globalThis.window;
+});
+
+test("Story browser page moves adopt the live page host and leave the source blank", async () => {
+  const storage = localStorageWindow();
+  globalThis.window = storage.window;
+  const scope = effectScope();
+  const sidebar = scope.run(() => useStoryResourceSidebar({
+    aiSessionId: computed(() => "ai-a"),
+    instanceId: computed(() => "instance-a"),
+    instances: computed(() => [instance("instance-a")]),
+  }));
+  assert.ok(sidebar);
+  sidebar.openBrowser("instance-a", "https://example.com/a");
+  sidebar.openBrowser("instance-a", "https://example.com/b");
+  await nextTick();
+  const resources = sidebar.allBrowserResources.value;
+  assert.equal(resources.length, 2);
+  const target = resources.find((resource) => resource.initialUrl === "https://example.com/a");
+  const source = resources.find((resource) => resource.initialUrl === "https://example.com/b");
+  assert.ok(target && source);
+  const targetKey = storyResourceKey(target);
+  const sourceKey = storyResourceKey(source);
+  const movedPageKey = sidebar.browserPageKeyOf(source);
+
+  assert.equal(sidebar.moveBrowserPage(targetKey, movedPageKey), true);
+  await nextTick();
+
+  const nextTarget = sidebar.allBrowserResources.value.find((resource) => storyResourceKey(resource) === targetKey);
+  const nextSource = sidebar.allBrowserResources.value.find((resource) => storyResourceKey(resource) === sourceKey);
+  assert.ok(nextTarget && nextSource);
+  assert.equal(sidebar.browserPageKeyOf(nextTarget), movedPageKey);
+  assert.equal(nextTarget.initialUrl, "https://example.com/b");
+  assert.notEqual(sidebar.browserPageKeyOf(nextSource), movedPageKey);
+  assert.match(sidebar.browserPageKeyOf(nextSource), /^story-browser-page:/);
+  assert.equal(nextSource.initialUrl, undefined);
+  assert.equal(nextSource.currentUrl, undefined);
+  assert.deepEqual(
+    sidebar.browserPageSurfaces.value["instance-a"]?.map((page) => page.key).sort(),
+    [sidebar.browserPageKeyOf(nextTarget), sidebar.browserPageKeyOf(nextSource)].sort(),
+  );
+
+  const adoptedPageKey = "embedded-browser-page:from-instance";
+  assert.equal(sidebar.adoptBrowserPage(storyResourceKey(nextTarget), adoptedPageKey, {
+    title: "Instance page",
+    currentUrl: "https://example.com/instance",
+    status: "ready",
+  }), true);
+  sidebar.blankBrowserPageResource(nextSource);
+  await nextTick();
+  const adopted = sidebar.allBrowserResources.value.find((resource) => storyResourceKey(resource) === targetKey);
+  assert.equal(sidebar.browserPageKeyOf(adopted), adoptedPageKey);
+  assert.equal(adopted.title, "Instance page");
+  assert.equal(adopted.currentUrl, "https://example.com/instance");
+  scope.stop();
+  delete globalThis.window;
+});
+
+test("activating a page from another AI Session resolves that Session's Story owner", () => {
+  const resource = {
+    kind: "embedded-browser",
+    aiSessionId: "ai-b",
+    instanceId: "instance-a",
+    browserTabId: "browser-b",
+  };
+  const instances = [{
+    id: "instance-a",
+    nodeId: "node-a",
+    aiSessions: { sessions: [
+      { id: "ai-a", storyId: "story-a" },
+      { id: "ai-b", storyId: "story-b" },
+    ] },
+  }];
+
+  assert.deepEqual(storyBrowserSessionSelection(resource, instances), {
+    kind: "session",
+    ownerNodeId: "node-a",
+    storyId: "story-b",
+    instanceId: "instance-a",
+    sessionId: "ai-b",
+  });
+  assert.equal(storyBrowserSessionSelection({ ...resource, aiSessionId: "missing" }, instances), undefined);
+  assert.equal(storyBrowserSessionSelection(resource, [{
+    id: "instance-a",
+    nodeId: "node-a",
+    aiSessions: { sessions: [{ id: "ai-b" }] },
+  }]), undefined);
+});
+
+test("a cross-session page becomes selectable after activation moves the Story context", async () => {
+  const storage = localStorageWindow();
+  globalThis.window = storage.window;
+  const aiSessionId = ref("ai-a");
+  const scope = effectScope();
+  const sidebar = scope.run(() => useStoryResourceSidebar({
+    aiSessionId: computed(() => aiSessionId.value),
+    instanceId: computed(() => "instance-a"),
+    instances: computed(() => [instance("instance-a")]),
+  }));
+  assert.ok(sidebar);
+  sidebar.openBrowser("instance-a", "https://example.com/a");
+  const first = sidebar.allBrowserResources.value.find((resource) => resource.initialUrl === "https://example.com/a");
+  assert.ok(first);
+
+  aiSessionId.value = "ai-b";
+  await nextTick();
+  sidebar.openBrowser("instance-a", "https://example.com/b");
+  const second = sidebar.allBrowserResources.value.find((resource) => resource.initialUrl === "https://example.com/b");
+  assert.ok(second);
+
+  aiSessionId.value = "ai-a";
+  await nextTick();
+  const selection = storyBrowserSessionSelection(second, [{
+    id: "instance-a",
+    nodeId: "node-a",
+    aiSessions: { sessions: [{ id: "ai-b", storyId: "story-b" }] },
+  }]);
+  assert.ok(selection);
+  aiSessionId.value = selection.sessionId;
+  await nextTick();
+  sidebar.select(second);
+  await nextTick();
+  assert.equal(sidebar.activeKey.value, storyResourceKey(second));
+  assert.notEqual(sidebar.activeKey.value, storyResourceKey(first));
   scope.stop();
   delete globalThis.window;
 });

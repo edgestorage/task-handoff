@@ -224,7 +224,7 @@ import { registerBrowserControlRoutes } from "./browser-control-routes";
 import { registerBrowserCdpBridgeRoutes } from "./browser-cdp-bridge";
 import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import { BROWSER_AGENT_TOOL_NAMES } from "@task-handoff/protocol/browser-agent-tools";
-import { EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION, EmbeddedBrowserCdpAccessSchema } from "@task-handoff/protocol/embedded-browser-control";
+import { EMBEDDED_BROWSER_ACCESS_WAIT_MS, EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION, EmbeddedBrowserCdpAccessResultSchema } from "@task-handoff/protocol/embedded-browser-control";
 
 const WebSocketClient = require("ws");
 
@@ -752,10 +752,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
   const browserControl = new BrowserControlService();
-  const browserControlRelay = new BrowserControlRelayRegistry(
-    browserControl,
-    process.env.TASK_HANDOFF_INSTANCE_ID || "standalone",
-  );
+  const browserControlRelay = new BrowserControlRelayRegistry(browserControl);
   const browserCdpHttpEndpoint = (
     options.agentToolsBaseUrl || `http://127.0.0.1:${process.env.TASK_HANDOFF_WEB_PORT || 8080}`
   ).replace(/\/+$/, "");
@@ -873,6 +870,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     gitCredentialBrokerInstalled,
     installEnvironment,
     desktopService.status(),
+    browserControl.capabilities(),
   ));
   const agentRunMembers = new AgentRunMemberBindingStore(storagePaths.runtimeDir);
   const storyAgentTools = new StoryAgentToolService(
@@ -885,9 +883,28 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     resolveSession: (provider, providerSessionId) => aiSessions.getByProviderSessionId(provider, providerSessionId),
     endpoint: `${browserCdpHttpEndpoint}/api/internal/agent-tools`,
     pluginPath: fs.existsSync(bundledOpenCodeStoryPlugin) ? bundledOpenCodeStoryPlugin : undefined,
-    issueBrowserCdpAccess: (session) => {
+    issueBrowserCdpAccess: async (session) => {
+      if (!browserControl.access().active) {
+        const request = browserControl.requestInstanceAccess(session.id);
+        if (request) {
+          const decision = await browserControl.waitForAccessDecision(request.requestRef, EMBEDDED_BROWSER_ACCESS_WAIT_MS);
+          if (decision.status !== "granted") {
+            return EmbeddedBrowserCdpAccessResultSchema.parse({
+              status: decision.status,
+              requestRef: decision.request.requestRef,
+              ...(decision.status === "pending" ? { expiresAt: decision.request.expiresAt } : {}),
+              message: decision.status === "denied"
+                ? "The user denied Agent browser access for this controlled instance."
+                : decision.status === "expired"
+                  ? "The browser access approval expired. Call browser_cdp_access again to request a new approval."
+                  : "Approve Agent browser access for this controlled instance in the approval center, then call browser_cdp_access again.",
+            });
+          }
+        }
+      }
       const issued = browserControl.issueCdpToken(session.id);
-      return EmbeddedBrowserCdpAccessSchema.parse({
+      return EmbeddedBrowserCdpAccessResultSchema.parse({
+        status: "granted",
         httpEndpoint: browserCdpHttpEndpoint,
         token: issued.token,
         expiresAt: issued.expiresAt,
@@ -2163,6 +2180,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       gitCredentialBrokerInstalled,
       installEnvironment,
       desktopService.status(),
+      browserControl.capabilities(),
     );
     return {
       data: {
@@ -2175,7 +2193,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/instance/capabilities", async () => ({
-    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities(), gitCredentialBrokerInstalled, installEnvironment, desktopService.status()),
+    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities(), gitCredentialBrokerInstalled, installEnvironment, desktopService.status(), browserControl.capabilities()),
   }));
 
   app.get("/api/workspace/status", async () => ({

@@ -30,7 +30,12 @@ import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import { getControlledInstanceTriggers } from "../../api/queries.ts";
 import { controlPlaneDomainQueryKeys, type ControlPlaneQueryDomain } from "../../api/queryInvalidation.ts";
 import { createAuthoritativeQueryRecovery } from "./authoritativeQueryRecovery.ts";
-import { BROWSER_ACCESS_CHANGED_EVENT, BROWSER_CREATION_CHANGED_EVENT, dispatchBrowserCreationEvent } from "./instance-detail/browserCreationEvents.ts";
+import {
+  BROWSER_ACCESS_CHANGED_EVENT,
+  BROWSER_ACCESS_REQUEST_CHANGED_EVENT,
+  BROWSER_CREATION_CONTEXT_CHANGED_EVENT,
+  dispatchBrowserCreationEvent,
+} from "./instance-detail/browserCreationEvents.ts";
 import { recordAiSessionRead } from "./aiSessionReadDiagnostics.ts";
 import { applyInstanceAppInventory, applyInstanceLifecycle, applyInstanceLifecycleHeartbeat, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
 import { removeInstanceTriggerBinding, replaceInstanceTriggerSnapshot, upsertInstanceTriggerBinding } from "./instanceTriggerCache.ts";
@@ -232,13 +237,24 @@ export function useControlPlaneEvents(input: {
         input.onAuthoritativeState?.(true);
         void input.operationApprovals?.recoverOpen();
         void input.deviceTrust?.recoverOpen();
+        // Browser creation context is per instance and has no global store.
+        // Every mounted browser surface refetches its authoritative snapshot.
+        dispatchBrowserCreationEvent(BROWSER_CREATION_CONTEXT_CHANGED_EVENT, {});
+        dispatchBrowserCreationEvent(BROWSER_ACCESS_REQUEST_CHANGED_EVENT, {});
         for (const descriptor of hello.streams.filter((stream) => !instanceId || stream.instanceId === instanceId)) {
           if (descriptor.topic === "app.sessions") void input.appSessions.recoverDescriptor(descriptor);
           if (descriptor.topic === "ai.sessions") void input.aiSessions.recoverDescriptor(descriptor);
         }
         return;
       }
-      const events = normalizedEvents(message).filter((event) => !instanceId || !eventInstanceId(event) || eventInstanceId(event) === instanceId);
+      // Browser access approvals are instance-owned but must reach the global
+      // approval center even while another instance detail is open.
+      const events = normalizedEvents(message).filter((event) =>
+        event.type === "browser.access.request.changed"
+        || !instanceId
+        || !eventInstanceId(event)
+        || eventInstanceId(event) === instanceId
+      );
       const handled = events.map(applyToCache).some(Boolean);
       if (!handled) scheduleTargetedInvalidation(events);
     } catch (error) {
@@ -247,8 +263,8 @@ export function useControlPlaneEvents(input: {
   }
 
   function applyToCache(event: EventMessage) {
-    if (event.type === "browser.creation.changed") {
-      dispatchBrowserCreationEvent(BROWSER_CREATION_CHANGED_EVENT, {
+    if (event.type === "browser.creation-context.changed" || event.type === "browser.creation.changed") {
+      dispatchBrowserCreationEvent(BROWSER_CREATION_CONTEXT_CHANGED_EVENT, {
         instanceId: eventInstanceId(event),
         payload: event.payload,
       });
@@ -256,6 +272,13 @@ export function useControlPlaneEvents(input: {
     }
     if (event.type === "browser.access.changed") {
       dispatchBrowserCreationEvent(BROWSER_ACCESS_CHANGED_EVENT, {
+        instanceId: eventInstanceId(event),
+        payload: event.payload,
+      });
+      return true;
+    }
+    if (event.type === "browser.access.request.changed") {
+      dispatchBrowserCreationEvent(BROWSER_ACCESS_REQUEST_CHANGED_EVENT, {
         instanceId: eventInstanceId(event),
         payload: event.payload,
       });

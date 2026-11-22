@@ -329,13 +329,14 @@
       v-if="!standaloneMode"
       :items="actionInboxItems"
       :collapsed="actionInboxCollapsed"
-      :busy-key="aiApprovalBusyKey || operationApprovalBusyKey || storyDecisionBusyKey || deviceTrustBusyKey || nodeControlPlaneTrustBusyKey"
+      :busy-key="aiApprovalBusyKey || operationApprovalBusyKey || storyDecisionBusyKey || deviceTrustBusyKey || nodeControlPlaneTrustBusyKey || browserAccessBusyKey"
       :error="actionInboxError"
       @collapse="actionInboxCollapsed = true"
       @resolve="resolveActionInboxApproval"
       @decide="decideActionInboxOperation"
       @decide-device="decideActionInboxDeviceTrust"
       @decide-node-control-plane="decideActionInboxNodeControlPlaneTrust"
+      @decide-browser-access="decideActionInboxBrowserAccess"
       @decide-story="decideActionInboxStoryDecision"
       @cancel-story="cancelActionInboxStoryDecision"
       @open-story="openActionInboxStory"
@@ -620,9 +621,11 @@
       <EmbeddedBrowserSurfaceLayer
         :active-instance-id="browserLayerActiveInstanceId"
         :browser-session-tabs="combinedBrowserSessionTabs"
+        :browser-pages="combinedBrowserPages"
         :browser-surface-state="combinedBrowserSurfaceState"
         @update-browser-tab="updateCombinedBrowserTab"
         @close-browser-tab="closeCombinedBrowserTab"
+        @move-browser-page="moveCombinedBrowserPage"
       />
       <RemoteDesktopSurfaceLayer
         :active-instance-id="storyMode || settingsMode || agentMode || boardMode ? '' : activeInstanceId"
@@ -708,7 +711,7 @@ import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { BookOpen, Bot, Boxes, Check, ChevronDown, CircleAlert, ClipboardCheck, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, Pause, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { cancelStoryDecision, checkInstanceAppUpdate, controlPlaneQueryKeys, decideNodeControlPlaneTrust, decideStoryDecision, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, listNodeControlPlaneTrust, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, updateInstanceApp, useAuthSessionQuery, useCloudAccountNodesQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { cancelStoryDecision, checkInstanceAppUpdate, controlPlaneQueryKeys, decideNodeControlPlaneTrust, decideStoryDecision, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, listNodeControlPlaneTrust, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, updateInstanceApp, useAuthSessionQuery, useCloudAccountNodesQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneSettingsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { sharedControlPlaneClient } from "../../api/sharedClient";
 import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
@@ -733,6 +736,7 @@ import { canReadOperationApprovals } from "./action-inbox/operationApprovalState
 import { useDeviceTrustStore } from "./action-inbox/useDeviceTrustStore";
 import { useNodeControlPlaneTrustInbox } from "./action-inbox/useNodeControlPlaneTrustInbox";
 import { useStoryDecisionInbox } from "./action-inbox/useStoryDecisionInbox";
+import { useBrowserAccessRequests } from "./action-inbox/useBrowserAccessRequests";
 import AgentView from "./agent/AgentView.vue";
 import { useAgentCatalog } from "./agent/useAgentCatalog";
 import StoryView from "./story/StoryView.vue";
@@ -740,7 +744,7 @@ import type { StorySelection } from "./story/storySelection";
 import { storyDecisionSessionInstance } from "./story/storyDecisionSession";
 import { inSessionDisplayedDecisionIds } from "./story/sessionDecisionDisplay";
 import StoryResourceSidebar from "./story/StoryResourceSidebar.vue";
-import { closeStoryResourceTarget, repositoryResource, storyResourceKey, type StoryRepositoryPage } from "./story/storyResources";
+import { closeStoryResourceTarget, repositoryResource, storyBrowserSessionSelection, storyResourceKey, type StoryRepositoryPage } from "./story/storyResources";
 import { storyResourceSidebarKeyboardWidth, storyResourceSidebarMaxWidth, storyResourceSidebarMode, storyResourceSidebarProportionalWidth } from "./story/storyResourceLayout";
 import { STORY_RESOURCE_SIDEBAR_MIN_WIDTH, normalizeStoryResourceSidebarWidth, useStoryResourceSidebar } from "./story/useStoryResourceSidebar";
 import type { NodeLoadState } from "./shared/nodeQueryLoad";
@@ -751,7 +755,6 @@ import { allNodesVisible, nodeIsVisible, nodeIsSelected, normalizeNodeVisibility
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
-import { BROWSER_CREATION_REFRESH_EVENT, dispatchBrowserCreationEvent } from "./instance-detail/browserCreationEvents.ts";
 import SessionRemoteDesktopSurfaceHost from "../../components/remote-desktop/SessionRemoteDesktopSurfaceHost.vue";
 import { createSessionRemoteDesktopSurfaces, sessionRemoteDesktopSurfacesKey } from "./instance-detail/sessionRemoteDesktopSurfaces";
 import { CLOSE_SESSION_REMOTE_DESKTOP_EVENT, type CloseSessionRemoteDesktopDetail, type OpenSessionRemoteDesktopDetail } from "./instance-detail/sessionRemoteDesktopEvents";
@@ -771,7 +774,7 @@ import { buildSettingsSections, findSettingsSectionGroup, type SettingsSection }
 import { type NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { Story, StoryAction, StoryDecision } from "@task-handoff/protocol/stories";
-import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
+import { useActiveInstanceSessions, type BrowserPageSurface } from "./instance-detail/useActiveInstanceSessions";
 import { useBoardTerminalPreviews } from "./board/useBoardTerminalPreviews";
 import { useInstanceActions } from "./useInstanceActions";
 import { useWorkbenchLayoutPreferences } from "./useWorkbenchLayoutPreferences";
@@ -806,6 +809,7 @@ type DesktopBridge = {
   onOpenSettings?: (listener: () => void) => () => void;
   onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string; title?: string; creationRef?: string }) => void) => () => void;
   logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
+  setDiagnosticLogsEnabled?: (enabled: boolean) => Promise<{ enabled: boolean }>;
   windowChrome?: { mode: "custom" | "macos-overlay" | "windows-overlay"; supportsDensity?: boolean };
   setWindowChromeDensity?: (density: "compact" | "normal") => Promise<{ ok: boolean }>;
   windowAction?: (action: "minimize" | "toggle-maximize" | "close") => Promise<{ ok: boolean; maximized?: boolean }>;
@@ -1159,6 +1163,15 @@ const signingOut = ref(false);
 const aiApprovalBusyKey = ref("");
 const boardSessionKeys = reactive<Record<string, string>>({});
 const desktopBridge = (window as Window & { taskHandoffDesktop?: DesktopBridge }).taskHandoffDesktop;
+const controlPlaneSettings = useControlPlaneSettingsQuery();
+watch(
+  () => controlPlaneSettings.data.value?.diagnosticLogs,
+  (enabled) => {
+    if (typeof enabled !== "boolean") return;
+    void desktopBridge?.setDiagnosticLogsEnabled?.(enabled);
+  },
+  { immediate: true },
+);
 const userMenuLabel = computed(() => authSession.data.value?.user?.displayName
   || authSession.data.value?.user?.primaryUsername
   || t("navigation.user"));
@@ -1231,6 +1244,12 @@ watch(() => [authSession.data.value?.user?.id, operationApprovalsAccessible.valu
   if (userId && authSession.data.value?.enabled && manageSettings) void deviceTrustStore.recover().catch(() => undefined);
 }, { immediate: true });
 const storyDecisionInbox = useStoryDecisionInbox(() => !standaloneMode.value);
+const browserAccessRequests = useBrowserAccessRequests(() => boardInstancesWithAiSessions.value, () => !standaloneMode.value);
+const browserAccessRequestItems = computed(() => browserAccessRequests.items.value.map((item) => {
+  const instance = boardInstancesWithAiSessions.value.find((entry) => entry.id === item.instanceId);
+  const session = instance?.aiSessions.sessions.find((entry) => entry.id === item.request.requesterSessionRef);
+  return { ...item, ...(session?.title ? { sessionTitle: session.title } : {}) };
+}));
 // 会话内提示正在展示的决策不再进入右上角浮层，避免同一决策在会话和审批中心重复出现。
 const actionInboxItems = computed<ActionInboxItem[]>(() => mergeActionInboxItems(
   aiSessionApprovalItems(boardInstancesWithAiSessions.value),
@@ -1238,6 +1257,7 @@ const actionInboxItems = computed<ActionInboxItem[]>(() => mergeActionInboxItems
   storyDecisionItemsOutsideSessionDisplay(storyDecisionInbox.items.value, inSessionDisplayedDecisionIds().value),
   deviceTrustStore.snapshot.value,
   managedNodeControlPlaneTrust.trust.value,
+  browserAccessRequestItems.value,
 ));
 const actionInboxCollapsed = ref(false);
 const actionInboxError = ref("");
@@ -1245,12 +1265,14 @@ const operationApprovalBusyKey = ref("");
 const storyDecisionBusyKey = ref("");
 const deviceTrustBusyKey = ref("");
 const nodeControlPlaneTrustBusyKey = ref("");
+const browserAccessBusyKey = ref("");
 
 function actionInboxPreview(item: ActionInboxItem) {
   if (item.type === "ai-session-approval") return `${item.instanceName} · ${item.session.title || item.session.id}`;
   if (item.type === "story-decision") return `${t("navigation.storyDecision")} · ${item.story.title}`;
   if (item.type === "device-trust") return `${t("navigation.deviceTrust.title")} · ${item.request.device.name}`;
   if (item.type === "node-control-plane-trust") return `${t("navigation.nodeControlPlaneTrust.title")} · ${item.trust.displayName || item.trust.nodeHandle}`;
+  if (item.type === "browser-access-request") return `${t("navigation.browserAccessRequest.title")} · ${item.instanceName}`;
   return `${t("navigation.operationApproval")} · ${item.request.targetId}`;
 }
 
@@ -1324,6 +1346,24 @@ async function decideActionInboxNodeControlPlaneTrust(
     await nodeControlPlaneTrust.refetch().catch(() => undefined);
   } finally {
     nodeControlPlaneTrustBusyKey.value = "";
+  }
+}
+
+async function decideActionInboxBrowserAccess(
+  item: Extract<ActionInboxItem, { type: "browser-access-request" }>,
+  decision: "approve" | "deny",
+) {
+  if (browserAccessBusyKey.value) return;
+  actionInboxError.value = "";
+  browserAccessBusyKey.value = item.key;
+  try {
+    if (decision === "approve") await browserAccessRequests.approve(item);
+    else await browserAccessRequests.deny(item);
+  } catch (error) {
+    actionInboxError.value = errorText(error);
+    await browserAccessRequests.recover().catch(() => undefined);
+  } finally {
+    browserAccessBusyKey.value = "";
   }
 }
 
@@ -1726,9 +1766,10 @@ useControlPlaneEvents({
     recoverOpen: () => canManageSettings.value ? deviceTrustStore.recover() : undefined,
   },
   onAuthoritativeState(authoritative) {
-    if (!authoritative) deviceTrustStore.reset();
+    if (!authoritative) {
+      deviceTrustStore.reset();
+    }
     instanceDirectoryEventsAuthoritative.value = authoritative;
-    if (authoritative) dispatchBrowserCreationEvent(BROWSER_CREATION_REFRESH_EVENT, { instanceId: sessionQueryInstanceId.value });
   },
 });
 const lastRefreshLabel = computed(() => formatTime(lastRefreshAt.value, locale.value as SupportedLocale));
@@ -1793,6 +1834,10 @@ const {
   pruneBrowserInstances,
   remoteDesktopSessionTabs,
   updateBrowserTab,
+  browserPages,
+  moveBrowserPageToTab,
+  bindLocalBrowserSlotToPage,
+  blankLocalBrowserSlot,
 } = useActiveInstanceSessions({
   activeInstance: activeInstanceWithAiSessions,
   routeSessionRemoteDesktop: routeStoryRemoteDesktop,
@@ -1825,6 +1870,7 @@ const storyBrowserSessionTabs = computed<Record<string, SessionTab[]>>(() => {
       title: resource.title || t("sessions.tabs.embeddedBrowser"),
       status: resource.status || "running",
       source: {
+        pageKey: storyResourceSidebar.browserPageKeyOf(resource),
         browserTabId: resource.browserTabId,
         ...(resource.initialUrl ? { initialUrl: resource.initialUrl } : {}),
         ...(resource.currentUrl ? { currentUrl: resource.currentUrl } : {}),
@@ -1834,11 +1880,28 @@ const storyBrowserSessionTabs = computed<Record<string, SessionTab[]>>(() => {
   return tabs;
 });
 const combinedBrowserSessionTabs = computed<Record<string, SessionTab[]>>(() => {
-  const instanceIds = new Set([...Object.keys(browserSessionTabs), ...Object.keys(storyBrowserSessionTabs.value)]);
+  const instanceIds = new Set([...Object.keys(browserSessionTabs.value), ...Object.keys(storyBrowserSessionTabs.value)]);
   return Object.fromEntries([...instanceIds].map((instanceId) => [
     instanceId,
-    [...(browserSessionTabs[instanceId] || []), ...(storyBrowserSessionTabs.value[instanceId] || [])],
+    [...(browserSessionTabs.value[instanceId] || []), ...(storyBrowserSessionTabs.value[instanceId] || [])],
   ]));
+});
+const combinedBrowserPages = computed<Record<string, BrowserPageSurface[]>>(() => {
+  const pages: Record<string, BrowserPageSurface[]> = {};
+  for (const [instanceId, instancePages] of Object.entries(browserPages)) {
+    pages[instanceId] = instancePages.map((page) => ({
+      key: page.key,
+      title: page.title,
+      status: page.status,
+      initialUrl: page.initialUrl,
+      currentUrl: page.currentUrl,
+      creationRef: page.creationRef,
+    }));
+  }
+  for (const [instanceId, instancePages] of Object.entries(storyResourceSidebar.browserPageSurfaces.value)) {
+    (pages[instanceId] ||= []).push(...instancePages);
+  }
+  return pages;
 });
 const combinedBrowserSurfaceState = computed(() => {
   if (!storyMode.value) return browserSurfaceState.value;
@@ -1863,6 +1926,7 @@ function updateCombinedBrowserTab(instanceId: string, sessionKey: string, patch:
     storyResourceSidebar.updateBrowser(storyResource, patch);
     return;
   }
+  if (storyResourceSidebar.updateBrowserPage(sessionKey, patch)) return;
   updateBrowserTab(instanceId, sessionKey, patch);
 }
 
@@ -1874,9 +1938,75 @@ function closeCombinedBrowserTab(instanceId: string, sessionKey: string) {
     storyResourceSidebar.removeBrowser(storyResource);
     return;
   }
-  const session = browserSessionTabs[instanceId]?.find((candidate) => candidate.key === sessionKey);
+  const session = browserSessionTabs.value[instanceId]?.find((candidate) => candidate.key === sessionKey);
   const instance = sortedInstances.value.find((candidate) => candidate.id === instanceId) || (activeInstance.value?.id === instanceId ? activeInstance.value : undefined);
   if (session && instance) void stopSelectedAppSession(instance, session);
+}
+
+async function activateCombinedBrowserTab(instanceId: string, pageKey: string) {
+  const storyResource = storyResourceSidebar.allBrowserResources.value.find((resource) => (
+    resource.instanceId === instanceId
+    && (storyResourceKey(resource) === pageKey || storyResourceSidebar.browserPageKeyOf(resource) === pageKey)
+  ));
+  if (storyResource) {
+    const selection = storyBrowserSessionSelection(storyResource, boardInstancesWithAiSessions.value);
+    if (selection) {
+      const currentSelection = storySelection.value;
+      if (currentSelection?.kind !== "session"
+        || currentSelection.instanceId !== selection.instanceId
+        || currentSelection.sessionId !== selection.sessionId) {
+        storySelection.value = selection;
+      }
+    }
+    storyResourceSidebar.visible.value = true;
+    storyResourceSidebar.select(storyResource);
+    desktopBridge?.logBrowserDiagnostic?.({ message: `browser page activated story session=${storyResource.aiSessionId}`, instanceId });
+    return;
+  }
+  const sessionKey = browserSessionTabs.value[instanceId]?.find((tab) => tab.source?.pageKey === pageKey)?.key || pageKey;
+  if (activeInstanceId.value !== instanceId) {
+    setActiveInstance(instanceId);
+    workbenchView.value = "instance";
+  }
+  await nextTick();
+  if (!sessionTabs.value.some((session) => session.key === sessionKey)) {
+    desktopBridge?.logBrowserDiagnostic?.({ message: `browser page activation target unavailable sessionKey=${sessionKey.slice(0, 160)}`, instanceId });
+    return;
+  }
+  selectSession(sessionKey);
+  desktopBridge?.logBrowserDiagnostic?.({ message: `browser page activated instance sessionKey=${sessionKey.slice(0, 160)}`, instanceId });
+}
+
+function moveCombinedBrowserPage(instanceId: string, targetSlotKey: string, sourcePageKey: string) {
+  if (moveBrowserPageToTab(instanceId, targetSlotKey, sourcePageKey)) {
+    desktopBridge?.logBrowserDiagnostic?.({ message: `browser page moved into tab=${targetSlotKey.slice(0, 160)} page=${sourcePageKey.slice(0, 160)}`, instanceId });
+    return;
+  }
+  if (storyResourceSidebar.moveBrowserPage(targetSlotKey, sourcePageKey)) {
+    desktopBridge?.logBrowserDiagnostic?.({ message: `browser story page moved into resource=${targetSlotKey.slice(0, 160)} page=${sourcePageKey.slice(0, 160)}`, instanceId });
+    return;
+  }
+  const storyResources = storyResourceSidebar.allBrowserResources.value.filter((resource) => resource.instanceId === instanceId);
+  const targetStoryResource = storyResources.find((resource) => storyResourceKey(resource) === targetSlotKey);
+  const sourceStoryResource = storyResources.find((resource) => storyResourceSidebar.browserPageKeyOf(resource) === sourcePageKey);
+  const targetLocalTab = browserSessionTabs.value[instanceId]?.find((tab) => tab.key === targetSlotKey);
+  const sourceLocalTab = browserSessionTabs.value[instanceId]?.find((tab) => tab.source?.pageKey === sourcePageKey);
+  if (targetStoryResource && sourceLocalTab) {
+    const sourcePage = browserPages[instanceId]?.find((page) => page.key === sourcePageKey);
+    if (storyResourceSidebar.adoptBrowserPage(targetSlotKey, sourcePageKey, sourcePage)) {
+      blankLocalBrowserSlot(instanceId, sourceLocalTab.key);
+      desktopBridge?.logBrowserDiagnostic?.({ message: `browser instance page moved into story resource=${targetSlotKey.slice(0, 160)} page=${sourcePageKey.slice(0, 160)}`, instanceId });
+      return;
+    }
+  }
+  if (targetLocalTab && sourceStoryResource) {
+    if (bindLocalBrowserSlotToPage(instanceId, targetSlotKey, sourcePageKey, sourceStoryResource)) {
+      storyResourceSidebar.blankBrowserPageResource(sourceStoryResource);
+      desktopBridge?.logBrowserDiagnostic?.({ message: `browser story page moved into instance tab=${targetSlotKey.slice(0, 160)} page=${sourcePageKey.slice(0, 160)}`, instanceId });
+      return;
+    }
+  }
+  void activateCombinedBrowserTab(instanceId, sourcePageKey);
 }
 const authoritativeInstanceIds = computed<ReadonlySet<string> | undefined>(() => {
   if (standaloneMode.value) {
@@ -1898,8 +2028,14 @@ const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId:
   if (storyMode.value) {
     if (storyResourceTargetAiSessionId.value && storyResourceTargetInstanceId.value === instanceId) {
       storyResourceSidebar.openBrowser(instanceId, url, { title, creationRef });
+      desktopBridge?.logBrowserDiagnostic?.({ message: `popup browser tab created url=${url.slice(0, 200)}`, instanceId });
+      return;
     }
-  } else openBrowserTab(instanceId, url, { title, creationRef });
+  }
+  if (settingsMode.value) closeSettings();
+  if (activeInstanceId.value !== instanceId) setActiveInstance(instanceId);
+  workbenchView.value = "instance";
+  openBrowserTab(instanceId, url, { title, creationRef });
   desktopBridge?.logBrowserDiagnostic?.({ message: `popup browser tab created url=${url.slice(0, 200)}`, instanceId });
 });
 

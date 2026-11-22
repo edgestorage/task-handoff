@@ -4,6 +4,10 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 pub const EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION: &str = "2026-11-22";
+/// Browser-level Target CDP sub-protocol; independent from channel framing and
+/// from the electron-page-cdp page profile.
+pub const EMBEDDED_BROWSER_TARGET_CDP_PROFILE: &str = "embedded-browser-target-cdp";
+pub const EMBEDDED_BROWSER_TARGET_CDP_PROTOCOL_VERSION: &str = "1.3";
 pub const EMBEDDED_BROWSER_FRAME_HEADER_BYTES: usize = 9;
 pub const EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES: usize = 2 * 1024 * 1024;
@@ -13,6 +17,8 @@ pub const EMBEDDED_BROWSER_MAX_SIDE_EFFECT_QUEUE: usize = 16;
 pub const EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS: u64 = 10_000;
 pub const EMBEDDED_BROWSER_MAX_REQUEST_TIMEOUT_MS: u64 = 60_000;
 pub const EMBEDDED_BROWSER_CREATION_TTL_MS: u64 = 120_000;
+pub const EMBEDDED_BROWSER_ACCESS_REQUEST_TTL_MS: u64 = 300_000;
+pub const EMBEDDED_BROWSER_ACCESS_WAIT_MS: u64 = 10_000;
 pub const EMBEDDED_BROWSER_DEDUPE_WINDOW_MS: u64 = 120_000;
 pub const EMBEDDED_BROWSER_MAX_DEDUPE_ENTRIES: usize = 1_024;
 pub const EMBEDDED_BROWSER_SNAPSHOT_MAX_PAGES_PER_CHUNK: usize = 100;
@@ -24,6 +30,66 @@ pub const EMBEDDED_BROWSER_RESULT_TTL_MS: u64 = 120_000;
 pub const EMBEDDED_BROWSER_SCREENSHOT_MAX_DIMENSION: u32 = 4_096;
 pub const EMBEDDED_BROWSER_CDP_PROFILE: &str = "electron-page-cdp";
 pub const EMBEDDED_BROWSER_CDP_ACCESS_TTL_MS: u64 = 8 * 60 * 60 * 1_000;
+
+pub const EMBEDDED_BROWSER_TARGET_CDP_METHODS: &[&str] = &[
+    "Target.getTargets",
+    "Target.getTargetInfo",
+    "Target.getBrowserContexts",
+    "Target.attachToTarget",
+    "Target.detachFromTarget",
+    "Target.closeTarget",
+    "Target.createTarget",
+    "Target.setDiscoverTargets",
+];
+
+pub const EMBEDDED_BROWSER_TARGET_CDP_EVENTS: &[&str] = &[
+    "Target.targetCreated",
+    "Target.targetDestroyed",
+    "Target.targetInfoChanged",
+    "Target.detachedFromTarget",
+];
+
+pub fn supports_embedded_browser_target_cdp_method(method: &str) -> bool {
+    EMBEDDED_BROWSER_TARGET_CDP_METHODS.contains(&method)
+}
+
+pub fn assert_embedded_browser_target_cdp_method(
+    method: &str,
+) -> Result<(), EmbeddedBrowserProtocolError> {
+    if supports_embedded_browser_target_cdp_method(method) {
+        Ok(())
+    } else {
+        Err(EmbeddedBrowserProtocolError::protocol(
+            "CDP method is outside the browser-level Target profile.",
+        ))
+    }
+}
+
+pub fn supports_embedded_browser_target_cdp_event(method: &str) -> bool {
+    EMBEDDED_BROWSER_TARGET_CDP_EVENTS.contains(&method)
+}
+
+pub fn supports_embedded_browser_target_cdp(
+    capabilities: &EmbeddedBrowserChannelCapabilities,
+) -> bool {
+    capabilities.supported && capabilities.target_cdp
+}
+
+/// Stable browser-control error strings. `EmbeddedBrowserControlError.code`
+/// remains a string on the wire so additive codes stay readable by old clients.
+pub mod embedded_browser_error_code {
+    pub const CREATION_NO_CANDIDATE: &str = "BROWSER_CREATION_NO_CANDIDATE";
+    pub const CREATION_CONTEXT_REQUIRED: &str = "BROWSER_CREATION_CONTEXT_REQUIRED";
+    pub const CREATION_CONTEXT_UNAVAILABLE: &str = "BROWSER_CREATION_CONTEXT_UNAVAILABLE";
+    pub const CREATION_CONTEXT_NOT_SELECTED: &str = "BROWSER_CREATION_CONTEXT_NOT_SELECTED";
+    pub const CREATION_CONTEXT_NOT_OWNED: &str = "BROWSER_CREATION_CONTEXT_NOT_OWNED";
+    pub const CREATION_CONTEXT_FORBIDDEN: &str = "BROWSER_CREATION_CONTEXT_FORBIDDEN";
+    pub const DEFAULT_CONTEXT_CONFLICT: &str = "BROWSER_DEFAULT_CONTEXT_CONFLICT";
+}
+
+pub type EmbeddedBrowserCdpBrowserContextId = String;
+pub type EmbeddedBrowserCdpTargetId = String;
+pub type EmbeddedBrowserCdpSessionId = String;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -141,6 +207,14 @@ pub struct EmbeddedBrowserControlError {
     pub cdp_code: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cdp_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_browser_context_id: Option<String>,
 }
 
 fn default_not_started_execution() -> String {
@@ -258,6 +332,180 @@ fn default_ready_state() -> String {
     "ready".to_string()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetInfo {
+    pub target_id: EmbeddedBrowserCdpTargetId,
+    #[serde(rename = "type")]
+    pub target_type: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default = "default_about_blank")]
+    pub url: String,
+    #[serde(default)]
+    pub attached: bool,
+    pub browser_context_id: EmbeddedBrowserCdpBrowserContextId,
+}
+
+impl EmbeddedBrowserTargetInfo {
+    pub fn from_page(page: &EmbeddedBrowserPage, attached: bool) -> Self {
+        Self {
+            target_id: page.tab_ref.clone(),
+            target_type: "page".to_string(),
+            title: page.title.clone(),
+            url: page.url.clone(),
+            attached,
+            browser_context_id: page.source_ref.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetGetTargetsParams {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetGetTargetsResult {
+    pub target_infos: Vec<EmbeddedBrowserTargetInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetGetTargetInfoParams {
+    pub target_id: EmbeddedBrowserCdpTargetId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetGetTargetInfoResult {
+    pub target_info: EmbeddedBrowserTargetInfo,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetGetBrowserContextsParams {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetGetBrowserContextsResult {
+    pub browser_context_ids: Vec<EmbeddedBrowserCdpBrowserContextId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_browser_context_id: Option<EmbeddedBrowserCdpBrowserContextId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetAttachToTargetParams {
+    pub target_id: EmbeddedBrowserCdpTargetId,
+    pub flatten: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetAttachToTargetResult {
+    pub session_id: EmbeddedBrowserCdpSessionId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetDetachFromTargetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<EmbeddedBrowserCdpSessionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<EmbeddedBrowserCdpTargetId>,
+}
+
+impl EmbeddedBrowserTargetDetachFromTargetParams {
+    pub fn validate(&self) -> Result<(), EmbeddedBrowserProtocolError> {
+        if self.session_id.is_none() && self.target_id.is_none() {
+            return Err(EmbeddedBrowserProtocolError::protocol(
+                "Target.detachFromTarget requires sessionId or targetId.",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetDetachFromTargetResult {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetCloseTargetParams {
+    pub target_id: EmbeddedBrowserCdpTargetId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetCloseTargetResult {
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetCreateTargetParams {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_context_id: Option<EmbeddedBrowserCdpBrowserContextId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetCreateTargetResult {
+    pub target_id: EmbeddedBrowserCdpTargetId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetSetDiscoverTargetsParams {
+    pub discover: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetSetDiscoverTargetsResult {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetCreatedParams {
+    pub target_info: EmbeddedBrowserTargetInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetInfoChangedParams {
+    pub target_info: EmbeddedBrowserTargetInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetDestroyedParams {
+    pub target_id: EmbeddedBrowserCdpTargetId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserTargetDetachedFromTargetParams {
+    pub session_id: EmbeddedBrowserCdpSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<EmbeddedBrowserCdpTargetId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "method", content = "params")]
+pub enum EmbeddedBrowserTargetCdpEvent {
+    #[serde(rename = "Target.targetCreated")]
+    TargetCreated(EmbeddedBrowserTargetCreatedParams),
+    #[serde(rename = "Target.targetInfoChanged")]
+    TargetInfoChanged(EmbeddedBrowserTargetInfoChangedParams),
+    #[serde(rename = "Target.targetDestroyed")]
+    TargetDestroyed(EmbeddedBrowserTargetDestroyedParams),
+    #[serde(rename = "Target.detachedFromTarget")]
+    DetachedFromTarget(EmbeddedBrowserTargetDetachedFromTargetParams),
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum EmbeddedBrowserCreationStatus {
@@ -304,9 +552,21 @@ pub struct EmbeddedBrowserLease {
 // identity scopes short-lived CDP tokens and writer leases, not page visibility.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserAccessRequestView {
+    pub request_ref: String,
+    pub requester_session_ref: String,
+    pub revision: u64,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct EmbeddedBrowserAccessView {
     pub active: bool,
     pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_request: Option<EmbeddedBrowserAccessRequestView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -385,28 +645,6 @@ pub struct EmbeddedBrowserRegistryDelta {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct EmbeddedBrowserCreationRequest {
-    pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EmbeddedBrowserCreationClaim {
-    pub source_ref: String,
-    pub expected_revision: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EmbeddedBrowserCreationDecline {
-    pub source_ref: String,
-    pub expected_revision: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct EmbeddedBrowserCreationCandidate {
     pub source_ref: String,
     pub panel_label: String,
@@ -436,16 +674,125 @@ pub struct EmbeddedBrowserCreationView {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct EmbeddedBrowserCreationApprovalView {
-    pub request: EmbeddedBrowserCreationView,
-    pub requester_session_ref: String,
+pub struct EmbeddedBrowserBrowserContext {
+    pub source_ref: String,
+    pub browser_context_id: EmbeddedBrowserCdpBrowserContextId,
+}
+
+impl EmbeddedBrowserBrowserContext {
+    pub fn validate(&self) -> Result<(), EmbeddedBrowserProtocolError> {
+        if self.source_ref != self.browser_context_id {
+            return Err(EmbeddedBrowserProtocolError::protocol(
+                "browserContextId must equal sourceRef.",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct EmbeddedBrowserCreationApprovalListResponse {
-    pub creation_revision: u64,
-    pub items: Vec<EmbeddedBrowserCreationApprovalView>,
+pub struct EmbeddedBrowserCreationPanel {
+    pub source_ref: String,
+    pub panel_label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_label: Option<String>,
+    pub page_host: EmbeddedBrowserPageHost,
+    pub can_create: bool,
+    #[serde(default)]
+    pub is_default: bool,
+    #[serde(default)]
+    pub can_claim: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserCreationPending {
+    pub creation_ref: String,
+    pub url: String,
+    #[serde(default = "default_pending_creation_state")]
+    pub state: String,
+    pub expires_at: String,
+}
+
+fn default_pending_creation_state() -> String {
+    "pending".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserCreationContextSnapshot {
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_context: Option<EmbeddedBrowserBrowserContext>,
+    #[serde(default)]
+    pub panels: Vec<EmbeddedBrowserCreationPanel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_creation: Option<EmbeddedBrowserCreationPending>,
+}
+
+impl EmbeddedBrowserCreationContextSnapshot {
+    pub fn validate(&self) -> Result<(), EmbeddedBrowserProtocolError> {
+        if let Some(context) = &self.default_context {
+            context.validate()?;
+        }
+        let defaults: Vec<_> = self
+            .panels
+            .iter()
+            .filter(|panel| panel.is_default)
+            .collect();
+        if defaults.len() > 1 {
+            return Err(EmbeddedBrowserProtocolError::protocol(
+                "At most one panel can be the default creation context.",
+            ));
+        }
+        if let (Some(context), Some(panel)) = (&self.default_context, defaults.first()) {
+            if panel.source_ref != context.source_ref {
+                return Err(EmbeddedBrowserProtocolError::protocol(
+                    "The default panel must match defaultContext.",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmbeddedBrowserDefaultContextClaimRequest {
+    pub source_ref: String,
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserDefaultContextClaimResult {
+    pub source_ref: String,
+    pub browser_context_id: EmbeddedBrowserCdpBrowserContextId,
+    pub revision: u64,
+}
+
+impl EmbeddedBrowserDefaultContextClaimResult {
+    pub fn validate(&self) -> Result<(), EmbeddedBrowserProtocolError> {
+        if self.source_ref != self.browser_context_id {
+            return Err(EmbeddedBrowserProtocolError::protocol(
+                "browserContextId must equal sourceRef.",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserCreationContextChangedEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_browser_context_id: Option<EmbeddedBrowserCdpBrowserContextId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_browser_context_id: Option<EmbeddedBrowserCdpBrowserContextId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -593,6 +940,8 @@ pub struct EmbeddedBrowserChannelCapabilities {
     pub stream_kinds: Vec<String>,
     pub drivers: Vec<String>,
     pub page_hosts: Vec<EmbeddedBrowserPageHost>,
+    #[serde(default)]
+    pub target_cdp: bool,
 }
 
 impl EmbeddedBrowserChannelCapabilities {
@@ -603,6 +952,7 @@ impl EmbeddedBrowserChannelCapabilities {
             stream_kinds: Vec::new(),
             drivers: Vec::new(),
             page_hosts: Vec::new(),
+            target_cdp: false,
         }
     }
 
@@ -616,6 +966,9 @@ impl EmbeddedBrowserChannelCapabilities {
                 EmbeddedBrowserPageHost::RendererWebview,
                 EmbeddedBrowserPageHost::MainPagePool,
             ],
+            // Protocol exposes the optional flag; the actual instance advertises
+            // it only after the browser-level bridge is implemented.
+            target_cdp: false,
         }
     }
 }
@@ -629,6 +982,9 @@ pub enum EmbeddedBrowserCdpMethodKind {
 }
 
 pub fn embedded_browser_cdp_method_kind(method: &str) -> Option<EmbeddedBrowserCdpMethodKind> {
+    if method.starts_with("Emulation.") {
+        return Some(EmbeddedBrowserCdpMethodKind::PageWrite);
+    }
     let kind = match method {
         "Accessibility.enable"
         | "Accessibility.disable"
@@ -1023,6 +1379,7 @@ pub fn normalize_embedded_browser_channel_capabilities(
         stream_kinds,
         drivers,
         page_hosts,
+        target_cdp: record.get("targetCdp").and_then(Value::as_bool) == Some(true),
     }
 }
 
@@ -1244,7 +1601,155 @@ mod tests {
         }
         assert!(assert_embedded_browser_cdp_method("Network.enable", false).is_err());
         assert!(assert_embedded_browser_cdp_method("Network.enable", true).is_ok());
+        assert!(
+            assert_embedded_browser_cdp_method("Emulation.setDeviceMetricsOverride", false).is_ok()
+        );
         assert!(assert_embedded_browser_cdp_method("Target.attachToTarget", true).is_err());
+    }
+
+    #[test]
+    fn browser_target_cdp_contract_matches_the_shared_fixture() {
+        let fixture = fixture();
+        assert_eq!(
+            fixture["cdp"]["targetCdp"]["profile"],
+            EMBEDDED_BROWSER_TARGET_CDP_PROFILE
+        );
+        let target: EmbeddedBrowserTargetInfo =
+            serde_json::from_value(fixture["messages"]["targetInfo"].clone()).unwrap();
+        assert_eq!(target.target_id, "browser_tab_1");
+        assert_eq!(target.browser_context_id, "source_main_pool");
+        assert_eq!(target.target_type, "page");
+
+        let targets: EmbeddedBrowserTargetGetTargetsResult =
+            serde_json::from_value(fixture["messages"]["targetGetTargets"].clone()).unwrap();
+        assert_eq!(targets.target_infos.len(), 2);
+        let contexts: EmbeddedBrowserTargetGetBrowserContextsResult =
+            serde_json::from_value(fixture["messages"]["targetGetBrowserContexts"].clone())
+                .unwrap();
+        assert_eq!(contexts.browser_context_ids.len(), 2);
+        assert_eq!(
+            contexts.default_browser_context_id.as_deref(),
+            Some("source_main_pool")
+        );
+
+        let attach: EmbeddedBrowserTargetAttachToTargetParams =
+            serde_json::from_value(fixture["messages"]["targetAttachParams"].clone()).unwrap();
+        assert!(attach.flatten);
+        let detach: EmbeddedBrowserTargetDetachFromTargetParams =
+            serde_json::from_value(fixture["messages"]["targetDetachParams"].clone()).unwrap();
+        detach.validate().unwrap();
+        assert!(EmbeddedBrowserTargetDetachFromTargetParams {
+            session_id: None,
+            target_id: None,
+        }
+        .validate()
+        .is_err());
+
+        let created: EmbeddedBrowserTargetCdpEvent =
+            serde_json::from_value(fixture["messages"]["targetCreatedEvent"].clone()).unwrap();
+        assert!(matches!(
+            created,
+            EmbeddedBrowserTargetCdpEvent::TargetCreated(_)
+        ));
+        let detached: EmbeddedBrowserTargetCdpEvent =
+            serde_json::from_value(fixture["messages"]["targetDetachedEvent"].clone()).unwrap();
+        assert!(matches!(
+            detached,
+            EmbeddedBrowserTargetCdpEvent::DetachedFromTarget(_)
+        ));
+        assert!(supports_embedded_browser_target_cdp_method(
+            "Target.createTarget"
+        ));
+        assert!(!supports_embedded_browser_target_cdp_method(
+            "Target.createBrowserContext"
+        ));
+        assert!(supports_embedded_browser_target_cdp_event(
+            "Target.targetInfoChanged"
+        ));
+        assert!(!supports_embedded_browser_target_cdp_event(
+            "Target.setAutoAttach"
+        ));
+        assert!(!supports_embedded_browser_target_cdp_method(
+            fixture["messages"]["targetUnsupportedMethod"]
+                .as_str()
+                .unwrap()
+        ));
+        assert!(assert_embedded_browser_target_cdp_method("Target.getBrowserContexts").is_ok());
+        assert!(assert_embedded_browser_target_cdp_method("Target.createBrowserContext").is_err());
+    }
+
+    #[test]
+    fn creation_context_claim_and_pending_errors_match_the_shared_fixture() {
+        let fixture = fixture();
+        let snapshot: EmbeddedBrowserCreationContextSnapshot =
+            serde_json::from_value(fixture["messages"]["creationContext"].clone()).unwrap();
+        snapshot.validate().unwrap();
+        assert_eq!(
+            snapshot
+                .panels
+                .iter()
+                .filter(|panel| panel.is_default)
+                .count(),
+            1
+        );
+        assert_eq!(
+            snapshot
+                .pending_creation
+                .as_ref()
+                .map(|creation| creation.state.as_str()),
+            Some("pending")
+        );
+
+        let claim: EmbeddedBrowserDefaultContextClaimRequest =
+            serde_json::from_value(fixture["messages"]["creationContextClaimRequest"].clone())
+                .unwrap();
+        assert_eq!(claim.source_ref, "source_renderer");
+        let result: EmbeddedBrowserDefaultContextClaimResult =
+            serde_json::from_value(fixture["messages"]["creationContextClaimResult"].clone())
+                .unwrap();
+        result.validate().unwrap();
+        assert_eq!(result.revision, snapshot.revision + 1);
+        let changed: EmbeddedBrowserCreationContextChangedEvent =
+            serde_json::from_value(fixture["messages"]["creationContextChanged"].clone()).unwrap();
+        assert_eq!(changed.event_type, "browser.creation-context.changed");
+
+        let required: EmbeddedBrowserControlError =
+            serde_json::from_value(fixture["messages"]["creationContextRequiredError"].clone())
+                .unwrap();
+        assert_eq!(
+            required.code,
+            embedded_browser_error_code::CREATION_CONTEXT_REQUIRED
+        );
+        assert_eq!(required.creation_ref.as_deref(), Some("creation_pending"));
+        let conflict: EmbeddedBrowserControlError =
+            serde_json::from_value(fixture["messages"]["creationContextConflictError"].clone())
+                .unwrap();
+        assert_eq!(
+            conflict.code,
+            embedded_browser_error_code::DEFAULT_CONTEXT_CONFLICT
+        );
+        assert_eq!(conflict.revision, Some(3));
+        let not_owned: EmbeddedBrowserControlError =
+            serde_json::from_value(fixture["messages"]["creationContextNotOwnedError"].clone())
+                .unwrap();
+        assert_eq!(
+            not_owned.code,
+            embedded_browser_error_code::CREATION_CONTEXT_NOT_OWNED
+        );
+
+        assert!(EmbeddedBrowserBrowserContext {
+            source_ref: "source_a".to_string(),
+            browser_context_id: "source_b".to_string(),
+        }
+        .validate()
+        .is_err());
+        assert!(EmbeddedBrowserDefaultContextClaimResult {
+            source_ref: "source_a".to_string(),
+            browser_context_id: "source_b".to_string(),
+            revision: 4,
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -1264,6 +1769,12 @@ mod tests {
                 EmbeddedBrowserPageHost::MainPagePool
             ]
         );
+        assert!(normalized.target_cdp);
+        let legacy = normalize_embedded_browser_channel_capabilities(
+            &fixture["capabilities"]["legacyWithoutTargetCdp"],
+        );
+        assert!(legacy.supported);
+        assert!(!legacy.target_cdp);
         let unsupported = normalize_embedded_browser_channel_capabilities(&json!({
             "supported": true,
             "transports": ["future"],

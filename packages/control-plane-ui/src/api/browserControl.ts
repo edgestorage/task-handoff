@@ -1,52 +1,52 @@
 import {
-  EmbeddedBrowserCreationApprovalListResponseSchema,
-  EmbeddedBrowserCreationViewSchema,
+  EmbeddedBrowserAccessRequestViewSchema,
   EmbeddedBrowserAccessViewSchema,
-  type EmbeddedBrowserCreationApprovalListResponse,
-  type EmbeddedBrowserCreationView,
+  EmbeddedBrowserCreationContextSnapshotSchema,
+  EmbeddedBrowserDefaultContextClaimResultSchema,
   type EmbeddedBrowserAccessView,
+  type EmbeddedBrowserAccessRequestView,
+  type EmbeddedBrowserCreationContextSnapshot,
+  type EmbeddedBrowserDefaultContextClaimResult,
 } from "@task-handoff/protocol/embedded-browser-control";
-import { deleteApiData, getApiData, postApiData } from "./client";
+import { deleteApiData, getApiData, postApiData, putApiData } from "./client";
 
 const instanceRoute = (instanceId: string, suffix: string) =>
   `controlled-instances/${encodeURIComponent(instanceId)}/browser-control${suffix}`;
 
-export async function listBrowserCreationApprovals(
+export async function getBrowserCreationContext(
   instanceId: string,
+  sourceRef?: string,
   options: { signal?: AbortSignal } = {},
-): Promise<EmbeddedBrowserCreationApprovalListResponse> {
-  const data = await getApiData<unknown>(instanceRoute(instanceId, "/creation-requests"), options);
-  return EmbeddedBrowserCreationApprovalListResponseSchema.parse(data);
+): Promise<EmbeddedBrowserCreationContextSnapshot> {
+  const query = new URLSearchParams();
+  if (sourceRef?.trim()) query.set("sourceRef", sourceRef.trim());
+  const suffix = `/creation-context${query.size ? `?${query.toString()}` : ""}`;
+  const data = await getApiData<unknown>(instanceRoute(instanceId, suffix), options);
+  return EmbeddedBrowserCreationContextSnapshotSchema.parse(data);
 }
 
-export async function claimBrowserCreation(
+export async function claimBrowserCreationContext(
   instanceId: string,
   sourceRef: string,
-  creationRef: string,
   expectedRevision: number,
-): Promise<EmbeddedBrowserCreationView> {
-  const data = await postApiData<unknown>(
-    instanceRoute(instanceId, `/sources/${encodeURIComponent(sourceRef)}/creation-requests/${encodeURIComponent(creationRef)}/claim`),
-    { sourceRef, expectedRevision },
-  );
-  return EmbeddedBrowserCreationViewSchema.parse(data);
+): Promise<EmbeddedBrowserDefaultContextClaimResult> {
+  const data = await putApiData<unknown>(instanceRoute(instanceId, "/creation-context"), { sourceRef, expectedRevision });
+  return EmbeddedBrowserDefaultContextClaimResultSchema.parse(data);
 }
 
-export async function declineBrowserCreation(
+export async function revokeBrowserCreationContext(
   instanceId: string,
   sourceRef: string,
-  creationRef: string,
   expectedRevision: number,
-): Promise<EmbeddedBrowserCreationView> {
-  const data = await postApiData<unknown>(
-    instanceRoute(instanceId, `/sources/${encodeURIComponent(sourceRef)}/creation-requests/${encodeURIComponent(creationRef)}/decline`),
-    { sourceRef, expectedRevision },
-  );
-  return EmbeddedBrowserCreationViewSchema.parse(data);
+): Promise<unknown> {
+  return deleteApiData<unknown>(instanceRoute(instanceId, "/creation-context"), { sourceRef, expectedRevision });
 }
 
-export async function grantBrowserControlAccess(instanceId: string): Promise<EmbeddedBrowserAccessView> {
-  const data = await postApiData<unknown>(instanceRoute(instanceId, "/access"), {});
+export async function grantBrowserControlAccess(
+  instanceId: string,
+  request?: { requestRef?: string; expectedRevision?: number },
+): Promise<EmbeddedBrowserAccessView> {
+  const data = await postApiData<unknown>(instanceRoute(instanceId, "/access"), request ?? {});
   return EmbeddedBrowserAccessViewSchema.parse(data);
 }
 
@@ -57,4 +57,16 @@ export async function getBrowserControlAccess(instanceId: string): Promise<Embed
 
 export async function revokeBrowserControlAccess(instanceId: string): Promise<{ revokedLeases: number }> {
   return deleteApiData<{ revokedLeases: number }>(instanceRoute(instanceId, "/access"));
+}
+
+export async function denyBrowserControlAccessRequest(
+  instanceId: string,
+  requestRef: string,
+  expectedRevision?: number,
+): Promise<EmbeddedBrowserAccessRequestView> {
+  const data = await postApiData<unknown>(
+    instanceRoute(instanceId, `/access-requests/${encodeURIComponent(requestRef)}/deny`),
+    expectedRevision === undefined ? {} : { expectedRevision },
+  );
+  return EmbeddedBrowserAccessRequestViewSchema.parse(data);
 }

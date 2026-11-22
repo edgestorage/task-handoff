@@ -34,11 +34,24 @@ export type DesktopBrowserControlInfo = {
 export type DesktopBrowserTab = {
   tabRef: string;
   instanceId: string;
+  sessionKey?: string;
   pageHost: DesktopBrowserPageHost;
   pageHostCapabilities: DesktopBrowserPageHostCapabilities;
   url: string;
   title: string;
   state: string;
+};
+
+export type DesktopBrowserDeviceMetrics = {
+  tabRef: string;
+  instanceId: string;
+  source: "agent";
+  active: boolean;
+  width?: number;
+  height?: number;
+  deviceScaleFactor?: number;
+  mobile?: boolean;
+  screenOrientation?: { type?: string; angle?: number };
 };
 
 export type DesktopBrowserTabResult = { ok: boolean; code?: string; message?: string; tab?: DesktopBrowserTab };
@@ -64,6 +77,8 @@ type DesktopBridge = {
   onBrowserFocusAddress?: (listener: (input: { webContentsId?: number }) => void) => () => void;
   onBrowserLoadFailure?: (listener: (input: DesktopBrowserLoadFailure) => void) => () => void;
   onBrowserTabClosed?: (listener: (input: { tabRef: string; instanceId?: string }) => void) => () => void;
+  onBrowserTabsChanged?: (listener: (input: { instanceId: string }) => void) => () => void;
+  onBrowserDeviceMetricsChanged?: (listener: (input: DesktopBrowserDeviceMetrics) => void) => () => void;
   logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
 };
 
@@ -176,6 +191,14 @@ export function onDesktopBrowserLoadFailure(listener: (input: DesktopBrowserLoad
 
 export function onDesktopBrowserTabClosed(listener: (input: { tabRef: string; instanceId?: string }) => void) {
   return desktopBridge()?.onBrowserTabClosed?.(listener);
+}
+
+export function onDesktopBrowserTabsChanged(listener: (input: { instanceId: string }) => void) {
+  return desktopBridge()?.onBrowserTabsChanged?.(listener);
+}
+
+export function onDesktopBrowserDeviceMetricsChanged(listener: (input: DesktopBrowserDeviceMetrics) => void) {
+  return desktopBridge()?.onBrowserDeviceMetricsChanged?.(listener);
 }
 
 export function logDesktopBrowserDiagnostic(message: string, instanceId?: string) {

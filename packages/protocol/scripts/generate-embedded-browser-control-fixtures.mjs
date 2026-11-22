@@ -16,12 +16,21 @@ import {
   EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
   EMBEDDED_BROWSER_RESULT_TTL_MS,
   EMBEDDED_BROWSER_SNAPSHOT_MAX_PAGES_PER_CHUNK,
+  EMBEDDED_BROWSER_TARGET_CDP_EVENTS,
+  EMBEDDED_BROWSER_TARGET_CDP_METHODS,
+  EMBEDDED_BROWSER_TARGET_CDP_PROFILE,
+  EMBEDDED_BROWSER_TARGET_CDP_PROTOCOL_VERSION,
   EmbeddedBrowserCdpCommandSchema,
   EmbeddedBrowserCdpEventSchema,
   EmbeddedBrowserAccessViewSchema,
   EmbeddedBrowserCdpAccessSchema,
   EmbeddedBrowserControlHelloSchema,
+  EmbeddedBrowserControlErrorSchema,
+  EmbeddedBrowserCreationContextChangedEventSchema,
+  EmbeddedBrowserCreationContextSnapshotSchema,
   EmbeddedBrowserCreationViewSchema,
+  EmbeddedBrowserDefaultContextClaimRequestSchema,
+  EmbeddedBrowserDefaultContextClaimResultSchema,
   EmbeddedBrowserLeaseSchema,
   EmbeddedBrowserPageListResponseSchema,
   EmbeddedBrowserPageSchema,
@@ -30,6 +39,24 @@ import {
   EmbeddedBrowserSourceSchema,
   EmbeddedBrowserSourceSnapshotSchema,
   EmbeddedBrowserStreamOpenOkSchema,
+  EmbeddedBrowserTargetAttachToTargetParamsSchema,
+  EmbeddedBrowserTargetAttachToTargetResultSchema,
+  EmbeddedBrowserTargetCloseTargetParamsSchema,
+  EmbeddedBrowserTargetCloseTargetResultSchema,
+  EmbeddedBrowserTargetCreateTargetParamsSchema,
+  EmbeddedBrowserTargetCreateTargetResultSchema,
+  EmbeddedBrowserTargetDetachedFromTargetEventSchema,
+  EmbeddedBrowserTargetDetachFromTargetParamsSchema,
+  EmbeddedBrowserTargetGetBrowserContextsResultSchema,
+  EmbeddedBrowserTargetGetTargetInfoParamsSchema,
+  EmbeddedBrowserTargetGetTargetInfoResultSchema,
+  EmbeddedBrowserTargetGetTargetsResultSchema,
+  EmbeddedBrowserTargetInfoSchema,
+  EmbeddedBrowserTargetSetDiscoverTargetsParamsSchema,
+  EmbeddedBrowserTargetCreatedEventSchema,
+  EmbeddedBrowserTargetDestroyedEventSchema,
+  EmbeddedBrowserTargetInfoChangedEventSchema,
+  embeddedBrowserTargetInfoFromPage,
   encodeEmbeddedBrowserChannelError,
   encodeEmbeddedBrowserControlMessage,
   encodeEmbeddedBrowserFrame,
@@ -73,6 +100,53 @@ const source = EmbeddedBrowserSourceSchema.parse({
   hostWindowId: 9,
 });
 const expiresAt = "2026-11-22T12:02:00.000Z";
+const rendererPage = EmbeddedBrowserPageSchema.parse({
+  ...pageInput,
+  sourceRef: "source_renderer",
+  generation: 1,
+  tabRef: "browser_tab_2",
+  pageHost: "renderer-webview",
+  pageHostCapabilities: { backgroundCreation: false, surviveHostWindowClose: false, crossWindowAdopt: false },
+  title: "Renderer page",
+  url: "https://renderer.example/",
+  revision: 4,
+});
+const mainTargetInfo = embeddedBrowserTargetInfoFromPage(page, false);
+const rendererTargetInfo = embeddedBrowserTargetInfoFromPage(rendererPage, true);
+const creationContext = EmbeddedBrowserCreationContextSnapshotSchema.parse({
+  revision: 3,
+  defaultContext: { sourceRef: page.sourceRef, browserContextId: page.sourceRef },
+  panels: [
+    {
+      sourceRef: page.sourceRef,
+      panelLabel: "MacBook",
+      hostLabel: "Main pool",
+      pageHost: "main-page-pool",
+      canCreate: true,
+      isDefault: true,
+      canClaim: true,
+    },
+    {
+      sourceRef: source.sourceRef,
+      panelLabel: "Mac mini",
+      hostLabel: "Renderer window",
+      pageHost: "renderer-webview",
+      canCreate: true,
+      isDefault: false,
+      canClaim: false,
+    },
+  ],
+  pendingCreation: {
+    creationRef: "creation_pending",
+    url: "https://pending.example/",
+    expiresAt,
+  },
+});
+const defaultContextClaimResult = EmbeddedBrowserDefaultContextClaimResultSchema.parse({
+  sourceRef: source.sourceRef,
+  browserContextId: source.sourceRef,
+  revision: creationContext.revision + 1,
+});
 const openFrame = encodeEmbeddedBrowserFrame({
   type: "open",
   streamId: 1,
@@ -99,6 +173,12 @@ const fixture = `${JSON.stringify({
     profile: "electron-page-cdp",
     methods: EMBEDDED_BROWSER_CDP_METHODS,
     events: EMBEDDED_BROWSER_CDP_EVENTS,
+    targetCdp: {
+      profile: EMBEDDED_BROWSER_TARGET_CDP_PROFILE,
+      protocolVersion: EMBEDDED_BROWSER_TARGET_CDP_PROTOCOL_VERSION,
+      methods: EMBEDDED_BROWSER_TARGET_CDP_METHODS,
+      events: EMBEDDED_BROWSER_TARGET_CDP_EVENTS,
+    },
   },
   frames: {
     openControlStream: hex(openFrame),
@@ -220,6 +300,67 @@ const fixture = `${JSON.stringify({
       method: "Page.loadEventFired",
       params: { timestamp: 1 },
     }),
+    targetInfo: mainTargetInfo,
+    targetInfoChanged: EmbeddedBrowserTargetInfoSchema.parse({
+      ...rendererTargetInfo,
+      title: "Renderer page updated",
+      url: "https://renderer.example/updated",
+    }),
+    targetGetTargets: EmbeddedBrowserTargetGetTargetsResultSchema.parse({
+      targetInfos: [mainTargetInfo, rendererTargetInfo],
+    }),
+    targetGetTargetInfoParams: EmbeddedBrowserTargetGetTargetInfoParamsSchema.parse({
+      targetId: rendererPage.tabRef,
+    }),
+    targetGetTargetInfo: EmbeddedBrowserTargetGetTargetInfoResultSchema.parse({
+      targetInfo: rendererTargetInfo,
+    }),
+    targetGetBrowserContexts: EmbeddedBrowserTargetGetBrowserContextsResultSchema.parse({
+      browserContextIds: [page.sourceRef, source.sourceRef],
+      defaultBrowserContextId: page.sourceRef,
+    }),
+    targetAttachParams: EmbeddedBrowserTargetAttachToTargetParamsSchema.parse({
+      targetId: page.tabRef,
+      flatten: true,
+    }),
+    targetAttachResult: EmbeddedBrowserTargetAttachToTargetResultSchema.parse({
+      sessionId: "target_session_1",
+    }),
+    targetDetachParams: EmbeddedBrowserTargetDetachFromTargetParamsSchema.parse({
+      sessionId: "target_session_1",
+    }),
+    targetCloseParams: EmbeddedBrowserTargetCloseTargetParamsSchema.parse({
+      targetId: page.tabRef,
+    }),
+    targetCloseResult: EmbeddedBrowserTargetCloseTargetResultSchema.parse({
+      success: true,
+    }),
+    targetCreateParams: EmbeddedBrowserTargetCreateTargetParamsSchema.parse({
+      url: "https://created.example/",
+    }),
+    targetCreateResult: EmbeddedBrowserTargetCreateTargetResultSchema.parse({
+      targetId: "browser_tab_created",
+    }),
+    targetSetDiscoverParams: EmbeddedBrowserTargetSetDiscoverTargetsParamsSchema.parse({
+      discover: true,
+    }),
+    targetUnsupportedMethod: "Target.createBrowserContext",
+    targetCreatedEvent: EmbeddedBrowserTargetCreatedEventSchema.parse({
+      method: "Target.targetCreated",
+      params: { targetInfo: mainTargetInfo },
+    }),
+    targetInfoChangedEvent: EmbeddedBrowserTargetInfoChangedEventSchema.parse({
+      method: "Target.targetInfoChanged",
+      params: { targetInfo: rendererTargetInfo },
+    }),
+    targetDestroyedEvent: EmbeddedBrowserTargetDestroyedEventSchema.parse({
+      method: "Target.targetDestroyed",
+      params: { targetId: page.tabRef },
+    }),
+    targetDetachedEvent: EmbeddedBrowserTargetDetachedFromTargetEventSchema.parse({
+      method: "Target.detachedFromTarget",
+      params: { sessionId: "target_session_1", targetId: page.tabRef },
+    }),
     externalResult: {
       delivery: "http",
       resultRef: "result_1",
@@ -227,6 +368,38 @@ const fixture = `${JSON.stringify({
       byteLength: 640000,
     },
     channelError: { code: "BROWSER_CHANNEL_STREAM_KIND_UNSUPPORTED", message: "unsupported" },
+    creationContext,
+    creationContextClaimRequest: EmbeddedBrowserDefaultContextClaimRequestSchema.parse({
+      sourceRef: source.sourceRef,
+      expectedRevision: creationContext.revision,
+    }),
+    creationContextClaimResult: defaultContextClaimResult,
+    creationContextChanged: EmbeddedBrowserCreationContextChangedEventSchema.parse({
+      type: "browser.creation-context.changed",
+      revision: defaultContextClaimResult.revision,
+      defaultBrowserContextId: defaultContextClaimResult.browserContextId,
+      previousBrowserContextId: page.sourceRef,
+    }),
+    creationContextRequiredError: EmbeddedBrowserControlErrorSchema.parse({
+      code: "BROWSER_CREATION_CONTEXT_REQUIRED",
+      message: "No connected panel has claimed the default browser creation context.",
+      execution: "not-started",
+      creationRef: "creation_pending",
+      expiresAt,
+    }),
+    creationContextConflictError: EmbeddedBrowserControlErrorSchema.parse({
+      code: "BROWSER_DEFAULT_CONTEXT_CONFLICT",
+      message: "Another panel changed the default browser creation context.",
+      execution: "not-started",
+      revision: creationContext.revision,
+      defaultBrowserContextId: page.sourceRef,
+    }),
+    creationContextNotOwnedError: EmbeddedBrowserControlErrorSchema.parse({
+      code: "BROWSER_CREATION_CONTEXT_NOT_OWNED",
+      message: "The requested browser source does not belong to this panel.",
+      execution: "not-started",
+      revision: creationContext.revision,
+    }),
   },
   capabilities: {
     supported: {
@@ -235,6 +408,7 @@ const fixture = `${JSON.stringify({
       streamKinds: ["control"],
       drivers: ["electron-page-cdp"],
       pageHosts: ["renderer-webview", "main-page-pool"],
+      targetCdp: true,
     },
     withUnknownExtensions: {
       supported: true,
@@ -242,7 +416,15 @@ const fixture = `${JSON.stringify({
       streamKinds: ["control", "tcp"],
       drivers: ["electron-page-cdp", "future-driver"],
       pageHosts: ["renderer-webview", "future-page-host", "main-page-pool"],
+      targetCdp: true,
       futureField: true,
+    },
+    legacyWithoutTargetCdp: {
+      supported: true,
+      transports: ["reverse-websocket"],
+      streamKinds: ["control"],
+      drivers: ["electron-page-cdp"],
+      pageHosts: ["renderer-webview", "main-page-pool"],
     },
   },
 }, null, 2)}\n`;

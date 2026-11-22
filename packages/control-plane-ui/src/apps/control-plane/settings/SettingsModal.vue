@@ -811,17 +811,6 @@ watch(
   { immediate: true },
 );
 
-watch(
-  () => controlPlaneSettings.data.value?.diagnosticLogs,
-  (enabled) => {
-    if (typeof enabled !== "boolean") return;
-    void (window as Window & {
-      taskHandoffDesktop?: { setDiagnosticLogsEnabled?: (value: boolean) => Promise<unknown> };
-    }).taskHandoffDesktop?.setDiagnosticLogsEnabled?.(enabled);
-  },
-  { immediate: true },
-);
-
 async function refresh() {
   await invalidateControlPlaneDomains(queryClient, ["manual"]);
 }

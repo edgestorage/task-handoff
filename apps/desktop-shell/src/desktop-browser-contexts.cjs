@@ -146,6 +146,16 @@ class DesktopBrowserContextManager {
     return undefined;
   }
 
+  instanceIdForSession(senderId, session) {
+    if (!session) return undefined;
+    for (const reference of this.references.values()) {
+      if (reference.senderId !== senderId) continue;
+      const context = this.contexts.get(reference.key);
+      if (context?.browserSession === session) return context.instanceId;
+    }
+    return undefined;
+  }
+
   async release(contextId, senderId) {
     const reference = this.references.get(contextId);
     if (!reference || reference.senderId !== senderId) return false;

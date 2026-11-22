@@ -1,26 +1,28 @@
 <template>
   <div ref="host" class="embedded-browser-surface-layer" aria-hidden="false">
     <div
-      v-for="(tabs, instanceId) in browserSessionTabs"
+      v-for="instanceId in pageInstanceIds"
       :key="instanceId"
       class="embedded-browser-instance-layer"
     >
       <div
-        v-for="tab in tabs.filter((item) => item.kind === 'embedded-browser')"
-        :key="tab.key"
+        v-for="pageKey in stablePages[instanceId] || []"
+        :key="pageKey"
         class="embedded-browser-layer-item"
-        :style="itemStyle(instanceId, tab.key)"
+        :style="itemStyle(instanceId, pageKey)"
         :data-instance-id="instanceId"
-        :data-session-key="tab.key"
+        :data-browser-page-key="pageKey"
       >
         <EmbeddedBrowserTab
           :instance-id="instanceId"
-          :session-key="tab.key"
-          :creation-ref="typeof tab.source?.creationRef === 'string' ? tab.source.creationRef : undefined"
-          :background-throttled="!isActiveTab(instanceId, tab.key)"
-          :initial-url="typeof tab.source?.currentUrl === 'string' ? tab.source.currentUrl : typeof tab.source?.initialUrl === 'string' ? tab.source.initialUrl : undefined"
-          @update-tab="(patch) => $emit('updateBrowserTab', instanceId, tab.key, patch)"
-          @close-tab="$emit('closeBrowserTab', instanceId, tab.key)"
+          :page-key="pageKey"
+          :creation-ref="pageRecord(instanceId, pageKey)?.creationRef"
+          :background-throttled="!isPageVisible(instanceId, pageKey)"
+          :initial-url="pageInitialUrl(instanceId, pageKey)"
+          :open-pages="openPagesFor(instanceId)"
+          @update-tab="(patch) => $emit('updateBrowserTab', instanceId, pageKey, patch)"
+          @close-tab="$emit('closeBrowserTab', instanceId, hostTabKey(instanceId, pageKey) || pageKey)"
+          @move-page="(targetPageKey) => $emit('moveBrowserPage', instanceId, hostTabKey(instanceId, pageKey) || '', targetPageKey)"
         />
       </div>
     </div>
@@ -28,10 +30,11 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch, type CSSProperties } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch, type CSSProperties } from "vue";
 import type { SessionTab } from "../useInstanceSessions";
 import EmbeddedBrowserTab from "./EmbeddedBrowserTab.vue";
-import type { SessionPaneId } from "./useActiveInstanceSessions";
+import type { BrowserPageSurface, SessionPaneId } from "./useActiveInstanceSessions";
+import { listDesktopBrowserTabs, onDesktopBrowserTabsChanged, type DesktopBrowserTab } from "../../../lib/desktopBridge";
 
 type SurfaceState = {
   leftSessionKey: string;
@@ -41,20 +44,30 @@ type SurfaceState = {
 const props = defineProps<{
   activeInstanceId?: string;
   browserSessionTabs: Record<string, SessionTab[]>;
+  browserPages: Record<string, BrowserPageSurface[]>;
   browserSurfaceState: Record<string, SurfaceState>;
 }>();
 
 defineEmits<{
-  updateBrowserTab: [instanceId: string, sessionKey: string, patch: { title?: string; url?: string; status?: string }];
-  closeBrowserTab: [instanceId: string, sessionKey: string];
+  updateBrowserTab: [instanceId: string, pageKey: string, patch: { title?: string; url?: string; status?: string }];
+  closeBrowserTab: [instanceId: string, slotKey: string];
+  moveBrowserPage: [instanceId: string, targetSlotKey: string, sourcePageKey: string];
 }>();
 
 const host = ref<HTMLElement>();
 const layoutRects = shallowRef(new Map<string, DOMRect>());
 const layoutVersion = ref(0);
+const desktopBrowserTabs = ref<Record<string, DesktopBrowserTab[]>>({});
+// Layers must never reorder: moving a <webview> in the DOM detaches and resets
+// its guest. This registry keeps first-seen order and only appends/removes.
+const stablePages = ref<Record<string, string[]>>({});
+const pageInstanceIds = computed(() => Object.keys(stablePages.value));
 let resizeObserver: ResizeObserver | undefined;
 let mutationObserver: MutationObserver | undefined;
 let layoutFrame: number | undefined;
+let stopBrowserTabsChanged: (() => void) | undefined;
+let browserTabsRefreshSequence = 0;
+let disposed = false;
 
 function scheduleLayout() {
   if (layoutFrame !== undefined) return;
@@ -89,13 +102,41 @@ function updateLayout() {
   for (const target of targets) resizeObserver?.observe(target);
 }
 
-function itemStyle(instanceId: string, sessionKey: string): CSSProperties {
+function tabPageKey(tab: SessionTab) {
+  const pageKey = tab.source?.pageKey;
+  return typeof pageKey === "string" && pageKey ? pageKey : tab.key;
+}
+
+function hostTab(instanceId: string, pageKey: string) {
+  return (props.browserSessionTabs[instanceId] || []).find((tab) => tabPageKey(tab) === pageKey);
+}
+
+function hostTabKey(instanceId: string, pageKey: string) {
+  return hostTab(instanceId, pageKey)?.key;
+}
+
+function paneForPage(instanceId: string, pageKey: string): SessionPaneId | undefined {
+  const tab = hostTab(instanceId, pageKey);
+  const state = props.browserSurfaceState[instanceId];
+  if (!tab || !state) return undefined;
+  if (state.rightSessionKey === tab.key) return "right";
+  if (state.leftSessionKey === tab.key) return "left";
+  return undefined;
+}
+
+function pageRecord(instanceId: string, pageKey: string) {
+  return (props.browserPages[instanceId] || []).find((page) => page.key === pageKey);
+}
+
+function pageInitialUrl(instanceId: string, pageKey: string) {
+  const page = pageRecord(instanceId, pageKey);
+  return page?.currentUrl || page?.initialUrl;
+}
+
+function itemStyle(instanceId: string, pageKey: string): CSSProperties {
   // Read the revision so Vue re-evaluates styles when pane geometry changes.
   void layoutVersion.value;
-  const state = props.browserSurfaceState[instanceId];
-  const pane = state?.rightSessionKey === sessionKey
-    ? "right"
-    : state?.leftSessionKey === sessionKey ? "left" : undefined;
+  const pane = paneForPage(instanceId, pageKey);
   const rect = pane ? layoutRects.value.get(`${instanceId}:${pane}`) : undefined;
   const visible = instanceId === props.activeInstanceId && Boolean(rect);
   return {
@@ -108,10 +149,78 @@ function itemStyle(instanceId: string, sessionKey: string): CSSProperties {
   };
 }
 
-function isActiveTab(instanceId: string, sessionKey: string) {
-  if (instanceId !== props.activeInstanceId) return false;
-  const state = props.browserSurfaceState[instanceId];
-  return state?.leftSessionKey === sessionKey || state?.rightSessionKey === sessionKey;
+function isPageVisible(instanceId: string, pageKey: string) {
+  return instanceId === props.activeInstanceId && Boolean(paneForPage(instanceId, pageKey));
+}
+
+async function refreshDesktopBrowserTabs() {
+  const sequence = ++browserTabsRefreshSequence;
+  const result = await listDesktopBrowserTabs().catch(() => undefined);
+  if (disposed || sequence !== browserTabsRefreshSequence || !result?.ok) return;
+  const grouped: Record<string, DesktopBrowserTab[]> = {};
+  for (const tab of result.tabs || []) {
+    if (!tab.instanceId) continue;
+    (grouped[tab.instanceId] ||= []).push(tab);
+  }
+  desktopBrowserTabs.value = grouped;
+}
+
+function syncStablePages() {
+  const next: Record<string, string[]> = {};
+  const sources = props.browserPages || {};
+  const appendInstance = (instanceId: string) => {
+    if (next[instanceId]) return;
+    const previous = stablePages.value[instanceId] || [];
+    const pages = sources[instanceId] || [];
+    const present = new Set(pages.map((page) => page.key));
+    const ordered = previous.filter((key) => present.has(key));
+    for (const page of pages) {
+      if (!ordered.includes(page.key)) ordered.push(page.key);
+    }
+    next[instanceId] = ordered;
+  };
+  for (const instanceId of Object.keys(stablePages.value)) {
+    if (sources[instanceId]) appendInstance(instanceId);
+  }
+  for (const instanceId of Object.keys(sources)) appendInstance(instanceId);
+  stablePages.value = next;
+}
+
+function openPagesFor(instanceId: string) {
+  const pages = new Map<string, { key: string; title?: string; status?: string; url?: string }>();
+  for (const page of props.browserPages[instanceId] || []) {
+    pages.set(page.key, {
+      key: page.key,
+      title: page.title,
+      status: page.status,
+      url: page.currentUrl || page.initialUrl || "about:blank",
+    });
+  }
+  for (const tab of props.browserSessionTabs[instanceId] || []) {
+    const key = tabPageKey(tab);
+    const current = pages.get(key);
+    const url = typeof tab.source?.currentUrl === "string"
+      ? tab.source.currentUrl
+      : typeof tab.source?.initialUrl === "string" ? tab.source.initialUrl : "about:blank";
+    pages.set(key, {
+      key,
+      title: current?.title || tab.title,
+      status: current?.status || tab.status,
+      url: current?.url || url,
+    });
+  }
+  for (const tab of desktopBrowserTabs.value[instanceId] || []) {
+    const key = tab.sessionKey?.trim();
+    if (!key) continue;
+    const current = pages.get(key);
+    pages.set(key, {
+      key,
+      title: tab.title || current?.title,
+      status: tab.state || current?.status,
+      url: tab.url || current?.url || "about:blank",
+    });
+  }
+  return [...pages.values()];
 }
 
 onMounted(() => {
@@ -119,8 +228,19 @@ onMounted(() => {
   mutationObserver = new MutationObserver(scheduleLayout);
   mutationObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-pane", "data-instance-id"] });
   window.addEventListener("resize", scheduleLayout);
+  stopBrowserTabsChanged = onDesktopBrowserTabsChanged(() => { void refreshDesktopBrowserTabs(); });
+  void refreshDesktopBrowserTabs();
   void nextTick(scheduleLayout);
 });
+
+watch(
+  () => props.browserPages,
+  () => {
+    syncStablePages();
+    void nextTick(scheduleLayout);
+  },
+  { deep: true, immediate: true, flush: "post" },
+);
 
 watch(
   [() => props.activeInstanceId, () => JSON.stringify(props.browserSurfaceState)],
@@ -129,8 +249,10 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  disposed = true;
   if (layoutFrame !== undefined) window.cancelAnimationFrame(layoutFrame);
   window.removeEventListener("resize", scheduleLayout);
+  stopBrowserTabsChanged?.();
   resizeObserver?.disconnect();
   mutationObserver?.disconnect();
 });

@@ -52,6 +52,9 @@ class DesktopEmbeddedBrowserChannelManager {
       pendingCreatedNotices: new Map(),
       leases: new Map(),
       flushPromise: undefined,
+      retryTimer: undefined,
+      retryDelayMs: 500,
+      needsSnapshot: false,
       channel: undefined,
       ready: false,
       closed: false,
@@ -107,7 +110,10 @@ class DesktopEmbeddedBrowserChannelManager {
       logError: this.logError,
     });
     session.channel = channel;
-    channel.on("sync-required", () => { void this.flush(session, [], [], true); });
+    channel.on("sync-required", () => {
+      session.needsSnapshot = true;
+      void this.flush(session, [], []);
+    });
     channel.on("closed", () => {
       session.ready = false;
       if (!session.closed) this.logError(`[desktop-shell] browser control channel closed source=${session.sourceRef} generation=${session.generation}`);
@@ -180,39 +186,80 @@ class DesktopEmbeddedBrowserChannelManager {
 
   async flush(session, upserts, removes, force = false) {
     if (session.closed || !session.sourceRef) return;
+    if (session.retryTimer) return;
     if (session.flushPromise) {
       await session.flushPromise.catch(() => undefined);
       return this.flush(session, [], [], force);
     }
-    const created = [];
-    const removed = [];
-    for (const [tabRef, change] of session.pending) {
-      session.pending.delete(tabRef);
-      if (change.type === "removed") {
-        removes.push(tabRef);
-        removed.push({ tabRef, reason: change.reason, creationRef: change.creationRef });
-        session.pendingCreatedNotices.delete(tabRef);
-      } else {
-        const page = this.pageForEntry(session, change.entry, session.revision + 1);
-        upserts.push(page);
-        if (change.type === "registered") created.push({ page, creationRef: change.creationRef });
+    session.flushPromise = this.runFlush(session, force).finally(() => {
+      session.flushPromise = undefined;
+    });
+    await session.flushPromise;
+  }
+
+  async runFlush(session, force = false) {
+    let conflictResynced = false;
+    while (!session.closed) {
+      if (session.needsSnapshot) {
+        session.needsSnapshot = false;
+        try {
+          await this.resyncSnapshot(session);
+          session.retryDelayMs = 500;
+        } catch (error) {
+          session.needsSnapshot = true;
+          this.logError(`[desktop-shell] browser source snapshot resync failed source=${session.sourceRef} generation=${session.generation} error=${error instanceof Error ? error.message : String(error)}`);
+          this.scheduleFlushRetry(session);
+          return;
+        }
       }
-    }
-    if (!upserts.length && !removes.length && !force) return;
-    const release = { upserts, removes };
-    const revision = session.revision + 1;
-    session.flushPromise = this.request(session, `/api/controlled-instances/${encodeURIComponent(session.instanceId)}/browser-control/sources/${encodeURIComponent(session.sourceRef)}/deltas`, {
-      method: "POST",
-      body: {
-        sourceRef: session.sourceRef,
-        generation: session.generation,
-        baseRevision: session.revision,
-        revision,
-        upserts: release.upserts.map((page) => ({ ...page, revision })),
-        removes: release.removes,
-      },
-    }).then(() => {
+      const created = [];
+      const removed = [];
+      const upserts = [];
+      const removes = [];
+      for (const [tabRef, change] of session.pending) {
+        session.pending.delete(tabRef);
+        if (change.type === "removed") {
+          removes.push(tabRef);
+          removed.push({ tabRef, reason: change.reason, creationRef: change.creationRef });
+          session.pendingCreatedNotices.delete(tabRef);
+        } else {
+          const page = this.pageForEntry(session, change.entry, session.revision + 1);
+          upserts.push(page);
+          if (change.type === "registered") created.push({ page, creationRef: change.creationRef });
+        }
+      }
+      if (!upserts.length && !removes.length && !force) return;
+      force = false;
+      const release = { upserts, removes };
+      const revision = session.revision + 1;
+      try {
+        await this.request(session, `/api/controlled-instances/${encodeURIComponent(session.instanceId)}/browser-control/sources/${encodeURIComponent(session.sourceRef)}/deltas`, {
+          method: "POST",
+          body: {
+            sourceRef: session.sourceRef,
+            generation: session.generation,
+            baseRevision: session.revision,
+            revision,
+            upserts: release.upserts.map((page) => ({ ...page, revision })),
+            removes: release.removes,
+          },
+        });
+      } catch (error) {
+        this.requeueRelease(session, release, created, removed);
+        if (error?.code === "BROWSER_SNAPSHOT_REQUIRED" && !conflictResynced) {
+          conflictResynced = true;
+          session.needsSnapshot = true;
+          this.logError(`[desktop-shell] browser source revision gap; resyncing snapshot source=${session.sourceRef} generation=${session.generation}`);
+          continue;
+        }
+        this.logError(`[desktop-shell] browser source delta failed source=${session.sourceRef} generation=${session.generation} error=${error instanceof Error ? error.message : String(error)}`);
+        this.scheduleFlushRetry(session);
+        return;
+      }
       session.revision = revision;
+      session.retryDelayMs = 500;
+      conflictResynced = false;
+      this.logInfo(`[desktop-shell] browser source delta committed source=${session.sourceRef} generation=${session.generation} revision=${revision} upserts=${release.upserts.length} removes=${release.removes.length}`);
       for (const entry of created) this.queueCreatedNotice(session, entry);
       this.flushCreatedNotices(session);
       if (session.channel?.state === "ready") {
@@ -220,34 +267,56 @@ class DesktopEmbeddedBrowserChannelManager {
           session.channel.notifyTabDestroyed(entry.tabRef, entry.reason || "tab-destroyed", entry.creationRef);
         }
       }
-    }).catch((error) => {
-      for (const page of release.upserts) {
-        const current = session.pending.get(page.tabRef);
-        if (!current) {
-          const createdEntry = created.find((entry) => entry.page.tabRef === page.tabRef);
-          session.pending.set(page.tabRef, {
-            type: createdEntry ? "registered" : "updated",
-            entry: page,
-            ...(createdEntry?.creationRef ? { creationRef: createdEntry.creationRef } : {}),
-          });
+    }
+  }
+
+  async resyncSnapshot(session) {
+    const pages = this.registryPages(session);
+    const commit = await this.commitSnapshot(session, pages);
+    session.registryEpoch = commit.registryEpoch;
+    session.registryRevision = commit.registryRevision;
+    session.revision = commit.sourceRevision;
+    this.logInfo(`[desktop-shell] browser source snapshot resynced source=${session.sourceRef} generation=${session.generation} revision=${session.revision} tabs=${pages.length}`);
+    this.flushCreatedNotices(session);
+  }
+
+  requeueRelease(session, release, created, removed) {
+    for (const page of release.upserts) {
+      const createdEntry = created.find((entry) => entry.page.tabRef === page.tabRef);
+      const current = session.pending.get(page.tabRef);
+      if (current) {
+        if (createdEntry?.creationRef && current.type !== "removed") {
+          current.creationRef ||= createdEntry.creationRef;
+          current.type = "registered";
         }
+        continue;
       }
-      for (const tabRef of release.removes) {
-        if (!session.pending.has(tabRef)) {
-          const removedEntry = removed.find((entry) => entry.tabRef === tabRef);
-          session.pending.set(tabRef, {
-            type: "removed",
-            entry: { tabRef },
-            ...(removedEntry?.creationRef ? { creationRef: removedEntry.creationRef } : {}),
-          });
-        }
-      }
-      this.logError(`[desktop-shell] browser source delta failed source=${session.sourceRef} generation=${session.generation} error=${error instanceof Error ? error.message : String(error)}`);
-    }).finally(() => {
-      session.flushPromise = undefined;
-    });
-    await session.flushPromise;
-    if (session.pending.size) return this.flush(session, [], []);
+      session.pending.set(page.tabRef, {
+        type: createdEntry ? "registered" : "updated",
+        entry: page,
+        ...(createdEntry?.creationRef ? { creationRef: createdEntry.creationRef } : {}),
+      });
+    }
+    for (const tabRef of release.removes) {
+      if (session.pending.has(tabRef)) continue;
+      const removedEntry = removed.find((entry) => entry.tabRef === tabRef);
+      session.pending.set(tabRef, {
+        type: "removed",
+        entry: { tabRef },
+        ...(removedEntry?.creationRef ? { creationRef: removedEntry.creationRef } : {}),
+      });
+    }
+  }
+
+  scheduleFlushRetry(session) {
+    if (session.closed || session.retryTimer) return;
+    const delay = Math.min(session.retryDelayMs, 30_000);
+    session.retryDelayMs = Math.min(delay * 2, 30_000);
+    session.retryTimer = setTimeout(() => {
+      session.retryTimer = undefined;
+      void this.flush(session, [], []);
+    }, delay);
+    session.retryTimer.unref?.();
   }
 
   queueCreatedNotice(session, { page, creationRef }) {
@@ -289,16 +358,44 @@ class DesktopEmbeddedBrowserChannelManager {
         const lease = session.leases.get(params.leaseRef);
         if (!lease || lease.generation !== session.generation) throw browserChannelError("BROWSER_LEASE_STALE", "Browser lease is stale.");
         if (params.frameSessionRef) throw browserChannelError("BROWSER_OPERATION_UNSUPPORTED", "Descendant CDP sessions are not supported yet.");
-        return this.registry.sendCommand({ tabRef: lease.tabRef, senderId: session.senderId, method: params.method, params: params.params });
+        const result = await this.registry.sendCommand({ tabRef: lease.tabRef, senderId: session.senderId, method: params.method, params: params.params });
+        this.notifyDeviceMetrics(session, lease.tabRef, params.method, params.params);
+        return result;
       },
       closeTab: async (params) => {
         const tabRef = String(params?.tabRef || "").trim();
         if (!tabRef) throw browserChannelError("BROWSER_TAB_NOT_FOUND", "Browser tab was not found.");
         await this.registry.close({ tabRef, senderId: session.senderId });
+        this.notifyRendererTabClosed(session, tabRef);
+        await this.flush(session, [], []);
         return { closed: true };
       },
       cancelRequest: async () => ({}),
     };
+  }
+
+  notifyRendererTabClosed(session, tabRef) {
+    if (!session.host || session.host.isDestroyed?.()) return;
+    try {
+      session.host.send("task-handoff:browser-tab-closed", { tabRef, instanceId: session.instanceId });
+    } catch (error) {
+      this.logError?.(`[desktop-shell] browser tab closed notification failed tabRef=${tabRef} error=${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  notifyDeviceMetrics(session, tabRef, method, params) {
+    const metrics = deviceMetricsFromCdpCommand(method, params);
+    if (!metrics || !session.host || session.host.isDestroyed?.()) return;
+    try {
+      session.host.send("task-handoff:browser-device-metrics-changed", {
+        tabRef,
+        instanceId: session.instanceId,
+        source: "agent",
+        ...metrics,
+      });
+    } catch (error) {
+      this.logInfo?.(`[desktop-shell] browser device metrics notification failed tabRef=${tabRef} error=${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   handleCdpEvent({ tabRef, method, params }) {
@@ -364,6 +461,8 @@ class DesktopEmbeddedBrowserChannelManager {
     this.sessions.delete(key);
     session.closed = true;
     session.ready = false;
+    if (session.retryTimer) clearTimeout(session.retryTimer);
+    session.retryTimer = undefined;
     session.channel?.close();
     if (session.sourceRef) {
       await this.request(session, `/api/controlled-instances/${encodeURIComponent(session.instanceId)}/browser-control/sources/${encodeURIComponent(session.sourceRef)}`, { method: "DELETE" })
@@ -411,6 +510,36 @@ function browserPageUrlAllowed(value) {
 
 function browserChannelError(code, message) {
   return Object.assign(new Error(message), { code });
+}
+
+function deviceMetricsFromCdpCommand(method, params) {
+  if (method === "Emulation.clearDeviceMetricsOverride") return { active: false };
+  if (method !== "Emulation.setDeviceMetricsOverride") return undefined;
+  const width = positiveInteger(params?.width);
+  const height = positiveInteger(params?.height);
+  if (!width || !height) return undefined;
+  const deviceScaleFactor = typeof params?.deviceScaleFactor === "number" && Number.isFinite(params.deviceScaleFactor) && params.deviceScaleFactor > 0
+    ? Math.min(params.deviceScaleFactor, 10)
+    : 1;
+  const orientation = params?.screenOrientation && typeof params.screenOrientation === "object"
+    ? {
+        type: typeof params.screenOrientation.type === "string" ? params.screenOrientation.type : undefined,
+        angle: typeof params.screenOrientation.angle === "number" && Number.isFinite(params.screenOrientation.angle) ? params.screenOrientation.angle : undefined,
+      }
+    : undefined;
+  return {
+    active: true,
+    width,
+    height,
+    deviceScaleFactor,
+    mobile: params?.mobile === true,
+    ...(orientation?.type ? { screenOrientation: orientation } : {}),
+  };
+}
+
+function positiveInteger(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 && numeric <= 4_096 ? numeric : undefined;
 }
 
 module.exports = { DesktopEmbeddedBrowserChannelManager };

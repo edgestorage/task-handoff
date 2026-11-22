@@ -67,7 +67,7 @@ test("the approval center and trusted-device settings share one device-trust sto
   const sections = read("settings/settingsSections.ts");
   const navigation = fs.readFileSync(new URL("../../i18n/locales/en-US/navigation.ts", root), "utf8");
 
-  assert.match(workbench, /:busy-key="aiApprovalBusyKey \|\| operationApprovalBusyKey \|\| storyDecisionBusyKey \|\| deviceTrustBusyKey \|\| nodeControlPlaneTrustBusyKey"/);
+  assert.match(workbench, /:busy-key="aiApprovalBusyKey \|\| operationApprovalBusyKey \|\| storyDecisionBusyKey \|\| deviceTrustBusyKey \|\| nodeControlPlaneTrustBusyKey \|\| browserAccessBusyKey"/);
   assert.match(workbench, /@decide-device="decideActionInboxDeviceTrust"/);
   assert.match(workbench, /expectedFingerprint: item\.request\.fingerprint/);
   assert.match(workbench, /expectedRevision: item\.request\.revision/);

@@ -7,13 +7,21 @@ const { nodeRouteSurface, normalizedPath } = require("./fixtures/controlled-inst
 const root = path.resolve(__dirname, "..");
 const serverPath = path.join(root, "controlled-instance-rs", "crates", "instance", "src", "server.rs");
 const remoteDesktopPath = path.join(root, "controlled-instance-rs", "crates", "instance", "src", "remote_desktop.rs");
+const browserControlPath = path.join(root, "controlled-instance-rs", "crates", "instance", "src", "browser_control_routes.rs");
+const browserCdpPath = path.join(root, "controlled-instance-rs", "crates", "instance", "src", "browser_cdp_bridge.rs");
 const matrixPath = path.join(root, "controlled-instance-rs", "docs", "http-route-matrix.md");
 
 const BASELINE_HEADING = "## `v0.0.47` compatibility baseline";
 const TARGET_HEADING = "## Target-current Node extensions after `v0.0.47`";
 const BASELINE_ROUTE_COUNT = 202;
-const TARGET_ROUTE_COUNT = 222;
+const TARGET_ROUTE_COUNT = 241;
 const POST_BASELINE_ROUTES = new Set([
+  "DELETE /api/browser-control/access",
+  "DELETE /api/browser-control/creation-context",
+  "DELETE /api/browser-control/sources/{}",
+  "GET /api/browser-control/access",
+  "GET /api/browser-control/creation-context",
+  "GET /api/browser-control/relay",
   "GET /api/apps/install-environment",
   "PUT /api/apps/install-environment",
   "POST /api/apps/install-environment/test",
@@ -21,6 +29,19 @@ const POST_BASELINE_ROUTES = new Set([
   "GET /api/ai-sessions/{}/repository/files/content",
   "GET /api/apps/sessions/{}/repository/files/content",
   "GET /api/ai-sessions/{}/turns/{}/tool-activity",
+  "GET /devtools/browser/{}",
+  "GET /devtools/page/{}",
+  "GET /json/close/{}",
+  "GET /json/list",
+  "GET /json/new",
+  "GET /json/version",
+  "POST /api/browser-control/access",
+  "POST /api/browser-control/access-requests/{}/deny",
+  "POST /api/browser-control/sources",
+  "POST /api/browser-control/sources/{}/deltas",
+  "PUT /api/browser-control/creation-context",
+  "PUT /api/browser-control/sources/{}/snapshot",
+  "PUT /json/new",
   "GET /api/internal/remote-desktop/attach",
   "GET /api/internal/remote-desktop/fallback/{}",
   "GET /api/internal/remote-desktop/permissions",
@@ -39,7 +60,6 @@ const WEB_PROXY_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"];
 const WEB_PROXY_ALIAS_PATH = "/api/apps/sessions/{}/web/";
 const WEB_PROXY_PATH = "/api/apps/sessions/{}/web/*";
 const RUST_SENTINEL_ROUTE = "ANY /api/*";
-
 function sorted(values) {
   return [...values].sort();
 }
@@ -171,7 +191,13 @@ function rustRouteSurface() {
   const desktop = serverProduction.includes(".merge(crate::remote_desktop::routes(")
     ? fs.readFileSync(remoteDesktopPath, "utf8").split("#[cfg(test)]")[0]
     : "";
-  const production = `${serverProduction}\n${desktop}`;
+  const browserControl = serverProduction.includes(".merge(crate::browser_control_routes::routes(")
+    ? fs.readFileSync(browserControlPath, "utf8").split("#[cfg(test)]")[0]
+    : "";
+  const browserCdp = serverProduction.includes(".merge(crate::browser_cdp_bridge::routes(")
+    ? fs.readFileSync(browserCdpPath, "utf8").split("#[cfg(test)]")[0]
+    : "";
+  const production = [serverProduction, desktop, browserControl, browserCdp].join("\n");
   const functions = rustFunctions(production);
   const routes = new Map();
   const unresolved = [];

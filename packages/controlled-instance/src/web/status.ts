@@ -16,6 +16,7 @@ import {
   type AiSessionProviderCapability,
   type ControlledInstanceCapabilities,
 } from "@task-handoff/protocol/control-plane";
+import type { EmbeddedBrowserChannelCapabilities } from "@task-handoff/protocol/embedded-browser-control";
 import { workspaceGitEnvironmentValue } from "@task-handoff/protocol/workspace-git";
 import { INSTANCE_SHELL_PROTOCOL_VERSION } from "@task-handoff/protocol/instance-shell";
 import { TriggerStore } from "../triggers/store";
@@ -202,6 +203,7 @@ export function controlledInstanceCapabilities(
   gitCredentialBrokerInstalled = false,
   installEnvironment?: AppInstallEnvironmentManager,
   remoteDesktop?: RemoteDesktopCapabilities,
+  embeddedBrowserChannel?: EmbeddedBrowserChannelCapabilities,
 ): ControlledInstanceCapabilities {
   const inventory = appRuntime.appInventory();
   const available = inventory.items.filter((item) => item.availability === "available");
@@ -222,13 +224,7 @@ export function controlledInstanceCapabilities(
       gui: available.some((item) => item.kind === "gui"),
       browser: available.some((item) => item.id === "browser" || item.id === "chromium"),
       browserTunnel: true,
-      embeddedBrowserChannel: {
-        supported: true,
-        transports: ["reverse-websocket"],
-        streamKinds: ["control"],
-        drivers: ["electron-page-cdp"],
-        pageHosts: ["renderer-webview", "main-page-pool"],
-      },
+      embeddedBrowserChannel,
       screenshots: available.some((item) => item.kind === "gui") && Boolean(executablePath("import")),
       logs: true,
       aiSessionWorkspaceSelection: true,
@@ -305,6 +301,7 @@ export async function controlledInstanceSnapshot(
   gitCredentialBrokerInstalled = false,
   installEnvironment?: AppInstallEnvironmentManager,
   remoteDesktop?: RemoteDesktopCapabilities,
+  embeddedBrowserChannel?: EmbeddedBrowserChannelCapabilities,
 ) {
   const appSessions = appRuntime.listSessions();
   return {
@@ -314,7 +311,7 @@ export async function controlledInstanceSnapshot(
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
     build: buildInfo(),
     controlMode: (controlledMode() ? "controlled" : "standalone") as "standalone" | "controlled",
-    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline, aiSessionProviders, gitCredentialBrokerInstalled, installEnvironment, remoteDesktop),
+    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline, aiSessionProviders, gitCredentialBrokerInstalled, installEnvironment, remoteDesktop, embeddedBrowserChannel),
     appInventory: appRuntime.appInventory(),
     apps: {
       runningCount: appRuntime.runningSessionCount(),

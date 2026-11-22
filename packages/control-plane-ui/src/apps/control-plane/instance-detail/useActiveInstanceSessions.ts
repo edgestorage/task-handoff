@@ -25,6 +25,8 @@ import { createBrowserUuid } from "../../../lib/random-id";
 import { ApiError } from "../../../api/client";
 import { remoteDesktopAvailable } from "../remoteDesktopCapability";
 import { CLOSE_SESSION_REMOTE_DESKTOP_EVENT, OPEN_SESSION_REMOTE_DESKTOP_EVENT, type CloseSessionRemoteDesktopDetail, type OpenSessionRemoteDesktopDetail } from "./sessionRemoteDesktopEvents";
+import { moveBrowserPageToSlot, type BrowserPageSurface, type BrowserTabSlot } from "./browserPageTabs";
+export type { BrowserPageSurface } from "./browserPageTabs";
 import {
   removeSessionRemoteDesktopLink,
   rememberSessionRemoteDesktopLink,
@@ -33,6 +35,15 @@ import {
 } from "./sessionRemoteDesktopLinks";
 
 export type SessionPaneId = "left" | "right";
+
+export type BrowserPageRecord = BrowserPageSurface & {
+  key: string;
+  title: string;
+  status: string;
+};
+
+const BROWSER_TAB_SLOT_PREFIX = "embedded-browser:";
+const BROWSER_PAGE_PREFIX = "embedded-browser-page:";
 
 const REMOTE_DESKTOP_TABS_STORAGE_KEY = "task-handoff.control-plane.remote-desktop-tabs";
 
@@ -127,7 +138,8 @@ export function useActiveInstanceSessions({
   const selectedAiSessionKeys = reactive<Record<string, string>>({});
   const selectedAiSessionSnapshots = reactive<Record<string, AiSessionSummary | undefined>>({});
   const repositorySessionTabs = reactive<Record<string, SessionTab[]>>({});
-  const browserSessionTabs = reactive<Record<string, SessionTab[]>>({});
+  const browserPages = reactive<Record<string, BrowserPageRecord[]>>({});
+  const browserTabSlots = reactive<Record<string, BrowserTabSlot[]>>({});
   const remoteDesktopSessionTabs = reactive<Record<string, SessionTab[]>>(loadRemoteDesktopSessionTabs(t));
   const pendingAiSessionAppSelections = new Map<string, AiSessionSummary>();
 
@@ -137,6 +149,29 @@ export function useActiveInstanceSessions({
     && remoteDesktopAvailable(activeInstance.value),
   ));
 
+  const browserSessionTabs = computed<Record<string, SessionTab[]>>(() => {
+    const tabs: Record<string, SessionTab[]> = {};
+    for (const [instanceId, slots] of Object.entries(browserTabSlots)) {
+      const pages = new Map((browserPages[instanceId] || []).map((page) => [page.key, page]));
+      tabs[instanceId] = slots.map((slot) => {
+        const page = pages.get(slot.pageKey);
+        return {
+          key: slot.key,
+          kind: "embedded-browser" as const,
+          label: EMBEDDED_BROWSER_APP_ID,
+          title: page?.title || t("sessions.tabs.embeddedBrowser"),
+          status: page?.status || "running",
+          source: {
+            pageKey: slot.pageKey,
+            ...(page?.initialUrl ? { initialUrl: page.initialUrl } : {}),
+            ...(page?.currentUrl ? { currentUrl: page.currentUrl } : {}),
+            ...(page?.creationRef ? { creationRef: page.creationRef } : {}),
+          },
+        };
+      });
+    }
+    return tabs;
+  });
   const sessionTabs = computed(() => {
     const instanceId = activeInstance.value?.id;
     const instanceTabs = buildSessionTabs(activeInstance.value, t);
@@ -145,7 +180,7 @@ export function useActiveInstanceSessions({
       : [
           ...instanceTabs,
           ...(instanceId ? repositorySessionTabs[instanceId] || [] : []),
-          ...(instanceId ? browserSessionTabs[instanceId] || [] : []),
+          ...(instanceId ? browserSessionTabs.value[instanceId] || [] : []),
           ...(instanceId && remoteDesktopEnabled.value ? remoteDesktopSessionTabs[instanceId] || [] : []),
         ];
   });
@@ -157,7 +192,7 @@ export function useActiveInstanceSessions({
       leftSessionKey: string;
       rightSessionKey: string;
     }> = {};
-    const instanceIds = new Set([...Object.keys(browserSessionTabs), ...Object.keys(remoteDesktopSessionTabs)]);
+    const instanceIds = new Set([...Object.keys(browserSessionTabs.value), ...Object.keys(remoteDesktopSessionTabs)]);
     for (const instanceId of instanceIds) {
       state[instanceId] = {
         leftSessionKey: selectedSessionKeys[instanceId] || "",
@@ -541,7 +576,9 @@ export function useActiveInstanceSessions({
       return;
     }
     if (session.kind === "embedded-browser") {
-      browserSessionTabs[instance.id] = (browserSessionTabs[instance.id] || []).filter((tab) => tab.key !== session.key);
+      const pageKey = browserPageKeyOf(session);
+      browserTabSlots[instance.id] = (browserTabSlots[instance.id] || []).filter((slot) => slot.key !== session.key);
+      removeBrowserPageIfUnused(instance.id, pageKey);
       if (selectedSessionKeys[instance.id] === session.key) delete selectedSessionKeys[instance.id];
       if (rightSelectedSessionKeys[instance.id] === session.key) delete rightSelectedSessionKeys[instance.id];
       delete rightPaneSessionKeys[instance.id]?.[session.key];
@@ -672,20 +709,16 @@ export function useActiveInstanceSessions({
   }
 
   function openBrowserTab(instanceId: string, initialUrl?: string, options: { title?: string; creationRef?: string } = {}) {
-    const key = `embedded-browser:${createBrowserUuid()}`;
-    const tabs = browserSessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
-    tabs.push({
-      key,
-      kind: "embedded-browser",
-      label: EMBEDDED_BROWSER_APP_ID,
+    const page = createBrowserPage(instanceId, {
       title: options.title?.trim() || t("sessions.tabs.embeddedBrowser"),
       status: initialUrl ? "loading" : "running",
-      source: {
-        browserTabId: key,
-        ...(initialUrl ? { initialUrl } : {}),
-        ...(options.creationRef ? { creationRef: options.creationRef } : {}),
-      },
+      initialUrl,
+      currentUrl: initialUrl,
+      creationRef: options.creationRef,
     });
+    const key = `${BROWSER_TAB_SLOT_PREFIX}${createBrowserUuid()}`;
+    const slots = browserTabSlots[instanceId] ||= reactive<BrowserTabSlot[]>([]);
+    slots.push({ key, pageKey: page.key });
     const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";
     if (pane === "right") {
       ensurePaneAssignments(instanceId)[key] = true;
@@ -695,6 +728,90 @@ export function useActiveInstanceSessions({
     }
     focusedSessionPanes[instanceId] = pane;
     rememberSessionKey(instanceId, key);
+  }
+
+  function browserPageKeyOf(session: SessionTab) {
+    return typeof session.source?.pageKey === "string" ? session.source.pageKey : "";
+  }
+
+  function createBrowserPage(instanceId: string, input: { title: string; status: string; initialUrl?: string; currentUrl?: string; creationRef?: string }): BrowserPageRecord {
+    const page: BrowserPageRecord = {
+      key: `${BROWSER_PAGE_PREFIX}${createBrowserUuid()}`,
+      title: input.title,
+      status: input.status,
+      ...(input.initialUrl ? { initialUrl: input.initialUrl } : {}),
+      ...(input.currentUrl ? { currentUrl: input.currentUrl } : {}),
+      ...(input.creationRef ? { creationRef: input.creationRef } : {}),
+    };
+    const pages = browserPages[instanceId] ||= reactive<BrowserPageRecord[]>([]);
+    pages.push(page);
+    return page;
+  }
+
+  function removeBrowserPageIfUnused(instanceId: string, pageKey: string) {
+    if (!pageKey) return;
+    if ((browserTabSlots[instanceId] || []).some((slot) => slot.pageKey === pageKey)) return;
+    const pages = browserPages[instanceId];
+    if (!pages) return;
+    const index = pages.findIndex((page) => page.key === pageKey);
+    if (index >= 0) pages.splice(index, 1);
+  }
+
+  /**
+   * Moves a live page host into another tab slot without re-mounting its
+   * <webview>. The destination's previous page is released and the source slot
+   * receives a fresh blank page, matching "move, do not swap".
+   */
+  function moveBrowserPageToTab(instanceId: string, targetSlotKey: string, sourcePageKey: string) {
+    const slots = browserTabSlots[instanceId];
+    if (!slots) return false;
+    const moved = moveBrowserPageToSlot(slots, targetSlotKey, sourcePageKey);
+    if (!moved.ok) return false;
+    removeBrowserPageIfUnused(instanceId, moved.replacedPageKey);
+    const blankPage = createBrowserPage(instanceId, {
+      title: t("sessions.tabs.embeddedBrowser"),
+      status: "running",
+    });
+    moved.sourceSlot.pageKey = blankPage.key;
+    return true;
+  }
+
+  function bindLocalBrowserSlotToPage(
+    instanceId: string,
+    slotKey: string,
+    pageKey: string,
+    input: { title?: string; status?: string; currentUrl?: string; initialUrl?: string; creationRef?: string } = {},
+  ) {
+    const slot = browserTabSlots[instanceId]?.find((candidate) => candidate.key === slotKey);
+    if (!slot || !pageKey) return false;
+    const previousPageKey = slot.pageKey;
+    slot.pageKey = pageKey;
+    if (!(browserPages[instanceId] || []).some((page) => page.key === pageKey)) {
+      const pages = browserPages[instanceId] ||= reactive<BrowserPageRecord[]>([]);
+      pages.push({
+        key: pageKey,
+        title: input.title?.trim() || t("sessions.tabs.embeddedBrowser"),
+        status: input.status?.trim() || "running",
+        ...(input.initialUrl ? { initialUrl: input.initialUrl } : {}),
+        ...(input.currentUrl ? { currentUrl: input.currentUrl } : {}),
+        ...(input.creationRef ? { creationRef: input.creationRef } : {}),
+      });
+    }
+    if (previousPageKey !== pageKey) removeBrowserPageIfUnused(instanceId, previousPageKey);
+    return true;
+  }
+
+  function blankLocalBrowserSlot(instanceId: string, slotKey: string) {
+    const slot = browserTabSlots[instanceId]?.find((candidate) => candidate.key === slotKey);
+    if (!slot) return false;
+    const previousPageKey = slot.pageKey;
+    const blankPage = createBrowserPage(instanceId, {
+      title: t("sessions.tabs.embeddedBrowser"),
+      status: "running",
+    });
+    slot.pageKey = blankPage.key;
+    removeBrowserPageIfUnused(instanceId, previousPageKey);
+    return true;
   }
 
   function openRemoteDesktopTab(instanceId: string, aiSessionId?: string) {
@@ -772,24 +889,26 @@ export function useActiveInstanceSessions({
     window.removeEventListener(CLOSE_SESSION_REMOTE_DESKTOP_EVENT, handleCloseRemoteDesktopRequest);
   });
 
-  function updateBrowserTab(instanceId: string, sessionKey: string, patch: { title?: string; url?: string; status?: string }) {
-    const session = browserSessionTabs[instanceId]?.find((tab) => tab.key === sessionKey);
-    if (!session) return;
-    if (typeof patch.title === "string" && patch.title.trim()) session.title = patch.title.trim().slice(0, 120);
-    if (typeof patch.url === "string" && patch.url.trim()) session.source = { ...(session.source || {}), currentUrl: patch.url.trim().slice(0, 2000) };
-    if (typeof patch.status === "string" && patch.status.trim()) session.status = patch.status.trim();
+  function updateBrowserTab(instanceId: string, pageKey: string, patch: { title?: string; url?: string; status?: string }) {
+    const page = browserPages[instanceId]?.find((candidate) => candidate.key === pageKey);
+    if (!page) return;
+    if (typeof patch.title === "string" && patch.title.trim()) page.title = patch.title.trim().slice(0, 120);
+    if (typeof patch.url === "string" && patch.url.trim()) page.currentUrl = patch.url.trim().slice(0, 2000);
+    if (typeof patch.status === "string" && patch.status.trim()) page.status = patch.status.trim();
   }
 
   function pruneBrowserInstances(validInstanceIds: ReadonlySet<string>) {
-    for (const instanceId of Object.keys(browserSessionTabs)) {
+    const instanceIds = new Set([...Object.keys(browserTabSlots), ...Object.keys(browserPages)]);
+    for (const instanceId of instanceIds) {
       if (validInstanceIds.has(instanceId)) continue;
       if (typeof window !== "undefined") {
         (window as Window & { taskHandoffDesktop?: { logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void } }).taskHandoffDesktop?.logBrowserDiagnostic?.({
-          message: `browser instances pruned tabs=${browserSessionTabs[instanceId]?.length || 0}`,
+          message: `browser instances pruned tabs=${browserTabSlots[instanceId]?.length || 0}`,
           instanceId,
         });
       }
-      delete browserSessionTabs[instanceId];
+      delete browserTabSlots[instanceId];
+      delete browserPages[instanceId];
       delete rightPaneSessionKeys[instanceId];
       delete rightSelectedSessionKeys[instanceId];
       delete selectedSessionKeys[instanceId];
@@ -819,6 +938,7 @@ export function useActiveInstanceSessions({
     appLaunchButtonLabel,
     appLaunchButtonTitle,
     canLaunchApp,
+    browserPages,
     browserSessionTabs,
     browserSurfaceState,
     remoteDesktopSessionTabs,
@@ -830,6 +950,9 @@ export function useActiveInstanceSessions({
     leftSessionKey,
     moveSessionTab,
     moveSessionToPane,
+    moveBrowserPageToTab,
+    bindLocalBrowserSlotToPage,
+    blankLocalBrowserSlot,
     openAiSessionApp,
     openBrowserTab,
     pruneBrowserInstances,

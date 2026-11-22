@@ -60,6 +60,14 @@ export const navigation = {
     failed: "无法读取 Node Agent 的权威信任状态：{message}。请确认节点在线，或使用本机 `task-handoff-node-agent trust list` 恢复。",
     stale: "此请求已在 Node Agent 处变化。重新读取后再决定。",
   },
+  browserAccessRequest: {
+    title: "Agent 浏览器访问申请",
+    hint: "AI 会话请求访问此实例已打开的浏览器页面。批准后该实例的所有 AI 会话都能使用浏览器。",
+    instance: "实例",
+    expires: "申请过期",
+    approve: "允许访问",
+    deny: "拒绝",
+  },
   trustApproval: {
     showDetails: "详情",
     hideDetails: "收起详情",

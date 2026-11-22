@@ -22,3 +22,18 @@ test("every stacked item remains reachable while at most two cards are complete"
   assert.equal(visibleActionInboxCount(500), 2);
   assert.deepEqual(visibleActionInboxItems([], 0, 2), []);
 });
+
+test("browser access requests join the shared inbox and keep their creation time order", () => {
+  const browserRequest = {
+    type: "browser-access-request",
+    key: "browser-access-request:instance-one:breq_one",
+    instanceId: "instance-one",
+    instanceName: "Local",
+    request: { createdAt: "2026-01-04T00:00:00.000Z" },
+  };
+  const session = { type: "ai-session-approval", key: "ai:one", session: { updatedAt: "2026-01-01T00:00:00.000Z" } };
+  assert.deepEqual(
+    mergeActionInboxItems([session], [], [], undefined, [], [browserRequest]).map((item) => item.key),
+    ["browser-access-request:instance-one:breq_one", "ai:one"],
+  );
+});

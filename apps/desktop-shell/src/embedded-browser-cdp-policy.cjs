@@ -6,7 +6,7 @@ const ALLOWED_CDP_EVENT_SET = new Set(ALLOWED_CDP_EVENTS);
 function embeddedBrowserCdpMethodKind(value) {
   const method = typeof value === "string" ? value.trim() : "";
   if (!method || method.length > 240 || !/^[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/.test(method)) return undefined;
-  return ALLOWED_CDP_METHODS.get(method);
+  return ALLOWED_CDP_METHODS.get(method) ?? ALLOWED_CDP_METHODS.get(`${method.slice(0, method.indexOf("."))}.*`);
 }
 
 function assertEmbeddedBrowserCdpMethod(value, options = {}) {

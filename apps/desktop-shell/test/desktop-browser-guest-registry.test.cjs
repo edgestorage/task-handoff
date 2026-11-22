@@ -70,15 +70,27 @@ test("registry rejects another renderer, partition, or conflicting local session
   const store = registry();
   const host = fakeHost();
   const guest = fakeGuest();
-  store.addGuest({ host, guest, partition: "persist:instance-a" });
+  store.addGuest({ host, guest, partition: "persist:instance-a", instanceId: "instance-a" });
   store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "key-a", partition: "persist:instance-a" });
 
   assert.throws(() => store.register({ senderId: 99, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "key-a" }), { code: "BROWSER_GUEST_NOT_FOUND" });
   assert.throws(() => store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "key-a", partition: "persist:other" }), { code: "BROWSER_GUEST_PARTITION_MISMATCH" });
+  assert.throws(() => store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-b", sessionKey: "key-b", partition: "persist:instance-a" }), { code: "BROWSER_GUEST_PARTITION_MISMATCH" });
 
   const otherGuest = fakeGuest(42);
   store.addGuest({ host, guest: otherGuest, partition: "persist:instance-a" });
   assert.throws(() => store.register({ senderId: host.id, webContentsId: otherGuest.id, instanceId: "instance-a", sessionKey: "key-a", partition: "persist:instance-a" }), { code: "BROWSER_SESSION_KEY_CONFLICT" });
+});
+
+test("guest keeps the authorized instance captured at attach after its context lease is gone", () => {
+  const store = registry();
+  const host = fakeHost();
+  const guest = fakeGuest();
+  store.addGuest({ host, guest, partition: "persist:instance-a", instanceId: "instance-a" });
+
+  const tab = store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "key-a", partition: "persist:instance-a" });
+
+  assert.equal(tab.instanceId, "instance-a");
 });
 
 test("updates and list calls are scoped to the owning renderer and instance", () => {
@@ -99,6 +111,35 @@ test("updates and list calls are scoped to the owning renderer and instance", ()
   assert.equal(store.list({ senderId: hostA.id, instanceId: "instance-b" }).length, 0);
   assert.equal(store.list({ senderId: hostB.id }).length, 1);
   assert.throws(() => store.update({ senderId: hostB.id, tabRef: tabA.tabRef, title: "wrong owner" }), { code: "BROWSER_TAB_NOT_FOUND" });
+});
+
+test("renderer snapshots expose local session keys without widening the control DTO", () => {
+  const store = registry();
+  const host = fakeHost();
+  const guest = fakeGuest();
+  store.addGuest({ host, guest, partition: "persist:instance-a" });
+  store.register({
+    senderId: host.id,
+    webContentsId: guest.id,
+    instanceId: "instance-a",
+    sessionKey: "embedded-browser:local",
+    partition: "persist:instance-a",
+    title: "Example",
+    url: "https://example.com",
+  });
+
+  assert.equal("sessionKey" in store.list({ senderId: host.id })[0], false);
+  assert.deepEqual(store.listForRenderer({ senderId: host.id, instanceId: "instance-a" }).map((tab) => ({
+    sessionKey: tab.sessionKey,
+    title: tab.title,
+    url: tab.url,
+    hasTabRef: Boolean(tab.tabRef),
+  })), [{
+    sessionKey: "embedded-browser:local",
+    title: "Example",
+    url: "https://example.com",
+    hasTabRef: true,
+  }]);
 });
 
 test("CDP attach, send and detach stay bound to the registered guest", async () => {
@@ -122,6 +163,31 @@ test("CDP attach, send and detach stay bound to the registered guest", async () 
   store.attachDebugger({ tabRef: tab.tabRef, senderId: host.id });
   store.detachDebugger({ tabRef: tab.tabRef, senderId: host.id });
   assert.deepEqual(calls.map(([name]) => name), ["attach", "attach", "detach"]);
+});
+
+test("Page.reload stays scoped to the guest webContents instead of the embedding renderer", async () => {
+  const debuggerCalls = [];
+  const reloads = [];
+  const debuggerApi = new EventEmitter();
+  debuggerApi.attach = () => undefined;
+  debuggerApi.isAttached = () => false;
+  debuggerApi.sendCommand = async (method, params) => {
+    debuggerCalls.push([method, params]);
+    return { method, params };
+  };
+  const store = registry();
+  const host = fakeHost();
+  const guest = fakeGuest(41, debuggerApi);
+  guest.reload = () => reloads.push("reload");
+  guest.reloadIgnoringCache = () => reloads.push("reloadIgnoringCache");
+  store.addGuest({ host, guest, partition: "persist:instance-a" });
+  const tab = store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "key-a", partition: "persist:instance-a" });
+
+  store.attachDebugger({ tabRef: tab.tabRef, senderId: host.id });
+  assert.deepEqual(await store.sendCommand({ tabRef: tab.tabRef, senderId: host.id, method: "Page.reload", params: {} }), {});
+  assert.deepEqual(await store.sendCommand({ tabRef: tab.tabRef, senderId: host.id, method: "Page.reload", params: { ignoreCache: true } }), {});
+  assert.deepEqual(reloads, ["reload", "reloadIgnoringCache"]);
+  assert.deepEqual(debuggerCalls, []);
 });
 
 test("guest and host destruction clear tabRefs and debugger ownership", () => {

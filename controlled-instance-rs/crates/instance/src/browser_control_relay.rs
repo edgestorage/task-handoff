@@ -672,35 +672,47 @@ fn handle_control_value(
                 );
             }
             match serde_json::from_value::<EmbeddedBrowserTabsCreatedParams>(params) {
-                Ok(params) => match state.browser_control.register_tab(
-                    &state.config.instance_id,
-                    &params.source_ref,
-                    params.generation,
-                    &params.tab_ref,
-                    &params.title,
-                    &params.url,
-                    &params.state,
-                ) {
-                    Ok(_) => {
-                        if let Some(creation_ref) = params.creation_ref.as_deref() {
-                            if let Err(error) = state.browser_control.complete_creation(
-                                &params.source_ref,
-                                creation_ref,
-                                &params.tab_ref,
-                            ) {
-                                tracing::warn!(
-                                    code = error.code,
-                                    creation_ref,
-                                    tab_ref = %params.tab_ref,
-                                    "Browser tab creation completion was rejected"
-                                );
-                            }
+                Ok(params) => {
+                    match state.browser_control.page(&params.tab_ref) {
+                        Ok(page)
+                            if page.source_ref == params.source_ref
+                                && page.generation == params.generation => {}
+                        Ok(_) => {
+                            return send_request_error(
+                                writer,
+                                request_id.as_deref(),
+                                -32000,
+                                "Browser tab does not belong to the bound generation.",
+                                "BROWSER_LEASE_STALE",
+                            );
                         }
-                        publish_browser_events(state);
-                        Ok(())
+                        Err(error) => {
+                            return send_request_error(
+                                writer,
+                                request_id.as_deref(),
+                                -32000,
+                                &error.message,
+                                error.code,
+                            );
+                        }
                     }
-                    Err(error) => Err(error),
-                },
+                    if let Some(creation_ref) = params.creation_ref.as_deref() {
+                        if let Err(error) = state.browser_control.complete_creation(
+                            &params.source_ref,
+                            creation_ref,
+                            &params.tab_ref,
+                        ) {
+                            tracing::warn!(
+                                code = error.code,
+                                creation_ref,
+                                tab_ref = %params.tab_ref,
+                                "Browser tab creation completion was rejected"
+                            );
+                        }
+                    }
+                    publish_browser_events(state);
+                    Ok(())
+                }
                 Err(_) => Err(BrowserControlError::new(
                     "BROWSER_CHANNEL_PROTOCOL_ERROR",
                     "tabs.created params are invalid.",
@@ -720,12 +732,6 @@ fn handle_control_value(
             }
             match serde_json::from_value::<EmbeddedBrowserTabsDestroyedParams>(params) {
                 Ok(params) => {
-                    let result = state.browser_control.destroy_tab(
-                        &params.source_ref,
-                        params.generation,
-                        &params.tab_ref,
-                        &params.reason,
-                    );
                     if let Some(creation_ref) = params.creation_ref.as_deref() {
                         if let Err(error) = state.browser_control.fail_creation_if_active(
                             &params.source_ref,
@@ -740,7 +746,7 @@ fn handle_control_value(
                         }
                     }
                     publish_browser_events(state);
-                    result
+                    Ok(())
                 }
                 Err(_) => Err(BrowserControlError::new(
                     "BROWSER_CHANNEL_PROTOCOL_ERROR",

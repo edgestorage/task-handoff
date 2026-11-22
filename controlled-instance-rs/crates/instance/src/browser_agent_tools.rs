@@ -1,10 +1,16 @@
-use crate::{browser_control::BrowserControlError, state::AppState, story_tools::StoryToolError};
+use crate::{
+    browser_control::{BrowserAccessDecision, BrowserControlError},
+    state::AppState,
+    story_tools::StoryToolError,
+};
 use controlled_instance_ai_session::AiSession;
 use controlled_instance_protocol::{
-    AiSessionAgentToolName, EmbeddedBrowserCdpAccess, EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
+    AiSessionAgentToolName, EMBEDDED_BROWSER_ACCESS_WAIT_MS,
+    EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -35,17 +41,54 @@ pub async fn invoke(
         )
     })?;
 
+    if !state.browser_control.access().active {
+        if let Some(request) = state.browser_control.request_instance_access(&session.id) {
+            let decision = state
+                .browser_control
+                .wait_for_access_decision(
+                    &request.request_ref,
+                    Duration::from_millis(EMBEDDED_BROWSER_ACCESS_WAIT_MS),
+                )
+                .await;
+            match decision {
+                BrowserAccessDecision::Granted(_) => {}
+                BrowserAccessDecision::Pending(view) => {
+                    return Ok(json!({
+                        "status": "pending",
+                        "requestRef": view.request_ref,
+                        "expiresAt": view.expires_at,
+                        "message": "Approve Agent browser access for this controlled instance in the approval center, then call browser_cdp_access again.",
+                    }));
+                }
+                BrowserAccessDecision::Denied(view) => {
+                    return Ok(json!({
+                        "status": "denied",
+                        "requestRef": view.request_ref,
+                        "message": "The user denied Agent browser access for this controlled instance.",
+                    }));
+                }
+                BrowserAccessDecision::Expired(view) => {
+                    return Ok(json!({
+                        "status": "expired",
+                        "requestRef": view.request_ref,
+                        "message": "The browser access approval expired. Call browser_cdp_access again to request a new approval.",
+                    }));
+                }
+            }
+        }
+    }
+
     let (token, expires_at) = state
         .browser_control
         .issue_cdp_token(&session.id)
         .map_err(browser_error)?;
-    serde_json::to_value(EmbeddedBrowserCdpAccess {
-        http_endpoint: state.browser_cdp_http_endpoint(),
-        token,
-        expires_at: expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        protocol_version: EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION.to_string(),
-    })
-    .map_err(|error| tool_error("BROWSER_CDP_ACCESS_SERIALIZATION_FAILED", error.to_string()))
+    Ok(json!({
+        "status": "granted",
+        "httpEndpoint": state.browser_cdp_http_endpoint(),
+        "token": token,
+        "expiresAt": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "protocolVersion": EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
+    }))
 }
 
 fn browser_error(error: BrowserControlError) -> StoryToolError {
