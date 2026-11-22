@@ -69,7 +69,8 @@
       "Runtime.callFunctionOn": "page-write",
       "Runtime.getProperties": "read",
       "Runtime.releaseObject": "adapter-only",
-      "Schema.getDomains": "read"
+      "Schema.getDomains": "read",
+      "Emulation.*": "page-write"
     },
     "events": [
       "Console.messageAdded",
@@ -92,7 +93,27 @@
       "Runtime.executionContextCreated",
       "Runtime.executionContextDestroyed",
       "Runtime.executionContextsCleared"
-    ]
+    ],
+    "targetCdp": {
+      "profile": "embedded-browser-target-cdp",
+      "protocolVersion": "1.3",
+      "methods": [
+        "Target.getTargets",
+        "Target.getTargetInfo",
+        "Target.getBrowserContexts",
+        "Target.attachToTarget",
+        "Target.detachFromTarget",
+        "Target.closeTarget",
+        "Target.createTarget",
+        "Target.setDiscoverTargets"
+      ],
+      "events": [
+        "Target.targetCreated",
+        "Target.targetDestroyed",
+        "Target.targetInfoChanged",
+        "Target.detachedFromTarget"
+      ]
+    }
   },
   "frames": {
     "openControlStream": "0100000001000000187b2273747265616d4b696e64223a22636f6e74726f6c227d",
@@ -309,6 +330,127 @@
         "timestamp": 1
       }
     },
+    "targetInfo": {
+      "targetId": "browser_tab_1",
+      "type": "page",
+      "title": "Example",
+      "url": "https://example.com/",
+      "attached": false,
+      "browserContextId": "source_main_pool"
+    },
+    "targetInfoChanged": {
+      "targetId": "browser_tab_2",
+      "type": "page",
+      "title": "Renderer page updated",
+      "url": "https://renderer.example/updated",
+      "attached": true,
+      "browserContextId": "source_renderer"
+    },
+    "targetGetTargets": {
+      "targetInfos": [
+        {
+          "targetId": "browser_tab_1",
+          "type": "page",
+          "title": "Example",
+          "url": "https://example.com/",
+          "attached": false,
+          "browserContextId": "source_main_pool"
+        },
+        {
+          "targetId": "browser_tab_2",
+          "type": "page",
+          "title": "Renderer page",
+          "url": "https://renderer.example/",
+          "attached": true,
+          "browserContextId": "source_renderer"
+        }
+      ]
+    },
+    "targetGetTargetInfoParams": {
+      "targetId": "browser_tab_2"
+    },
+    "targetGetTargetInfo": {
+      "targetInfo": {
+        "targetId": "browser_tab_2",
+        "type": "page",
+        "title": "Renderer page",
+        "url": "https://renderer.example/",
+        "attached": true,
+        "browserContextId": "source_renderer"
+      }
+    },
+    "targetGetBrowserContexts": {
+      "browserContextIds": [
+        "source_main_pool",
+        "source_renderer"
+      ],
+      "defaultBrowserContextId": "source_main_pool"
+    },
+    "targetAttachParams": {
+      "targetId": "browser_tab_1",
+      "flatten": true
+    },
+    "targetAttachResult": {
+      "sessionId": "target_session_1"
+    },
+    "targetDetachParams": {
+      "sessionId": "target_session_1"
+    },
+    "targetCloseParams": {
+      "targetId": "browser_tab_1"
+    },
+    "targetCloseResult": {
+      "success": true
+    },
+    "targetCreateParams": {
+      "url": "https://created.example/"
+    },
+    "targetCreateResult": {
+      "targetId": "browser_tab_created"
+    },
+    "targetSetDiscoverParams": {
+      "discover": true
+    },
+    "targetUnsupportedMethod": "Target.createBrowserContext",
+    "targetCreatedEvent": {
+      "method": "Target.targetCreated",
+      "params": {
+        "targetInfo": {
+          "targetId": "browser_tab_1",
+          "type": "page",
+          "title": "Example",
+          "url": "https://example.com/",
+          "attached": false,
+          "browserContextId": "source_main_pool"
+        }
+      }
+    },
+    "targetInfoChangedEvent": {
+      "method": "Target.targetInfoChanged",
+      "params": {
+        "targetInfo": {
+          "targetId": "browser_tab_2",
+          "type": "page",
+          "title": "Renderer page",
+          "url": "https://renderer.example/",
+          "attached": true,
+          "browserContextId": "source_renderer"
+        }
+      }
+    },
+    "targetDestroyedEvent": {
+      "method": "Target.targetDestroyed",
+      "params": {
+        "targetId": "browser_tab_1"
+      }
+    },
+    "targetDetachedEvent": {
+      "method": "Target.detachedFromTarget",
+      "params": {
+        "sessionId": "target_session_1",
+        "targetId": "browser_tab_1"
+      }
+    },
     "externalResult": {
       "delivery": "http",
       "resultRef": "result_1",
@@ -318,6 +460,74 @@
     "channelError": {
       "code": "BROWSER_CHANNEL_STREAM_KIND_UNSUPPORTED",
       "message": "unsupported"
+    },
+    "creationContext": {
+      "revision": 3,
+      "defaultContext": {
+        "sourceRef": "source_main_pool",
+        "browserContextId": "source_main_pool"
+      },
+      "panels": [
+        {
+          "sourceRef": "source_main_pool",
+          "panelLabel": "MacBook",
+          "hostLabel": "Main pool",
+          "pageHost": "main-page-pool",
+          "canCreate": true,
+          "isDefault": true,
+          "canClaim": true
+        },
+        {
+          "sourceRef": "source_renderer",
+          "panelLabel": "Mac mini",
+          "hostLabel": "Renderer window",
+          "pageHost": "renderer-webview",
+          "canCreate": true,
+          "isDefault": false,
+          "canClaim": false
+        }
+      ],
+      "pendingCreation": {
+        "creationRef": "creation_pending",
+        "url": "https://pending.example/",
+        "state": "pending",
+        "expiresAt": "2026-11-22T12:02:00.000Z"
+      }
+    },
+    "creationContextClaimRequest": {
+      "sourceRef": "source_renderer",
+      "expectedRevision": 3
+    },
+    "creationContextClaimResult": {
+      "sourceRef": "source_renderer",
+      "browserContextId": "source_renderer",
+      "revision": 4
+    },
+    "creationContextChanged": {
+      "type": "browser.creation-context.changed",
+      "revision": 4,
+      "defaultBrowserContextId": "source_renderer",
+      "previousBrowserContextId": "source_main_pool"
+    },
+    "creationContextRequiredError": {
+      "code": "BROWSER_CREATION_CONTEXT_REQUIRED",
+      "message": "No connected panel has claimed the default browser creation context.",
+      "execution": "not-started",
+      "creationRef": "creation_pending",
+      "expiresAt": "2026-11-22T12:02:00.000Z"
+    },
+    "creationContextConflictError": {
+      "code": "BROWSER_DEFAULT_CONTEXT_CONFLICT",
+      "message": "Another panel changed the default browser creation context.",
+      "execution": "not-started",
+      "revision": 3,
+      "defaultBrowserContextId": "source_main_pool"
+    },
+    "creationContextNotOwnedError": {
+      "code": "BROWSER_CREATION_CONTEXT_NOT_OWNED",
+      "message": "The requested browser source does not belong to this panel.",
+      "execution": "not-started",
+      "revision": 3
     }
   },
   "capabilities": {
@@ -335,7 +545,8 @@
       "pageHosts": [
         "renderer-webview",
         "main-page-pool"
-      ]
+      ],
+      "targetCdp": true
     },
     "withUnknownExtensions": {
       "supported": true,
@@ -356,7 +567,24 @@
         "future-page-host",
         "main-page-pool"
       ],
+      "targetCdp": true,
       "futureField": true
+    },
+    "legacyWithoutTargetCdp": {
+      "supported": true,
+      "transports": [
+        "reverse-websocket"
+      ],
+      "streamKinds": [
+        "control"
+      ],
+      "drivers": [
+        "electron-page-cdp"
+      ],
+      "pageHosts": [
+        "renderer-webview",
+        "main-page-pool"
+      ]
     }
   }
 }

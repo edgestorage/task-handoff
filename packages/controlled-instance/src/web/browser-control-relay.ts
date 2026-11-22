@@ -107,10 +107,7 @@ export class BrowserControlRelayRegistry {
   private nextConnection = 0;
   private nextRequest = 0;
 
-  constructor(
-    private readonly service: BrowserControlService,
-    private readonly instanceId: string,
-  ) {}
+  constructor(private readonly service: BrowserControlService) {}
 
   subscribeCdpEvent(listener: (event: BrowserControlCdpEvent) => void) {
     this.cdpListeners.add(listener);
@@ -301,15 +298,10 @@ export class BrowserControlRelayRegistry {
     if (method === "tabs.created") {
       const parsed = EmbeddedBrowserTabsCreatedParamsSchema.parse(params);
       this.requireBinding(state, parsed.sourceRef, parsed.generation);
-      this.service.registerTab(
-        this.instanceId,
-        parsed.sourceRef,
-        parsed.generation,
-        parsed.tabRef,
-        parsed.title,
-        parsed.url,
-        parsed.state,
-      );
+      const page = this.service.page(parsed.tabRef);
+      if (page.sourceRef !== parsed.sourceRef || page.generation !== parsed.generation) {
+        throw new BrowserControlError("BROWSER_LEASE_STALE", "Browser tab does not belong to the bound generation.", 409);
+      }
       if (parsed.creationRef) {
         try { this.service.completeCreation(parsed.sourceRef, parsed.creationRef, parsed.tabRef); } catch { /* Page registration is authoritative. */ }
       }
@@ -318,7 +310,6 @@ export class BrowserControlRelayRegistry {
     if (method === "tabs.destroyed") {
       const parsed = EmbeddedBrowserTabsDestroyedParamsSchema.parse(params);
       this.requireBinding(state, parsed.sourceRef, parsed.generation);
-      this.service.destroyTab(parsed.sourceRef, parsed.generation, parsed.tabRef, parsed.reason);
       if (parsed.creationRef) {
         try { this.service.failCreationIfActive(parsed.sourceRef, parsed.creationRef, parsed.reason); } catch { /* Destruction already removed the page. */ }
       }

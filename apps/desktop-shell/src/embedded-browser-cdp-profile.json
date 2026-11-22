@@ -46,7 +46,8 @@
     "Runtime.callFunctionOn": "page-write",
     "Runtime.getProperties": "read",
     "Runtime.releaseObject": "adapter-only",
-    "Schema.getDomains": "read"
+    "Schema.getDomains": "read",
+    "Emulation.*": "page-write"
   },
   "events": [
     "Console.messageAdded",

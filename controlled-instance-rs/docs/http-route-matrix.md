@@ -1,6 +1,6 @@
 # Controlled Instance HTTP and WebSocket Route Matrix
 
-This matrix separates the frozen 202-route `v0.0.47` release snapshot from 20 target-current Node additions. The snapshot includes the instance-shell WebSocket route introduced in `v0.0.47`. This is static registration evidence, not per-route behavioral parity; the earlier release comparison remains tracked in `baseline-v0.0.47.md`.
+This matrix separates the frozen 202-route `v0.0.47` release snapshot from 38 target-current Node additions. The snapshot includes the instance-shell WebSocket route introduced in `v0.0.47`. This is static registration evidence, not per-route behavioral parity; the earlier release comparison remains tracked in `baseline-v0.0.47.md`.
 
 ## Authority and scope
 
@@ -20,6 +20,8 @@ This matrix separates the frozen 202-route `v0.0.47` release snapshot from 20 ta
 | Node Agent process | `TASK_HANDOFF_REGISTRATION_TOKEN`; most routes are controlled-mode only | `/api/internal/node-agent/*`, `/api/internal/node-agent-connection`, `/api/internal/instance-shell` |
 | Node Agent private config | `TASK_HANDOFF_REGISTRATION_TOKEN` | `/api/internal/ai-session-persistence-settings`, `/api/internal/model-environment`, `/api/internal/model-catalog`, `/api/internal/codex-settings` |
 | Agent tool | Ephemeral Story tool bridge token | `POST /api/internal/agent-tools/invoke`, `GET/POST/DELETE /api/internal/agent-tools/mcp` |
+| Browser control proxy | `TASK_HANDOFF_REGISTRATION_TOKEN` plus verified Control Plane/user headers | `/api/browser-control/*` |
+| Browser CDP | AI Session-scoped CDP token via bearer or `token` query; instance browser access must be active | `/json/*`, `/devtools/*` |
 
 When web auth is disabled, web routes remain reachable without a token. Node Agent and agent-tool routes still require their own credentials. Authentication failure uses the route-specific structured error code and never falls back to another token domain.
 
@@ -245,7 +247,7 @@ This section freezes 202 explicit Node registrations at tag `v0.0.47`, including
 
 ## Target-current Node extensions after `v0.0.47`
 
-These 20 registrations are outside the pinned `v0.0.47` release snapshot.
+These 38 registrations are outside the pinned `v0.0.47` release snapshot.
 
 | Method | Path | Auth | Transport | Success / notes |
 | --- | --- | --- | --- | --- |
@@ -256,6 +258,25 @@ These 20 registrations are outside the pinned `v0.0.47` release snapshot.
 | `GET` | `/api/ai-sessions/:id/repository/files/content` | Web | File | 200 or 206 |
 | `GET` | `/api/apps/sessions/:id/repository/files/content` | Web | File | 200 or 206 |
 | `GET` | `/api/ai-sessions/:id/turns/:turnId/tool-activity` | Web | JSON | 200 |
+| `DELETE` | `/api/browser-control/access` | Browser control proxy | JSON | 200 |
+| `DELETE` | `/api/browser-control/creation-context` | Browser control proxy | JSON | 200 |
+| `DELETE` | `/api/browser-control/sources/:sourceRef` | Browser control proxy | JSON | 200 |
+| `GET` | `/api/browser-control/access` | Browser control proxy | JSON | 200 |
+| `GET` | `/api/browser-control/creation-context` | Browser control proxy | JSON | 200 |
+| `GET` | `/api/browser-control/relay` | Browser control proxy | WebSocket | 101 then framed |
+| `GET` | `/devtools/browser/:browserRef` | Browser CDP | WebSocket | 101 then CDP JSON |
+| `GET` | `/devtools/page/:tabRef` | Browser CDP | WebSocket | 101 then CDP JSON |
+| `GET` | `/json/close/:tabRef` | Browser CDP | JSON | 200 |
+| `GET` | `/json/list` | Browser CDP | JSON | 200 |
+| `GET` | `/json/new` | Browser CDP | JSON | 200 or 202 pending creation |
+| `GET` | `/json/version` | Browser CDP | JSON | 200 |
+| `POST` | `/api/browser-control/access` | Browser control proxy | JSON | 200 |
+| `POST` | `/api/browser-control/access-requests/:requestRef/deny` | Browser control proxy | JSON | 200 |
+| `POST` | `/api/browser-control/sources` | Browser control proxy | JSON | 200 |
+| `POST` | `/api/browser-control/sources/:sourceRef/deltas` | Browser control proxy | JSON | 200 |
+| `PUT` | `/api/browser-control/creation-context` | Browser control proxy | JSON | 200 |
+| `PUT` | `/api/browser-control/sources/:sourceRef/snapshot` | Browser control proxy | JSON | 200 |
+| `PUT` | `/json/new` | Browser CDP | JSON | 200 or 202 pending creation |
 | `GET` | `/api/internal/remote-desktop/attach` | Node Agent | WebSocket | 101 then framed |
 | `GET` | `/api/internal/remote-desktop/fallback/:role` | Node Agent | WebSocket | 101 then binary fallback stream |
 | `GET` | `/api/internal/remote-desktop/permissions` | Node Agent | JSON | 200 |
@@ -287,7 +308,7 @@ These 20 registrations are outside the pinned `v0.0.47` release snapshot.
 - HTTP, WebSocket, Node Agent, private model/config, agent-tool, App Runtime, repository, Trigger, Config Sync, Story and Git credential domains have Rust handlers and contract tests in their owning crates.
 - AI Session message and Timeline deltas use the same 20-50ms coalescing window (32ms default), insertion order, authoritative-event flush and `event-source-close` behavior as Node. Diagnostics expose the live coalescer counters instead of placeholders.
 - Non-`/api` paths use the frozen UI's `index.html` with HTTP `200` for SPA route refreshes; unmatched `/api/*` paths remain structured `404` responses.
-- Tests compare the pinned release snapshot, the 222-route target-current matrix, and the Node/Rust registrations. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
+- Tests compare the pinned release snapshot, the 240-route target-current matrix, and the Node/Rust registrations. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
 
 ## Remaining fixture work
 

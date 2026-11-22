@@ -5,8 +5,9 @@ import { deviceTrustApprovalItems, operationApprovalItems } from "@task-handoff/
 import type { CloudNodeRelayTrust } from "../../../api/types";
 import type { aiSessionApprovalItems } from "./aiSessionApprovals";
 import type { storyDecisionInboxItems } from "./storyDecisionItems";
+import type { BrowserAccessRequestItem } from "./useBrowserAccessRequests";
 
-export type ActionInboxItem = ReturnType<typeof aiSessionApprovalItems>[number] | ReturnType<typeof storyDecisionInboxItems>[number] | {
+export type ActionInboxItem = ReturnType<typeof aiSessionApprovalItems>[number] | ReturnType<typeof storyDecisionInboxItems>[number] | BrowserAccessRequestItem | {
   type: "operation-approval";
   key: string;
   request: ApprovalRequest;
@@ -27,6 +28,7 @@ function itemTimestamp(item: ActionInboxItem) {
   if (item.type === "story-decision") return item.decision.createdAt;
   if (item.type === "device-trust") return item.request.requestedAt;
   if (item.type === "node-control-plane-trust") return item.trust.requestedAt;
+  if (item.type === "browser-access-request") return item.request.createdAt;
   return item.session.updatedAt;
 }
 
@@ -36,10 +38,12 @@ export function mergeActionInboxItems(
   storyItems: ReturnType<typeof storyDecisionInboxItems>,
   deviceTrust?: CloudDeviceTrustSnapshot,
   nodeControlPlaneTrust: CloudNodeRelayTrust[] = [],
+  browserAccessRequests: BrowserAccessRequestItem[] = [],
 ): ActionInboxItem[] {
   return [
     ...aiItems,
     ...storyItems,
+    ...browserAccessRequests,
     ...operationApprovalItems("", requests),
     ...deviceTrustInboxItems(deviceTrust),
     ...nodeControlPlaneTrustInboxItems(nodeControlPlaneTrust),

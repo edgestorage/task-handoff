@@ -24,7 +24,7 @@ type PluginOptions = {
   fetch?: typeof globalThis.fetch;
 };
 
-const BROWSER_CDP_ACCESS_DESCRIPTION = "Return a short-lived standard CDP endpoint and token for this controlled instance. Send Authorization: Bearer <token> or ?token=<token> on HTTP requests. Use GET /json/list to discover all open pages, PUT /json/new?url=... to request a new page, GET /json/close/{tabRef} to close a page, and connect to each page's webSocketDebuggerUrl for raw CDP JSON. Only one writer may control the same tab at a time.";
+const BROWSER_CDP_ACCESS_DESCRIPTION = "Return a short-lived standard CDP endpoint and token for this controlled instance. If Agent browser access is disabled, this call asks the user for approval: it returns status=pending with a requestRef when the approval is still waiting, status=denied when the user denies it, and status=expired when the approval window closes. Tell the user to approve it in the approval center, then call this tool again; never loop on this tool while status is pending. When status=granted, send Authorization: Bearer <token> or ?token=<token> on HTTP requests. Use GET /json/list to discover all open pages, PUT /json/new?url=... to request a new page, GET /json/close/{tabRef} to close a page, and connect to each page's webSocketDebuggerUrl for raw CDP JSON. The full Emulation domain is available for viewport, touch, user-agent, media, and other page-scoped device simulation. Only one writer may control the same tab at a time.";
 
 async function invoke(options: PluginOptions, tool: StoryAgentToolName | AgentInvocationToolName | BrowserAgentToolName, args: unknown, context: OpenCodeToolContext) {
   const endpoint = options.endpoint?.trim();

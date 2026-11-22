@@ -57,6 +57,14 @@ export const navigation = {
     failed: "Could not read the authoritative trust state from the Node Agent: {message}. Check that the node is online, or recover with `task-handoff-node-agent trust list` on the node.",
     stale: "This request changed on the Node Agent. Refresh it before deciding.",
   },
+  browserAccessRequest: {
+    title: "Agent browser access request",
+    hint: "An AI session is asking to access this instance's open browser pages. Approving lets every AI session on this instance use the browser.",
+    instance: "Instance",
+    expires: "Request expires",
+    approve: "Allow access",
+    deny: "Deny",
+  },
   trustApproval: {
     showDetails: "Details",
     hideDetails: "Hide details",

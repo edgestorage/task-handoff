@@ -17435,13 +17435,39 @@ mod tests {
             .expect("response")
     }
 
+    async fn browser_proxy_json_request(
+        app: &Router,
+        method: Method,
+        uri: &str,
+        panel_id: &str,
+        user_id: &str,
+        body: Option<Value>,
+    ) -> Response {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, "Bearer test-registration-token")
+            .header("x-task-handoff-control-plane-id", panel_id)
+            .header("x-task-handoff-user-id", user_id);
+        let body = if let Some(body) = body {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
+            Body::from(serde_json::to_vec(&body).expect("json body"))
+        } else {
+            Body::empty()
+        };
+        app.clone()
+            .oneshot(builder.body(body).expect("request"))
+            .await
+            .expect("response")
+    }
+
     fn browser_test_source(
         state: &AppState,
         pages: Vec<(String, String)>,
     ) -> controlled_instance_protocol::EmbeddedBrowserSource {
-        let source = state
-            .browser_control
-            .register_source(crate::browser_control::BrowserSourceRegistration {
+        browser_test_register_source(
+            state,
+            crate::browser_control::BrowserSourceRegistration {
                 panel_id: "control_plane_1".to_string(),
                 owner_ref: "user_1".to_string(),
                 display_name: "Desktop A".to_string(),
@@ -17450,7 +17476,59 @@ mod tests {
                 renderer_host_binding: None,
                 page_host: EmbeddedBrowserPageHost::MainPagePool,
                 page_host_capabilities: EmbeddedBrowserPageHostCapabilities::default(),
-            })
+            },
+            pages,
+        )
+    }
+
+    fn browser_test_creatable_source(
+        state: &AppState,
+        panel_id: &str,
+        owner_ref: &str,
+        publisher_ref: &str,
+    ) -> controlled_instance_protocol::EmbeddedBrowserSource {
+        browser_test_creatable_source_with_pages(
+            state,
+            panel_id,
+            owner_ref,
+            publisher_ref,
+            Vec::new(),
+        )
+    }
+
+    fn browser_test_creatable_source_with_pages(
+        state: &AppState,
+        panel_id: &str,
+        owner_ref: &str,
+        publisher_ref: &str,
+        pages: Vec<(String, String)>,
+    ) -> controlled_instance_protocol::EmbeddedBrowserSource {
+        browser_test_register_source(
+            state,
+            crate::browser_control::BrowserSourceRegistration {
+                panel_id: panel_id.to_string(),
+                owner_ref: owner_ref.to_string(),
+                display_name: format!("Desktop {panel_id}"),
+                host_label: None,
+                publisher_ref: publisher_ref.to_string(),
+                renderer_host_binding: None,
+                page_host: EmbeddedBrowserPageHost::MainPagePool,
+                page_host_capabilities: EmbeddedBrowserPageHostCapabilities::for_page_host(
+                    EmbeddedBrowserPageHost::MainPagePool,
+                ),
+            },
+            pages,
+        )
+    }
+
+    fn browser_test_register_source(
+        state: &AppState,
+        registration: crate::browser_control::BrowserSourceRegistration,
+        pages: Vec<(String, String)>,
+    ) -> controlled_instance_protocol::EmbeddedBrowserSource {
+        let source = state
+            .browser_control
+            .register_source(registration)
             .expect("browser source");
         let snapshot = EmbeddedBrowserSourceSnapshot {
             source_ref: source.source_ref.clone(),
@@ -23791,5 +23869,531 @@ mod tests {
             body_json(unauthenticated).await["error"]["code"],
             "BROWSER_AUTHORIZATION_REQUIRED"
         );
+    }
+
+    #[tokio::test]
+    async fn browser_creation_context_routes_require_source_ownership_and_clear_default() {
+        let (state, _root) = test_state();
+        let first =
+            browser_test_creatable_source(&state, "control_plane_1", "user_1", "publisher-first");
+        let second =
+            browser_test_creatable_source(&state, "control_plane_2", "user_2", "publisher-second");
+        let app = router(state.clone());
+
+        let web_snapshot = browser_proxy_json_request(
+            &app,
+            Method::GET,
+            "/api/browser-control/creation-context",
+            "control_plane_1",
+            "user_1",
+            None,
+        )
+        .await;
+        assert_eq!(web_snapshot.status(), StatusCode::OK);
+        let web_snapshot = body_json(web_snapshot).await;
+        assert!(web_snapshot["data"]["panels"]
+            .as_array()
+            .expect("panels")
+            .iter()
+            .all(|panel| panel["canClaim"] == false));
+
+        let own_snapshot = browser_proxy_json_request(
+            &app,
+            Method::GET,
+            &format!(
+                "/api/browser-control/creation-context?sourceRef={}",
+                first.source_ref
+            ),
+            "control_plane_1",
+            "user_1",
+            None,
+        )
+        .await;
+        assert_eq!(own_snapshot.status(), StatusCode::OK);
+        let own_snapshot = body_json(own_snapshot).await;
+        let panels = own_snapshot["data"]["panels"].as_array().expect("panels");
+        assert!(panels
+            .iter()
+            .find(|panel| panel["sourceRef"] == first.source_ref)
+            .is_some_and(|panel| panel["canClaim"] == true));
+        assert!(panels
+            .iter()
+            .find(|panel| panel["sourceRef"] == second.source_ref)
+            .is_some_and(|panel| panel["canClaim"] == false));
+
+        let forged_snapshot = browser_proxy_json_request(
+            &app,
+            Method::GET,
+            &format!(
+                "/api/browser-control/creation-context?sourceRef={}",
+                second.source_ref
+            ),
+            "control_plane_1",
+            "user_1",
+            None,
+        )
+        .await;
+        assert_eq!(forged_snapshot.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            body_json(forged_snapshot).await["error"]["code"],
+            "BROWSER_CREATION_CONTEXT_NOT_OWNED"
+        );
+
+        let forged_claim = browser_proxy_json_request(
+            &app,
+            Method::PUT,
+            "/api/browser-control/creation-context",
+            "control_plane_1",
+            "user_1",
+            Some(json!({ "sourceRef": second.source_ref, "expectedRevision": 0 })),
+        )
+        .await;
+        assert_eq!(forged_claim.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            body_json(forged_claim).await["error"]["code"],
+            "BROWSER_CREATION_CONTEXT_NOT_OWNED"
+        );
+
+        let claimed = browser_proxy_json_request(
+            &app,
+            Method::PUT,
+            "/api/browser-control/creation-context",
+            "control_plane_1",
+            "user_1",
+            Some(json!({ "sourceRef": first.source_ref, "expectedRevision": 0 })),
+        )
+        .await;
+        assert_eq!(claimed.status(), StatusCode::OK);
+        let claimed = body_json(claimed).await;
+        assert_eq!(claimed["data"]["browserContextId"], first.source_ref);
+        assert_eq!(claimed["data"]["revision"], 1);
+
+        let stale_claim = browser_proxy_json_request(
+            &app,
+            Method::PUT,
+            "/api/browser-control/creation-context",
+            "control_plane_2",
+            "user_2",
+            Some(json!({ "sourceRef": second.source_ref, "expectedRevision": 0 })),
+        )
+        .await;
+        assert_eq!(stale_claim.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            body_json(stale_claim).await["error"]["code"],
+            "BROWSER_DEFAULT_CONTEXT_CONFLICT"
+        );
+
+        let missing_revocation = browser_proxy_json_request(
+            &app,
+            Method::DELETE,
+            "/api/browser-control/creation-context",
+            "control_plane_1",
+            "user_1",
+            None,
+        )
+        .await;
+        assert_eq!(missing_revocation.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(missing_revocation).await["error"]["code"],
+            "BROWSER_REQUEST_INVALID"
+        );
+
+        let forged_revocation = browser_proxy_json_request(
+            &app,
+            Method::DELETE,
+            "/api/browser-control/creation-context",
+            "control_plane_2",
+            "user_2",
+            Some(json!({ "sourceRef": first.source_ref, "expectedRevision": 1 })),
+        )
+        .await;
+        assert_eq!(forged_revocation.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            body_json(forged_revocation).await["error"]["code"],
+            "BROWSER_CREATION_CONTEXT_NOT_OWNED"
+        );
+
+        let stale_revocation = browser_proxy_json_request(
+            &app,
+            Method::DELETE,
+            "/api/browser-control/creation-context",
+            "control_plane_1",
+            "user_1",
+            Some(json!({ "sourceRef": first.source_ref, "expectedRevision": 0 })),
+        )
+        .await;
+        assert_eq!(stale_revocation.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            body_json(stale_revocation).await["error"]["code"],
+            "BROWSER_DEFAULT_CONTEXT_CONFLICT"
+        );
+
+        let cleared = browser_proxy_json_request(
+            &app,
+            Method::DELETE,
+            &format!(
+                "/api/browser-control/creation-context?sourceRef={}&expectedRevision=1",
+                first.source_ref
+            ),
+            "control_plane_1",
+            "user_1",
+            None,
+        )
+        .await;
+        let cleared_status = cleared.status();
+        let cleared_body = body_json(cleared).await;
+        assert_eq!(cleared_status, StatusCode::OK, "{cleared_body}");
+        assert_eq!(cleared_body["data"]["cleared"], true);
+        assert_eq!(state.browser_control.default_browser_context_id(), None);
+    }
+
+    #[tokio::test]
+    async fn browser_cdp_discovery_exposes_browser_target_and_context_metadata() {
+        let (state, _root) = test_state();
+        let source = browser_test_source(
+            &state,
+            vec![
+                (
+                    "browser_tab_a".to_string(),
+                    "https://example.com/a".to_string(),
+                ),
+                (
+                    "browser_tab_b".to_string(),
+                    "https://example.com/b".to_string(),
+                ),
+            ],
+        );
+        state
+            .ai_sessions
+            .save(ai_session_record("ses_0000000000001", "aps_0000000000001"))
+            .expect("session");
+        state.browser_control.grant_instance_access();
+        let (token, _) = state
+            .browser_control
+            .issue_cdp_token("ses_0000000000001")
+            .expect("token");
+        let app = router(state);
+
+        let version = get_json(&app, &format!("/json/version?token={token}")).await;
+        assert_eq!(version.status(), StatusCode::OK);
+        let version = body_json(version).await;
+        assert_eq!(version["Browser"], "TaskHandoff/EmbeddedBrowser");
+        assert_eq!(version["Protocol-Version"], "1.3");
+        assert!(version["webSocketDebuggerUrl"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("ws://127.0.0.1:0/devtools/browser/")));
+
+        let listed = get_json(&app, &format!("/json/list?token={token}")).await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed = body_json(listed).await;
+        let targets = listed.as_array().expect("targets");
+        assert_eq!(targets.len(), 2);
+        assert!(targets
+            .iter()
+            .all(|target| target["browserContextId"] == source.source_ref));
+
+        let capabilities = get_json(&app, "/api/instance/capabilities").await;
+        assert_eq!(capabilities.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(capabilities).await["data"]["features"]["embeddedBrowserChannel"]
+                ["targetCdp"],
+            true
+        );
+    }
+
+    type BrowserCdpTestClient = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    async fn next_browser_cdp_json(client: &mut BrowserCdpTestClient) -> Value {
+        let message = tokio::time::timeout(std::time::Duration::from_secs(3), client.next())
+            .await
+            .expect("browser CDP timeout")
+            .expect("browser CDP stream ended")
+            .expect("browser CDP frame");
+        let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+            panic!("expected browser CDP text frame, got {message:?}");
+        };
+        serde_json::from_str(&text).expect("browser CDP json")
+    }
+
+    async fn browser_cdp_response(client: &mut BrowserCdpTestClient, id: i64) -> Value {
+        loop {
+            let value = next_browser_cdp_json(client).await;
+            if value["id"] == id {
+                return value;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_target_websocket_serves_targets_and_rejects_invalid_sessions() {
+        let (state, _root) = test_state();
+        let source = browser_test_creatable_source_with_pages(
+            &state,
+            "control_plane_1",
+            "user_1",
+            "browser-target-source-a",
+            vec![(
+                "browser_tab_a".to_string(),
+                "https://example.com/a".to_string(),
+            )],
+        );
+        let other = browser_test_creatable_source(
+            &state,
+            "control_plane_2",
+            "user_2",
+            "browser-target-source-b",
+        );
+        state
+            .ai_sessions
+            .save(ai_session_record("ses_0000000000001", "aps_0000000000001"))
+            .expect("session");
+        state.browser_control.grant_instance_access();
+        let (panel_id, owner_ref) = state
+            .browser_control
+            .source_owner(&source.source_ref)
+            .expect("source owner");
+        state
+            .browser_control
+            .claim_default_context(&source.source_ref, 0, &panel_id, &owner_ref)
+            .expect("default context");
+        let (token, _) = state
+            .browser_control
+            .issue_cdp_token("ses_0000000000001")
+            .expect("token");
+        let registry_epoch = state.browser_control.registry_epoch();
+        let app = router(state);
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind browser CDP");
+        let address = listener.local_addr().expect("browser CDP address");
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let (mut client, _) = tokio_tungstenite::connect_async(format!(
+            "ws://{address}/devtools/browser/{registry_epoch}?token={token}"
+        ))
+        .await
+        .expect("browser CDP upgrade");
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({ "id": 1, "method": "Target.getBrowserContexts" })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("get browser contexts");
+        let contexts = browser_cdp_response(&mut client, 1).await;
+        let mut context_ids = vec![source.source_ref.clone(), other.source_ref.clone()];
+        context_ids.sort();
+        assert_eq!(contexts["result"]["browserContextIds"], json!(context_ids));
+        assert_eq!(
+            contexts["result"]["defaultBrowserContextId"],
+            source.source_ref
+        );
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({ "id": 2, "method": "Target.getTargets" })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("get targets");
+        let targets = browser_cdp_response(&mut client, 2).await;
+        assert_eq!(
+            targets["result"]["targetInfos"][0]["targetId"],
+            "browser_tab_a"
+        );
+        assert_eq!(
+            targets["result"]["targetInfos"][0]["browserContextId"],
+            source.source_ref
+        );
+        assert_eq!(targets["result"]["targetInfos"][0]["attached"], false);
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "id": 3,
+                    "method": "Target.attachToTarget",
+                    "params": { "targetId": "browser_tab_a", "flatten": false }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("non-flatten attach");
+        let flat_only = browser_cdp_response(&mut client, 3).await;
+        assert_eq!(
+            flat_only["error"]["data"]["code"],
+            "BROWSER_OPERATION_UNSUPPORTED"
+        );
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({ "id": 4, "method": "Target.createBrowserContext" })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("create browser context");
+        let unsupported = browser_cdp_response(&mut client, 4).await;
+        assert_eq!(
+            unsupported["error"]["data"]["code"],
+            "BROWSER_OPERATION_UNSUPPORTED"
+        );
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "id": 7,
+                    "method": "Target.createTarget",
+                    "params": {
+                        "url": "https://example.com/wrong-context",
+                        "browserContextId": other.source_ref
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("create target in unselected context");
+        let unselected = browser_cdp_response(&mut client, 7).await;
+        assert_eq!(
+            unselected["error"]["data"]["code"],
+            "BROWSER_CREATION_CONTEXT_NOT_SELECTED"
+        );
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "id": 5,
+                    "sessionId": "tbs_missing",
+                    "method": "Runtime.evaluate",
+                    "params": { "expression": "1" }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("stale session command");
+        let stale = browser_cdp_response(&mut client, 5).await;
+        assert_eq!(stale["error"]["data"]["code"], "BROWSER_LEASE_STALE");
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "id": 6,
+                    "method": "Target.setDiscoverTargets",
+                    "params": { "discover": true }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("discover targets");
+        let discovered = browser_cdp_response(&mut client, 6).await;
+        assert!(discovered["result"].is_object());
+        let created = next_browser_cdp_json(&mut client).await;
+        assert_eq!(created["method"], "Target.targetCreated");
+        assert_eq!(
+            created["params"]["targetInfo"]["browserContextId"],
+            source.source_ref
+        );
+
+        client.close(None).await.expect("close browser CDP");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn browser_target_attach_reuses_a_session_lease_and_disconnect_keeps_the_page() {
+        let (state, _root) = test_state();
+        let source = browser_test_creatable_source_with_pages(
+            &state,
+            "control_plane_1",
+            "user_1",
+            "browser-attach-source",
+            vec![(
+                "browser_tab_a".to_string(),
+                "https://example.com/a".to_string(),
+            )],
+        );
+        state
+            .ai_sessions
+            .save(ai_session_record("ses_0000000000001", "aps_0000000000001"))
+            .expect("session");
+        state.browser_control.grant_instance_access();
+        let existing_lease = state
+            .browser_control
+            .attach_tab("ses_0000000000001", "browser_tab_a")
+            .expect("page lease");
+        let (token, _) = state
+            .browser_control
+            .issue_cdp_token("ses_0000000000001")
+            .expect("token");
+        let registry_epoch = state.browser_control.registry_epoch();
+        let app = router(state.clone());
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind browser CDP");
+        let address = listener.local_addr().expect("browser CDP address");
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let (mut client, _) = tokio_tungstenite::connect_async(format!(
+            "ws://{address}/devtools/browser/{registry_epoch}?token={token}"
+        ))
+        .await
+        .expect("browser CDP upgrade");
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "id": 1,
+                    "method": "Target.attachToTarget",
+                    "params": { "targetId": "browser_tab_a", "flatten": true }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("attach target");
+        let attached = browser_cdp_response(&mut client, 1).await;
+        assert!(attached["result"]["sessionId"]
+            .as_str()
+            .is_some_and(|session_id| session_id.starts_with("tbs_")));
+        assert_eq!(
+            state
+                .browser_control
+                .lease_for_session_tab("ses_0000000000001", "browser_tab_a"),
+            Some(existing_lease)
+        );
+
+        client.close(None).await.expect("close browser CDP");
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if state
+                    .browser_control
+                    .lease_for_session_tab("ses_0000000000001", "browser_tab_a")
+                    .is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("browser CDP detached lease");
+        assert_eq!(
+            state
+                .browser_control
+                .page("browser_tab_a")
+                .expect("page remains")
+                .source_ref,
+            source.source_ref
+        );
+        task.abort();
     }
 }

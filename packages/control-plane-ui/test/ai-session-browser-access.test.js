@@ -12,7 +12,7 @@ test("Agent browser access belongs to the controlled instance, not an AI Session
   assert.doesNotMatch(panel, /grantBrowserControlAccess|revokeBrowserControlAccess|getBrowserControlAccess/);
   assert.doesNotMatch(panel, /agentAccessGrant|agentAccessRevoke/);
   assert.match(api, /controlled-instances\/\$\{encodeURIComponent\(instanceId\)\}\/browser-control\$\{suffix\}/);
-  assert.match(api, /grantBrowserControlAccess\(instanceId: string\)/);
+  assert.match(api, /grantBrowserControlAccess\(\s*instanceId: string,/);
   assert.match(api, /getBrowserControlAccess\(instanceId: string\)/);
   assert.match(api, /revokeBrowserControlAccess\(instanceId: string\)/);
 });
@@ -22,7 +22,7 @@ test("the embedded browser grants and revokes access for the whole instance", ()
   assert.match(browser, /grantBrowserControlAccess\(props\.instanceId\)/);
   assert.match(browser, /revokeBrowserControlAccess\(props\.instanceId\)/);
   assert.match(browser, /browserControlAccess = ref<EmbeddedBrowserAccessView>\(\{ active: false, revision: 0 \}\)/);
-  assert.match(browser, /await refreshBrowserControlAccess\(\)/);
+  assert.match(browser, /await Promise\.all\(\[refreshBrowserControlAccess\(\), refreshBrowserCreationContext\(\)\]\)/);
   assert.match(browser, /class="embedded-browser-agent-access"/);
 });
 

@@ -16,7 +16,8 @@ test("embedded browser is a local session tab and never launches an AppSession",
 test("embedded browser mounts an isolated webview only after desktop context preparation", () => {
   const component = source("instance-detail/EmbeddedBrowserTab.vue");
   const addresses = source("instance-detail/browserAddressSuggestions.ts");
-  assert.match(component, /<webview v-if="context\?\.partition"[\s\S]*?src="about:blank"[\s\S]*?:partition="context\.partition"[\s\S]*?allowpopups/);
+  assert.match(component, /<webview\s+v-if="context\?\.partition"[\s\S]*?src="about:blank"[\s\S]*?:partition="context\.partition"[\s\S]*?allowpopups/);
+  assert.match(component, /@did-attach="scheduleGuestRegistration\('did-attach'\)"/);
   assert.match(component, /@dom-ready="handleGuestDomReady"/);
   assert.match(component, /prepareDesktopBrowserContext\(props\.instanceId\)/);
   assert.match(component, /result\.message \|\| \(result\.code/);
@@ -30,7 +31,8 @@ test("browser guests stay mounted while another tab in the same pane is selected
   const layer = source("instance-detail/EmbeddedBrowserSurfaceLayer.vue");
   const pane = source("instance-detail/SessionPaneContent.vue");
   assert.match(pane, /data-browser-surface/);
-  assert.match(layer, /v-for="\(tabs, instanceId\) in browserSessionTabs"/);
+  assert.match(layer, /v-for="pageKey in stablePages\[instanceId\] \|\| \[\]"/);
+  assert.match(layer, /const ordered = previous\.filter\(\(key\) => present\.has\(key\)\)/);
   assert.match(layer, /<EmbeddedBrowserTab/);
   assert.match(layer, /visibility: visible \? "visible" : "hidden"/);
 });
@@ -39,7 +41,7 @@ test("browser tabs are pruned only from a complete authoritative instance direct
   const workbench = source("ControlPlaneWorkbench.vue");
   const sessions = source("instance-detail/useActiveInstanceSessions.ts");
   assert.match(sessions, /function pruneBrowserInstances\(validInstanceIds: ReadonlySet<string>\)/);
-  assert.match(sessions, /if \(validInstanceIds\.has\(instanceId\)\) continue;[\s\S]*?delete browserSessionTabs\[instanceId\]/);
+  assert.match(sessions, /if \(validInstanceIds\.has\(instanceId\)\) continue;[\s\S]*?delete browserTabSlots\[instanceId\][\s\S]*?delete browserPages\[instanceId\]/);
   assert.match(workbench, /const authoritativeInstanceIds = computed<ReadonlySet<string> \| undefined>/);
   assert.match(workbench, /instanceDirectoryComplete\.value[\s\S]*?new Set\(sortedInstances\.value\.map/);
   assert.match(workbench, /watch\(authoritativeInstanceIds,[\s\S]*?pruneBrowserInstances\(instanceIds\)/);
@@ -93,10 +95,10 @@ test("browser popup requests create a sibling browser tab with its initial URL",
   const browser = source("instance-detail/EmbeddedBrowserTab.vue");
   assert.match(workbench, /onBrowserNewTab\?\.\(\(\{ instanceId: sourceInstanceId, url, title, creationRef \}\) =>[\s\S]*?openBrowserTab\(instanceId, url, \{ title, creationRef \}\)/);
   assert.match(sessions, /function openBrowserTab\(instanceId: string, initialUrl\?: string, options: \{ title\?: string; creationRef\?: string \} = \{\}\)/);
-  assert.match(sessions, /options\.creationRef \? \{ creationRef: options\.creationRef \} : \{\}/);
+  assert.match(sessions, /input\.creationRef \? \{ creationRef: input\.creationRef \} : \{\}/);
   assert.match(sessions, /status: initialUrl \? "loading" : "running"/);
-  assert.match(sessions, /initialUrl \? \{ initialUrl \} : \{\}/);
-  assert.match(layer, /:initial-url="typeof tab\.source\?\.currentUrl === 'string'/);
+  assert.match(sessions, /input\.initialUrl \? \{ initialUrl: input\.initialUrl \} : \{\}/);
+  assert.match(layer, /:initial-url="pageInitialUrl\(instanceId, pageKey\)"/);
   assert.match(browser, /initialUrl\?: string/);
   assert.match(browser, /creationRef\?: string/);
   assert.match(browser, /props\.creationRef \? \{ creationRef: props\.creationRef \} : \{\}/);
@@ -123,7 +125,7 @@ test("browser tabs publish page title and loading state", () => {
   assert.match(preview, /session\.status === 'loading'/);
   assert.match(preview, /sessionDisplayName\(session, t\)/);
   assert.match(preview, /session\.kind === "embedded-browser"[\s\S]*?currentUrl/);
-  assert.match(layer, /\$emit\('updateBrowserTab', instanceId, tab\.key, patch\)/);
+  assert.match(layer, /\$emit\('updateBrowserTab', instanceId, pageKey, patch\)/);
   assert.match(workbench, /@update-browser-tab="updateCombinedBrowserTab"/);
   assert.match(workbench, /function updateCombinedBrowserTab\(instanceId: string, sessionKey: string, patch:/);
   assert.match(sessions, /function updateBrowserTab\(/);
@@ -132,7 +134,11 @@ test("browser tabs publish page title and loading state", () => {
 test("browser guests register their live tab identity after dom-ready and clear it on teardown", () => {
   const browser = source("instance-detail/EmbeddedBrowserTab.vue");
   const bridge = fs.readFileSync(new URL("../src/lib/desktopBridge.ts", import.meta.url), "utf8");
-  assert.match(browser, /function handleGuestDomReady\(\) \{\s*applyBackgroundThrottling\(\);\s*void registerGuestTab\(\);/);
+  assert.match(browser, /function handleGuestDomReady\(\) \{\s*applyBackgroundThrottling\(\);\s*scheduleGuestRegistration\("dom-ready"\);/);
+  assert.match(browser, /function scheduleGuestRegistration\(reason: string\)/);
+  assert.match(browser, /browser tab registration waiting for webContentsId attempt=/);
+  assert.match(browser, /resolveGuestWebContentsId\(\)/);
+  assert.match(browser, /if \(!registeredTabRef\) scheduleGuestRegistration\("did-finish-load"\)/);
   assert.match(browser, /registerDesktopBrowserTab\(\{[\s\S]*?webContentsId[\s\S]*?instanceId: props\.instanceId[\s\S]*?sessionKey: localSessionKey/);
   assert.match(browser, /registeredTabRef = result\.tab\.tabRef/);
   assert.match(browser, /updateDesktopBrowserTab\(\{ tabRef: registeredTabRef, \.\.\.patch \}\)/);
@@ -149,9 +155,61 @@ test("an authoritative tab close is matched by opaque tabRef and removes the own
   const layer = source("instance-detail/EmbeddedBrowserSurfaceLayer.vue");
   const workbench = source("ControlPlaneWorkbench.vue");
   assert.match(browser, /onDesktopBrowserTabClosed\(\(\{ tabRef, instanceId \}\) => \{[\s\S]*?tabRef !== registeredTabRef[\s\S]*?emit\("closeTab"\)/);
-  assert.match(layer, /@close-tab="\$emit\('closeBrowserTab', instanceId, tab\.key\)"/);
+  assert.match(layer, /@close-tab="\$emit\('closeBrowserTab', instanceId, hostTabKey\(instanceId, pageKey\) \|\| pageKey\)"/);
   assert.match(workbench, /@close-browser-tab="closeCombinedBrowserTab"/);
   assert.match(workbench, /function closeCombinedBrowserTab\(instanceId: string, sessionKey: string\)[\s\S]*?storyResourceSidebar\.removeBrowser\(storyResource\)[\s\S]*?stopSelectedAppSession\(instance, session\)/);
+});
+
+test("moving an open page adopts its live guest and blanks the source tab", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  const layer = source("instance-detail/EmbeddedBrowserSurfaceLayer.vue");
+  const workbench = source("ControlPlaneWorkbench.vue");
+  const sessions = source("instance-detail/useActiveInstanceSessions.ts");
+  const pageTabs = source("instance-detail/browserPageTabs.ts");
+  // The page host is identified independently from the tab slot so the
+  // <webview> element is never re-ordered or re-mounted by the move.
+  assert.match(layer, /v-for="pageKey in stablePages\[instanceId\] \|\| \[\]"/);
+  assert.match(layer, /:data-browser-page-key="pageKey"/);
+  assert.match(layer, /:page-key="pageKey"/);
+  assert.match(sessions, /import \{ moveBrowserPageToSlot, type BrowserPageSurface, type BrowserTabSlot \} from "\.\/browserPageTabs"/);
+  assert.match(sessions, /browserTabSlots = reactive<Record<string, BrowserTabSlot\[\]>>\(\{\}\)/);
+  assert.match(pageTabs, /export function moveBrowserPageToSlot\(/);
+  assert.match(pageTabs, /target\.pageKey = sourcePageKey;/);
+  assert.match(sessions, /function moveBrowserPageToTab\(instanceId: string, targetSlotKey: string, sourcePageKey: string\)/);
+  assert.match(sessions, /removeBrowserPageIfUnused\(instanceId, moved\.replacedPageKey\)/);
+  assert.match(sessions, /const blankPage = createBrowserPage\(instanceId, \{\s*title: t\("sessions\.tabs\.embeddedBrowser"\),\s*status: "running",\s*\}\);\s*moved\.sourceSlot\.pageKey = blankPage\.key;/);
+  assert.match(browser, /emit\("movePage", pageKey\)/);
+  assert.match(layer, /@move-page="\(targetPageKey\) => \$emit\('moveBrowserPage', instanceId, hostTabKey\(instanceId, pageKey\) \|\| '', targetPageKey\)"/);
+  assert.match(workbench, /function moveCombinedBrowserPage\(instanceId: string, targetSlotKey: string, sourcePageKey: string\)/);
+  assert.match(workbench, /if \(moveBrowserPageToTab\(instanceId, targetSlotKey, sourcePageKey\)\)/);
+});
+
+test("page moves work in both directions between instance tabs and Story resources", () => {
+  const workbench = source("ControlPlaneWorkbench.vue");
+  const sidebar = source("story/useStoryResourceSidebar.ts");
+  // Both cross-boundary branches adopt the live page first, then blank the
+  // source. Reversing that order would unmount the <webview> for a render.
+  assert.match(sidebar, /function adoptBrowserPage\(/);
+  assert.match(sidebar, /function blankBrowserPageResource\(/);
+  assert.match(workbench, /const targetStoryResource = storyResources\.find\(\(resource\) => storyResourceKey\(resource\) === targetSlotKey\)/);
+  assert.match(workbench, /const targetLocalTab = browserSessionTabs\.value\[instanceId\]\?\.find\(\(tab\) => tab\.key === targetSlotKey\)/);
+  assert.match(workbench, /if \(targetStoryResource && sourceLocalTab\) \{[\s\S]*?storyResourceSidebar\.adoptBrowserPage\(targetSlotKey, sourcePageKey, sourcePage\)[\s\S]*?blankLocalBrowserSlot\(instanceId, sourceLocalTab\.key\)/);
+  assert.match(workbench, /if \(targetLocalTab && sourceStoryResource\) \{[\s\S]*?bindLocalBrowserSlotToPage\(instanceId, targetSlotKey, sourcePageKey, sourceStoryResource\)[\s\S]*?storyResourceSidebar\.blankBrowserPageResource\(sourceStoryResource\)/);
+});
+
+test("the browser session tab projection is consumed as a computed ref", () => {
+  const sessions = source("instance-detail/useActiveInstanceSessions.ts");
+  const workbench = source("ControlPlaneWorkbench.vue");
+  // browserSessionTabs is derived from page hosts + tab slots, so it is a
+  // ComputedRef. Indexing the ref object itself silently yields undefined and
+  // breaks the surface layer; every read must go through .value.
+  assert.match(sessions, /const browserSessionTabs = computed<Record<string, SessionTab\[\]>>/);
+  assert.doesNotMatch(sessions, /browserSessionTabs\[/);
+  assert.match(sessions, /browserSessionTabs\.value\[instanceId\]/);
+  assert.match(sessions, /Object\.keys\(browserSessionTabs\.value\)/);
+  assert.doesNotMatch(workbench, /browserSessionTabs\[/);
+  assert.match(workbench, /Object\.keys\(browserSessionTabs\.value\)/);
+  assert.match(workbench, /browserSessionTabs\.value\[instanceId\]/);
 });
 
 test("a degraded main page pool is reported while the renderer webview keeps working", () => {
@@ -180,4 +238,67 @@ test("browser load failures show an actionable prompt instead of a silent guest"
   assert.match(browser, /class="embedded-browser-state-detail"/);
   assert.match(browser, /@click="retry"/);
   assert.match(browser, /t\("sessions\.browser\.retry"\)/);
+});
+
+test("embedded browser device mode resizes the real guest and mirrors Agent emulation commands", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  const bridge = fs.readFileSync(new URL("../src/lib/desktopBridge.ts", import.meta.url), "utf8");
+  const preload = fs.readFileSync(new URL("../../../apps/desktop-shell/src/preload.cjs", import.meta.url), "utf8");
+  assert.match(browser, /class="embedded-browser-device-toggle"[\s\S]*?@click="toggleDeviceMode"[\s\S]*?<MonitorSmartphone/);
+  assert.match(browser, /class="embedded-browser-device-toolbar"[\s\S]*?sessions\.browser\.deviceWidth[\s\S]*?sessions\.browser\.deviceHeight[\s\S]*?@click="rotateDevice"/);
+  assert.match(browser, /Emulation\.setDeviceMetricsOverride/);
+  assert.match(browser, /Emulation\.clearDeviceMetricsOverride/);
+  assert.match(browser, /width: `\$\{deviceMetrics\.width\}px`[\s\S]*?height: `\$\{deviceMetrics\.height\}px`[\s\S]*?transform: `scale\(\$\{deviceScale\.value\}\)`/);
+  assert.match(browser, /onDesktopBrowserDeviceMetricsChanged\(\(input\) => handleDeviceMetricsChanged\(input\)\)/);
+  assert.match(browser, /input\.source !== "agent"/);
+  assert.match(browser, /deviceMode\.value = true;\s*void nextTick\(updateDeviceScale\)/);
+  assert.match(browser, /deviceMode\.value = false;\s*logDesktopBrowserDiagnostic\("browser device mode cleared by agent"/);
+  assert.match(bridge, /onBrowserDeviceMetricsChanged/);
+  assert.match(preload, /task-handoff:browser-device-metrics-changed/);
+});
+
+test("connected contexts stay in the pages menu and are not shown on the start page", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  assert.match(browser, /t\("sessions\.browser\.browserContexts"\)/);
+  assert.match(browser, /<div v-if="creationPanels\.length && !creationContextUnsupported" class="embedded-browser-pages-context">/);
+  assert.match(browser, /pageHostLabel\(panel\.pageHost\)/);
+  assert.doesNotMatch(browser, /embedded-browser-start-context/);
+  assert.doesNotMatch(browser, /<section v-if="creationPanels\.length && !creationContextUnsupported" class="embedded-browser-start-section">/);
+  assert.match(browser, /v-if="openPages\.length" class="embedded-browser-start-section"/);
+});
+
+test("browser popovers use the shared compact section spacing", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  assert.match(browser, /<PopoverContent class="embedded-browser-pages-menu p-0"/);
+  assert.match(browser, /<PopoverContent class="embedded-browser-agent-access-menu p-0"/);
+  assert.match(browser, /\.embedded-browser-pages-menu \{ display: flex; width: min\(360px, var\(--reka-popover-content-available-width\)\)/);
+  assert.match(browser, /\.embedded-browser-agent-access-menu \{ display: flex; width: min\(380px, var\(--reka-popover-content-available-width\)\)/);
+  assert.match(browser, /\.embedded-browser-pages-menu-head \{[^}]*padding: 8px 12px 6px;/);
+  assert.match(browser, /\.embedded-browser-agent-access-summary \{[^}]*padding: 11px 12px 10px;/);
+  assert.match(browser, /\.embedded-browser-creation-context \{[^}]*padding: 10px 12px 12px;/);
+});
+
+test("the Agent access popover exposes only the current panel's default switch", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  assert.match(browser, /function isOwnCreationPanel\(panel: EmbeddedBrowserCreationPanel\)/);
+  assert.match(browser, /panel\.sourceRef === browserSourceRef\.value/);
+  assert.match(browser, /v-if="canClaimCreationPanel\(panel\)"/);
+  assert.match(browser, /v-else-if="canRevokeCreationPanel\(panel\)"/);
+  assert.match(browser, /creationContextTakeOver/);
+  assert.match(browser, /creationContextRequestDefault/);
+  assert.match(browser, /\.embedded-browser-agent-access-active \{ color: var\(--text\); background: var\(--surface-hover\); \}/);
+});
+
+test("creation-context changes refresh the authoritative snapshot and explain default handoff", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  const events = source("useControlPlaneEvents.ts");
+  assert.match(browser, /BROWSER_CREATION_CONTEXT_CHANGED_EVENT/);
+  assert.match(browser, /EmbeddedBrowserCreationContextChangedEventSchema\.safeParse\([\s\S]*?\.\.\.payload[\s\S]*?type: "browser\.creation-context\.changed"/);
+  assert.match(browser, /previousBrowserContextId === browserSourceRef\.value/);
+  assert.match(browser, /refreshBrowserCreationContext\(\)\.then/);
+  assert.match(browser, /creationContextTakenOver/);
+  assert.match(browser, /BROWSER_DEFAULT_CONTEXT_CONFLICT/);
+  assert.match(browser, /creationContextNoDefault/);
+  assert.match(browser, /defaultCreationOffline/);
+  assert.match(events, /BROWSER_CREATION_CONTEXT_CHANGED_EVENT, \{\}\)/);
 });

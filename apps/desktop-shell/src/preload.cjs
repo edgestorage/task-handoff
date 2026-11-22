@@ -61,6 +61,16 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
     ipcRenderer.on("task-handoff:browser-tab-closed", handler);
     return () => ipcRenderer.removeListener("task-handoff:browser-tab-closed", handler);
   },
+  onBrowserTabsChanged: (listener) => {
+    const handler = (_event, input) => listener(input);
+    ipcRenderer.on("task-handoff:browser-tabs-changed", handler);
+    return () => ipcRenderer.removeListener("task-handoff:browser-tabs-changed", handler);
+  },
+  onBrowserDeviceMetricsChanged: (listener) => {
+    const handler = (_event, input) => listener(input);
+    ipcRenderer.on("task-handoff:browser-device-metrics-changed", handler);
+    return () => ipcRenderer.removeListener("task-handoff:browser-device-metrics-changed", handler);
+  },
   logBrowserDiagnostic: (input) => ipcRenderer.send("task-handoff:browser-diagnostic", input),
   openControlPlaneWindow: (url) => ipcRenderer.invoke("task-handoff:open-control-plane-window", url),
   openInstanceDetailWindow: (instanceId) => ipcRenderer.invoke("task-handoff:open-instance-detail-window", instanceId),

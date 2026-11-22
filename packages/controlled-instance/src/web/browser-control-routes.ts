@@ -1,22 +1,30 @@
 import crypto from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import {
-  EmbeddedBrowserCreationClaimSchema,
-  EmbeddedBrowserCreationDeclineSchema,
-  EmbeddedBrowserCreationViewSchema,
+  EmbeddedBrowserDefaultContextClaimRequestSchema,
   EmbeddedBrowserSourceDeltaSchema,
   EmbeddedBrowserSourceRegistrationRequestSchema,
   EmbeddedBrowserSourceRegistrationViewSchema,
   EmbeddedBrowserSourceSnapshotCommitSchema,
   EmbeddedBrowserSourceSnapshotSchema,
 } from "@task-handoff/protocol/embedded-browser-control";
-import { BrowserControlError, type BrowserControlService } from "./browser-control";
-import type { BrowserControlRelayContext, BrowserControlRelayRegistry } from "./browser-control-relay";
+import { BrowserControlError, type BrowserControlService } from "./browser-control.ts";
+import type { BrowserControlRelayContext, BrowserControlRelayRegistry } from "./browser-control-relay.ts";
 
 const CONTROL_PLANE_HEADER = "x-task-handoff-control-plane-id";
 const USER_HEADER = "x-task-handoff-user-id";
 const PUBLIC_ROUTE = { config: { taskHandoffAuth: "public" as const } };
 const RELAY_DETACH_TIMEOUT_MS = 3_000;
+
+const AccessGrantRequestSchema = z.object({
+  requestRef: z.string().trim().min(1).max(240).optional(),
+  expectedRevision: z.number().int().nonnegative().optional(),
+}).strip();
+const AccessRequestParamsSchema = z.object({ requestRef: z.string().trim().min(1).max(240) }).strip();
+const AccessRequestDecisionSchema = z.object({
+  expectedRevision: z.number().int().nonnegative().optional(),
+}).strip();
 
 type RegisterBrowserControlRoutesOptions = {
   app: FastifyInstance;
@@ -68,7 +76,13 @@ function requireSourceOwner(request: FastifyRequest, service: BrowserControlServ
 
 function sendBrowserError(reply: FastifyReply, error: unknown) {
   if (error instanceof BrowserControlError) {
-    return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
+    return reply.code(error.statusCode).send({
+      error: {
+        code: error.code,
+        message: error.message,
+        ...error.details,
+      },
+    });
   }
   if (error && typeof error === "object" && "issues" in error) {
     return reply.code(400).send({ error: { code: "BROWSER_REQUEST_INVALID", message: error instanceof Error ? error.message : String(error) } });
@@ -99,6 +113,15 @@ async function detachWithTimeout(promise: Promise<unknown>) {
 
 export function registerBrowserControlRoutes(options: RegisterBrowserControlRoutesOptions) {
   const { app, service, relay, registrationToken } = options;
+  service.setCreationDispatcher(async (creation, target) => {
+    await relay.tabsOpen({
+      creationRef: creation.creationRef,
+      sourceRef: target.sourceRef,
+      generation: target.generation,
+      url: creation.requestedUrl,
+      ...(creation.title ? { title: creation.title } : {}),
+    });
+  });
 
   app.post("/api/browser-control/sources", { ...PUBLIC_ROUTE, bodyLimit: 256 * 1024 }, async (request, reply) => {
     try {
@@ -170,10 +193,69 @@ export function registerBrowserControlRoutes(options: RegisterBrowserControlRout
     }
   });
 
-  app.get("/api/browser-control/creation-requests", PUBLIC_ROUTE, async (request, reply) => {
+  app.get<{ Querystring: { sourceRef?: string } }>("/api/browser-control/creation-context", PUBLIC_ROUTE, async (request, reply) => {
     try {
       const context = browserProxyContext(request, registrationToken);
-      return { data: service.listCreationApprovalsForSourceOwner(context.panelId, context.userId) };
+      const callerSourceRef = typeof request.query.sourceRef === "string" ? request.query.sourceRef.trim() : "";
+      let ownedSourceRef: string | undefined;
+      if (callerSourceRef) {
+        const owner = service.sourceOwner(callerSourceRef);
+        if (owner && (owner.panelId !== context.panelId || owner.ownerRef !== context.userId)) {
+          throw new BrowserControlError("BROWSER_CREATION_CONTEXT_NOT_OWNED", "A panel can only inspect its own browser source.", 403);
+        }
+        if (owner) ownedSourceRef = callerSourceRef;
+      }
+      return { data: service.creationContextSnapshot(ownedSourceRef) };
+    } catch (error) {
+      return sendBrowserError(reply, error);
+    }
+  });
+
+  app.put("/api/browser-control/creation-context", { ...PUBLIC_ROUTE, bodyLimit: 64 * 1024 }, async (request, reply) => {
+    try {
+      const context = browserProxyContext(request, registrationToken);
+      const body = parseBody(EmbeddedBrowserDefaultContextClaimRequestSchema, request.body);
+      const owner = service.sourceOwner(body.sourceRef);
+      if (!owner || owner.panelId !== context.panelId || owner.ownerRef !== context.userId) {
+        throw new BrowserControlError("BROWSER_CREATION_CONTEXT_NOT_OWNED", "A panel can only claim its own browser source.", 403);
+      }
+      return {
+        data: service.claimDefaultContext({
+          sourceRef: body.sourceRef,
+          expectedRevision: body.expectedRevision,
+          panelId: context.panelId,
+          ownerRef: context.userId,
+        }),
+      };
+    } catch (error) {
+      return sendBrowserError(reply, error);
+    }
+  });
+
+  app.delete<{ Querystring: { sourceRef?: string; expectedRevision?: string } }>("/api/browser-control/creation-context", PUBLIC_ROUTE, async (request, reply) => {
+    try {
+      const context = browserProxyContext(request, registrationToken);
+      const body = request.body && typeof request.body === "object" && !Array.isArray(request.body) && Object.keys(request.body).length
+        ? EmbeddedBrowserDefaultContextClaimRequestSchema.parse(request.body)
+        : undefined;
+      const querySourceRef = typeof request.query.sourceRef === "string" ? request.query.sourceRef.trim() : "";
+      const queryRevision = typeof request.query.expectedRevision === "string" ? request.query.expectedRevision.trim() : "";
+      if (!body && querySourceRef && !/^(0|[1-9]\d*)$/.test(queryRevision)) {
+        throw new BrowserControlError("BROWSER_REQUEST_INVALID", "expectedRevision is required to revoke the default browser context.", 400);
+      }
+      const fromQuery = !body && querySourceRef
+        ? EmbeddedBrowserDefaultContextClaimRequestSchema.parse({
+          sourceRef: querySourceRef,
+          expectedRevision: Number(queryRevision),
+        })
+        : undefined;
+      const revocation = body ?? fromQuery;
+      if (!revocation) {
+        throw new BrowserControlError("BROWSER_REQUEST_INVALID", "sourceRef and expectedRevision are required to revoke the default browser context.", 400);
+      }
+      return {
+        data: service.clearDefaultContext({ ...revocation, panelId: context.panelId, ownerRef: context.userId }),
+      };
     } catch (error) {
       return sendBrowserError(reply, error);
     }
@@ -191,7 +273,19 @@ export function registerBrowserControlRoutes(options: RegisterBrowserControlRout
   app.post("/api/browser-control/access", PUBLIC_ROUTE, async (request, reply) => {
     try {
       browserProxyContext(request, registrationToken);
-      return { data: service.grantInstanceAccess() };
+      const body = AccessGrantRequestSchema.parse(request.body ?? {});
+      return { data: service.grantInstanceAccess(body) };
+    } catch (error) {
+      return sendBrowserError(reply, error);
+    }
+  });
+
+  app.post("/api/browser-control/access-requests/:requestRef/deny", PUBLIC_ROUTE, async (request, reply) => {
+    try {
+      browserProxyContext(request, registrationToken);
+      const { requestRef } = AccessRequestParamsSchema.parse(request.params);
+      const body = AccessRequestDecisionSchema.parse(request.body ?? {});
+      return { data: service.denyInstanceAccessRequest(requestRef, body.expectedRevision) };
     } catch (error) {
       return sendBrowserError(reply, error);
     }
@@ -220,64 +314,6 @@ export function registerBrowserControlRoutes(options: RegisterBrowserControlRout
       return sendBrowserError(reply, error);
     }
   });
-
-  app.post<{ Params: { sourceRef: string; creationRef: string } }>(
-    "/api/browser-control/sources/:sourceRef/creation-requests/:creationRef/claim",
-    { ...PUBLIC_ROUTE, bodyLimit: 64 * 1024 },
-    async (request, reply) => {
-      try {
-        requireSourceOwner(request, service, registrationToken, request.params.sourceRef);
-        const body = parseBody(EmbeddedBrowserCreationClaimSchema, request.body);
-        if (body.sourceRef !== request.params.sourceRef) {
-          throw new BrowserControlError("BROWSER_CREATION_CONFLICT", "Creation claim sourceRef does not match the request path.", 400);
-        }
-        service.claimCreation(request.params.sourceRef, request.params.creationRef, body.expectedRevision);
-        const creating = service.markCreationCreating(request.params.sourceRef, request.params.creationRef);
-        const generation = service.sourceGeneration(request.params.sourceRef);
-        if (generation === undefined) {
-          throw new BrowserControlError("BROWSER_SOURCE_UNAVAILABLE", "Browser source disconnected before creation dispatch.", 409);
-        }
-        try {
-          await relay.tabsOpen({
-            creationRef: creating.creationRef,
-            sourceRef: request.params.sourceRef,
-            generation,
-            url: creating.requestedUrl,
-            ...(creating.title ? { title: creating.title } : {}),
-          });
-        } catch (error) {
-          service.failCreation(request.params.sourceRef, request.params.creationRef, error instanceof Error ? error.message : String(error));
-          throw error;
-        }
-        return { data: EmbeddedBrowserCreationViewSchema.parse(creating) };
-      } catch (error) {
-        return sendBrowserError(reply, error);
-      }
-    },
-  );
-
-  app.post<{ Params: { sourceRef: string; creationRef: string } }>(
-    "/api/browser-control/sources/:sourceRef/creation-requests/:creationRef/decline",
-    { ...PUBLIC_ROUTE, bodyLimit: 64 * 1024 },
-    async (request, reply) => {
-      try {
-        requireSourceOwner(request, service, registrationToken, request.params.sourceRef);
-        const body = parseBody(EmbeddedBrowserCreationDeclineSchema, request.body);
-        if (body.sourceRef !== request.params.sourceRef) {
-          throw new BrowserControlError("BROWSER_CREATION_CONFLICT", "Creation decline sourceRef does not match the request path.", 400);
-        }
-        return {
-          data: EmbeddedBrowserCreationViewSchema.parse(service.declineCreation(
-            request.params.sourceRef,
-            request.params.creationRef,
-            body.expectedRevision,
-          )),
-        };
-      } catch (error) {
-        return sendBrowserError(reply, error);
-      }
-    },
-  );
 
   app.get("/api/browser-control/relay", {
     ...PUBLIC_ROUTE,

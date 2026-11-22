@@ -20,7 +20,7 @@ class DesktopBrowserGuestRegistry {
     this.bySessionKey = new Map();
   }
 
-  addGuest({ host, guest, partition }) {
+  addGuest({ host, guest, partition, instanceId }) {
     if (!host || !guest || !Number.isInteger(guest.id)) throw browserGuestError("BROWSER_GUEST_INVALID");
     const existing = this.byGuestId.get(guest.id);
     if (existing) return existing;
@@ -30,7 +30,7 @@ class DesktopBrowserGuestRegistry {
       partition: String(partition || ""),
       tabRef: undefined,
       creationRef: undefined,
-      instanceId: undefined,
+      instanceId: optionalString(instanceId, 160) || undefined,
       sessionKey: undefined,
       title: "",
       url: "about:blank",
@@ -47,6 +47,7 @@ class DesktopBrowserGuestRegistry {
     if (!entry || entry.host.id !== senderId) throw browserGuestError("BROWSER_GUEST_NOT_FOUND");
     if (!entry.partition || (partition && entry.partition !== partition)) throw browserGuestError("BROWSER_GUEST_PARTITION_MISMATCH");
     const normalizedInstanceId = requiredString(instanceId, "BROWSER_INSTANCE_ID_INVALID", 160);
+    if (entry.instanceId && entry.instanceId !== normalizedInstanceId) throw browserGuestError("BROWSER_GUEST_PARTITION_MISMATCH");
     const normalizedSessionKey = requiredString(sessionKey, "BROWSER_SESSION_KEY_INVALID", 320);
     const sessionKeyId = `${normalizedInstanceId}\0${normalizedSessionKey}`;
     const previous = this.bySessionKey.get(sessionKeyId);
@@ -88,6 +89,16 @@ class DesktopBrowserGuestRegistry {
       .filter((entry) => senderId === undefined || entry.host.id === senderId)
       .filter((entry) => !instanceId || entry.instanceId === instanceId)
       .map((entry) => this.publicEntry(entry));
+  }
+
+  listForRenderer({ senderId, instanceId } = {}) {
+    return [...this.byTabRef.values()]
+      .filter((entry) => senderId === undefined || entry.host.id === senderId)
+      .filter((entry) => !instanceId || entry.instanceId === instanceId)
+      .map((entry) => Object.freeze({
+        ...this.publicEntry(entry),
+        sessionKey: entry.sessionKey,
+      }));
   }
 
   get(tabRef) {
@@ -152,6 +163,21 @@ class DesktopBrowserGuestRegistry {
     const entry = this.requireEntry(tabRef, senderId);
     if (!entry.debuggerAttached) throw browserGuestError("BROWSER_TARGET_NOT_ATTACHED");
     const normalizedMethod = assertEmbeddedBrowserCdpMethod(method);
+    // Electron's renderer-webview debugger applies Page.reload to the embedding
+    // renderer, which reloads the Control Plane UI and releases every browser
+    // context. Use the guest WebContents API so reload stays scoped to the page.
+    if (normalizedMethod === "Page.reload") {
+      if (params?.ignoreCache === true && typeof entry.guest.reloadIgnoringCache === "function") {
+        entry.guest.reloadIgnoringCache();
+      } else if (typeof entry.guest.reload === "function") {
+        entry.guest.reload();
+      } else {
+        const url = entry.guest.getURL?.() || entry.url;
+        if (!url || url === "about:blank") throw browserGuestError("BROWSER_OPERATION_UNSUPPORTED");
+        return entry.guest.debugger.sendCommand("Page.navigate", { url });
+      }
+      return {};
+    }
     return entry.guest.debugger.sendCommand(normalizedMethod, params);
   }
 

@@ -7,14 +7,15 @@ const {
   supportsEmbeddedBrowserCdpEvent,
 } = require("../src/embedded-browser-cdp-policy.cjs");
 
-test("the embedded browser accepts page-profile CDP domains", () => {
-  for (const method of ["Page.navigate", "Runtime.evaluate", "DOM.getDocument", "Accessibility.getFullAXTree", "Input.dispatchMouseEvent", "Page.captureScreenshot"]) {
+test("the embedded browser accepts page-profile CDP domains and the Emulation namespace", () => {
+  for (const method of ["Page.navigate", "Runtime.evaluate", "DOM.getDocument", "Accessibility.getFullAXTree", "Input.dispatchMouseEvent", "Page.captureScreenshot", "Emulation.setDeviceMetricsOverride", "Emulation.setUserAgentOverride"]) {
     assert.equal(assertEmbeddedBrowserCdpMethod(method), method);
   }
   assert.equal(assertEmbeddedBrowserCdpMethod("Network.enable", { adapterOnly: true }), "Network.enable");
   assert.equal(embeddedBrowserCdpMethodKind("Page.navigate"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Runtime.evaluate"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Accessibility.getFullAXTree"), "read");
+  assert.equal(embeddedBrowserCdpMethodKind("Emulation.setDeviceMetricsOverride"), "page-write");
   assert.equal(supportsEmbeddedBrowserCdpEvent("Page.lifecycleEvent"), true);
 });
 

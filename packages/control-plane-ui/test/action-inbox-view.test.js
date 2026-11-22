@@ -69,9 +69,9 @@ test("operation cards show a label for every protected action and only server-su
 });
 
 test("every card leads with one header row that carries its source", () => {
-  assert.equal((inbox.match(/<header class="action-inbox-head">/g) ?? []).length, 5);
-  assert.equal((inbox.match(/<span class="action-inbox-kind/g) ?? []).length, 5);
-  assert.equal((inbox.match(/<span class="action-inbox-source"/g) ?? []).length, 4);
+  assert.equal((inbox.match(/<header class="action-inbox-head">/g) ?? []).length, 6);
+  assert.equal((inbox.match(/<span class="action-inbox-kind/g) ?? []).length, 6);
+  assert.equal((inbox.match(/<span class="action-inbox-source"/g) ?? []).length, 5);
   assert.doesNotMatch(inbox, /<div class="action-inbox-kind">/);
   for (const icon of ["ShieldQuestion", "ShieldCheck"]) {
     assert.match(inbox, new RegExp(`<${icon} :size="13" aria-hidden="true" />`), icon);

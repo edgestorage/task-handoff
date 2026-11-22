@@ -52,6 +52,9 @@ test("desktop browser contexts share one instance partition and release by refer
   assert.equal(sessions[0].proxy.proxyRules, "socks5://127.0.0.1:12345");
   assert.equal(sessions[0].proxy.proxyBypassRules, "<-loopback>");
   assert.equal(manager.allows(10, first.partition), true);
+  assert.equal(manager.instanceIdForSession(10, sessions[0]), "instance_1");
+  assert.equal(manager.instanceIdForSession(11, sessions[0]), undefined);
+  assert.equal(manager.instanceIdForSession(10, { partition: first.partition }), undefined);
   assert.equal(await manager.release(first.contextId, 11), false);
   assert.equal(await manager.release(first.contextId, 10), true);
   assert.equal(channels[0].closed, false);

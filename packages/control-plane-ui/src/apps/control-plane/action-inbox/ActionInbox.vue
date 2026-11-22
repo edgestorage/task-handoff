@@ -133,6 +133,25 @@
                   <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide-node-control-plane', item, 'reject')">{{ t('navigation.nodeControlPlaneTrust.reject') }}</Button>
                 </div>
               </template>
+              <template v-else-if="item.type === 'browser-access-request'">
+                <header class="action-inbox-head">
+                  <span class="action-inbox-kind">
+                    <ShieldCheck :size="13" aria-hidden="true" />
+                    {{ t('navigation.browserAccessRequest.title') }}
+                  </span>
+                  <span class="action-inbox-source" :title="item.instanceName">{{ item.instanceName }}</span>
+                </header>
+                <div class="action-inbox-title" :title="item.sessionTitle || item.request.requesterSessionRef">
+                  {{ item.sessionTitle || item.request.requesterSessionRef }}
+                </div>
+                <div class="action-inbox-context">{{ t('navigation.browserAccessRequest.hint') }}</div>
+                <div class="action-inbox-context action-inbox-detail">{{ t('navigation.browserAccessRequest.instance') }}: {{ item.instanceName }}</div>
+                <div class="action-inbox-context">{{ t('navigation.browserAccessRequest.expires') }}: {{ formatExpiryRelative(item.request.expiresAt) }}</div>
+                <div class="action-inbox-actions">
+                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide-browser-access', item, 'approve')">{{ t('navigation.browserAccessRequest.approve') }}</Button>
+                  <Button size="sm" variant="outline" :disabled="Boolean(busyKey)" @click="emit('decide-browser-access', item, 'deny')">{{ t('navigation.browserAccessRequest.deny') }}</Button>
+                </div>
+              </template>
               <template v-else>
                 <header class="action-inbox-head">
                   <span class="action-inbox-kind">
@@ -184,6 +203,7 @@ const emit = defineEmits<{
   decide: [item: Extract<Item, { type: "operation-approval" }>, decision: "approve" | "deny"];
   "decide-device": [item: Extract<Item, { type: "device-trust" }>, decision: { decision: "approve" } | { decision: "reject" }];
   "decide-node-control-plane": [item: Extract<Item, { type: "node-control-plane-trust" }>, decision: "approve" | "reject"];
+  "decide-browser-access": [item: Extract<Item, { type: "browser-access-request" }>, decision: "approve" | "deny"];
   "decide-story": [item: StoryDecisionItem, input: { optionId?: string; response?: string }];
   "cancel-story": [item: StoryDecisionItem];
   "open-story": [item: StoryDecisionItem];

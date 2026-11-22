@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 export const EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION = "2026-11-22";
+// Browser-level Target CDP is exposed through /json/version and is a separate
+// sub-protocol from the channel framing and electron-page-cdp method profile.
+export const EMBEDDED_BROWSER_TARGET_CDP_PROFILE = "embedded-browser-target-cdp";
+export const EMBEDDED_BROWSER_TARGET_CDP_PROTOCOL_VERSION = "1.3";
 export const EMBEDDED_BROWSER_FRAME_HEADER_BYTES = 9;
 export const EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES = 256 * 1024;
 export const EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
@@ -22,6 +26,8 @@ export const EMBEDDED_BROWSER_HTTP_RESULT_TOTAL_BYTES = 64 * 1024 * 1024;
 export const EMBEDDED_BROWSER_RESULT_TTL_MS = 120_000;
 export const EMBEDDED_BROWSER_SCREENSHOT_MAX_DIMENSION = 4_096;
 export const EMBEDDED_BROWSER_CDP_ACCESS_TTL_MS = 8 * 60 * 60 * 1000;
+export const EMBEDDED_BROWSER_ACCESS_REQUEST_TTL_MS = 5 * 60_000;
+export const EMBEDDED_BROWSER_ACCESS_WAIT_MS = 10_000;
 
 export const EMBEDDED_BROWSER_FRAME_TYPES = Object.freeze({
   open: 1,
@@ -173,6 +179,7 @@ export const EMBEDDED_BROWSER_CDP_METHODS = Object.freeze({
   "Runtime.getProperties": "read",
   "Runtime.releaseObject": "adapter-only",
   "Schema.getDomains": "read",
+  "Emulation.*": "page-write",
 } satisfies Record<string, EmbeddedBrowserCdpMethodKind>);
 
 export const EMBEDDED_BROWSER_CDP_EVENTS = Object.freeze([
@@ -200,7 +207,8 @@ export const EMBEDDED_BROWSER_CDP_EVENTS = Object.freeze([
 
 export function embeddedBrowserCdpMethodKind(method: string): EmbeddedBrowserCdpMethodKind | undefined {
   if (!embeddedBrowserCdpMethodShape(method)) return undefined;
-  return (EMBEDDED_BROWSER_CDP_METHODS as Record<string, EmbeddedBrowserCdpMethodKind>)[method];
+  const methods = EMBEDDED_BROWSER_CDP_METHODS as Record<string, EmbeddedBrowserCdpMethodKind>;
+  return methods[method] ?? methods[`${method.slice(0, method.indexOf("."))}.*`];
 }
 
 export function assertEmbeddedBrowserCdpMethod(method: unknown, options: { adapterOnly?: boolean } = {}): string {
@@ -213,6 +221,167 @@ export function assertEmbeddedBrowserCdpMethod(method: unknown, options: { adapt
 export function supportsEmbeddedBrowserCdpEvent(method: unknown) {
   return typeof method === "string" && (EMBEDDED_BROWSER_CDP_EVENTS as readonly string[]).includes(method);
 }
+
+// Wire identities intentionally reuse the authoritative source and page IDs:
+// browserContextId is sourceRef, and targetId is tabRef. These schemas do not
+// mint parallel IDs; they only keep the mapping explicit at the CDP boundary.
+export const EmbeddedBrowserCdpBrowserContextIdSchema = z.string().trim().min(1).max(240);
+export type EmbeddedBrowserCdpBrowserContextId = z.infer<typeof EmbeddedBrowserCdpBrowserContextIdSchema>;
+export const EmbeddedBrowserCdpTargetIdSchema = z.string().trim().min(1).max(240);
+export type EmbeddedBrowserCdpTargetId = z.infer<typeof EmbeddedBrowserCdpTargetIdSchema>;
+export const EmbeddedBrowserCdpSessionIdSchema = z.string().trim().min(1).max(240);
+export type EmbeddedBrowserCdpSessionId = z.infer<typeof EmbeddedBrowserCdpSessionIdSchema>;
+
+export const EMBEDDED_BROWSER_TARGET_CDP_METHODS = Object.freeze([
+  "Target.getTargets",
+  "Target.getTargetInfo",
+  "Target.getBrowserContexts",
+  "Target.attachToTarget",
+  "Target.detachFromTarget",
+  "Target.closeTarget",
+  "Target.createTarget",
+  "Target.setDiscoverTargets",
+] as const);
+export type EmbeddedBrowserTargetCdpMethod = (typeof EMBEDDED_BROWSER_TARGET_CDP_METHODS)[number];
+
+export const EMBEDDED_BROWSER_TARGET_CDP_EVENTS = Object.freeze([
+  "Target.targetCreated",
+  "Target.targetDestroyed",
+  "Target.targetInfoChanged",
+  "Target.detachedFromTarget",
+] as const);
+export type EmbeddedBrowserTargetCdpEventMethod = (typeof EMBEDDED_BROWSER_TARGET_CDP_EVENTS)[number];
+
+export function supportsEmbeddedBrowserTargetCdpMethod(method: unknown): method is EmbeddedBrowserTargetCdpMethod {
+  return typeof method === "string" && (EMBEDDED_BROWSER_TARGET_CDP_METHODS as readonly string[]).includes(method);
+}
+
+export function assertEmbeddedBrowserTargetCdpMethod(method: unknown): EmbeddedBrowserTargetCdpMethod {
+  const normalized = typeof method === "string" ? method.trim() : "";
+  if (!supportsEmbeddedBrowserTargetCdpMethod(normalized)) throw embeddedBrowserCdpOperationUnsupported();
+  return normalized;
+}
+
+export function supportsEmbeddedBrowserTargetCdpEvent(method: unknown): method is EmbeddedBrowserTargetCdpEventMethod {
+  return typeof method === "string" && (EMBEDDED_BROWSER_TARGET_CDP_EVENTS as readonly string[]).includes(method);
+}
+
+export const EmbeddedBrowserTargetInfoSchema = z.object({
+  targetId: EmbeddedBrowserCdpTargetIdSchema,
+  type: z.literal("page"),
+  title: z.string().trim().max(512).default(""),
+  url: z.string().trim().max(4_096).default("about:blank"),
+  attached: z.boolean().default(false),
+  browserContextId: EmbeddedBrowserCdpBrowserContextIdSchema,
+}).strip();
+export type EmbeddedBrowserTargetInfo = z.infer<typeof EmbeddedBrowserTargetInfoSchema>;
+
+export const EmbeddedBrowserTargetGetTargetsParamsSchema = z.object({}).strip();
+export type EmbeddedBrowserTargetGetTargetsParams = z.infer<typeof EmbeddedBrowserTargetGetTargetsParamsSchema>;
+export const EmbeddedBrowserTargetGetTargetsResultSchema = z.object({
+  targetInfos: z.array(EmbeddedBrowserTargetInfoSchema),
+}).strip();
+export type EmbeddedBrowserTargetGetTargetsResult = z.infer<typeof EmbeddedBrowserTargetGetTargetsResultSchema>;
+
+export const EmbeddedBrowserTargetGetTargetInfoParamsSchema = z.object({
+  targetId: EmbeddedBrowserCdpTargetIdSchema,
+}).strip();
+export type EmbeddedBrowserTargetGetTargetInfoParams = z.infer<typeof EmbeddedBrowserTargetGetTargetInfoParamsSchema>;
+export const EmbeddedBrowserTargetGetTargetInfoResultSchema = z.object({
+  targetInfo: EmbeddedBrowserTargetInfoSchema,
+}).strip();
+export type EmbeddedBrowserTargetGetTargetInfoResult = z.infer<typeof EmbeddedBrowserTargetGetTargetInfoResultSchema>;
+
+export const EmbeddedBrowserTargetGetBrowserContextsParamsSchema = z.object({}).strip();
+export type EmbeddedBrowserTargetGetBrowserContextsParams = z.infer<typeof EmbeddedBrowserTargetGetBrowserContextsParamsSchema>;
+export const EmbeddedBrowserTargetGetBrowserContextsResultSchema = z.object({
+  browserContextIds: z.array(EmbeddedBrowserCdpBrowserContextIdSchema).max(EMBEDDED_BROWSER_MAX_SOURCES),
+  defaultBrowserContextId: EmbeddedBrowserCdpBrowserContextIdSchema.optional(),
+}).strip();
+export type EmbeddedBrowserTargetGetBrowserContextsResult = z.infer<typeof EmbeddedBrowserTargetGetBrowserContextsResultSchema>;
+
+export const EmbeddedBrowserTargetAttachToTargetParamsSchema = z.object({
+  targetId: EmbeddedBrowserCdpTargetIdSchema,
+  flatten: z.literal(true),
+}).strip();
+export type EmbeddedBrowserTargetAttachToTargetParams = z.infer<typeof EmbeddedBrowserTargetAttachToTargetParamsSchema>;
+export const EmbeddedBrowserTargetAttachToTargetResultSchema = z.object({
+  sessionId: EmbeddedBrowserCdpSessionIdSchema,
+}).strip();
+export type EmbeddedBrowserTargetAttachToTargetResult = z.infer<typeof EmbeddedBrowserTargetAttachToTargetResultSchema>;
+
+export const EmbeddedBrowserTargetDetachFromTargetParamsSchema = z.object({
+  sessionId: EmbeddedBrowserCdpSessionIdSchema.optional(),
+  targetId: EmbeddedBrowserCdpTargetIdSchema.optional(),
+}).strip().superRefine((value, context) => {
+  if (!value.sessionId && !value.targetId) {
+    context.addIssue({ code: "custom", message: "Target.detachFromTarget requires sessionId or targetId." });
+  }
+});
+export type EmbeddedBrowserTargetDetachFromTargetParams = z.infer<typeof EmbeddedBrowserTargetDetachFromTargetParamsSchema>;
+export const EmbeddedBrowserTargetDetachFromTargetResultSchema = z.object({}).strip();
+export type EmbeddedBrowserTargetDetachFromTargetResult = z.infer<typeof EmbeddedBrowserTargetDetachFromTargetResultSchema>;
+
+export const EmbeddedBrowserTargetCloseTargetParamsSchema = z.object({
+  targetId: EmbeddedBrowserCdpTargetIdSchema,
+}).strip();
+export type EmbeddedBrowserTargetCloseTargetParams = z.infer<typeof EmbeddedBrowserTargetCloseTargetParamsSchema>;
+export const EmbeddedBrowserTargetCloseTargetResultSchema = z.object({
+  success: z.boolean(),
+}).strip();
+export type EmbeddedBrowserTargetCloseTargetResult = z.infer<typeof EmbeddedBrowserTargetCloseTargetResultSchema>;
+
+export const EmbeddedBrowserTargetCreateTargetParamsSchema = z.object({
+  url: z.string().trim().min(1).max(4_096),
+  browserContextId: EmbeddedBrowserCdpBrowserContextIdSchema.optional(),
+}).strip();
+export type EmbeddedBrowserTargetCreateTargetParams = z.infer<typeof EmbeddedBrowserTargetCreateTargetParamsSchema>;
+export const EmbeddedBrowserTargetCreateTargetResultSchema = z.object({
+  targetId: EmbeddedBrowserCdpTargetIdSchema,
+}).strip();
+export type EmbeddedBrowserTargetCreateTargetResult = z.infer<typeof EmbeddedBrowserTargetCreateTargetResultSchema>;
+
+export const EmbeddedBrowserTargetSetDiscoverTargetsParamsSchema = z.object({
+  discover: z.boolean(),
+}).strip();
+export type EmbeddedBrowserTargetSetDiscoverTargetsParams = z.infer<typeof EmbeddedBrowserTargetSetDiscoverTargetsParamsSchema>;
+export const EmbeddedBrowserTargetSetDiscoverTargetsResultSchema = z.object({}).strip();
+export type EmbeddedBrowserTargetSetDiscoverTargetsResult = z.infer<typeof EmbeddedBrowserTargetSetDiscoverTargetsResultSchema>;
+
+export const EmbeddedBrowserTargetCreatedEventSchema = z.object({
+  method: z.literal("Target.targetCreated"),
+  params: z.object({ targetInfo: EmbeddedBrowserTargetInfoSchema }).strip(),
+}).strip();
+export type EmbeddedBrowserTargetCreatedEvent = z.infer<typeof EmbeddedBrowserTargetCreatedEventSchema>;
+
+export const EmbeddedBrowserTargetInfoChangedEventSchema = z.object({
+  method: z.literal("Target.targetInfoChanged"),
+  params: z.object({ targetInfo: EmbeddedBrowserTargetInfoSchema }).strip(),
+}).strip();
+export type EmbeddedBrowserTargetInfoChangedEvent = z.infer<typeof EmbeddedBrowserTargetInfoChangedEventSchema>;
+
+export const EmbeddedBrowserTargetDestroyedEventSchema = z.object({
+  method: z.literal("Target.targetDestroyed"),
+  params: z.object({ targetId: EmbeddedBrowserCdpTargetIdSchema }).strip(),
+}).strip();
+export type EmbeddedBrowserTargetDestroyedEvent = z.infer<typeof EmbeddedBrowserTargetDestroyedEventSchema>;
+
+export const EmbeddedBrowserTargetDetachedFromTargetEventSchema = z.object({
+  method: z.literal("Target.detachedFromTarget"),
+  params: z.object({
+    sessionId: EmbeddedBrowserCdpSessionIdSchema,
+    targetId: EmbeddedBrowserCdpTargetIdSchema.optional(),
+  }).strip(),
+}).strip();
+export type EmbeddedBrowserTargetDetachedFromTargetEvent = z.infer<typeof EmbeddedBrowserTargetDetachedFromTargetEventSchema>;
+
+export const EmbeddedBrowserTargetCdpEventSchema = z.discriminatedUnion("method", [
+  EmbeddedBrowserTargetCreatedEventSchema,
+  EmbeddedBrowserTargetInfoChangedEventSchema,
+  EmbeddedBrowserTargetDestroyedEventSchema,
+  EmbeddedBrowserTargetDetachedFromTargetEventSchema,
+]);
+export type EmbeddedBrowserTargetCdpEvent = z.infer<typeof EmbeddedBrowserTargetCdpEventSchema>;
 
 export const EmbeddedBrowserCdpCommandSchema = z.object({
   leaseRef: z.string().trim().min(1).max(240),
@@ -304,6 +473,12 @@ export const EMBEDDED_BROWSER_ERROR_CODES = [
   "BROWSER_CREATION_DECLINED",
   "BROWSER_CREATION_EXPIRED",
   "BROWSER_CREATION_NO_CANDIDATE",
+  "BROWSER_CREATION_CONTEXT_REQUIRED",
+  "BROWSER_CREATION_CONTEXT_UNAVAILABLE",
+  "BROWSER_CREATION_CONTEXT_NOT_SELECTED",
+  "BROWSER_CREATION_CONTEXT_NOT_OWNED",
+  "BROWSER_CREATION_CONTEXT_FORBIDDEN",
+  "BROWSER_DEFAULT_CONTEXT_CONFLICT",
   "BROWSER_CHANNEL_STREAM_KIND_UNSUPPORTED",
   "BROWSER_CHANNEL_PROTOCOL_ERROR",
 ] as const;
@@ -319,6 +494,13 @@ export const EmbeddedBrowserControlErrorSchema = z.object({
   execution: EmbeddedBrowserErrorExecutionSchema.default("not-started"),
   cdpCode: z.number().int().optional(),
   cdpMessage: z.string().trim().max(500).optional(),
+  // Structured details for pending creation and creation-context conflicts.
+  // The base error model remains code/message/execution; these fields are
+  // additive so older readers can ignore them.
+  creationRef: z.string().trim().min(1).max(240).optional(),
+  expiresAt: z.string().datetime().optional(),
+  revision: z.number().int().nonnegative().optional(),
+  defaultBrowserContextId: z.string().trim().min(1).max(240).optional(),
 }).strip();
 export type EmbeddedBrowserControlError = z.infer<typeof EmbeddedBrowserControlErrorSchema>;
 
@@ -381,6 +563,30 @@ export const EmbeddedBrowserPageSchema = z.object({
   revision: z.number().int().nonnegative(),
 }).strip().superRefine(validateEmbeddedBrowserPageHostCapabilities);
 export type EmbeddedBrowserPage = z.infer<typeof EmbeddedBrowserPageSchema>;
+
+/** Returns the sourceRef unchanged; browserContextId has no separate identity. */
+export function embeddedBrowserBrowserContextId(sourceRef: string): EmbeddedBrowserCdpBrowserContextId {
+  return EmbeddedBrowserCdpBrowserContextIdSchema.parse(sourceRef);
+}
+
+/** Returns the tabRef unchanged; targetId has no separate identity. */
+export function embeddedBrowserTargetId(tabRef: string): EmbeddedBrowserCdpTargetId {
+  return EmbeddedBrowserCdpTargetIdSchema.parse(tabRef);
+}
+
+export function embeddedBrowserTargetInfoFromPage(
+  page: EmbeddedBrowserPage,
+  attached = false,
+): EmbeddedBrowserTargetInfo {
+  return EmbeddedBrowserTargetInfoSchema.parse({
+    targetId: embeddedBrowserTargetId(page.tabRef),
+    type: "page",
+    title: page.title,
+    url: page.url,
+    attached,
+    browserContextId: embeddedBrowserBrowserContextId(page.sourceRef),
+  });
+}
 
 export const EmbeddedBrowserPageListResponseSchema = z.object({
   registryEpoch: z.string().trim().min(1).max(240),
@@ -470,24 +676,6 @@ export const EmbeddedBrowserCreationSchema = z.object({
 });
 export type EmbeddedBrowserCreation = z.infer<typeof EmbeddedBrowserCreationSchema>;
 
-export const EmbeddedBrowserCreationRequestSchema = z.object({
-  url: z.string().trim().min(1).max(4_096),
-  title: z.string().trim().max(512).optional(),
-}).strict();
-export type EmbeddedBrowserCreationRequest = z.infer<typeof EmbeddedBrowserCreationRequestSchema>;
-
-export const EmbeddedBrowserCreationClaimSchema = z.object({
-  sourceRef: z.string().trim().min(1).max(240),
-  expectedRevision: z.number().int().nonnegative(),
-}).strict();
-export type EmbeddedBrowserCreationClaim = z.infer<typeof EmbeddedBrowserCreationClaimSchema>;
-
-export const EmbeddedBrowserCreationDeclineSchema = z.object({
-  sourceRef: z.string().trim().min(1).max(240),
-  expectedRevision: z.number().int().nonnegative(),
-}).strict();
-export type EmbeddedBrowserCreationDecline = z.infer<typeof EmbeddedBrowserCreationDeclineSchema>;
-
 export const EmbeddedBrowserCreationCandidateSchema = z.object({
   sourceRef: z.string().trim().min(1).max(240),
   panelLabel: z.string().trim().min(1).max(160),
@@ -515,20 +703,85 @@ export const EmbeddedBrowserCreationViewSchema = z.object({
 }).strip();
 export type EmbeddedBrowserCreationView = z.infer<typeof EmbeddedBrowserCreationViewSchema>;
 
-// Approval views are scoped to one desktop publisher. `requesterSessionRef` is
-// intentionally absent from page DTOs: only the approval surface needs to show
-// which AI Session is waiting for the user to pick a desktop.
-export const EmbeddedBrowserCreationApprovalViewSchema = z.object({
-  request: EmbeddedBrowserCreationViewSchema,
-  requesterSessionRef: z.string().trim().min(1).max(240),
-}).strict();
-export type EmbeddedBrowserCreationApprovalView = z.infer<typeof EmbeddedBrowserCreationApprovalViewSchema>;
+// Instance-wide creation-context state. `browserContextId` is the sourceRef;
+// the pair exists only so consumers can use the CDP field name without
+// inventing a second identifier.
+export const EmbeddedBrowserBrowserContextSchema = z.object({
+  sourceRef: z.string().trim().min(1).max(240),
+  browserContextId: EmbeddedBrowserCdpBrowserContextIdSchema,
+}).strip().superRefine((value, context) => {
+  if (value.sourceRef !== value.browserContextId) {
+    context.addIssue({ code: "custom", path: ["browserContextId"], message: "browserContextId must equal sourceRef." });
+  }
+});
+export type EmbeddedBrowserBrowserContext = z.infer<typeof EmbeddedBrowserBrowserContextSchema>;
 
-export const EmbeddedBrowserCreationApprovalListResponseSchema = z.object({
-  creationRevision: z.number().int().nonnegative(),
-  items: z.array(EmbeddedBrowserCreationApprovalViewSchema).max(EMBEDDED_BROWSER_MAX_SOURCES),
+export const EmbeddedBrowserCreationPanelSchema = z.object({
+  sourceRef: z.string().trim().min(1).max(240),
+  panelLabel: z.string().trim().min(1).max(160),
+  hostLabel: z.string().trim().min(1).max(160).optional(),
+  pageHost: EmbeddedBrowserPageHostSchema,
+  canCreate: z.boolean(),
+  isDefault: z.boolean().default(false),
+  canClaim: z.boolean().default(false),
+}).strip().superRefine((value, context) => {
+  if (value.pageHost === "renderer-webview" && value.canCreate && !value.hostLabel) {
+    context.addIssue({ code: "custom", path: ["hostLabel"], message: "renderer-webview creation panels require a live renderer host label." });
+  }
+});
+export type EmbeddedBrowserCreationPanel = z.infer<typeof EmbeddedBrowserCreationPanelSchema>;
+
+export const EmbeddedBrowserCreationPendingSchema = z.object({
+  creationRef: z.string().trim().min(1).max(240),
+  url: z.string().trim().min(1).max(4_096),
+  state: z.literal("pending").default("pending"),
+  expiresAt: z.string().datetime(),
 }).strip();
-export type EmbeddedBrowserCreationApprovalListResponse = z.infer<typeof EmbeddedBrowserCreationApprovalListResponseSchema>;
+export type EmbeddedBrowserCreationPending = z.infer<typeof EmbeddedBrowserCreationPendingSchema>;
+
+export const EmbeddedBrowserCreationContextSnapshotSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  defaultContext: z.preprocess((value) => value === null ? undefined : value, EmbeddedBrowserBrowserContextSchema.optional()),
+  panels: z.array(EmbeddedBrowserCreationPanelSchema).max(EMBEDDED_BROWSER_MAX_SOURCES).default([]),
+  pendingCreation: z.preprocess((value) => value === null ? undefined : value, EmbeddedBrowserCreationPendingSchema.optional()),
+}).strip().superRefine((value, context) => {
+  const defaults = value.panels.filter((panel) => panel.isDefault);
+  if (defaults.length > 1) {
+    context.addIssue({ code: "custom", path: ["panels"], message: "At most one panel can be the default creation context." });
+  }
+  if (defaults.length === 1 && value.defaultContext && defaults[0].sourceRef !== value.defaultContext.sourceRef) {
+    context.addIssue({ code: "custom", path: ["panels"], message: "The default panel must match defaultContext." });
+  }
+});
+export type EmbeddedBrowserCreationContextSnapshot = z.infer<typeof EmbeddedBrowserCreationContextSnapshotSchema>;
+
+export const EmbeddedBrowserDefaultContextClaimRequestSchema = z.object({
+  // The caller may only submit its own desktop source. The instance rechecks
+  // token, panel/user and source ownership; this schema deliberately has no
+  // field for selecting another panel.
+  sourceRef: z.string().trim().min(1).max(240),
+  expectedRevision: z.number().int().nonnegative(),
+}).strict();
+export type EmbeddedBrowserDefaultContextClaimRequest = z.infer<typeof EmbeddedBrowserDefaultContextClaimRequestSchema>;
+
+export const EmbeddedBrowserDefaultContextClaimResultSchema = z.object({
+  sourceRef: z.string().trim().min(1).max(240),
+  browserContextId: EmbeddedBrowserCdpBrowserContextIdSchema,
+  revision: z.number().int().nonnegative(),
+}).strip().superRefine((value, context) => {
+  if (value.sourceRef !== value.browserContextId) {
+    context.addIssue({ code: "custom", path: ["browserContextId"], message: "browserContextId must equal sourceRef." });
+  }
+});
+export type EmbeddedBrowserDefaultContextClaimResult = z.infer<typeof EmbeddedBrowserDefaultContextClaimResultSchema>;
+
+export const EmbeddedBrowserCreationContextChangedEventSchema = z.object({
+  type: z.literal("browser.creation-context.changed"),
+  revision: z.number().int().nonnegative(),
+  defaultBrowserContextId: EmbeddedBrowserCdpBrowserContextIdSchema.optional(),
+  previousBrowserContextId: EmbeddedBrowserCdpBrowserContextIdSchema.optional(),
+}).strip();
+export type EmbeddedBrowserCreationContextChangedEvent = z.infer<typeof EmbeddedBrowserCreationContextChangedEventSchema>;
 
 export const EmbeddedBrowserLeaseSchema = z.object({
   leaseRef: z.string().trim().min(1).max(240),
@@ -539,14 +792,35 @@ export const EmbeddedBrowserLeaseSchema = z.object({
 }).strip();
 export type EmbeddedBrowserLease = z.infer<typeof EmbeddedBrowserLeaseSchema>;
 
+// An AI Session can ask the user for instance-wide browser access. The request
+// is a separate instance-owned record so every connected Control Plane can show
+// the same approval; it never narrows which pages an authorized Agent may see.
+export const EmbeddedBrowserAccessRequestViewSchema = z.object({
+  requestRef: z.string().trim().min(1).max(240),
+  requesterSessionRef: z.string().trim().min(1).max(240),
+  revision: z.number().int().nonnegative(),
+  createdAt: z.string().datetime(),
+  expiresAt: z.string().datetime(),
+}).strip();
+export type EmbeddedBrowserAccessRequestView = z.infer<typeof EmbeddedBrowserAccessRequestViewSchema>;
+
 // Browser control access belongs to the whole controlled instance. AI Session
 // identity is only used to scope short-lived CDP connection tokens and writer
 // leases; it does not narrow which published pages an authorized Agent may see.
 export const EmbeddedBrowserAccessViewSchema = z.object({
   active: z.boolean(),
   revision: z.number().int().nonnegative(),
+  pendingRequest: z.preprocess((value) => value === null ? undefined : value, EmbeddedBrowserAccessRequestViewSchema.optional()),
 }).strip();
 export type EmbeddedBrowserAccessView = z.infer<typeof EmbeddedBrowserAccessViewSchema>;
+
+export const EmbeddedBrowserAccessRequestChangedEventSchema = z.object({
+  type: z.literal("browser.access.request.changed"),
+  requestRef: z.string().trim().min(1).max(240),
+  state: z.enum(["pending", "approved", "denied", "expired", "cancelled"]),
+  revision: z.number().int().nonnegative(),
+}).strip();
+export type EmbeddedBrowserAccessRequestChangedEvent = z.infer<typeof EmbeddedBrowserAccessRequestChangedEventSchema>;
 
 export const EmbeddedBrowserCdpAccessSchema = z.object({
   httpEndpoint: z.string().url().max(2_048),
@@ -555,6 +829,31 @@ export const EmbeddedBrowserCdpAccessSchema = z.object({
   protocolVersion: z.literal(EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION),
 }).strip();
 export type EmbeddedBrowserCdpAccess = z.infer<typeof EmbeddedBrowserCdpAccessSchema>;
+
+// The single Agent browser tool returns one of these states. `pending` means
+// the approval card is waiting for a human in the approval center; callers must
+// return to the conversation and ask the user to approve instead of holding the
+// MCP call open indefinitely.
+export const EmbeddedBrowserCdpAccessResultSchema = z.discriminatedUnion("status", [
+  EmbeddedBrowserCdpAccessSchema.extend({ status: z.literal("granted") }).strip(),
+  z.object({
+    status: z.literal("pending"),
+    requestRef: z.string().trim().min(1).max(240),
+    expiresAt: z.string().datetime(),
+    message: z.string().trim().min(1).max(2_000),
+  }).strip(),
+  z.object({
+    status: z.literal("denied"),
+    requestRef: z.string().trim().min(1).max(240),
+    message: z.string().trim().min(1).max(2_000),
+  }).strip(),
+  z.object({
+    status: z.literal("expired"),
+    requestRef: z.string().trim().min(1).max(240),
+    message: z.string().trim().min(1).max(2_000),
+  }).strip(),
+]);
+export type EmbeddedBrowserCdpAccessResult = z.infer<typeof EmbeddedBrowserCdpAccessResultSchema>;
 
 export const EmbeddedBrowserLeaseRefRequestSchema = z.object({
   leaseRef: z.string().trim().min(1).max(240),
@@ -648,11 +947,14 @@ export const EmbeddedBrowserChannelCapabilitiesSchema = z.object({
   streamKinds: z.array(z.literal("control")).max(8).default([]),
   drivers: z.array(z.literal("electron-page-cdp")).max(8).default([]),
   pageHosts: z.array(EmbeddedBrowserPageHostSchema).max(8).default([]),
+  // Compatibility: older capability documents omit this additive domain and
+  // therefore keep browser-level Target CDP disabled.
+  targetCdp: z.preprocess((value) => value === true, z.boolean()),
 }).strip();
 export type EmbeddedBrowserChannelCapabilities = z.infer<typeof EmbeddedBrowserChannelCapabilitiesSchema>;
 
 export function unsupportedEmbeddedBrowserChannelCapabilities(): EmbeddedBrowserChannelCapabilities {
-  return { supported: false, transports: [], streamKinds: [], drivers: [], pageHosts: [] };
+  return { supported: false, transports: [], streamKinds: [], drivers: [], pageHosts: [], targetCdp: false };
 }
 
 export function normalizeEmbeddedBrowserChannelCapabilities(value: unknown): EmbeddedBrowserChannelCapabilities {
@@ -667,7 +969,7 @@ export function normalizeEmbeddedBrowserChannelCapabilities(value: unknown): Emb
   if (!transports.includes("reverse-websocket") || !streamKinds.includes("control") || !drivers.includes("electron-page-cdp")) {
     return unsupportedEmbeddedBrowserChannelCapabilities();
   }
-  return { supported: true, transports, streamKinds, drivers, pageHosts };
+  return { supported: true, transports, streamKinds, drivers, pageHosts, targetCdp: record.targetCdp === true };
 }
 
 export function supportsEmbeddedBrowserChannel(capabilities: unknown) {
@@ -677,6 +979,10 @@ export function supportsEmbeddedBrowserChannel(capabilities: unknown) {
 
 export function supportsEmbeddedBrowserPageHost(capabilities: unknown, pageHost: EmbeddedBrowserPageHost) {
   return normalizeEmbeddedBrowserChannelCapabilities(embeddedBrowserChannelFeature(capabilities)).pageHosts.includes(pageHost);
+}
+
+export function supportsEmbeddedBrowserTargetCdp(capabilities: unknown) {
+  return normalizeEmbeddedBrowserChannelCapabilities(embeddedBrowserChannelFeature(capabilities)).targetCdp;
 }
 
 export function encodeEmbeddedBrowserFrame(frame: EmbeddedBrowserFrame): Uint8Array {
