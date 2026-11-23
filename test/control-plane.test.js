@@ -776,6 +776,14 @@ test("app inventory protocol is strict and stored legacy app capability is disca
         maxHeight: 0,
       },
     },
+    embeddedBrowserChannel: {
+      supported: false,
+      transports: [],
+      streamKinds: [],
+      drivers: [],
+      pageHosts: [],
+      targetCdp: false,
+    },
   } });
   assert.deepEqual(warnings, [{ instanceId: "inst_legacy_apps", field: "capabilities.apps" }]);
 });

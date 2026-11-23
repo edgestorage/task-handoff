@@ -548,6 +548,43 @@
       "limitations": [
         "Windows process start identity uses PowerShell and remains runtime-unverified."
       ]
+    },
+    {
+      "source": "packages/controlled-instance/src/web/{browser-cdp-bridge,browser-control,browser-control-relay,browser-control-routes,browser-control-tab-compat}.ts",
+      "rust": [
+        "controlled-instance-rs/crates/instance/src/browser_agent_tools.rs",
+        "controlled-instance-rs/crates/instance/src/browser_cdp_bridge.rs",
+        "controlled-instance-rs/crates/instance/src/browser_control.rs",
+        "controlled-instance-rs/crates/instance/src/browser_control_relay.rs",
+        "controlled-instance-rs/crates/instance/src/browser_control_routes.rs"
+      ],
+      "tests": [
+        "controlled-instance-rs/crates/instance/src/browser_cdp_bridge.rs",
+        "controlled-instance-rs/crates/instance/src/browser_control.rs",
+        "controlled-instance-rs/crates/instance/src/browser_control_relay.rs",
+        "controlled-instance-rs/crates/instance/src/server.rs"
+      ],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested-differential-partial",
+      "limitations": [
+        "CDP discovery and browser-control bridge behavior have focused Rust tests, but the full Node/Rust HTTP/WS corpus and Electron runtime remain unverified."
+      ]
+    },
+    {
+      "source": "packages/protocol/src/{browser-agent-tools,embedded-browser-control}.ts",
+      "rust": [
+        "controlled-instance-rs/crates/protocol/src/ai_session_agent_tools.rs",
+        "controlled-instance-rs/crates/protocol/src/embedded_browser_control.rs"
+      ],
+      "tests": [
+        "controlled-instance-rs/crates/protocol/src/ai_session_agent_tools.rs",
+        "controlled-instance-rs/crates/protocol/src/embedded_browser_control.rs"
+      ],
+      "status": "implemented",
+      "verification": "unit-and-contract-tested",
+      "limitations": [
+        "Schema and sanitize tests exist; recorded cross-version browser capability fixtures remain pending."
+      ]
     }
   ]
 }

@@ -50,7 +50,13 @@
               </div>
               <GripVertical v-else class="ai-session-detail-queue-icon" :size="17" :stroke-width="1.8" />
               <div class="ai-session-detail-queue-copy">
-                <p>{{ item.message }}</p>
+                <p v-if="item.message">{{ item.message }}</p>
+                <ul v-if="item.attachments.length" class="ai-session-detail-queue-attachments" role="list">
+                  <li v-for="attachment in item.attachments" :key="attachment.id">
+                    <Paperclip :size="13" aria-hidden="true" />
+                    <span>{{ attachment.name }}</span>
+                  </li>
+                </ul>
                 <small v-if="item.error">{{ item.error }}</small>
               </div>
               <div class="ai-session-detail-queue-actions">
@@ -77,7 +83,7 @@
 </template>
 
 <script setup lang="ts">
-import { CornerDownRight, GripVertical, ListChecks, Pause, Pencil, Play, RotateCcw, Trash2 } from "@lucide/vue";
+import { CornerDownRight, GripVertical, ListChecks, Paperclip, Pause, Pencil, Play, RotateCcw, Trash2 } from "@lucide/vue";
 import type { AiSessionQueue } from "@task-handoff/protocol/ai-sessions";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -352,6 +358,34 @@ watch(() => props.queue.revision, cancelQueueDrag);
   line-clamp: 1;
 }
 
+.ai-session-detail-queue-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--queue-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ai-session-detail-queue-copy p + .ai-session-detail-queue-attachments {
+  margin-top: 2px;
+  color: var(--queue-muted);
+  font-size: 12px;
+}
+
+.ai-session-detail-queue-attachments li {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ai-session-detail-queue-attachments svg { flex: none; align-self: start; margin-top: 2px; }
+.ai-session-detail-queue-attachments span { min-width: 0; overflow-wrap: anywhere; }
 .ai-session-detail-queue-item small { color: var(--queue-muted); font-size: 12px; overflow-wrap: anywhere; }
 .ai-session-detail-queue-actions { display: flex; align-items: center; gap: 2px; }
 

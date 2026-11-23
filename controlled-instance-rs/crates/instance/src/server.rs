@@ -10013,9 +10013,18 @@ fn parse_agent_tool_invocation(
         let story_values = controlled_instance_protocol::AI_SESSION_AGENT_TOOL_NAMES
             .iter()
             .copied()
-            .filter(|value| *value != "agent_run")
+            .filter(|value| {
+                *value != "agent_run"
+                    && !controlled_instance_protocol::BROWSER_AGENT_TOOL_NAMES.contains(value)
+            })
             .collect::<Vec<_>>();
         let story_message = story_values
+            .iter()
+            .map(|value| format!("\"{value}\""))
+            .collect::<Vec<_>>()
+            .join("|");
+        let browser_values = controlled_instance_protocol::BROWSER_AGENT_TOOL_NAMES;
+        let browser_message = browser_values
             .iter()
             .map(|value| format!("\"{value}\""))
             .collect::<Vec<_>>()
@@ -10034,6 +10043,12 @@ fn parse_agent_tool_invocation(
                     "values": ["agent_run"],
                     "path": [],
                     "message": "Invalid input: expected \"agent_run\"",
+                }],
+                [{
+                    "code": "invalid_value",
+                    "values": browser_values,
+                    "path": [],
+                    "message": format!("Invalid input: expected {browser_message}"),
                 }],
             ],
             "path": ["tool"],

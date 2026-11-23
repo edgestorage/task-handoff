@@ -4041,13 +4041,13 @@ mod tests {
         routing::any,
         Json, Router,
     };
+    use controlled_instance_protocol::{
+        AiSessionMessageAttachmentMeta, AiSessionMessageAttachmentSourceType,
+    };
     use std::{
         collections::VecDeque,
         convert::Infallible,
         sync::{atomic::AtomicUsize, Mutex as StdMutex},
-    };
-    use controlled_instance_protocol::{
-        AiSessionMessageAttachmentMeta, AiSessionMessageAttachmentSourceType,
     };
 
     #[test]

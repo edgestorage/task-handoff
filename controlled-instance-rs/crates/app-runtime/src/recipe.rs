@@ -2530,6 +2530,7 @@ fn walk_owned_files(root: &Path) -> Result<Vec<String>, AppRecipeExecutionError>
     }
     let mut files = Vec::new();
     visit(root, root, &mut files)?;
+    files.sort();
     Ok(files)
 }
 
