@@ -20,7 +20,7 @@ const forwardedProps = useForwardProps(delegatedProps)
   <ContextMenuSubTrigger
     v-bind="forwardedProps"
     :class="cn(
-      'flex cursor-default select-none items-center rounded-sm gap-2 px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground [&>svg]:size-4 [&>svg]:shrink-0',
+      'flex cursor-default select-none items-center rounded-sm gap-2 px-2 py-1.5 text-sm outline-none focus:bg-[var(--surface-hover)] focus:text-accent-foreground data-[state=open]:bg-[var(--surface-hover)] data-[state=open]:text-accent-foreground [&>svg]:size-4 [&>svg]:shrink-0',
       inset && 'pl-8',
       props.class,
     )"

@@ -484,7 +484,7 @@
 :global(.session-ai-project-item:hover),
 :global(.session-ai-project-item:focus-visible),
 :global(.session-ai-project-item[data-highlighted]) {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--control-plane-menu-hover-text);
   outline: none;
 }
@@ -640,7 +640,7 @@
 :global(.session-ai-options-item:focus-visible),
 :global(.session-ai-options-item[data-highlighted]),
 :global(.session-ai-options-item[data-state="open"]) {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--control-plane-menu-hover-text);
   outline: none;
 }
@@ -700,7 +700,7 @@
 :global(.session-ai-filter-item:hover),
 :global(.session-ai-filter-item:focus-visible),
 :global(.session-ai-filter-item[data-highlighted]) {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--control-plane-menu-hover-text);
   outline: none;
 }
@@ -2397,10 +2397,10 @@
   background: linear-gradient(
     to bottom,
     transparent 0,
-    color-mix(in srgb, var(--surface-inset) 76%, transparent) 16px,
-    color-mix(in srgb, var(--surface-inset) 76%, transparent) calc(100% - 64px),
-    var(--surface-inset) calc(100% - 32px),
-    var(--surface-inset) 100%
+    color-mix(in srgb, var(--workspace-bg) 76%, transparent) 16px,
+    color-mix(in srgb, var(--workspace-bg) 76%, transparent) calc(100% - 64px),
+    var(--workspace-bg) calc(100% - 32px),
+    var(--workspace-bg) 100%
   );
 }
 

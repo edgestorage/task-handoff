@@ -193,7 +193,7 @@ function toggleFolder(event: Event, id: string) {
 :global(.new-worktree-branch-item small) { margin-left: auto; color: var(--text-muted); font-size: 12px; font-weight: 400; }
 :global(.new-worktree-branch-item:hover),
 :global(.new-worktree-branch-item:focus-visible),
-:global(.new-worktree-branch-item[data-highlighted]) { background: var(--surface-active); color: var(--control-plane-menu-hover-text); outline: none; }
+:global(.new-worktree-branch-item[data-highlighted]) { background: var(--surface-hover); color: var(--control-plane-menu-hover-text); outline: none; }
 .new-worktree-tree-toggle { display: grid; flex: 0 0 9px; width: 9px; height: 13px; place-items: center; }
 .new-worktree-tree-toggle > svg { width: 9px; height: 9px; transition: transform 120ms ease; }
 .new-worktree-tree-toggle > svg.expanded { transform: rotate(90deg); }

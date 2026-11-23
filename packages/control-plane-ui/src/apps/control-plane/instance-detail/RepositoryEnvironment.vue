@@ -437,8 +437,8 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
 .repository-environment-trigger-menu:focus-visible,
 .repository-environment-trigger-menu[data-state="open"] {
   border-color: transparent;
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--surface-hover);
+  color: var(--control-plane-menu-hover-text);
   outline: none;
 }
 

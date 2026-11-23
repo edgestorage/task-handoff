@@ -1164,7 +1164,7 @@ watch(
 :global(.node-detail-action-item:hover),
 :global(.node-detail-action-item:focus-visible),
 :global(.node-detail-action-item[data-highlighted]) {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--control-plane-menu-hover-text);
   outline: none;
 }

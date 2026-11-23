@@ -1168,7 +1168,7 @@ async function save() {
 :global(.agent-graph-add-empty) { margin:0; padding:14px 12px; color:var(--text-muted); font-size:12px; text-align:center; }
 :global(.agent-graph-add-option-name) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
 :global(.agent-graph-add-option-state) { flex:0 0 auto; margin-left:auto; color:var(--text-muted); font-size:12px; font-weight:400; white-space:nowrap; }
-:global(.agent-graph-add-list .agent-graph-add-option:hover),:global(.agent-graph-add-list .agent-graph-add-option:focus-visible),:global(.agent-graph-add-list .agent-graph-add-option[data-highlighted]) { background:var(--surface-active); color:var(--text-strong); outline:none; }
+:global(.agent-graph-add-list .agent-graph-add-option:hover),:global(.agent-graph-add-list .agent-graph-add-option:focus-visible),:global(.agent-graph-add-list .agent-graph-add-option[data-highlighted]) { background:var(--surface-hover); color:var(--text-strong); outline:none; }
 @media (max-width: 900px) {
   /* 头部换成上下两段后，identity 的 flex-basis 会作用在纵轴上，必须显式取消。 */
   .agent-graph-head { flex-direction:column; align-items:stretch; }

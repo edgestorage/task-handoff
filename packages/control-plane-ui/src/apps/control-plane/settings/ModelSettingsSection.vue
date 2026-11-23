@@ -670,7 +670,7 @@ async function confirmMerge() {
 .model-picker-command :deep([cmdk-input-wrapper] > svg) { height: 14px; margin-right: 0; width: 14px; }
 .model-picker-command :deep([role="group"]) { display: grid; gap: 2px; grid-template-columns: minmax(0,1fr); padding: 0; }
 .model-picker-command :deep([role="option"]) { border-radius: 5px; cursor: pointer; font-size: 13px; gap: 7px; min-height: 32px; padding: 5px 8px; }
-.model-picker-command :deep([role="option"]:hover), .model-picker-command :deep([role="option"][data-highlighted]) { background: var(--surface-active); color: var(--text-strong); }
+.model-picker-command :deep([role="option"]:hover), .model-picker-command :deep([role="option"][data-highlighted]) { background: var(--surface-hover); color: var(--text-strong); }
 .model-picker-command :deep([role="option"][data-state="checked"]) { background: var(--surface-active); color: var(--status-success); }
 .model-picker-command :deep([role="option"] > span:first-child) { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-picker-command :deep([role="option"] small) { color: var(--text-muted); font-size: 12px; font-weight: 400; margin-left: auto; white-space: nowrap; }

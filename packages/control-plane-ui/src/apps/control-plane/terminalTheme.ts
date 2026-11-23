@@ -3,10 +3,10 @@ import { watch } from "vue";
 import { useThemePreference } from "../../utils/theme";
 
 const FALLBACK_TERMINAL_THEME: ITheme = {
-  background: "#17181c",
-  foreground: "#f2f2f7",
+  background: "#151619",
+  foreground: "#f3f3f6",
   cursor: "#2dd4bf",
-  selectionBackground: "#23252a",
+  selectionBackground: "#2e3036",
 };
 
 export function terminalTheme(): ITheme {

@@ -113,7 +113,7 @@ test("Story tab context menu keeps rename and close on the shared instance actio
 test("instance action menus share one chrome definition", () => {
   assert.match(actionMenuStyles, /\.instance-action-menu \{[\s\S]*display: grid;[\s\S]*background: var\(--surface-inset\);[\s\S]*box-shadow: var\(--shadow-popover\);[\s\S]*padding: 5px;/);
   assert.match(actionMenuStyles, /\.instance-action-menu \.instance-action-item \{[\s\S]*min-height: 30px;[\s\S]*font-size: 13px;[\s\S]*font-weight: 500;/);
-  assert.match(actionMenuStyles, /\.instance-action-menu \.instance-action-item\[data-highlighted\][\s\S]*background: var\(--surface-active\);/);
+  assert.match(actionMenuStyles, /\.instance-action-menu \.instance-action-item\[data-highlighted\][\s\S]*background: var\(--surface-hover\);/);
   assert.match(actionMenuStyles, /\.instance-action-menu \.instance-action-item\[data-disabled\] \{\s*cursor: default;\s*opacity: 0\.52;/);
   assert.match(tabStrip, /<style src="\.\.\/shared\/InstanceActionMenu\.css"><\/style>/);
   assert.match(instanceList, /<style src="\.\.\/shared\/InstanceActionMenu\.css"><\/style>/);

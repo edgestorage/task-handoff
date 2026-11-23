@@ -44,7 +44,7 @@
 .instance-action-menu .instance-action-item:focus-visible,
 .instance-action-menu .instance-action-item[data-highlighted],
 .instance-action-menu .instance-action-item[data-state="open"] {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--control-plane-menu-hover-text);
   outline: none;
 }

@@ -134,7 +134,7 @@ defineEmits<{
 .instance-view-options-item:focus-visible,
 .instance-view-options-item[data-highlighted],
 .instance-view-options-item[data-state="open"] {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--control-plane-menu-hover-text);
   outline: none;
 }

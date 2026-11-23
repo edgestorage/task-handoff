@@ -28,7 +28,7 @@ test("repository environment matches detail actions without changing the tab too
   assert.match(environment, /\.repository-environment-trigger-menu span \{[^}]*font-size: inherit;/s);
   assert.match(environment, /\.repository-environment-trigger-menu \.repository-environment-trigger-content \{[^}]*justify-content: flex-start;[^}]*gap: 8px;[^}]*min-width: 0;/s);
   assert.match(environment, /\.repository-environment-trigger-menu-branch \{[^}]*flex: 1 1 auto;[^}]*min-width: 0;[^}]*max-width: min\(170px, 42vw\);[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/s);
-  assert.match(environment, /\.repository-environment-trigger-menu:hover,[\s\S]*?background: var\(--accent\);[\s\S]*?color: var\(--accent-foreground\);/);
+  assert.match(environment, /\.repository-environment-trigger-menu:hover,[\s\S]*?background: var\(--surface-hover\);[\s\S]*?color: var\(--control-plane-menu-hover-text\);/);
   assert.match(aiPanel, /<RepositoryEnvironment[\s\S]*?session-kind="ai-session"[\s\S]*?trigger-appearance="detail"/);
   assert.match(aiPanel, /<RepositoryEnvironment[\s\S]*?session-kind="ai-session"[\s\S]*?trigger-appearance="menu"/);
 

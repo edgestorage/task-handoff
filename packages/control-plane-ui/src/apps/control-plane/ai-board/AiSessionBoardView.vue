@@ -1507,7 +1507,7 @@ watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBinding
 .ai-board-options-item:hover,
 .ai-board-options-item:focus-visible,
 .ai-board-options-item[data-highlighted] {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--control-plane-menu-hover-text);
   outline: none;
 }

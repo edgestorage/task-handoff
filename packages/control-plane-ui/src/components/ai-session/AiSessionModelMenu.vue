@@ -233,7 +233,7 @@ function modelGroupSubtitle(group: AiSessionModelGroup) {
 
 :global(.ai-session-model-menu__item:is(:focus, [data-highlighted])),
 :global(.ai-session-model-menu__provider-item[data-state="open"]) {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--text-strong);
 }
 

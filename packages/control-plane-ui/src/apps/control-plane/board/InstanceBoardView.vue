@@ -714,7 +714,12 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
 
 .board-session-item:hover,
 .board-session-item:focus-visible,
-.board-session-item[data-highlighted],
+.board-session-item[data-highlighted] {
+  background: var(--surface-hover);
+  color: var(--white);
+  outline: none;
+}
+
 .board-session-item.active {
   background: var(--surface-active);
   color: var(--white);
@@ -847,7 +852,7 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   z-index: 80;
   min-width: 220px;
   border: 1px solid var(--terminal-selection);
-  background: var(--surface-hover);
+  background: var(--surface-inset);
   color: var(--terminal-text);
   padding: 5px;
 }
@@ -865,7 +870,7 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
 :global(.board-launch-menu .app-launch-menu-item:hover),
 :global(.board-launch-menu .app-launch-menu-item:focus-visible),
 :global(.board-launch-menu .app-launch-menu-item[data-highlighted]) {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--white);
 }
 

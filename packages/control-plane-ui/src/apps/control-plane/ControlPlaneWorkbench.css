@@ -689,8 +689,8 @@
 
 :global(.control-plane-node-filter-menu-item:not(.selected):hover),
 :global(.control-plane-node-filter-menu-item:not(.selected):focus-within) {
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
+  background: var(--surface-hover);
+  color: var(--control-plane-menu-hover-text);
 }
 
 :global(.control-plane-node-filter-menu-item.selected) {

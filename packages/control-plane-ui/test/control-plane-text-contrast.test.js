@@ -13,7 +13,7 @@ test("control plane light theme uses the default text color for strong text", ()
   assert.match(appStyles, /:root:not\(\.dark\):not\(\[data-theme="dark"\]\),\s*:root\[data-theme="light"\]\s*\{[^}]*--text: #1c1c1e;[^}]*--text-strong: var\(--text\);/s);
 });
 
-test("control plane dark theme uses the mobile palette for normal and strong text", () => {
-  assert.match(appStyles, /:root\.dark,\s*:root\[data-theme="dark"\]\s*\{[^}]*--text: #f2f2f7;[^}]*--text-strong: var\(--text\);/s);
+test("control plane dark theme uses the dark text color for normal and strong text", () => {
+  assert.match(appStyles, /:root\.dark,\s*:root\[data-theme="dark"\]\s*\{[^}]*--text: #f3f3f6;[^}]*--text-strong: var\(--text\);/s);
   assert.doesNotMatch(workbenchStyles, /:global\(html\.dark\)/);
 });

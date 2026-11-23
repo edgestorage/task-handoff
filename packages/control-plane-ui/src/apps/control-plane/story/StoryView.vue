@@ -2059,7 +2059,7 @@ onBeforeUnmount(() => {
 :global(.story-list-options-label) { color:var(--text-muted); font-size:11px; font-weight:500; line-height:1; padding:7px 8px 5px; }
 :global(.story-list-options-separator) { margin:4px -5px; background:var(--surface-active); }
 :global(.story-list-options-item) { display:flex; align-items:center; gap:7px; width:100%; min-height:30px; border:0; border-radius:6px; background:transparent; color:var(--control-plane-menu-text); cursor:pointer; font-size:12px; font-weight:400; padding:0 8px 0 28px; text-align:left; }
-:global(.story-list-options-item:hover),:global(.story-list-options-item:focus-visible),:global(.story-list-options-item[data-highlighted]) { background:var(--surface-active); color:var(--control-plane-menu-hover-text); outline:none; }
+:global(.story-list-options-item:hover),:global(.story-list-options-item:focus-visible),:global(.story-list-options-item[data-highlighted]) { background:var(--surface-hover); color:var(--control-plane-menu-hover-text); outline:none; }
 :global(.story-list-options-item .absolute) { left:8px; width:12px; height:12px; }
 :global(.story-list-options-item .absolute svg) { width:9px; height:9px; }
 .story-sidebar-scroll { min-width:0; min-height:0; }

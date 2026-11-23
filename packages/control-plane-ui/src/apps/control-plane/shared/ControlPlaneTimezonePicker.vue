@@ -64,5 +64,5 @@ function selectTimezone(value: unknown) {
 :global(.control-plane-timezone-list [role="option"]) { width:100%; min-width:0; cursor:pointer; font-size:13px; }
 :global(.control-plane-timezone-name) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 :global(.control-plane-timezone-offset) { flex:0 0 auto; margin-left:auto; color:var(--text-muted); font-size:12px; font-weight:400; white-space:nowrap; }
-:global(.control-plane-timezone-list [role="option"]:hover),:global(.control-plane-timezone-list [role="option"]:focus-visible),:global(.control-plane-timezone-list [role="option"][data-highlighted]) { background:var(--surface-active); color:var(--text-strong); outline:none; }
+:global(.control-plane-timezone-list [role="option"]:hover),:global(.control-plane-timezone-list [role="option"]:focus-visible),:global(.control-plane-timezone-list [role="option"][data-highlighted]) { background:var(--surface-hover); color:var(--text-strong); outline:none; }
 </style>

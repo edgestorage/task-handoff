@@ -182,7 +182,7 @@ function defaultProfileLabel(profile: AppProfile) {
 :global(.app-launch-menu-item:hover),
 :global(.app-launch-menu-item:focus-visible),
 :global(.app-launch-menu-item[data-highlighted]) {
-  background: var(--surface-active);
+  background: var(--surface-hover);
   color: var(--control-plane-menu-hover-text);
   outline: none;
 }
