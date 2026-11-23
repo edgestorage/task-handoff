@@ -78,6 +78,7 @@ const legacyBuild = [
       "browser-tunnel": "packages/protocol/src/browser-tunnel.ts",
       "chat-render": "packages/core/src/core/chat-render.ts",
       diagnostics: "packages/core/src/core/diagnostics.ts",
+      "embedded-browser-control": "packages/protocol/src/embedded-browser-control.ts",
       persistence: "packages/core/src/core/persistence.ts",
       transcript: "packages/core/src/core/transcript.ts",
       web: "packages/controlled-instance/src/web/server.ts",

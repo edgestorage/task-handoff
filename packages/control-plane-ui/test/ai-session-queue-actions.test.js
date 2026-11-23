@@ -1,9 +1,50 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { createServer } from "vite";
+import { createSSRApp, h } from "vue";
+import { renderToString } from "vue/server-renderer";
+import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
 
 const root = new URL("../src/", import.meta.url);
 const read = (path) => fs.readFileSync(new URL(path, root), "utf8");
+
+test("queued messages render attachment names even without text", async (context) => {
+  const server = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    root: fileURLToPath(new URL("../", import.meta.url)),
+    server: { middlewareMode: true },
+  });
+  context.after(() => server.close());
+  const { default: AiSessionQueue } = await server.ssrLoadModule("/src/components/ai-session/AiSessionQueue.vue");
+  const items = [
+    { id: "queue-image", message: "", names: ["screenshot.png", "notes.txt"] },
+    { id: "queue-report", message: "", names: ["report.pdf"] },
+    { id: "queue-mixed", message: "Review this", names: ["data.csv"] },
+    { id: "queue-text", message: "Text only", names: [] },
+  ].map(({ id, message, names }) => ({
+    id,
+    message,
+    status: "queued",
+    attachments: names.map((name) => ({ id: `${id}-${name}`, name })),
+  }));
+  const app = createSSRApp({
+    render: () => h(AiSessionQueue, { queue: { revision: 1, pendingCount: items.length, items } }),
+  });
+  app.use(createControlPlaneI18nForTest());
+
+  const html = await renderToString(app);
+  const rows = [...html.matchAll(/<article\b[^>]*>([\s\S]*?)<\/article>/g)].map((match) => match[1]);
+  assert.equal(rows.length, 4);
+  assert.match(rows[0], />screenshot\.png<.*>notes\.txt</s);
+  assert.match(rows[1], />report\.pdf</);
+  assert.doesNotMatch(rows[0] + rows[1], /<p\b[^>]*>\s*<\/p>/);
+  assert.match(rows[2], />Review this<.*>data\.csv</s);
+  assert.match(rows[3], />Text only</);
+  assert.doesNotMatch(rows[3], /<ul\b/);
+});
 
 test("AI session queue edit and reorder actions stay revisioned through both control-plane surfaces", () => {
   const queue = read("components/ai-session/AiSessionQueue.vue");

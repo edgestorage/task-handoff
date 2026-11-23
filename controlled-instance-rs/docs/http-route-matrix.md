@@ -247,7 +247,7 @@ This section freezes 202 explicit Node registrations at tag `v0.0.47`, including
 
 ## Target-current Node extensions after `v0.0.47`
 
-These 38 registrations are outside the pinned `v0.0.47` release snapshot.
+These 43 registrations are outside the pinned `v0.0.47` release snapshot.
 
 | Method | Path | Auth | Transport | Success / notes |
 | --- | --- | --- | --- | --- |
@@ -268,8 +268,12 @@ These 38 registrations are outside the pinned `v0.0.47` release snapshot.
 | `GET` | `/devtools/page/:tabRef` | Browser CDP | WebSocket | 101 then CDP JSON |
 | `GET` | `/json/close/:tabRef` | Browser CDP | JSON | 200 |
 | `GET` | `/json/list` | Browser CDP | JSON | 200 |
+| `GET` | `/json/list/` | Browser CDP | JSON | 200 |
 | `GET` | `/json/new` | Browser CDP | JSON | 200 or 202 pending creation |
+| `GET` | `/json/protocol` | Browser CDP | JSON | 200 |
+| `GET` | `/json/protocol/` | Browser CDP | JSON | 200 |
 | `GET` | `/json/version` | Browser CDP | JSON | 200 |
+| `GET` | `/json/version/` | Browser CDP | JSON | 200 |
 | `POST` | `/api/browser-control/access` | Browser control proxy | JSON | 200 |
 | `POST` | `/api/browser-control/access-requests/:requestRef/deny` | Browser control proxy | JSON | 200 |
 | `POST` | `/api/browser-control/sources` | Browser control proxy | JSON | 200 |

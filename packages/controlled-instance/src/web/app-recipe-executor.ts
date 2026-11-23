@@ -429,7 +429,7 @@ function walkOwnedFiles(root: string, current = root): string[] {
     else if (stat.isFile()) values.push(relative.split(path.sep).join("/"));
     else throw new AppRecipeExecutionError("unsafe_archive", "Extracted archive contains an unsupported file type.");
   }
-  return values;
+  return values.sort();
 }
 
 function archiveEntryKind(entry: ReadEntry) {

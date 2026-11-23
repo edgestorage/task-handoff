@@ -3857,11 +3857,7 @@ fn provider_message(
 }
 
 fn message_input_has_content(input: &AiSessionMessageInput) -> bool {
-    message_has_content(
-        &input.message,
-        &input.attachments,
-        &input.references,
-    )
+    message_has_content(&input.message, &input.attachments, &input.references)
 }
 
 fn message_has_content(

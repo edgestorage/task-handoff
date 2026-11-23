@@ -31,6 +31,7 @@ function validateDesktopServerRuntime(context) {
   const requiredFiles = [
     "bin/task-handoff.js",
     "dist/cli.js",
+    "dist/embedded-browser-control.js",
     "node_modules/fastify/package.json",
   ];
   const missing = requiredFiles.filter((relativePath) => !fs.existsSync(path.join(runtimeRoot, relativePath)));

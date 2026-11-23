@@ -41,7 +41,7 @@ test("afterPack rejects an incomplete unpacked desktop server runtime", () => {
   };
   assert.throws(
     () => validateDesktopServerRuntime(context),
-    /dist\/cli\.js, node_modules\/fastify\/package\.json/,
+    /dist\/cli\.js, dist\/embedded-browser-control\.js, node_modules\/fastify\/package\.json/,
   );
 });
 
@@ -76,6 +76,12 @@ test("afterPack rejects a desktop bundle that dropped a node agent bootstrap ass
       projectDir: path.resolve(__dirname, "../../.."),
     },
   };
+
+  assert.throws(
+    () => validateDesktopServerRuntime(context),
+    /incomplete: dist\/embedded-browser-control\.js$/,
+  );
+  fs.writeFileSync(path.join(runtimeRoot, "dist", "embedded-browser-control.js"), "module.exports = {};\n");
 
   assert.throws(
     () => validateDesktopServerRuntime(context),
