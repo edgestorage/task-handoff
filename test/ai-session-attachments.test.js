@@ -6,9 +6,14 @@ const test = require("node:test");
 
 const {
   AI_SESSION_MAX_INLINE_FILE_BYTES,
+  AiSessionCreateInputSchema,
+  AiSessionCreateRefInputSchema,
+  AiSessionMessageRefInputSchema,
   AiSessionMessageAttachmentSchema,
   AiSessionMessageAttachmentRefSchema,
   AiSessionMessageInputSchema,
+  AiSessionQueueEditInputSchema,
+  AiSessionQueuedMessageSchema,
 } = require("../packages/protocol/src/ai-sessions.ts");
 const { materializeAiSessionAttachments, prepareCodexAiSessionAttachments, withAttachmentPathFallback } = require("../packages/ai-session-runtime/src/ai-session-attachments.ts");
 const { assertAiSessionRuntimePathSupport } = require("../packages/control-plane/src/control-plane/application/service.ts");
@@ -27,6 +32,60 @@ function inlineFile(size) {
 test("inline files must be smaller than 500 KiB", () => {
   assert.equal(AiSessionMessageAttachmentSchema.safeParse(inlineFile(AI_SESSION_MAX_INLINE_FILE_BYTES - 1)).success, true);
   assert.equal(AiSessionMessageAttachmentSchema.safeParse(inlineFile(AI_SESSION_MAX_INLINE_FILE_BYTES)).success, false);
+});
+
+test("AI session messages require text, attachments, or references without requiring text", () => {
+  const image = {
+    id: "attachment_image",
+    kind: "image",
+    name: "screen.png",
+    mime: "image/png",
+    size: 3,
+    source: { type: "inline", encoding: "base64", data: "cG5n" },
+  };
+  const uploadRef = { id: "draft_image", kind: "image", source: { type: "upload-ref" } };
+  const empty = { message: "", attachments: [], references: [] };
+
+  assert.equal(AiSessionMessageInputSchema.safeParse(empty).success, false);
+  assert.equal(AiSessionMessageInputSchema.safeParse({ ...empty, attachments: [image] }).success, true);
+  assert.equal(AiSessionMessageRefInputSchema.safeParse({ ...empty, attachments: [uploadRef] }).success, true);
+  assert.equal(AiSessionCreateInputSchema.safeParse({
+    ...empty,
+    agent: "codex",
+    cwd: { type: "runtime-path", path: "/workspace" },
+    clientRequestId: "create-attachment-only",
+    attachments: [image],
+  }).success, true);
+  assert.equal(AiSessionCreateRefInputSchema.safeParse({
+    ...empty,
+    agent: "codex",
+    cwdFolderId: "folder_attachment_only",
+    clientRequestId: "create-ref-attachment-only",
+    attachments: [uploadRef],
+  }).success, true);
+  assert.equal(AiSessionQueueEditInputSchema.safeParse({
+    expectedRevision: 1,
+    message: "",
+    attachments: [{ id: "retained_image", source: { type: "retained" } }],
+  }).success, true);
+  assert.equal(AiSessionQueuedMessageSchema.safeParse({
+    id: "queue_image",
+    message: "",
+    attachments: [{ id: "retained_image", kind: "image", name: "screen.png", mime: "image/png", size: 3, sourceType: "inline" }],
+    references: [],
+    status: "queued",
+    createdAt: "2026-11-24T00:00:00.000Z",
+    updatedAt: "2026-11-24T00:00:00.000Z",
+  }).success, true);
+  assert.equal(AiSessionQueuedMessageSchema.safeParse({
+    id: "queue_empty",
+    message: "",
+    attachments: [],
+    references: [],
+    status: "queued",
+    createdAt: "2026-11-24T00:00:00.000Z",
+    updatedAt: "2026-11-24T00:00:00.000Z",
+  }).success, false);
 });
 
 test("runtime path references use the target instance filesystem namespace", async (t) => {

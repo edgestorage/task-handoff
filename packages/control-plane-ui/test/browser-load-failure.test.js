@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { browserFailureTarget, browserLoadFailureKey } from "../src/apps/control-plane/instance-detail/browserLoadFailure.ts";
+import { browserFailureTarget, browserLoadFailureKey, isBrowserPageLoadFailure } from "../src/apps/control-plane/instance-detail/browserLoadFailure.ts";
 
 test("the tunnel failure code outranks Chromium's coarse SOCKS error", () => {
   assert.equal(
@@ -30,4 +30,12 @@ test("Chromium error codes still produce actionable messages without a tunnel co
 test("failure detail drops query strings and fragments before display", () => {
   assert.equal(browserFailureTarget("http://localhost:8080/admin/relays?token=secret#x"), "http://localhost:8080/admin/relays");
   assert.equal(browserFailureTarget(""), "");
+});
+
+test("subframe cancellations and aborted navigations do not replace the page with an error", () => {
+  assert.equal(isBrowserPageLoadFailure({ isMainFrame: false, errorCode: -3, validatedURL: "about://srcdoc" }), false);
+  assert.equal(isBrowserPageLoadFailure({ isMainFrame: false, errorCode: -105, validatedURL: "https://example.com/frame" }), false);
+  assert.equal(isBrowserPageLoadFailure({ isMainFrame: true, errorCode: -3, validatedURL: "https://challenges.cloudflare.com/" }), false);
+  assert.equal(isBrowserPageLoadFailure({ isMainFrame: true, errorCode: -105, validatedURL: "about:srcdoc" }), false);
+  assert.equal(isBrowserPageLoadFailure({ isMainFrame: true, errorCode: -105, validatedURL: "https://missing.example/" }), true);
 });

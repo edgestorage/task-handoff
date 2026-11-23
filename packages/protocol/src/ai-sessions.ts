@@ -368,6 +368,18 @@ export const AiSessionSendModeSchema = z.enum(["auto", "queue", "steer", "immedi
 
 export const AiSessionPermissionModeSchema = z.enum(["ask", "auto-review", "full-access"]);
 
+// Compatibility for v0.0.59: older controlled instances reject attachment-only
+// messages, so clients and the chat gateway keep a text prompt for those peers.
+export const AI_SESSION_LEGACY_ATTACHMENT_ONLY_MESSAGE = "Please review the attached files.";
+
+export function aiSessionMessageHasContent(message: {
+  message: string;
+  attachments?: readonly unknown[];
+  references?: readonly unknown[];
+}) {
+  return Boolean(message.message.trim() || message.attachments?.length || message.references?.length);
+}
+
 export const AiSessionCommandNameSchema = z.enum(["review", "rename", "goal", "compact"]);
 
 export const AiSessionCommandInputSchema = z.object({
@@ -476,7 +488,7 @@ export const AiSessionMentionFileSearchSchema = z.object({
 }).strict();
 
 const AiSessionMessageBaseSchema = z.object({
-  message: NonEmptyTrimmedTextSchema.max(20000),
+  message: TrimmedTextSchema.max(20000),
   mode: AiSessionSendModeSchema.optional(),
   permissionMode: AiSessionPermissionModeSchema.optional(),
   // Compatibility for v0.0.33: 旧实例的 strict 入参不接受该增量字段，只有声明发送幂等能力的实例才据它去重。
@@ -487,6 +499,13 @@ export const AiSessionMessageInputSchema = AiSessionMessageBaseSchema.extend({
   attachments: z.array(AiSessionMessageAttachmentSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
   references: AiSessionReferencesSchema,
 }).strict().superRefine((message, context) => {
+  if (!aiSessionMessageHasContent(message)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["message"],
+      message: "A message, attachment, or reference is required.",
+    });
+  }
   const totalBytes = message.attachments.reduce((sum, attachment) => sum + (attachment.source.type === "inline" ? attachment.size : 0), 0);
   if (totalBytes > AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES) {
     context.addIssue({
@@ -500,7 +519,15 @@ export const AiSessionMessageInputSchema = AiSessionMessageBaseSchema.extend({
 export const AiSessionMessageRefInputSchema = AiSessionMessageBaseSchema.extend({
   attachments: z.array(AiSessionMessageAttachmentRefSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
   references: AiSessionReferencesSchema,
-}).strict();
+}).strict().superRefine((message, context) => {
+  if (!aiSessionMessageHasContent(message)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["message"],
+      message: "A message, attachment, or reference is required.",
+    });
+  }
+});
 
 export const AiSessionRuntimePathSchema = z.object({
   type: z.literal("runtime-path"),
@@ -588,7 +615,7 @@ export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.safeExtend
   storyId: StoryIdSchema.optional(),
 }).strict();
 
-export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.extend({
+export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.safeExtend({
   agent: AiAgentKindSchema,
   cwdFolderId: NonEmptyTrimmedTextSchema.max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
@@ -729,7 +756,7 @@ export const AiSessionQueuePauseInputSchema = z.object({
 
 export const AiSessionQueueEditInputSchema = z.object({
   expectedRevision: z.number().int().min(0),
-  message: NonEmptyTrimmedTextSchema.max(20000),
+  message: TrimmedTextSchema.max(20000),
   attachments: z.array(z.union([
     z.object({
       id: NonEmptyTrimmedTextSchema.max(120),
@@ -751,7 +778,7 @@ export const AiSessionQueuedMessageSchema = z
   .object({
     id: NonEmptyTrimmedTextSchema.max(120),
     messageId: NonEmptyTrimmedTextSchema.max(240).optional(),
-    message: NonEmptyTrimmedTextSchema.max(20000),
+    message: TrimmedTextSchema.max(20000),
     attachments: z.array(AiSessionMessageAttachmentMetaSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
     references: AiSessionReferencesSchema,
     permissionMode: AiSessionPermissionModeSchema.optional(),
@@ -760,7 +787,16 @@ export const AiSessionQueuedMessageSchema = z
     updatedAt: DateTimeStringSchema,
     error: TrimmedTextSchema.max(4000).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((message, context) => {
+    if (!aiSessionMessageHasContent(message)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["message"],
+        message: "A message, attachment, or reference is required.",
+      });
+    }
+  });
 
 export const AiSessionQueueSchema = z
   .object({

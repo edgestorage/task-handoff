@@ -237,7 +237,7 @@ watch(
 .ai-session-streaming-markdown {
   display: block;
   min-width: 0;
-  color: inherit;
+  color: var(--markdown-text-color, var(--text, inherit));
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
@@ -257,8 +257,8 @@ watch(
   --inline-code-bg: var(--markdown-code-bg, var(--surface, rgb(127 127 127 / 14%)));
   --inline-code-border: var(--markdown-border-color, var(--line-subtle, transparent));
   --link-color: var(--markdown-link-color, var(--brand-accent, currentColor));
-  --list-counter-marker: var(--markdown-text-color, var(--text-strong, currentColor));
-  --list-marker: var(--markdown-text-color, var(--text-strong, currentColor));
+  --list-counter-marker: var(--markdown-text-color, var(--text, currentColor));
+  --list-marker: var(--markdown-text-color, var(--text, currentColor));
   --table-border: var(--markdown-table-border, var(--line, currentColor));
   --ms-text-body: 1em;
   --ms-leading-body: 1.55;
@@ -457,7 +457,7 @@ watch(
     var(--markdown-table-head-bg, var(--surface-inset)),
     color-mix(in srgb, var(--markdown-table-head-bg, var(--surface-inset)) 78%, transparent)
   );
-  --code-fg: var(--markdown-text-color, var(--text-strong));
+  --code-fg: var(--markdown-text-color, var(--text));
   --code-action-fg: var(--markdown-muted-color, var(--text-muted));
   --code-action-hover-bg: var(--surface-hover);
   --code-action-hover-fg: var(--text-strong);

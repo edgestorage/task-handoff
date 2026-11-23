@@ -346,7 +346,7 @@ fn validate_create(body: &Value, reference_variant: bool) -> Result<Value, Vec<I
     let mut issues = Vec::new();
     let mut normalized = Map::new();
 
-    if let Some(value) = required_text(object, "message", &["message"], 1, 20_000, &mut issues) {
+    if let Some(value) = required_text(object, "message", &["message"], 0, 20_000, &mut issues) {
         normalized.insert("message".to_string(), Value::String(value));
     }
     if let Some(value) = optional_enum(
@@ -393,6 +393,24 @@ fn validate_create(body: &Value, reference_variant: bool) -> Result<Value, Vec<I
     }
     if let Some(references) = references(object.get("references"), &mut issues) {
         normalized.insert("references".to_string(), Value::Array(references));
+    }
+    if normalized
+        .get("message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| message.is_empty())
+        && normalized
+            .get("attachments")
+            .and_then(Value::as_array)
+            .is_none_or(|attachments| attachments.is_empty())
+        && normalized
+            .get("references")
+            .and_then(Value::as_array)
+            .is_none_or(|references| references.is_empty())
+    {
+        issues.push(Issue::new(
+            path(&["message"]),
+            "A message, attachment, or reference is required.",
+        ));
     }
 
     if let Some(value) = required_text(object, "agent", &["agent"], 1, 80, &mut issues) {
@@ -491,7 +509,7 @@ fn validate_message(body: &Value, reference_variant: bool) -> Result<Value, Vec<
     let mut issues = Vec::new();
     let mut normalized = Map::new();
 
-    if let Some(value) = required_text(object, "message", &["message"], 1, 20_000, &mut issues) {
+    if let Some(value) = required_text(object, "message", &["message"], 0, 20_000, &mut issues) {
         normalized.insert("message".to_string(), Value::String(value));
     }
     if let Some(value) = optional_enum(
@@ -537,6 +555,24 @@ fn validate_message(body: &Value, reference_variant: bool) -> Result<Value, Vec<
     }
     if let Some(references) = references(object.get("references"), &mut issues) {
         normalized.insert("references".to_string(), Value::Array(references));
+    }
+    if normalized
+        .get("message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| message.is_empty())
+        && normalized
+            .get("attachments")
+            .and_then(Value::as_array)
+            .is_none_or(|attachments| attachments.is_empty())
+        && normalized
+            .get("references")
+            .and_then(Value::as_array)
+            .is_none_or(|references| references.is_empty())
+    {
+        issues.push(Issue::new(
+            path(&["message"]),
+            "A message, attachment, or reference is required.",
+        ));
     }
     unsupported_keys(
         object,
@@ -834,7 +870,7 @@ fn validate_queue_edit(body: &Value) -> Result<Value, Vec<Issue>> {
     ) {
         normalized.insert("expectedRevision".to_string(), Value::from(value));
     }
-    if let Some(value) = required_text(object, "message", &["message"], 1, 20_000, &mut issues) {
+    if let Some(value) = required_text(object, "message", &["message"], 0, 20_000, &mut issues) {
         normalized.insert("message".to_string(), Value::String(value));
     }
     if let Some(attachments) = queue_attachments(object.get("attachments"), &mut issues) {
@@ -2147,6 +2183,34 @@ mod tests {
         assert_eq!(value["clientRequestId"], "request");
         assert_eq!(value["message"], "hello");
         assert_eq!(value["attachments"][0]["id"], "draft");
+    }
+
+    #[test]
+    fn attachment_only_ai_session_messages_are_valid_but_empty_messages_are_not() {
+        let create = normalize_ai_session_create_body(&json!({
+            "agent": "codex",
+            "cwd": { "type": "runtime-path", "path": "/tmp" },
+            "clientRequestId": "attachment-only",
+            "message": "",
+            "attachments": [{ "id": "draft", "source": { "type": "upload-ref" } }]
+        }))
+        .expect("attachment-only create should be valid");
+        assert_eq!(create["message"], "");
+
+        assert_eq!(
+            normalize_ai_session_message_body(&json!({
+                "message": "",
+                "attachments": [{ "id": "draft", "source": { "type": "upload-ref" } }]
+            }))
+            .expect("attachment-only message should be valid")["message"],
+            ""
+        );
+
+        assert_eq!(
+            normalize_ai_session_message_body(&json!({ "message": "" }))
+                .expect_err("empty message should fail"),
+            vec!["message: A message, attachment, or reference is required."]
+        );
     }
 
     #[test]

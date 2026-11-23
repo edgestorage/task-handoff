@@ -5562,11 +5562,7 @@ fn apply_permissions(
 
 fn prepare_inputs(input: &ProviderMessage) -> Result<(String, Vec<Value>), ProviderError> {
     let mut message = input.message.trim().to_string();
-    let mut inputs = vec![json!({
-        "type": "text",
-        "text": message,
-        "text_elements": [],
-    })];
+    let mut inputs = Vec::new();
     let mut file_paths = Vec::new();
     for attachment in &input.attachments {
         if attachment.meta.kind == AiSessionAttachmentKind::Image {
@@ -5633,11 +5629,16 @@ fn prepare_inputs(input: &ProviderMessage) -> Result<(String, Vec<Value>), Provi
             .filter(|part| !part.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        if let Some(first) = inputs.first_mut() {
-            if let Some(object) = first.as_object_mut() {
-                object.insert("text".to_string(), json!(message));
-            }
-        }
+    }
+    if !message.is_empty() {
+        inputs.insert(
+            0,
+            json!({
+                "type": "text",
+                "text": message,
+                "text_elements": [],
+            }),
+        );
     }
     for reference in &input.references {
         inputs.push(if reference.kind == "skill" {
@@ -6153,6 +6154,34 @@ fn build_websocket_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AiSessionReference;
+
+    #[test]
+    fn attachment_only_codex_inputs_omit_the_empty_text_part() {
+        let input = ProviderMessage {
+            message: String::new(),
+            attachments: Vec::new(),
+            references: vec![AiSessionReference {
+                kind: "skill".to_string(),
+                name: "review".to_string(),
+                path: "/tmp/review/SKILL.md".to_string(),
+            }],
+            permission_mode: None,
+            message_id: Some("msg_attachment_only".to_string()),
+            user_message_attachments: Vec::new(),
+            story_agent_tools: None,
+        };
+        let (_, inputs) = prepare_inputs(&input).expect("attachment-only inputs");
+        assert_eq!(
+            inputs,
+            vec![json!({
+                "type": "skill",
+                "name": "review",
+                "path": "/tmp/review/SKILL.md",
+            })]
+        );
+    }
+
     #[cfg(unix)]
     mod reconnect_parity {
         include!("codex_reconnect_parity.rs");

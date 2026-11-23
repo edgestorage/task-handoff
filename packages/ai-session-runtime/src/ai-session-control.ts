@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { AiSessionConversationAttachmentSchema, sameAiSessionModelSelection } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionConversationAttachmentSchema, aiSessionMessageHasContent, sameAiSessionModelSelection } from "@task-handoff/protocol/ai-sessions";
 import type {
   AiSessionActionResult,
   AiSessionApprovalInput,
@@ -380,9 +380,7 @@ export class AiSessionController {
     const session = this.requireSession(sessionId);
     this.assertNoSettingsUpdate(session.id);
     const message = input.message.trim();
-    if (!message) {
-      throw aiSessionControlError("AI_SESSION_MESSAGE_EMPTY", "Message is required.");
-    }
+    this.assertMessageContent({ ...input, message });
     if (input.references?.length && session.agent !== "codex") {
       throw aiSessionControlError("AI_SESSION_REFERENCES_UNSUPPORTED", `${session.agent} sessions do not support Codex references.`, 400);
     }
@@ -407,10 +405,12 @@ export class AiSessionController {
   async startMessage(sessionId: string, input: AiSessionSendInput) {
     const session = this.requireSession(sessionId);
     this.assertNoSettingsUpdate(session.id);
+    const normalized = { ...input, message: input.message.trim() };
+    this.assertMessageContent(normalized);
     if (isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_BUSY", "AI session is busy. Queue the message or steer it into the running turn.", 409);
     }
-    return this.startPreparedMessage(session, this.prepareMessage(session, input));
+    return this.startPreparedMessage(session, this.prepareMessage(session, normalized));
   }
 
   private async startPreparedMessage(
@@ -446,10 +446,18 @@ export class AiSessionController {
   async steerMessage(sessionId: string, input: string | AiSessionSendInput) {
     const session = this.requireSession(sessionId);
     this.assertNoSettingsUpdate(session.id);
+    const normalized = typeof input === "string" ? { message: input.trim() } : { ...input, message: input.message.trim() };
+    this.assertMessageContent(normalized);
     if (!isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_NOT_ACTIVE", "AI session is not active.", 409);
     }
-    return this.steerPreparedMessage(session, this.prepareMessage(session, typeof input === "string" ? { message: input } : input));
+    return this.steerPreparedMessage(session, this.prepareMessage(session, normalized));
+  }
+
+  private assertMessageContent(input: AiSessionSendInput) {
+    if (!aiSessionMessageHasContent(input) && !input.draftAttachmentIds?.length) {
+      throw aiSessionControlError("AI_SESSION_MESSAGE_EMPTY", "A message, attachment, or reference is required.");
+    }
   }
 
   private async steerPreparedMessage(
@@ -587,6 +595,14 @@ export class AiSessionController {
         payloads: staged.providerAttachments,
         messageId: replacementMessageId,
       };
+    }
+    if (!aiSessionMessageHasContent({
+      message,
+      attachments: attachmentUpdate?.attachments || item.attachments,
+      references: item.references,
+    })) {
+      if (replacementMessageId) this.registry.rollbackMessageAttachments(sessionId, replacementMessageId);
+      throw aiSessionControlError("AI_SESSION_MESSAGE_EMPTY", "A message, attachment, or reference is required.");
     }
     const result = this.registry.editQueuedMessage(sessionId, queueId, expectedRevision, message, attachmentUpdate);
     if (result && result.kind !== "updated" && replacementMessageId) this.registry.rollbackMessageAttachments(sessionId, replacementMessageId);

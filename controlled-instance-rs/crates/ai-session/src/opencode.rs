@@ -2032,7 +2032,9 @@ impl OpenCodeSessionProvider {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        parts.insert(0, json!({ "type": "text", "text": text }));
+        if !text.is_empty() {
+            parts.insert(0, json!({ "type": "text", "text": text }));
+        }
         Ok(parts)
     }
 
@@ -4031,6 +4033,7 @@ fn iso_from_millis(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProviderAttachment;
     use axum::{
         body::{to_bytes, Body},
         extract::State,
@@ -4042,6 +4045,9 @@ mod tests {
         collections::VecDeque,
         convert::Infallible,
         sync::{atomic::AtomicUsize, Mutex as StdMutex},
+    };
+    use controlled_instance_protocol::{
+        AiSessionMessageAttachmentMeta, AiSessionMessageAttachmentSourceType,
     };
 
     #[test]
@@ -5099,6 +5105,47 @@ mod tests {
             "status": "idle"
         }))
         .expect("OpenCode session fixture")
+    }
+
+    #[tokio::test]
+    async fn attachment_only_opencode_prompts_omit_the_empty_text_part() {
+        let root = tempfile::tempdir().expect("attachment root");
+        let image_path = root.path().join("screen.png");
+        std::fs::write(&image_path, b"png").expect("image attachment");
+        let session = opencode_session("ses_attachment_only", &root.path().to_string_lossy());
+        let provider = OpenCodeSessionProvider::new(Arc::new(TestConnection {
+            endpoint: "http://127.0.0.1".to_string(),
+            roots: vec![root.path().to_path_buf()],
+        }));
+        let input = ProviderMessage {
+            message: String::new(),
+            attachments: vec![ProviderAttachment {
+                meta: AiSessionMessageAttachmentMeta {
+                    id: "image_attachment".to_string(),
+                    kind: AiSessionAttachmentKind::Image,
+                    name: "screen.png".to_string(),
+                    mime: "image/png".to_string(),
+                    size: 3,
+                    source_type: AiSessionMessageAttachmentSourceType::RuntimePath,
+                },
+                path: image_path.clone(),
+                source: ProviderAttachmentSource::RuntimePath,
+                runtime_path: Some(image_path),
+            }],
+            references: Vec::new(),
+            permission_mode: None,
+            message_id: Some("msg_attachment_only".to_string()),
+            user_message_attachments: Vec::new(),
+            story_agent_tools: None,
+        };
+
+        let parts = provider
+            .prompt_parts(&session, &input)
+            .await
+            .expect("attachment-only parts");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["type"], "file");
+        assert_eq!(parts[0]["mime"], "image/png");
     }
 
     fn query_parameter(query: &Option<String>, name: &str) -> Option<String> {

@@ -39,6 +39,7 @@ const { sendTelegramMessage, splitTelegramMessageText } = require("../packages/c
 const { TelegramProgressStore } = require("../packages/core/src/core/telegram-progress.ts");
 const { listHistoricalSessions } = require("../packages/ai-session-runtime/src/session-history.ts");
 const {
+  aiSessionConversationTurns,
   createAiSessionRegistry,
   reconcileActiveAiProcesses,
   scanRecentTranscripts,
@@ -57,6 +58,7 @@ const {
   rebuildCodexSubAgents,
 } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
+const { ControlPlaneChatMessageSender } = require("../packages/control-plane/src/control-plane/chat/message-sender.ts");
 const { AiSessionDiscoveryCoordinator } = require("../packages/ai-session-runtime/src/ai-session-discovery.ts");
 const { AiSessionHistoryStore } = require("../packages/ai-session-runtime/src/ai-session-history-store.ts");
 const { normalizeAiSessionGoal } = require("../packages/ai-session-runtime/src/ai-session/persistence.ts");
@@ -3662,6 +3664,85 @@ test("codex app server bridge only recovers sessions with active work or demand"
   ]);
 });
 
+test("codex app server bridge projects an App binding onto an idle subscribed thread", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-open-app-binding-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_open_app",
+    cwd: "/workspace",
+    status: "running",
+    phase: "thinking",
+    userPrompt: "resume this session",
+    summary: "kept summary",
+    turns: [{
+      id: "turn_open_app",
+      status: "completed",
+      revision: 0,
+      userPrompt: "resume this session",
+      lastMessage: "kept message",
+      summary: "kept summary",
+    }],
+  });
+  registry.patch(session.id, { lastMessage: "kept message", lastMessageItemId: "item_open_app" });
+
+  class FakeCodexAppServerClient extends EventEmitter {
+    constructor() {
+      super();
+      this.resumedThreads = [];
+      this.reads = [];
+    }
+    async start() {}
+    async listLoadedThreadIds() { throw new Error("periodic discovery must not list loaded threads"); }
+    async readThread(threadId, options) {
+      this.reads.push({ threadId, options });
+      return { id: threadId, cwd: "/workspace", status: { type: "idle" } };
+    }
+    async resumeThread(threadId) {
+      this.resumedThreads.push(threadId);
+      return { id: threadId, cwd: "/workspace", status: { type: "idle" } };
+    }
+    stop() {}
+  }
+
+  const fake = new FakeCodexAppServerClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  await bridge.sync();
+
+  assert.deepEqual(fake.resumedThreads, ["thread_open_app"]);
+  assert.equal(registry.get(session.id).appSessionId, undefined);
+
+  const appSessions = [{
+    id: "app_open",
+    appId: "codex",
+    status: "running",
+    ai: {
+      activeThreadId: "thread_open_app",
+      appServer: { socketPath: "/tmp/codex.sock" },
+    },
+  }];
+  await bridge.sync(appSessions);
+
+  const rebound = registry.get(session.id);
+  assert.equal(rebound.appSessionId, "app_open");
+  assert.equal(rebound.appId, "codex");
+  assert.deepEqual(rebound.appBindingKeys, ["app:app_open"]);
+  assert.equal(rebound.summary, "kept summary");
+  assert.equal(rebound.lastMessage, "kept message");
+  assert.equal(rebound.lastMessageItemId, "item_open_app");
+  assert.deepEqual(rebound.turns.map((turn) => turn.id), ["turn_open_app"]);
+  assert.deepEqual(fake.reads, [{ threadId: "thread_open_app", options: { includeTurns: false } }]);
+
+  const readCount = fake.reads.length;
+  const resumeCount = fake.resumedThreads.length;
+  await bridge.sync(appSessions);
+
+  assert.equal(fake.reads.length, readCount);
+  assert.equal(fake.resumedThreads.length, resumeCount);
+  assert.equal(registry.get(session.id).appSessionId, "app_open");
+});
+
 test("codex app server bridge resumes a cold session only when its timeline is opened", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-timeline-demand-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -6209,6 +6290,113 @@ test("codex turns preserve structured image inputs across start, steer, and comp
       { type: "image", url: "data:image/png;base64,cG5n" },
     ]],
   ]);
+});
+
+test("chat gateway keeps the legacy attachment prompt only for old instances", async () => {
+  const sent = [];
+  let capabilities = { features: {} };
+  const sender = new ControlPlaneChatMessageSender({
+    upsertChatSession: async (input) => input,
+    listNodeInstances: async () => [],
+    requireControlledInstance: async () => ({
+      id: "inst_chat_attachment",
+      name: "Chat Instance",
+      connectionStatus: "online",
+      agentStatus: "online",
+      capabilities,
+      sourceSnapshot: { name: "Chat Project" },
+    }),
+    requireProject: () => { throw new Error("project is not needed"); },
+    sendAiSessionMessage: async (_instanceId, _sessionId, message, _mode, attachments) => {
+      sent.push({ message, attachments });
+      return { turnId: "turn_chat_attachment" };
+    },
+  }, {});
+  const binding = {
+    channel: "telegram",
+    chatSessionId: "chat_attachment",
+    activeInstanceId: "inst_chat_attachment",
+    activeAiSessionId: "ses_chat_attachment",
+  };
+  const image = {
+    id: "image_attachment",
+    kind: "image",
+    name: "screen.png",
+    mime: "image/png",
+    size: 3,
+    source: { type: "inline", encoding: "base64", data: "cG5n" },
+  };
+  const input = {
+    source: { channel: "telegram", chatSessionId: "chat_attachment" },
+    target: { instanceId: "inst_chat_attachment", aiSessionId: "ses_chat_attachment" },
+    message: { text: "", attachments: [image] },
+  };
+
+  await sender.forwardChatMessage(binding, input);
+  capabilities = { features: { aiSessionAttachmentOnlyMessages: true } };
+  await sender.forwardChatMessage(binding, input);
+
+  assert.deepEqual(sent, [
+    { message: "Please review the attached files.", attachments: [image] },
+    { message: "", attachments: [image] },
+  ]);
+});
+
+test("codex attachment-only turns omit text parts and remain visible in the conversation", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-image-only-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const turns = [];
+  class FakeCodexImageOnlyClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_image_only"]; }
+    async startTurn(threadId, message, inputs) {
+      turns.push({ threadId, message, inputs });
+      return { turnId: "turn_image_only" };
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexImageOnlyClient());
+  const session = registry.start({ agent: "codex", providerSessionId: "thread_image_only", cwd: root, status: "idle", phase: "unknown" });
+  const image = {
+    id: "image_only",
+    kind: "image",
+    name: "screen.png",
+    mime: "image/png",
+    size: 3,
+    source: { type: "inline", encoding: "base64", data: "cG5n" },
+  };
+  const conversationImage = { id: "image_only", kind: "image", name: "screen.png", mime: "image/png", size: 3 };
+
+  await bridge.startMessage(session, {
+    message: "",
+    messageId: "msg_image_only",
+    attachments: [image],
+    userMessageAttachments: [conversationImage],
+  });
+
+  assert.deepEqual(turns, [{
+    threadId: "thread_image_only",
+    message: "",
+    inputs: [{ type: "image", url: "data:image/png;base64,cG5n" }],
+  }]);
+  const current = registry.get(session.id);
+  assert.equal(aiSessionConversationTurns(current).length, 1);
+  assert.deepEqual(current.turns[0].userMessages[0], {
+    id: "msg_image_only",
+    text: "",
+    attachments: [{ ...conversationImage, contentState: "available" }],
+  });
+
+  const controller = new AiSessionController(registry);
+  await assert.rejects(
+    () => controller.sendMessage(session.id, { message: "" }),
+    (error) => error?.code === "AI_SESSION_MESSAGE_EMPTY",
+  );
+  const busy = registry.start({ agent: "codex", providerSessionId: "thread_image_queue", cwd: root, status: "running", phase: "thinking" });
+  await controller.sendMessage(busy.id, { message: "", mode: "queue", attachments: [image] });
+  assert.equal(registry.get(busy.id).queue.items[0].message, "");
+  assert.equal(registry.get(busy.id).queue.items[0].attachments.length, 1);
 });
 
 test("queued AI messages preserve their permission mode", async () => {

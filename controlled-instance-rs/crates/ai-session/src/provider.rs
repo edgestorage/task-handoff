@@ -1270,10 +1270,10 @@ impl AiSessionController {
         input: AiSessionCreateInput,
         mut options: AiSessionManagedCreateOptions,
     ) -> Result<AiSessionCreateResult, ProviderError> {
-        if input.message.message.trim().is_empty() {
+        if !message_input_has_content(&input.message) {
             return Err(ProviderError::new(
                 "AI_SESSION_MESSAGE_EMPTY",
-                "Message is required.",
+                "A message, attachment, or reference is required.",
                 400,
             ));
         }
@@ -2178,10 +2178,14 @@ impl AiSessionController {
     ) -> Result<AiSessionActionResult, ProviderError> {
         self.assert_no_pending_settings(&session.id).await?;
         let message = input.message.message.trim().to_string();
-        if message.is_empty() {
+        if !message_has_content(
+            &message,
+            &input.message.attachments,
+            &input.message.references,
+        ) {
             return Err(ProviderError::new(
                 "AI_SESSION_MESSAGE_EMPTY",
-                "Message is required.",
+                "A message, attachment, or reference is required.",
                 400,
             ));
         }
@@ -3850,6 +3854,22 @@ fn provider_message(
         user_message_attachments: staged.attachments.clone(),
         story_agent_tools: None,
     }
+}
+
+fn message_input_has_content(input: &AiSessionMessageInput) -> bool {
+    message_has_content(
+        &input.message,
+        &input.attachments,
+        &input.references,
+    )
+}
+
+fn message_has_content(
+    message: &str,
+    attachments: &[AiSessionAttachmentInput],
+    references: &[AiSessionReference],
+) -> bool {
+    !message.trim().is_empty() || !attachments.is_empty() || !references.is_empty()
 }
 
 fn provider_attachment(attachment: &RetainedAiSessionMessageAttachment) -> ProviderAttachment {

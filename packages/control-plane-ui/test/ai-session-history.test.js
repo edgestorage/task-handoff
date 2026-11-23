@@ -60,7 +60,7 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(panel, /waitForAiSessionProjection\(findAuthoritativeSession\)/);
   assert.doesNotMatch(panel, /for \(let attempt = 0; attempt < 12/);
   assert.doesNotMatch(panel, /refetchQueries\(\{ queryKey: \["control-plane-ai-sessions"\] \}\)/);
-  assert.match(panel, /await sendAiSessionMessage\([\s\S]*session\.id[\s\S]*aiSessionMessageText\(message\)[\s\S]*attachments/);
+  assert.match(panel, /await sendAiSessionMessage\([\s\S]*session\.id[\s\S]*aiSessionMessageText\(message, supportsAiSessionAttachmentOnlyMessages\(props\.instance\.capabilities\)\)[\s\S]*attachments/);
   assert.match(panel, /emit\("selectAiSession", props\.instance\.id, session\.id\);/);
   assert.match(panel, /showControlPlaneToast/);
   assert.doesNotMatch(panel, />继续对话</);

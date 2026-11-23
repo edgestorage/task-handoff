@@ -444,6 +444,8 @@ test("new-session drafts persist in their instance or Story scope until creation
   assert.match(panel, /watch\(newSessionDraftKey,[\s\S]*loadAiSessionDraftPayload\(activeNewSessionDraftKey\.value\)/);
   assert.match(panel, /newSessionAttachmentDraftKey = computed\(\(\) => props\.creationMode === "preset" \? "" : activeNewSessionDraftKey\.value\)/);
   assert.match(panel, /newSessionAttachments = useAiSessionAttachmentDraft\(newSessionAttachmentDraftKey\)/);
+  assert.match(panel, /const creationSubmitReady = computed\([\s\S]*newSessionDraft\.value\.trim\(\) \|\| newSessionAttachments\.value\.length/);
+  assert.match(panel, /async function createNewSession[\s\S]*\(!message && !newSessionAttachments\.value\.length\)/);
   assert.match(panel, /v-model="newSessionDraft"[\s\S]*v-model:attachments="newSessionAttachments"/);
   assert.doesNotMatch(panel, /watch\(\(\) => props\.instance\.id, \(\) => \{[\s\S]{0,160}messageAttachments\.value = \[\]/);
   assert.match(panel, /v-model="newSessionDraft"[\s\S]*v-model:mention-bindings="newSessionMentionBindings"/);

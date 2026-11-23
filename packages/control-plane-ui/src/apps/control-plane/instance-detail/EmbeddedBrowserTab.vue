@@ -143,7 +143,7 @@
         <MonitorSmartphone :size="15" />
       </Button>
       <Popover :open="agentAccessOpen" @update:open="handleAgentAccessOpenChange">
-        <PopoverAnchor as-child>
+        <PopoverTrigger as-child>
           <Button
             variant="ghost"
             size="icon"
@@ -151,82 +151,98 @@
             :class="{ 'embedded-browser-agent-access-active': browserControlAccess.active }"
             :title="agentAccessTitle"
             :aria-label="agentAccessTitle"
-            @click="agentAccessOpen = !agentAccessOpen"
           >
             <Bot :size="15" />
           </Button>
-        </PopoverAnchor>
-        <PopoverContent class="embedded-browser-agent-access-menu p-0" align="end" side="bottom" :side-offset="6" :collision-padding="10">
+        </PopoverTrigger>
+        <PopoverContent class="embedded-browser-agent-access-menu p-0" align="end" side="bottom" :side-offset="6" :collision-padding="10" :aria-label="agentAccessTitle">
           <div class="embedded-browser-agent-access-summary">
             <div class="embedded-browser-agent-access-head">
-              <strong>{{ t("sessions.browser.agentAccess") }}</strong>
-              <span class="embedded-browser-agent-access-state" :class="{ active: browserControlAccess.active }">
+              <strong><Bot :size="15" aria-hidden="true" />{{ agentAccessTitle }}</strong>
+              <Badge variant="outline" class="embedded-browser-agent-access-state" :data-active="browserControlAccess.active">
+                <span class="embedded-browser-agent-access-state-dot" aria-hidden="true" />
                 {{ t(browserControlAccess.active ? "sessions.browser.agentAccessActive" : "sessions.browser.agentAccessInactive") }}
-              </span>
+              </Badge>
             </div>
             <p>{{ agentAccessHint }}</p>
-            <div class="embedded-browser-agent-access-actions">
-              <Button
-                size="sm"
-                :variant="browserControlAccess.active ? 'ghost' : 'default'"
-                :disabled="agentAccessBusy || agentAccessLoading"
-                @click="browserControlAccess.active ? revokeBrowserControlAccessForInstance() : grantBrowserControlAccessForInstance()"
-              >
-                {{ t(browserControlAccess.active ? "sessions.browser.agentAccessRevoke" : "sessions.browser.agentAccessGrant") }}
-              </Button>
-            </div>
+            <Button
+              size="sm"
+              class="embedded-browser-agent-access-action"
+              :variant="browserControlAccess.active ? 'outline' : 'default'"
+              :disabled="agentAccessBusy || agentAccessLoading"
+              @click="browserControlAccess.active ? revokeBrowserControlAccessForInstance() : grantBrowserControlAccessForInstance()"
+            >
+              {{ t(browserControlAccess.active ? "sessions.browser.agentAccessRevoke" : "sessions.browser.agentAccessGrant") }}
+            </Button>
           </div>
           <section v-if="!creationContextUnsupported" class="embedded-browser-creation-context">
             <div class="embedded-browser-creation-context-head">
-              <span>{{ t("sessions.browser.creationContextLabel") }}</span>
+              <strong class="embedded-browser-creation-context-title">{{ t("sessions.browser.creationContextLabel") }}</strong>
               <div class="embedded-browser-creation-context-value">
-                <strong>{{ hasDefaultCreationContext ? defaultCreationLabel : t("sessions.browser.creationContextNoDefault") }}</strong>
+                <strong v-if="hasDefaultCreationContext">{{ defaultCreationLabel }}</strong>
+                <span v-else>{{ t("sessions.browser.creationContextNoDefault") }}</span>
                 <span v-if="defaultCreationOffline" class="embedded-browser-context-badge offline">{{ t("sessions.browser.creationContextCannotCreate") }}</span>
               </div>
             </div>
             <p v-if="creationContextNotice" class="embedded-browser-creation-context-notice" role="status">{{ creationContextNotice }}</p>
             <p v-if="creationContextError" class="embedded-browser-creation-context-error" role="alert">
               {{ creationContextError }}
-              <button type="button" @click="refreshBrowserCreationContext">{{ t("sessions.browser.retry") }}</button>
+              <Button size="sm" variant="link" class="embedded-browser-creation-context-retry" @click="refreshBrowserCreationContext">{{ t("sessions.browser.retry") }}</Button>
             </p>
             <p v-else-if="creationContextLoading && !creationContext" class="embedded-browser-creation-context-empty">{{ t("sessions.browser.creationContextLoading") }}</p>
             <ScrollArea v-else-if="creationPanels.length" class="embedded-browser-creation-panel-scroll" :horizontal="false">
-              <div class="embedded-browser-creation-panel-list">
-                <article
-                  v-for="panel in creationPanels"
-                  :key="panel.sourceRef"
-                  class="embedded-browser-creation-panel"
-                  :class="{ default: panel.isDefault, own: isOwnCreationPanel(panel) }"
-                >
-                  <div class="embedded-browser-creation-panel-head">
-                    <span class="embedded-browser-creation-panel-name">{{ panel.panelLabel }}</span>
-                    <span v-if="isOwnCreationPanel(panel)" class="embedded-browser-context-badge">{{ t("sessions.browser.creationContextThisPanel") }}</span>
-                    <span v-if="panel.isDefault" class="embedded-browser-context-badge default">{{ t("sessions.browser.creationContextDefault") }}</span>
-                    <span v-if="panel.isDefault && !panel.canCreate" class="embedded-browser-context-badge offline">{{ t("sessions.browser.creationContextCannotCreate") }}</span>
-                  </div>
-                  <p>{{ panel.hostLabel || panel.panelLabel }} · {{ pageHostLabel(panel.pageHost) }} · {{ panel.canCreate ? t("sessions.browser.creationContextCanCreate") : t("sessions.browser.creationContextCannotCreate") }}</p>
-                  <div v-if="canClaimCreationPanel(panel)" class="embedded-browser-creation-panel-actions">
-                    <Button size="sm" :disabled="creationContextBusy" @click="claimCreationContextForPanel(panel)">
-                      {{ t(hasDefaultCreationContext ? "sessions.browser.creationContextTakeOver" : "sessions.browser.creationContextRequestDefault") }}
-                    </Button>
-                  </div>
-                  <div v-else-if="canRevokeCreationPanel(panel)" class="embedded-browser-creation-panel-actions">
-                    <Button size="sm" variant="ghost" :disabled="creationContextBusy" @click="revokeCreationContextForOwnPanel(panel)">
-                      {{ t("sessions.browser.creationContextRevoke") }}
-                    </Button>
-                  </div>
-                </article>
-              </div>
+              <TooltipProvider :delay-duration="250">
+                <ul class="embedded-browser-creation-panel-list" role="list" :aria-label="t('sessions.browser.creationContextLabel')">
+                  <li v-for="panel in creationPanels" :key="panel.sourceRef" class="embedded-browser-creation-panel" :data-default="panel.isDefault">
+                    <Monitor class="embedded-browser-creation-panel-icon" :size="15" aria-hidden="true" />
+                    <div class="embedded-browser-creation-panel-copy">
+                      <span class="embedded-browser-creation-panel-name" :title="panel.panelLabel">{{ panel.panelLabel }}</span>
+                      <span class="embedded-browser-creation-panel-meta" :title="creationPanelMeta(panel)">{{ creationPanelMeta(panel) }}</span>
+                    </div>
+                    <div class="embedded-browser-creation-panel-trailing">
+                      <Badge v-if="panel.isDefault" variant="outline" class="embedded-browser-context-badge default border-transparent">{{ t("sessions.browser.creationContextDefault") }}</Badge>
+                      <Tooltip v-if="canClaimCreationPanel(panel)">
+                        <TooltipTrigger as-child>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            class="embedded-browser-creation-panel-action"
+                            :disabled="creationContextBusy"
+                            @click="claimCreationContextForPanel(panel)"
+                          >
+                            {{ t(hasDefaultCreationContext ? "sessions.browserDefaultActions.takeOver" : "sessions.browserDefaultActions.set") }}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" :collision-padding="10" class="max-w-56">
+                          {{ claimCreationLabel }}
+                          <div v-if="!hasDefaultCreationContext" class="mt-1 text-muted-foreground">{{ t("sessions.browser.creationContextClaimHint") }}</div>
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip v-else-if="canRevokeCreationPanel(panel)">
+                        <TooltipTrigger as-child>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            class="embedded-browser-creation-panel-action"
+                            :disabled="creationContextBusy"
+                            @click="revokeCreationContextForOwnPanel(panel)"
+                          >
+                            {{ t("sessions.browserDefaultActions.clear") }}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" :collision-padding="10">{{ t("sessions.browser.creationContextRevoke") }}</TooltipContent>
+                      </Tooltip>
+                    </div>
+                  </li>
+                </ul>
+              </TooltipProvider>
             </ScrollArea>
             <p v-else class="embedded-browser-creation-context-empty">{{ t("sessions.browser.creationContextNoPanels") }}</p>
             <div v-if="creationContext?.pendingCreation" class="embedded-browser-creation-pending">
               <span>{{ t("sessions.browser.creationContextPending") }}</span>
               <small :title="creationContext.pendingCreation.url">{{ creationContext.pendingCreation.url }}</small>
             </div>
-            <p v-if="browserSourceRef && ownCreationPanel?.canCreate && !hasDefaultCreationContext" class="embedded-browser-creation-context-hint">
-              {{ t("sessions.browser.creationContextClaimHint") }}
-            </p>
-            <p v-else-if="!browserSourceRef" class="embedded-browser-creation-context-hint">
+            <p v-if="!browserSourceRef" class="embedded-browser-creation-context-hint">
               {{ t("sessions.browser.creationContextWebReadOnly") }}
             </p>
           </section>
@@ -254,7 +270,6 @@
             min="1"
             :max="BROWSER_DEVICE_MAX_DIMENSION"
             :value="deviceMetrics.width"
-            :disabled="deviceControlBusy"
             :aria-label="t('sessions.browser.deviceWidth')"
             @change="commitDeviceDimension('width', $event)"
           />
@@ -268,11 +283,19 @@
             min="1"
             :max="BROWSER_DEVICE_MAX_DIMENSION"
             :value="deviceMetrics.height"
-            :disabled="deviceControlBusy"
             :aria-label="t('sessions.browser.deviceHeight')"
             @change="commitDeviceDimension('height', $event)"
           />
         </label>
+        <ControlPlaneSelect
+          :model-value="selectedDeviceZoomId"
+          trigger-class="embedded-browser-device-zoom-select"
+          :aria-label="t('sessions.browser.deviceZoom')"
+          @update:model-value="selectDeviceZoom"
+        >
+          <ControlPlaneSelectItem :value="BROWSER_DEVICE_ZOOM_FIT">{{ t("sessions.browser.deviceZoomFit") }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="percentage in BROWSER_DEVICE_ZOOM_PERCENTAGES" :key="percentage" :value="String(percentage)">{{ percentage }}%</ControlPlaneSelectItem>
+        </ControlPlaneSelect>
         <Button variant="ghost" size="icon" :disabled="deviceControlBusy" :title="t('sessions.browser.rotateDevice')" :aria-label="t('sessions.browser.rotateDevice')" @click="rotateDevice">
           <RotateCcw :size="15" />
         </Button>
@@ -358,12 +381,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
-import { ArrowLeft, ArrowRight, Bot, CircleAlert, Globe2, History, Layers, LoaderCircle, MonitorSmartphone, Pin, Plus, RotateCcw, RotateCw, X } from "@lucide/vue";
+import { ArrowLeft, ArrowRight, Bot, CircleAlert, Globe2, History, Layers, LoaderCircle, Monitor, MonitorSmartphone, Pin, Plus, RotateCcw, RotateCw, X } from "@lucide/vue";
+import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
-import { Popover, PopoverAnchor, PopoverContent } from "../../../components/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import {
@@ -387,8 +412,8 @@ import {
   type BrowserCreationEventDetail,
 } from "./browserCreationEvents";
 import { createBrowserUuid } from "../../../lib/random-id";
-import { browserFailureTarget, browserLoadFailureKey } from "./browserLoadFailure";
-import { browserDeviceEmulationParams, browserDevicePreset, browserDevicePresetForMetrics, BROWSER_DEVICE_MAX_DIMENSION, BROWSER_DEVICE_PRESETS, CUSTOM_BROWSER_DEVICE_ID, DEFAULT_BROWSER_DEVICE_PRESET, normalizeBrowserDeviceDimension, rotateBrowserDeviceMetrics, type BrowserDeviceMetrics } from "./browserDeviceMetrics";
+import { browserFailureTarget, browserLoadFailureKey, isBrowserPageLoadFailure } from "./browserLoadFailure";
+import { browserDeviceEmulationParams, browserDevicePreset, browserDevicePresetForMetrics, browserDeviceZoomScale, BROWSER_DEVICE_MAX_DIMENSION, BROWSER_DEVICE_PRESETS, BROWSER_DEVICE_ZOOM_FIT, BROWSER_DEVICE_ZOOM_PERCENTAGES, CUSTOM_BROWSER_DEVICE_ID, DEFAULT_BROWSER_DEVICE_PRESET, normalizeBrowserDeviceDimension, rotateBrowserDeviceMetrics, type BrowserDeviceMetrics } from "./browserDeviceMetrics";
 import { browserAddressSuggestions, normalizeDesktopBrowserUrl, sanitizeBrowserStartPageData, type BrowserAddressSuggestion, type PinnedBrowserShortcut, type RecentBrowserPage } from "./browserAddressSuggestions";
 import { translateApiError } from "../../../i18n/apiError";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -428,6 +453,7 @@ const browserTabReady = ref(false);
 const deviceMode = ref(false);
 const deviceControlBusy = ref(false);
 const selectedDevicePresetId = ref(DEFAULT_BROWSER_DEVICE_PRESET.id);
+const selectedDeviceZoomId = ref<string>(BROWSER_DEVICE_ZOOM_FIT);
 const deviceScale = ref(1);
 const deviceMetrics = reactive<BrowserDeviceMetrics>({
   width: DEFAULT_BROWSER_DEVICE_PRESET.width,
@@ -435,8 +461,8 @@ const deviceMetrics = reactive<BrowserDeviceMetrics>({
   deviceScaleFactor: DEFAULT_BROWSER_DEVICE_PRESET.deviceScaleFactor,
   mobile: DEFAULT_BROWSER_DEVICE_PRESET.mobile,
 });
-const DEVICE_FRAME_BEZEL = 6;
 const DEVICE_STAGE_PADDING = 24;
+const DEVICE_COMMAND_TIMEOUT_MS = 8_000;
 let deviceStageResizeObserver: ResizeObserver | undefined;
 let removeDeviceMetricsListener: (() => void) | undefined;
 let deviceCommandSequence = 0;
@@ -463,10 +489,12 @@ const agentAccessHint = computed(() => t(
 ));
 const openPages = computed(() => props.openPages || []);
 const creationPanels = computed(() => creationContext.value?.panels || []);
-const ownCreationPanel = computed(() => creationPanels.value.find((panel) => panel.sourceRef === browserSourceRef.value));
 const defaultCreationPanel = computed(() => creationPanels.value.find((panel) => panel.isDefault));
 const defaultCreationLabel = computed(() => defaultCreationPanel.value?.panelLabel || creationContext.value?.defaultContext?.sourceRef || "");
 const hasDefaultCreationContext = computed(() => Boolean(creationContext.value?.defaultContext));
+const claimCreationLabel = computed(() => t(hasDefaultCreationContext.value
+  ? "sessions.browser.creationContextTakeOver"
+  : "sessions.browser.creationContextRequestDefault"));
 const defaultCreationOffline = computed(() => Boolean(creationContext.value?.defaultContext)
   && (!defaultCreationPanel.value || !defaultCreationPanel.value.canCreate));
 const currentPageKey = computed(() => props.pageKey || "");
@@ -481,8 +509,8 @@ const suggestions = computed(() => browserAddressSuggestions(pinned.value, recen
 const activeSuggestionId = computed(() => activeSuggestionIndex.value >= 0 ? suggestionOptionId(activeSuggestionIndex.value) : undefined);
 const deviceScalerStyle = computed(() => deviceMode.value
   ? {
-      width: `${(deviceMetrics.width + DEVICE_FRAME_BEZEL * 2) * deviceScale.value}px`,
-      height: `${(deviceMetrics.height + DEVICE_FRAME_BEZEL * 2) * deviceScale.value}px`,
+      width: `${deviceMetrics.width * deviceScale.value}px`,
+      height: `${deviceMetrics.height * deviceScale.value}px`,
     }
   : { width: "100%", height: "100%" });
 const deviceFrameStyle = computed<CSSProperties>(() => deviceMode.value
@@ -634,15 +662,26 @@ function updateDeviceScale() {
     deviceScale.value = 1;
     return;
   }
+  const fixedScale = browserDeviceZoomScale(selectedDeviceZoomId.value);
+  if (fixedScale !== undefined) {
+    deviceScale.value = fixedScale;
+    return;
+  }
   const availableWidth = deviceStage.value.clientWidth - DEVICE_STAGE_PADDING * 2;
   const availableHeight = deviceStage.value.clientHeight - DEVICE_STAGE_PADDING * 2;
-  const frameWidth = deviceMetrics.width + DEVICE_FRAME_BEZEL * 2;
-  const frameHeight = deviceMetrics.height + DEVICE_FRAME_BEZEL * 2;
+  const frameWidth = deviceMetrics.width;
+  const frameHeight = deviceMetrics.height;
   if (availableWidth <= 0 || availableHeight <= 0) {
     deviceScale.value = 1;
     return;
   }
   deviceScale.value = Math.min(1, availableWidth / frameWidth, availableHeight / frameHeight);
+}
+
+function selectDeviceZoom(value: string) {
+  if (value !== BROWSER_DEVICE_ZOOM_FIT && browserDeviceZoomScale(value) === undefined) return;
+  selectedDeviceZoomId.value = value;
+  updateDeviceScale();
 }
 
 async function sendDeviceCdp(method: string, params?: unknown) {
@@ -665,8 +704,14 @@ async function runDeviceCommand(method: string, params?: unknown) {
   if (!registeredTabRef) return false;
   const sequence = ++deviceCommandSequence;
   deviceControlBusy.value = true;
+  let timeout: number | undefined;
   try {
-    await sendDeviceCdp(method, params);
+    await Promise.race([
+      sendDeviceCdp(method, params),
+      new Promise<never>((_, reject) => {
+        timeout = window.setTimeout(() => reject(new Error(`Browser device command timed out: ${method}`)), DEVICE_COMMAND_TIMEOUT_MS);
+      }),
+    ]);
     return true;
   } catch (cause) {
     if (sequence === deviceCommandSequence) {
@@ -675,6 +720,7 @@ async function runDeviceCommand(method: string, params?: unknown) {
     }
     return false;
   } finally {
+    if (timeout !== undefined) window.clearTimeout(timeout);
     if (sequence === deviceCommandSequence) deviceControlBusy.value = false;
   }
 }
@@ -1052,8 +1098,8 @@ function bindGuest() {
     logDesktopBrowserDiagnostic(`browser title event title=${title.slice(0, 160)}`, props.instanceId);
     if (title) publishTabPatch({ title, status: "running" });
   };
-  const failed = (event: Event & { errorCode?: number; errorDescription?: string; validatedURL?: string }) => {
-    if (event.validatedURL === "about:blank") return;
+  const failed = (event: Event & { errorCode?: number; errorDescription?: string; validatedURL?: string; isMainFrame?: boolean }) => {
+    if (!isBrowserPageLoadFailure(event)) return;
     loading.value = false;
     publishTabPatch({ status: "failed" });
     lastChromiumError = { code: event.errorCode, description: event.errorDescription };
@@ -1322,6 +1368,15 @@ function isOwnCreationPanel(panel: EmbeddedBrowserCreationPanel) {
   return Boolean(browserSourceRef.value && panel.sourceRef === browserSourceRef.value);
 }
 
+function creationPanelMeta(panel: EmbeddedBrowserCreationPanel) {
+  return [
+    isOwnCreationPanel(panel) && t("sessions.browser.creationContextThisPanel"),
+    !panel.canCreate && t("sessions.browser.creationContextCannotCreate"),
+    pageHostLabel(panel.pageHost),
+    panel.hostLabel !== panel.panelLabel && panel.hostLabel,
+  ].filter(Boolean).join(" · ");
+}
+
 function canClaimCreationPanel(panel: EmbeddedBrowserCreationPanel) {
   return isOwnCreationPanel(panel) && panel.canClaim && panel.canCreate && !panel.isDefault;
 }
@@ -1418,8 +1473,7 @@ async function revokeCreationContextForOwnPanel(panel: EmbeddedBrowserCreationPa
 .embedded-browser-toolbar button { width: 30px; height: 30px; flex: 0 0 30px; }
 .embedded-browser-address { display: flex; min-width: 0; height: 30px; flex: 1; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-inset); padding: 0 9px; color: var(--text-muted); }
 .embedded-browser-pages { position: relative; }
-.embedded-browser-pages-active { color: var(--brand-accent); background: var(--brand-accent-soft); }
-.embedded-browser-device-toggle-active { color: var(--brand-accent); background: var(--brand-accent-soft); }
+.embedded-browser-pages-active, .embedded-browser-device-toggle-active, .embedded-browser-agent-access-active { color: var(--text); background: var(--surface-hover); }
 .embedded-browser-pages-count { position: absolute; top: 1px; right: 0; min-width: 13px; height: 13px; border-radius: 999px; background: var(--brand-accent); color: var(--surface); font-size: 9px; font-weight: 500; line-height: 13px; text-align: center; }
 .embedded-browser-pages-menu { display: flex; width: min(360px, var(--reka-popover-content-available-width)); max-height: min(480px, var(--reka-popover-content-available-height)); flex-direction: column; overflow: hidden; }
 .embedded-browser-pages-context { display: grid; flex: 0 0 auto; gap: 2px; padding-bottom: 5px; }
@@ -1443,33 +1497,40 @@ async function revokeCreationContextForOwnPanel(panel: EmbeddedBrowserCreationPa
 .embedded-browser-context-badge { flex: 0 0 auto; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); font-size: 11px; font-weight: 400; padding: 1px 6px; }
 .embedded-browser-context-badge.default { background: var(--brand-accent-soft); color: var(--brand-accent); }
 .embedded-browser-context-badge.offline { background: var(--status-danger-bg); color: var(--status-danger); }
-.embedded-browser-agent-access-active { color: var(--text); background: var(--surface-hover); }
-.embedded-browser-agent-access-menu { display: flex; width: min(380px, var(--reka-popover-content-available-width)); max-height: min(560px, var(--reka-popover-content-available-height)); flex-direction: column; overflow: hidden; }
-.embedded-browser-agent-access-summary { display: grid; flex: 0 0 auto; gap: 7px; padding: 11px 12px 10px; }
-.embedded-browser-agent-access-menu strong { color: var(--text); font-size: 13px; font-weight: 500; }
-.embedded-browser-agent-access-menu p { margin: 0; color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 17px; }
-.embedded-browser-agent-access-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.embedded-browser-agent-access-state { flex: 0 0 auto; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); font-size: 11px; font-weight: 400; padding: 1px 7px; }
-.embedded-browser-agent-access-state.active { background: var(--brand-accent-soft); color: var(--brand-accent); }
-.embedded-browser-agent-access-actions { display: flex; justify-content: flex-end; padding-top: 1px; }
-.embedded-browser-creation-context { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding: 10px 12px 12px; }
-.embedded-browser-creation-context-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-muted); font-size: 12px; line-height: 17px; }
-.embedded-browser-creation-context-value { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 5px; }
-.embedded-browser-creation-context-value strong { min-width: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
-.embedded-browser-agent-access-menu .embedded-browser-creation-context-notice { border-radius: 6px; background: var(--brand-accent-soft); padding: 6px 8px; color: var(--text); }
-.embedded-browser-agent-access-menu .embedded-browser-creation-context-error { color: var(--status-danger); }
-.embedded-browser-creation-context-error button { border: 0; background: transparent; color: var(--brand-accent); cursor: pointer; font-size: 12px; font-weight: 400; padding: 0 2px; }
-.embedded-browser-creation-context-empty, .embedded-browser-creation-context-hint { color: var(--text-muted); }
-.embedded-browser-creation-panel-scroll { min-height: 0; flex: 1 1 auto; max-height: min(320px, 45vh); }
-.embedded-browser-creation-panel-list { display: grid; gap: 6px; }
-.embedded-browser-creation-panel { display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-inset); padding: 8px 9px; }
-.embedded-browser-creation-panel.own { border-color: var(--brand-accent); }
-.embedded-browser-creation-panel.default { background: var(--brand-accent-soft); }
-.embedded-browser-creation-panel-head { display: flex; min-width: 0; align-items: center; gap: 5px; }
-.embedded-browser-creation-panel-name { min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.embedded-browser-creation-panel p { margin: 0; }
-.embedded-browser-creation-panel-actions { display: flex; justify-content: flex-end; padding-top: 2px; }
-.embedded-browser-creation-pending { display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; color: var(--text); font-size: 12px; }
+:global(.embedded-browser-agent-access-menu) { display: flex; width: min(360px, var(--reka-popover-content-available-width)); max-height: var(--reka-popover-content-available-height); flex-direction: column; overflow: hidden; }
+.embedded-browser-agent-access-summary { display: grid; min-width: 0; flex: 0 0 auto; gap: 8px; padding: 12px; }
+.embedded-browser-agent-access-head, .embedded-browser-creation-context-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
+.embedded-browser-agent-access-head strong, .embedded-browser-creation-context-title { color: var(--text-strong); font-size: 12px; font-weight: 500; line-height: 17px; }
+.embedded-browser-agent-access-head strong { display: flex; align-items: center; gap: 7px; }
+.embedded-browser-agent-access-head svg { flex: none; color: var(--text-muted); }
+.embedded-browser-agent-access-summary p, .embedded-browser-creation-context p { margin: 0; overflow-wrap: anywhere; color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 17px; }
+.embedded-browser-agent-access-state { border-radius: 6px; border-color: var(--line); padding: 1px 6px; color: var(--text-muted); font-size: 11px; font-weight: 400; line-height: 16px; }
+.embedded-browser-agent-access-state[data-active="true"] { border-color: color-mix(in srgb, var(--status-success) 36%, var(--line)); background: var(--status-success-bg); color: var(--status-success); }
+.embedded-browser-agent-access-state-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.embedded-browser-agent-access-action { height: auto; min-height: 28px; max-width: 100%; justify-self: start; padding: 4px 8px; font-weight: 400; line-height: 16px; white-space: normal; overflow-wrap: anywhere; }
+.embedded-browser-creation-context { --creation-context-inline-padding: 12px; display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 6px; border-top: 1px solid var(--line-subtle); padding: 8px var(--creation-context-inline-padding) 10px; }
+.embedded-browser-creation-context > :not(.embedded-browser-creation-panel-scroll) { flex: none; }
+.embedded-browser-creation-context-head { color: var(--text-muted); font-size: 12px; line-height: 16px; }
+.embedded-browser-creation-context-value { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 4px; overflow-wrap: anywhere; }
+.embedded-browser-creation-context-value strong { min-width: 0; color: var(--text); font-weight: 500; }
+.embedded-browser-creation-context .embedded-browser-creation-context-notice { border-radius: 6px; background: var(--brand-accent-soft); padding: 6px 8px; color: var(--text); }
+.embedded-browser-creation-context .embedded-browser-creation-context-error { color: var(--status-danger); }
+.embedded-browser-creation-context-retry { height: auto; padding: 0 2px; font-weight: 400; }
+.embedded-browser-creation-context-empty { padding: 4px 0; }
+.embedded-browser-creation-panel-scroll { display: flex; min-height: 0; max-height: 224px; flex: 0 1 auto; margin-inline-end: calc(-1 * var(--creation-context-inline-padding)); }
+.embedded-browser-creation-panel-scroll :deep([data-task-handoff-scroll-viewport]) { height: auto; min-height: 0; }
+.embedded-browser-creation-panel-list { margin: 0; padding: 0; padding-inline-end: var(--creation-context-inline-padding); list-style: none; }
+.embedded-browser-creation-panel { display: grid; min-height: 44px; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding-block: 5px; padding-inline-start: 4px; }
+.embedded-browser-creation-panel + .embedded-browser-creation-panel { border-top: 1px solid var(--line-subtle); }
+.embedded-browser-creation-panel-icon { color: var(--text-muted); }
+.embedded-browser-creation-panel[data-default="true"] .embedded-browser-creation-panel-icon { color: var(--brand-accent); }
+.embedded-browser-creation-panel-copy { display: grid; min-width: 0; gap: 1px; }
+.embedded-browser-creation-panel-name, .embedded-browser-creation-panel-meta { overflow: hidden; font-size: 12px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.embedded-browser-creation-panel-name { color: var(--text-strong); font-weight: 500; }
+.embedded-browser-creation-panel-meta { color: var(--text-muted); font-weight: 400; }
+.embedded-browser-creation-panel-trailing { display: flex; align-items: center; gap: 4px; }
+.embedded-browser-creation-panel-action { height: 28px; padding-inline: 8px; color: var(--text); }
+.embedded-browser-creation-pending { display: grid; gap: 2px; border-left: 2px solid var(--line-strong); padding: 2px 0 2px 8px; color: var(--text); font-size: 12px; }
 .embedded-browser-creation-pending small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .embedded-browser-address:focus-within { border-color: var(--brand-accent); box-shadow: 0 0 0 2px var(--brand-accent-soft); }
 .embedded-browser-address input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; font-weight: 400; }
@@ -1489,20 +1550,22 @@ async function revokeCreationContextForOwnPanel(panel: EmbeddedBrowserCreationPa
 .embedded-browser-device-toolbar { display: flex; flex: 0 0 auto; align-items: center; min-height: 38px; gap: 7px; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 4px 8px; background: var(--surface-inset); color: var(--text-muted); }
 .embedded-browser-device-toolbar > button { width: 28px; height: 28px; flex: 0 0 28px; }
 .embedded-browser-device-toolbar :deep(.embedded-browser-device-select) { width: 160px; min-height: 28px; height: 28px; padding: 0 7px; font-size: 12px; }
+.embedded-browser-device-toolbar :deep(.embedded-browser-device-zoom-select) { width: 124px; min-height: 28px; height: 28px; padding: 0 7px; font-size: 12px; }
 .embedded-browser-device-field { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; font-size: 12px; }
 .embedded-browser-device-field input { width: 56px; height: 28px; border: 1px solid var(--line); border-radius: 5px; outline: 0; background: var(--surface); padding: 0 5px; color: var(--text); font-size: 12px; }
 .embedded-browser-device-field input:focus { border-color: var(--brand-accent); box-shadow: 0 0 0 2px var(--brand-accent-soft); }
 .embedded-browser-device-times { flex: 0 0 auto; font-size: 12px; }
-.embedded-browser-device-stage { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; align-items: center; justify-content: center; overflow: hidden; background: #fff; }
-.embedded-browser.device-mode .embedded-browser-device-stage { padding: 24px; background: #16181d; }
-.embedded-browser-device-scaler { position: relative; flex: none; width: 100%; height: 100%; }
-.embedded-browser-device-frame { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: #fff; }
-.embedded-browser.device-mode .embedded-browser-device-frame { border: 6px solid #0b0d10; border-radius: 18px; box-shadow: 0 20px 60px rgb(0 0 0 / 32%); }
+.embedded-browser-device-stage { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; align-items: safe center; justify-content: safe center; overflow: auto; background: #fff; }
+.embedded-browser-surface.device-mode { background: #16181d; }
+.embedded-browser-surface.device-mode .embedded-browser-device-stage { padding: 24px; background: #16181d; }
+.embedded-browser-device-scaler { position: relative; flex: none; width: 100%; height: 100%; margin: auto; }
+.embedded-browser-device-frame { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; container-type: inline-size; overflow: hidden; background: #fff; }
+.embedded-browser-surface.device-mode .embedded-browser-device-frame { border: 0; border-radius: 18px; box-shadow: 0 20px 60px rgb(0 0 0 / 32%); }
 .embedded-browser-state { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; background: var(--surface); color: var(--text-muted); font-size: 12px; }
 .embedded-browser-state > svg { color: var(--status-danger); }
 .embedded-browser-state-message { max-width: 420px; margin: 0; text-align: center; color: var(--text); font-size: 13px; }
 .embedded-browser-state-detail { max-width: 440px; margin: 0; overflow-wrap: anywhere; text-align: center; color: var(--text-muted); font-size: 11px; }
-.embedded-browser-start-page { position: absolute; z-index: 1; inset: 0; overflow: auto; pointer-events: auto; background: var(--surface); padding: 34px clamp(20px, 6vw, 80px); }
+.embedded-browser-start-page { position: absolute; z-index: 1; inset: 0; overflow: auto; pointer-events: auto; background: var(--surface); padding: 34px clamp(12px, 6cqi, 80px); }
 .embedded-browser-start-section { max-width: 920px; margin: 0 auto 30px; }
 .embedded-browser-start-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .embedded-browser-start-heading h2 { margin: 0; color: var(--text); font-size: 14px; font-weight: 500; }

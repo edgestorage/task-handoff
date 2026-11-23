@@ -103,7 +103,8 @@ test("tool activity does not interpolate authoritative summary or tool fields th
 });
 
 test("attachment-only provider content is locale-neutral and outside translation resources", () => {
-  assert.equal(aiSessionMessageText("user input"), "user input");
-  assert.equal(aiSessionMessageText(""), AI_SESSION_ATTACHMENT_ONLY_MESSAGE);
-  assert.equal(aiSessionMessageText(""), "Please review the attached files.");
+  assert.equal(aiSessionMessageText("user input", true), "user input");
+  assert.equal(aiSessionMessageText("", true), "");
+  assert.equal(aiSessionMessageText("", false), AI_SESSION_ATTACHMENT_ONLY_MESSAGE);
+  assert.equal(aiSessionMessageText("", false), "Please review the attached files.");
 });

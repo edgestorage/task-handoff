@@ -189,8 +189,9 @@ export function codexPermissionOverrides(mode?: AiSessionPermissionMode): CodexT
 }
 
 function codexInputs(message: string, references: AiSessionReference[], attachmentInputs: CodexAttachmentInput[] = []): CodexUserInput[] {
+  const textInput: CodexUserInput = { type: "text", text: message, text_elements: [] };
   return [
-    { type: "text", text: message, text_elements: [] },
+    ...(message.trim() ? [textInput] : []),
     ...attachmentInputs,
     ...references.map((reference): CodexUserInput => reference.kind === "skill"
       ? { type: "skill", name: reference.name, path: reference.path }

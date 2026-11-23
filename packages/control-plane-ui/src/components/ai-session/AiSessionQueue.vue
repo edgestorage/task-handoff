@@ -18,52 +18,60 @@
       </button>
     </header>
     <ScrollArea type="auto" class="ai-session-detail-queue-list" :horizontal="false">
-      <article
-        v-for="item in displayedQueueItems"
-        :key="item.id"
-        class="ai-session-detail-queue-item"
-        :class="{ 'ai-session-detail-queue-item-dragging': draggingQueueId === item.id }"
-        :data-state="item.status"
-        @dragenter.prevent="previewQueueDrag(item.id)"
-        @dragover.prevent
-        @drop.prevent="commitQueueDrag"
-      >
+      <TransitionGroup name="ai-session-queue-item" tag="div" class="ai-session-detail-queue-items">
         <div
-          v-if="item.status === 'queued'"
-          class="ai-session-detail-queue-drag-handle"
-          :aria-disabled="busy"
-          :aria-label="t('sessions.activity.reorder')"
-          :draggable="!busy"
-          role="button"
-          tabindex="0"
-          :title="t('sessions.activity.reorder')"
-          @dragend="cancelQueueDrag"
-          @dragstart="startQueueDrag($event, item.id)"
-          @keydown="handleQueueHandleKeydown($event, item.id)"
+          v-for="item in displayedQueueItems"
+          :key="item.id"
+          class="ai-session-detail-queue-item-shell"
         >
-          <GripVertical :size="17" :stroke-width="1.8" />
+          <div class="ai-session-detail-queue-item-shell-inner">
+            <article
+              class="ai-session-detail-queue-item"
+              :class="{ 'ai-session-detail-queue-item-dragging': draggingQueueId === item.id }"
+              :data-state="item.status"
+              @dragenter.prevent="previewQueueDrag(item.id)"
+              @dragover.prevent
+              @drop.prevent="commitQueueDrag"
+            >
+              <div
+                v-if="item.status === 'queued'"
+                class="ai-session-detail-queue-drag-handle"
+                :aria-disabled="busy"
+                :aria-label="t('sessions.activity.reorder')"
+                :draggable="!busy"
+                role="button"
+                tabindex="0"
+                :title="t('sessions.activity.reorder')"
+                @dragend="cancelQueueDrag"
+                @dragstart="startQueueDrag($event, item.id)"
+                @keydown="handleQueueHandleKeydown($event, item.id)"
+              >
+                <GripVertical :size="17" :stroke-width="1.8" />
+              </div>
+              <GripVertical v-else class="ai-session-detail-queue-icon" :size="17" :stroke-width="1.8" />
+              <div class="ai-session-detail-queue-copy">
+                <p>{{ item.message }}</p>
+                <small v-if="item.error">{{ item.error }}</small>
+              </div>
+              <div class="ai-session-detail-queue-actions">
+                <button v-if="item.status === 'queued'" type="button" :disabled="busy" :aria-label="t('sessions.activity.edit')" :title="t('sessions.activity.edit')" @click="$emit('editQueuedMessage', { queueId: item.id, message: item.message })">
+                  <Pencil :size="15" />
+                </button>
+                <button type="button" :disabled="busy || !canInterrupt" :title="t('sessions.activity.steer')" @click="$emit('steerQueuedMessage', item.id)">
+                  <CornerDownRight :size="15" />
+                  <span>{{ t("sessions.activity.steer") }}</span>
+                </button>
+                <button v-if="item.status === 'failed'" type="button" :disabled="busy" :aria-label="t('sessions.activity.retry')" :title="t('sessions.activity.retry')" @click="$emit('retryQueuedMessage', item.id)">
+                  <RotateCcw :size="15" />
+                </button>
+                <button type="button" class="ai-session-detail-queue-remove" :disabled="busy" :aria-label="t('sessions.activity.remove')" :title="t('sessions.activity.remove')" @click="$emit('removeQueuedMessage', item.id)">
+                  <Trash2 :size="15" />
+                </button>
+              </div>
+            </article>
+          </div>
         </div>
-        <GripVertical v-else class="ai-session-detail-queue-icon" :size="17" :stroke-width="1.8" />
-        <div class="ai-session-detail-queue-copy">
-          <p>{{ item.message }}</p>
-          <small v-if="item.error">{{ item.error }}</small>
-        </div>
-        <div class="ai-session-detail-queue-actions">
-          <button v-if="item.status === 'queued'" type="button" :disabled="busy" :aria-label="t('sessions.activity.edit')" :title="t('sessions.activity.edit')" @click="$emit('editQueuedMessage', { queueId: item.id, message: item.message })">
-            <Pencil :size="15" />
-          </button>
-          <button type="button" :disabled="busy || !canInterrupt" :title="t('sessions.activity.steer')" @click="$emit('steerQueuedMessage', item.id)">
-            <CornerDownRight :size="15" />
-            <span>{{ t("sessions.activity.steer") }}</span>
-          </button>
-          <button v-if="item.status === 'failed'" type="button" :disabled="busy" :aria-label="t('sessions.activity.retry')" :title="t('sessions.activity.retry')" @click="$emit('retryQueuedMessage', item.id)">
-            <RotateCcw :size="15" />
-          </button>
-          <button type="button" class="ai-session-detail-queue-remove" :disabled="busy" :aria-label="t('sessions.activity.remove')" :title="t('sessions.activity.remove')" @click="$emit('removeQueuedMessage', item.id)">
-            <Trash2 :size="15" />
-          </button>
-        </div>
-      </article>
+      </TransitionGroup>
     </ScrollArea>
   </section>
 </template>
@@ -281,7 +289,35 @@ watch(() => props.queue.revision, cancelQueueDrag);
   padding: 4px 9px;
 }
 
-.ai-session-detail-queue-item + .ai-session-detail-queue-item { border-top: 1px solid var(--queue-border); }
+.ai-session-detail-queue-items,
+.ai-session-detail-queue-item-shell,
+.ai-session-detail-queue-item-shell-inner {
+  min-width: 0;
+}
+
+.ai-session-detail-queue-item-shell {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition: grid-template-rows 180ms cubic-bezier(0.22, 1, 0.36, 1), opacity 140ms ease;
+}
+
+.ai-session-detail-queue-item-shell-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ai-session-queue-item-enter-from,
+.ai-session-queue-item-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.ai-session-queue-item-move {
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), grid-template-rows 180ms cubic-bezier(0.22, 1, 0.36, 1), opacity 140ms ease;
+}
+
+.ai-session-detail-queue-item-shell + .ai-session-detail-queue-item-shell .ai-session-detail-queue-item { border-top: 1px solid var(--queue-border); }
 .ai-session-detail-queue-icon { color: var(--queue-muted); }
 
 .ai-session-detail-queue-drag-handle {
@@ -339,4 +375,11 @@ watch(() => props.queue.revision, cancelQueueDrag);
 .ai-session-detail-queue-actions button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--focus-ring, var(--queue-strong)); }
 .ai-session-detail-queue-actions button:disabled { cursor: not-allowed; opacity: 0.55; }
 .ai-session-detail-queue-actions .ai-session-detail-queue-remove:hover { background: color-mix(in srgb, var(--queue-danger) 12%, transparent); color: var(--queue-danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-session-detail-queue-item-shell,
+  .ai-session-queue-item-move {
+    transition: none;
+  }
+}
 </style>

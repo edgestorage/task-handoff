@@ -12,6 +12,8 @@ export type BrowserDevicePreset = BrowserDeviceMetrics & {
 
 export const BROWSER_DEVICE_MAX_DIMENSION = 4_096;
 export const CUSTOM_BROWSER_DEVICE_ID = "custom";
+export const BROWSER_DEVICE_ZOOM_FIT = "fit";
+export const BROWSER_DEVICE_ZOOM_PERCENTAGES = Object.freeze([50, 75, 100, 125, 150] as const);
 
 export const BROWSER_DEVICE_PRESETS: readonly BrowserDevicePreset[] = Object.freeze([
   { id: "iphone-15-pro", labelKey: "sessions.browserDevices.iphone15Pro", width: 393, height: 852, deviceScaleFactor: 3, mobile: true },
@@ -40,6 +42,14 @@ export function normalizeBrowserDeviceDimension(value: unknown) {
   const numeric = Number(value);
   return Number.isInteger(numeric) && numeric > 0 && numeric <= BROWSER_DEVICE_MAX_DIMENSION
     ? numeric
+    : undefined;
+}
+
+export function browserDeviceZoomScale(value: string) {
+  if (value === BROWSER_DEVICE_ZOOM_FIT) return undefined;
+  const percentage = Number(value);
+  return BROWSER_DEVICE_ZOOM_PERCENTAGES.some((option) => option === percentage)
+    ? percentage / 100
     : undefined;
 }
 

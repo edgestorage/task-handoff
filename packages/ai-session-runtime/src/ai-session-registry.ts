@@ -212,6 +212,7 @@ export function aiSessionTurnBodyRevision(turn: NonNullable<AiSessionStatus["tur
 export function aiSessionConversationTurns(session: AiSessionStatus) {
   return (session.turns || []).filter((turn) => (
     turn.userPrompt?.trim()
+    || turn.userMessages?.some((message) => message.text.trim() || message.attachments.length)
     || turn.lastMessage?.trim()
     || turn.summary?.trim()
     || turn.contextCompactions?.length
@@ -304,7 +305,9 @@ export function syncAiSessionTimelineItems(
 
 function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
   const meaningfulTurns = aiSessionConversationTurns(session);
-  const lastUserTurn = [...meaningfulTurns].reverse().find((turn) => turn.userPrompt?.trim());
+  const lastUserTurn = [...meaningfulTurns].reverse().find((turn) => (
+    turn.userPrompt?.trim() || turn.userMessages?.some((message) => message.text.trim() || message.attachments.length)
+  ));
   return {
     id: session.id,
     agent: session.agent,

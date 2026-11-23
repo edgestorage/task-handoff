@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 import { aiSessionMessageText, defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
-import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
+import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionAttachmentOnlyMessages } from '@task-handoff/protocol/control-plane-directory';
 
 import { NewSessionForm, newSessionVisualBalanceInset } from '../../src/ai-sessions/NewSessionForm';
 import { NewWorktreeDialog } from '../../src/ai-sessions/NewWorktreeDialog';
@@ -230,7 +230,7 @@ export default function NewAiSessionRoute() {
         cwdFolderId: selectedFolder.cwdFolderId,
         gitSelection,
         workspaceSelection,
-        message: aiSessionMessageText(message.trim()),
+        message: aiSessionMessageText(message.trim(), supportsDirectoryAiSessionAttachmentOnlyMessages(selectedInstance.capabilities)),
         permissionMode: permissionModes.includes(permissionMode) ? permissionMode : undefined,
         modelSelection,
         reasoningEffort: effectiveReasoningEffort,
@@ -251,7 +251,7 @@ export default function NewAiSessionRoute() {
         cwdFolderId: selectedFolder.cwdFolderId,
         gitSelection,
         workspaceSelection,
-        message: aiSessionMessageText(message.trim()),
+        message: aiSessionMessageText(message.trim(), supportsDirectoryAiSessionAttachmentOnlyMessages(selectedInstance.capabilities)),
         attachments: usableUploadRefs(uploadedAttachments),
         permissionMode: permissionModes.includes(permissionMode) ? permissionMode : undefined,
         modelSelection,

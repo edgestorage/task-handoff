@@ -256,6 +256,7 @@ export function controlledInstanceCapabilities(
       repositoryWorktreeMoveToMain: true,
       aiSessionSendIdempotency: true,
       aiSessionQueuePause: true,
+      aiSessionAttachmentOnlyMessages: true,
       aiSessionTimeline: availableTimeline,
       aiSessionProviders: availableProviders,
       instanceShell: {

@@ -169,6 +169,8 @@ pub struct FeatureCapabilities {
     pub repository_worktree_move_to_main: bool,
     pub ai_session_send_idempotency: bool,
     pub ai_session_queue_pause: bool,
+    #[serde(default)]
+    pub ai_session_attachment_only_messages: bool,
     pub model_relay: ModelRelayCapabilities,
     pub managed_model_environment: ManagedModelEnvironmentCapabilities,
     pub app_install_environment: ControlledInstanceAppInstallEnvironmentCapabilities,

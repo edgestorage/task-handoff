@@ -713,8 +713,9 @@ test("shared long-paste classifier accepts an instance-specific file limit", () 
 });
 
 test("attachment-only message helper remains locale neutral", () => {
-  assert.equal(aiSessionMessageText(""), AI_SESSION_ATTACHMENT_ONLY_MESSAGE);
-  assert.equal(aiSessionMessageText("hello"), "hello");
+  assert.equal(aiSessionMessageText("", true), "");
+  assert.equal(aiSessionMessageText("", false), AI_SESSION_ATTACHMENT_ONLY_MESSAGE);
+  assert.equal(aiSessionMessageText("hello", true), "hello");
 });
 
 test("shared AI Session client sends a node folder identity for server-side runtime path resolution", async () => {

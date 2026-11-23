@@ -141,8 +141,8 @@
   --surface-hover: #282a30;
   --surface-active: #2e3036;
   --titlebar-overflow-fade: #1b1c21;
-  --text: #f3f3f6;
-  --text-strong: var(--text);
+  --text: #e3e4e8;
+  --text-strong: #f3f3f6;
   --text-muted: #b2b3ba;
   --text-subtle: #95969d;
   --line: #35373d;

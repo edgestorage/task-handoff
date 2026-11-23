@@ -1658,7 +1658,7 @@
   display: block;
   min-width: 0;
   overflow: hidden;
-  color: var(--ai-session-title);
+  color: var(--markdown-text-color, var(--text));
   font-size: 14px;
   font-weight: 400;
   line-height: 1.35;

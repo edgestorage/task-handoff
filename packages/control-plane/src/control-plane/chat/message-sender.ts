@@ -4,7 +4,9 @@ import type {
   ControlledInstance,
   Project,
 } from "@task-handoff/protocol/control-plane";
+import { supportsAiSessionAttachmentOnlyMessages } from "@task-handoff/protocol/control-plane";
 import type { AiSessionActionResponse, AiSessionMessageAttachment } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_LEGACY_ATTACHMENT_ONLY_MESSAGE } from "@task-handoff/protocol/ai-sessions";
 import {
   aiSessionActionProviderTurnId,
   aiSessionActionTurnId,
@@ -29,6 +31,7 @@ export class ControlPlaneChatMessageSender {
     const targetInstanceId = input.target?.instanceId || binding.activeInstanceId || "";
     const targetAiSessionId = input.target?.aiSessionId || binding.activeAiSessionId;
     const instance = await this.deps.requireControlledInstance(targetInstanceId, true) as ControlledInstance;
+    const attachmentOnlyMessagesSupported = supportsAiSessionAttachmentOnlyMessages(instance.capabilities);
     const project = instance.projectId ? this.deps.requireProject(instance.projectId) : undefined;
     if (instance.connectionStatus !== "online") {
       const error = new Error(`Instance ${instance.name} is not reachable.`);
@@ -36,7 +39,7 @@ export class ControlPlaneChatMessageSender {
       throw error;
     }
     if (targetAiSessionId) {
-      const sent = await this.trySendAiSessionMessage(binding, instance.id, targetAiSessionId, input.message.text, input.message.attachments, !input.target);
+      const sent = await this.trySendAiSessionMessage(binding, instance.id, targetAiSessionId, input.message.text, input.message.attachments, !input.target, attachmentOnlyMessagesSupported);
       if (!sent.ok) {
         return this.failedSendResult(sent.binding, project, instance, sent.reply);
       }
@@ -46,7 +49,7 @@ export class ControlPlaneChatMessageSender {
     const defaultAiSessionId = await this.targets.defaultAiSessionIdForInstance(instance.id);
     if (defaultAiSessionId) {
       const updated = await this.deps.upsertChatSession({ ...binding, activeAiSessionId: defaultAiSessionId });
-      const sent = await this.trySendAiSessionMessage(updated, instance.id, defaultAiSessionId, input.message.text, input.message.attachments);
+      const sent = await this.trySendAiSessionMessage(updated, instance.id, defaultAiSessionId, input.message.text, input.message.attachments, true, attachmentOnlyMessagesSupported);
       if (!sent.ok) {
         return this.failedSendResult(sent.binding, project, instance, sent.reply);
       }
@@ -63,12 +66,21 @@ export class ControlPlaneChatMessageSender {
     };
   }
 
-  private async trySendAiSessionMessage(binding: ChatSessionBinding, instanceId: string, sessionId: string, message: string, attachments: AiSessionMessageAttachment[] = [], clearMissingBinding = true) {
+  private async trySendAiSessionMessage(
+    binding: ChatSessionBinding,
+    instanceId: string,
+    sessionId: string,
+    message: string,
+    attachments: AiSessionMessageAttachment[] = [],
+    clearMissingBinding = true,
+    attachmentOnlyMessagesSupported = false,
+  ) {
     try {
+      const providerMessage = message || (attachmentOnlyMessagesSupported ? "" : AI_SESSION_LEGACY_ATTACHMENT_ONLY_MESSAGE);
       return {
         ok: true as const,
         binding,
-        aiSession: await this.deps.sendAiSessionMessage(instanceId, sessionId, message || "请查看附件。", undefined, attachments),
+        aiSession: await this.deps.sendAiSessionMessage(instanceId, sessionId, providerMessage, undefined, attachments),
       };
     } catch (error) {
       if (isMissingAiSessionError(error)) {

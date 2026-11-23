@@ -10,7 +10,7 @@ import {
   AGENT_INVOCATION_TOOL_SCHEMA,
   type AgentInvocationToolName,
 } from "@task-handoff/protocol/agent-invocation-tools";
-import { BROWSER_AGENT_TOOL_NAMES, type BrowserAgentToolName } from "@task-handoff/protocol/browser-agent-tools";
+import { BROWSER_AGENT_TOOL_DESCRIPTIONS, BROWSER_AGENT_TOOL_NAMES, type BrowserAgentToolName } from "@task-handoff/protocol/browser-agent-tools";
 
 type OpenCodeToolContext = {
   sessionID: string;
@@ -23,8 +23,6 @@ type PluginOptions = {
   token?: string;
   fetch?: typeof globalThis.fetch;
 };
-
-const BROWSER_CDP_ACCESS_DESCRIPTION = "Return a short-lived standard CDP (Chrome DevTools Protocol) endpoint and token for this embedded browser — the browser tabs shown in the TaskHandoff browser panel. The endpoint follows Chrome's CDP semantics: use the standard /json discovery endpoints and each target's webSocketDebuggerUrl, then send normal CDP methods and events. This is the embedded browser's endpoint, not a separate local Chromium instance. If browser access is disabled, the call returns status=pending with a requestRef, status=denied, or status=expired; ask the user to approve it in the approval center and call again after approval. When granted, send Authorization: Bearer <token> or ?token=<token> on HTTP requests.";
 
 async function invoke(options: PluginOptions, tool: StoryAgentToolName | AgentInvocationToolName | BrowserAgentToolName, args: unknown, context: OpenCodeToolContext) {
   const endpoint = options.endpoint?.trim();
@@ -70,7 +68,7 @@ export function createOpenCodeStoryPlugin(options: PluginOptions = {
         execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, "agent_run", args, context),
       }],
       ...BROWSER_AGENT_TOOL_NAMES.map((name) => [name, {
-        description: BROWSER_CDP_ACCESS_DESCRIPTION,
+        description: BROWSER_AGENT_TOOL_DESCRIPTIONS[name],
         args: {},
         execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, name, args, context),
       }] as const),

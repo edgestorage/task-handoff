@@ -11,11 +11,15 @@ test("trusted control plane windows enable webview tags with enforced guest isol
   assert.match(main, /desktopWindowWebPreferences\(webviewTag = false\)/);
   assert.match(main, /will-attach-webview[\s\S]*?delete webPreferences\.preload[\s\S]*?sandbox = true[\s\S]*?nodeIntegration = false/);
   assert.match(main, /desktopBrowserContexts\?\.allows\(host\.id, partition\)/);
-  assert.match(main, /browserTabUrlAllowed\(params\.src\)/);
+  assert.match(main, /isAllowedEmbeddedBrowserUrl\(params\.src\)/);
 });
 
 test("guest navigation is limited to HTTP(S) while browser credentials remain in main", () => {
-  assert.match(main, /url\.href === "about:blank" \|\| url\.protocol === "http:" \|\| url\.protocol === "https:"/);
+  const policy = fs.readFileSync(path.resolve(__dirname, "../src/navigation-policy.cjs"), "utf8");
+  assert.match(policy, /WEB_PROTOCOLS = new Set\(\["http:", "https:"\]\)/);
+  assert.match(policy, /function isAllowedEmbeddedBrowserUrl/);
+  assert.match(policy, /function isAllowedEmbeddedBrowserFrameUrl/);
+  assert.match(main, /isMainFrame\s*\?\s*isAllowedEmbeddedBrowserUrl\(targetUrl\)\s*:\s*isAllowedEmbeddedBrowserFrameUrl\(targetUrl\)/);
   assert.match(main, /task-handoff:browser-context-prepare/);
   assert.match(main, /browserContextDiagnosticMessage\(code, error\)/);
   assert.match(main, /trustedControlPlaneSenderUrl\(event\.sender\)/);

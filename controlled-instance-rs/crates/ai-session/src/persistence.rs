@@ -194,7 +194,12 @@ fn normalize_queue(value: Option<&Value>) -> Option<AiSessionQueue> {
 fn normalize_queue_item(value: &Value) -> Option<Value> {
     let record = value.as_object()?;
     let id = required_text(record.get("id"), 120)?;
-    let message = required_message_text(record.get("message"), 20_000)?;
+    let message = optional_trimmed_text(record.get("message"), 20_000)?;
+    let attachments = normalize_attachment_metas(record.get("attachments"));
+    let references = normalize_references(record.get("references"));
+    if message.is_empty() && attachments.is_empty() && references.is_empty() {
+        return None;
+    }
     let created_at = required_timestamp(record.get("createdAt"))?;
     let updated_at = required_timestamp(record.get("updatedAt"))?;
     let mut item = Map::new();
@@ -208,14 +213,8 @@ fn normalize_queue_item(value: &Value) -> Option<Value> {
         item.insert("messageId".to_string(), Value::String(message_id));
     }
     item.insert("message".to_string(), Value::String(message));
-    item.insert(
-        "attachments".to_string(),
-        Value::Array(normalize_attachment_metas(record.get("attachments"))),
-    );
-    item.insert(
-        "references".to_string(),
-        Value::Array(normalize_references(record.get("references"))),
-    );
+    item.insert("attachments".to_string(), Value::Array(attachments));
+    item.insert("references".to_string(), Value::Array(references));
     if let Some(permission_mode) = record
         .get("permissionMode")
         .and_then(Value::as_str)
@@ -1000,11 +999,6 @@ fn optional_message_text(value: Option<&Value>) -> Option<String> {
         return None;
     }
     Some(js_string(value).trim().to_string())
-}
-
-fn required_message_text(value: Option<&Value>, max: usize) -> Option<String> {
-    let text = value?.as_str()?.trim();
-    (!text.is_empty() && text.chars().count() <= max).then(|| text.to_string())
 }
 
 fn required_timestamp(value: Option<&Value>) -> Option<String> {

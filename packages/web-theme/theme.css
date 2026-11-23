@@ -1,4 +1,9 @@
 @layer base {
+  :root {
+    --markdown-text-color: var(--text);
+    --markdown-muted-color: var(--text-muted);
+  }
+
   :root,
   :root[data-theme="light"] {
     color-scheme: light;

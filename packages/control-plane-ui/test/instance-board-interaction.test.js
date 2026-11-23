@@ -84,7 +84,7 @@ test("instance board cards keep App and AI in the session menu and slide individ
   assert.match(board, /\.board-ai-title \{[\s\S]*color: var\(--ai-board-title\);[\s\S]*font-size: 14px;[\s\S]*font-weight: 400/);
   assert.match(board, /<AiSessionToolActivity[\s\S]*class="board-instance-ai-activity"[\s\S]*:current-tool="boardPrimaryAiSession\(instance\)\?\.currentTool"[\s\S]*tone="board"/);
   assert.match(board, /\.board-instance-ai-activity \{[\s\S]*right: 82px;[\s\S]*bottom: 10px;[\s\S]*left: 14px;/);
-  assert.match(board, /\.board-ai-answer \{[\s\S]*background: var\(--ai-session-card-content-bg\);[\s\S]*color: var\(--ai-board-title\);[\s\S]*font-size: 14px;[\s\S]*font-weight: 400;[\s\S]*line-height: 1\.35/);
+  assert.match(board, /\.board-ai-answer \{[\s\S]*background: var\(--ai-session-card-content-bg\);[\s\S]*color: var\(--markdown-text-color, var\(--text\)\);[\s\S]*font-size: 14px;[\s\S]*font-weight: 400;[\s\S]*line-height: 1\.35/);
   assert.doesNotMatch(board, /\.board-ai-answer \{[\s\S]*?margin-top:/);
 });
 

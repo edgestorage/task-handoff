@@ -23,6 +23,7 @@ test("the embedded browser grants and revokes access for the whole instance", ()
   assert.match(browser, /revokeBrowserControlAccess\(props\.instanceId\)/);
   assert.match(browser, /browserControlAccess = ref<EmbeddedBrowserAccessView>\(\{ active: false, revision: 0 \}\)/);
   assert.match(browser, /await Promise\.all\(\[refreshBrowserControlAccess\(\), refreshBrowserCreationContext\(\)\]\)/);
+  assert.match(browser, /<Popover :open="agentAccessOpen" @update:open="handleAgentAccessOpenChange">\s*<PopoverTrigger as-child>/);
   assert.match(browser, /class="embedded-browser-agent-access"/);
 });
 
@@ -34,5 +35,5 @@ test("instance browser access copy explains the shared session scope and revocat
   }
   assert.match(zh, /所有 AI 会话/);
   assert.match(en, /every AI Session/);
-  assert.match(browser, /\.embedded-browser-agent-access-menu p \{[^}]*font-size: 12px;/);
+  assert.match(browser, /\.embedded-browser-agent-access-summary p\b[^{]*\{[^}]*font-size: 12px;/);
 });

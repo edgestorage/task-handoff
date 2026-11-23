@@ -285,7 +285,7 @@ import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/con
 import { aiSessionModelSelectionAllowed, deriveAiSessionModelGroups } from "@task-handoff/control-plane-client";
 import { aiSessionApprovalDecisions } from "../action-inbox/aiSessionApprovals";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
-import { supportsAiSessionQueuePause } from "@task-handoff/protocol/control-plane";
+import { supportsAiSessionAttachmentOnlyMessages, supportsAiSessionQueuePause } from "@task-handoff/protocol/control-plane";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import { prepareQueuedMessageEditAttachments, queuedMessageComposerAttachments, uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
@@ -1008,7 +1008,7 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
-    await sendAiSessionMessage(card.instance.id, card.session.id, aiSessionMessageText(message), undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
+    await sendAiSessionMessage(card.instance.id, card.session.id, aiSessionMessageText(message, supportsAiSessionAttachmentOnlyMessages(card.instance.capabilities)), undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
@@ -1047,7 +1047,7 @@ async function steerMessageDraft() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(card.instance.id, card.session.id);
-    await sendAiSessionMessage(card.instance.id, card.session.id, aiSessionMessageText(message), "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
+    await sendAiSessionMessage(card.instance.id, card.session.id, aiSessionMessageText(message, supportsAiSessionAttachmentOnlyMessages(card.instance.capabilities)), "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(card.session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
@@ -1181,7 +1181,7 @@ async function saveSelectedQueuedMessage() {
   const card = selectedCard.value;
   const edit = queueComposerEdit.value;
   const message = messageDraft.value.trim();
-  if (!card || !edit || !message || aiSessionActionBusy.value) return;
+  if (!card || !edit || (!message && !messageAttachments.value.length) || aiSessionActionBusy.value) return;
   const attachmentIds = messageAttachments.value.map((attachment) => attachment.id);
   if (message === edit.originalMessage.trim() && attachmentIds.length === edit.originalAttachmentIds.length
     && attachmentIds.every((id, index) => id === edit.originalAttachmentIds[index])) {

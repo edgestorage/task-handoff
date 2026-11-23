@@ -68,7 +68,7 @@ test("control plane dark surfaces, text, status colors, and primary use the expe
   assert.equal(darkRules.get("surface-hover"), "#282a30");
   assert.equal(darkRules.get("surface-active"), "#2e3036");
   assert.equal(darkRules.get("sidebar-row-selected-bg"), "var(--surface-active)");
-  assert.equal(darkRules.get("text"), "#f3f3f6");
+  assert.equal(darkRules.get("text"), "#e3e4e8");
   assert.equal(darkRules.get("text-muted"), "#b2b3ba");
   assert.equal(darkRules.get("line"), "#35373d");
   assert.equal(darkRules.get("line-strong"), "#3f4249");
@@ -83,7 +83,7 @@ test("control plane dark surfaces, text, status colors, and primary use the expe
   assert.equal(darkRules.get("status-warning-bg"), "#3b2f05");
   assert.equal(darkRules.get("status-danger"), "#ff6961");
   assert.equal(darkRules.get("status-danger-bg"), "#3f1715");
-  assert.equal(darkRules.get("text-strong"), "var(--text)");
+  assert.equal(darkRules.get("text-strong"), "#f3f3f6");
 });
 
 test("control plane dark theme no longer carries the legacy teal surface palette", () => {

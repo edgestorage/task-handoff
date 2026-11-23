@@ -176,6 +176,7 @@ function defaultControlledInstanceFeatures() {
     appInstallEnvironment: emptyAppInstallEnvironmentCapabilities(),
     aiSessionSendIdempotency: false,
     aiSessionQueuePause: false,
+    aiSessionAttachmentOnlyMessages: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
     aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
     aiSessionProviders: emptyAiSessionProviderCapabilities(),
@@ -353,6 +354,9 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   // Compatibility for v0.0.35: absence means the AI Session queue route does
   // not expose the pause/resume control.
   aiSessionQueuePause: z.boolean().optional(),
+  // Compatibility for v0.0.59: absence means the instance rejects a message
+  // without text, so clients must retain the legacy attachment hint.
+  aiSessionAttachmentOnlyMessages: z.boolean().optional(),
   aiSessionTimeline: AiSessionTimelineCapabilitiesSchema.default(emptyAiSessionTimelineCapabilities),
   // Compatibility for v0.0.21: the additive wire field must remain optional.
   aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilitiesSchema.optional(),
@@ -419,6 +423,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     repositoryFileContent: boolean;
     repositoryWorktreeMoveToMain: boolean;
     aiSessionSendIdempotency: boolean;
+    aiSessionAttachmentOnlyMessages: boolean;
     privateModelCatalog: boolean;
     browserTunnel: boolean;
     nodeAgentConnectionUpdate: boolean;
@@ -461,6 +466,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "repositoryWorktreeMoveToMain",
     "aiSessionSendIdempotency",
     "aiSessionQueuePause",
+    "aiSessionAttachmentOnlyMessages",
   ] as const) {
     // Capability queries run on heartbeats and fleet reads. A boolean has no
     // coercion or refinements here; avoid allocating a schema (and validation
@@ -606,6 +612,10 @@ export function supportsAiSessionSendIdempotency(capabilities: unknown) {
 
 export function supportsAiSessionQueuePause(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionQueuePause === true;
+}
+
+export function supportsAiSessionAttachmentOnlyMessages(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionAttachmentOnlyMessages === true;
 }
 
 export function aiSessionConversationAttachmentCapabilities(capabilities: unknown): AiSessionConversationAttachmentCapabilities {

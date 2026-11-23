@@ -6,6 +6,7 @@ import type {
   AiSessionQueuedMessage,
   AiSessionStatus,
 } from "@task-handoff/protocol/ai-sessions";
+import { aiSessionMessageHasContent } from "@task-handoff/protocol/ai-sessions";
 import { compact, messageText } from "../ai-session-turns";
 import {
   aiSessionAttachmentMetas,
@@ -68,6 +69,7 @@ export class AiSessionQueueService {
     permissionMode?: AiSessionPermissionMode,
     messageId?: string,
   ): AiSessionEnqueueResult | undefined {
+    if (!aiSessionMessageHasContent({ message, attachments, references })) return undefined;
     const timestamp = this.now();
     const item: AiSessionQueuedMessage = {
       id: this.generateQueueId(),

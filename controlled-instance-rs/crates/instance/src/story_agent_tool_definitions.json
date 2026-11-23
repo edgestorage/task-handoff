@@ -3008,7 +3008,7 @@
   },
   {
     "name": "browser_cdp_access",
-    "description": "Return a short-lived standard CDP (Chrome DevTools Protocol) endpoint and token for this embedded browser — the browser tabs shown in the TaskHandoff browser panel. The endpoint follows Chrome's CDP semantics: use the standard /json discovery endpoints and each target's webSocketDebuggerUrl, then send normal CDP methods and events. This is the embedded browser's endpoint, not a separate local Chromium instance. If browser access is disabled, the call returns status=pending with a requestRef, status=denied, or status=expired; ask the user to approve it in the approval center and call again after approval. When granted, send Authorization: Bearer <token> or ?token=<token> on HTTP requests.",
+    "description": "返回内置浏览器的已鉴权 Chrome DevTools HTTP 基础端点（即 TaskHandoff 浏览器面板中的标签页）。成功时返回 status=granted，并包含 httpEndpoint、token 和 expiresAt。使用 Authorization: Bearer <token> 或 ?token=<token> 鉴权。GET <httpEndpoint>/json/version 可直接获取浏览器级 CDP WebSocket 地址，GET <httpEndpoint>/json/list 可获取页面目标及各自的 CDP WebSocket 地址。返回的地址已包含 token，在 expiresAt 之前，同一 token 可复用于获取连接和重连；如果浏览器访问被禁用或 AI Session 关闭，它会提前失效。如果浏览器访问未启用，调用会返回 status=pending 并附带 requestRef，或返回 status=denied、status=expired；请用户在审批中心批准后再次调用。",
     "inputSchema": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "type": "object",

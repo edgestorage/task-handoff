@@ -3,10 +3,19 @@ import test from "node:test";
 import {
   browserDeviceEmulationParams,
   browserDevicePresetForMetrics,
+  browserDeviceZoomScale,
   BROWSER_DEVICE_PRESETS,
   normalizeBrowserDeviceDimension,
   rotateBrowserDeviceMetrics,
 } from "../src/apps/control-plane/instance-detail/browserDeviceMetrics.ts";
+
+test("device zoom distinguishes fit-to-window from fixed percentages", () => {
+  assert.equal(browserDeviceZoomScale("fit"), undefined);
+  assert.equal(browserDeviceZoomScale("75"), 0.75);
+  assert.equal(browserDeviceZoomScale("100"), 1);
+  assert.equal(browserDeviceZoomScale("125"), 1.25);
+  assert.equal(browserDeviceZoomScale("33"), undefined);
+});
 
 test("device presets cover common phone, tablet, and desktop viewports", () => {
   assert.deepEqual(BROWSER_DEVICE_PRESETS.map((preset) => preset.width), [393, 412, 820, 912, 1_440]);

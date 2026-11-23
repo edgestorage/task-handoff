@@ -15,6 +15,7 @@ class DesktopBrowserContextManager {
     this.BrowserSocksServer = options.BrowserSocksServer || BrowserSocksServer;
     this.logInfo = options.logInfo;
     this.logError = options.logError;
+    this.userAgent = options.userAgent;
     this.onBrowserFailure = options.onBrowserFailure;
     this.onDownloadEvent = options.onDownloadEvent;
     this.now = options.now || Date.now;
@@ -112,6 +113,7 @@ class DesktopBrowserContextManager {
       const address = await socks.start();
       const partition = partitionName(input.controlPlaneId, input.instanceId);
       browserSession = this.session.fromPartition(partition, { cache: true });
+      if (this.userAgent) browserSession.setUserAgent?.(this.userAgent);
       await browserSession.setProxy({
         mode: "fixed_servers",
         proxyRules: `socks5://${address.host}:${address.port}`,

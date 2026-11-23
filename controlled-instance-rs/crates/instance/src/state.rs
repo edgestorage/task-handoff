@@ -2754,6 +2754,7 @@ fn controlled_instance_capabilities(
     }
     capabilities.features.ai_session_send_idempotency = true;
     capabilities.features.ai_session_queue_pause = true;
+    capabilities.features.ai_session_attachment_only_messages = true;
     capabilities.features.private_model_catalog = true;
     capabilities.features.codex_managed_settings = true;
     capabilities.features.git_cli_credential_broker = git_credential_broker_installed;

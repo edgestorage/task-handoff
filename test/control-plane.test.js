@@ -731,6 +731,8 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     aiSessionSendIdempotency: false,
     // Compatibility for v0.0.35: a stored pre-upgrade instance has no queue pause capability.
     aiSessionQueuePause: false,
+    // Compatibility for v0.0.59: a stored pre-upgrade instance requires text.
+    aiSessionAttachmentOnlyMessages: false,
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [], toolActivityAgents: [] },
     aiSessionConversationAttachments: { metadataAgents: [], contentAgents: [], uploadAgents: [], retentionSettings: false, fileSizeLimitSettings: false },
     aiSessionProviders: [],

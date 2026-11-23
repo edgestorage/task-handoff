@@ -52,6 +52,8 @@ test("stable browser host lets the start page and guest fill the pane surface", 
   assert.match(browser, /\.embedded-browser \{[^}]*width: 100%; height: 100%;/);
   assert.match(browser, /\.embedded-browser-surface \{[^}]*min-height: 0;/);
   assert.match(browser, /\.embedded-browser-start-page \{[^}]*inset: 0;/);
+  assert.match(browser, /\.embedded-browser-device-frame \{[^}]*container-type: inline-size;/);
+  assert.match(browser, /\.embedded-browser-start-page \{[^}]*padding: 34px clamp\(12px, 6cqi, 80px\);/);
   assert.match(browser, /\.embedded-browser-start-page \{[^}]*pointer-events: auto;/);
   assert.match(browser, /@click\.stop="addPinned"/);
   assert.match(browser, /browser add pinned clicked/);
@@ -255,6 +257,7 @@ test("browser load failures show an actionable prompt instead of a silent guest"
   assert.match(browser, /function showLoadFailure\(\)/);
   assert.match(browser, /error\.value = t\(browserLoadFailureKey\(\{ chromiumCode: lastChromiumError\?\.code, tunnelCode: tunnelFailure\?\.code \}\)\)/);
   assert.match(browser, /const failed = \(event: Event & \{ errorCode\?: number;/);
+  assert.match(browser, /if \(!isBrowserPageLoadFailure\(event\)\) return;/);
   assert.match(browser, /did-fail-load", failed as EventListener/);
   assert.match(browser, /class="embedded-browser-state-detail"/);
   assert.match(browser, /@click="retry"/);
@@ -266,9 +269,19 @@ test("embedded browser device mode resizes the real guest and mirrors Agent emul
   const bridge = fs.readFileSync(new URL("../src/lib/desktopBridge.ts", import.meta.url), "utf8");
   const preload = fs.readFileSync(new URL("../../../apps/desktop-shell/src/preload.cjs", import.meta.url), "utf8");
   assert.match(browser, /class="embedded-browser-device-toggle"[\s\S]*?@click="toggleDeviceMode"[\s\S]*?<MonitorSmartphone/);
-  assert.match(browser, /class="embedded-browser-device-toolbar"[\s\S]*?sessions\.browser\.deviceWidth[\s\S]*?sessions\.browser\.deviceHeight[\s\S]*?@click="rotateDevice"/);
+  assert.match(browser, /class="embedded-browser-device-toolbar"[\s\S]*?sessions\.browser\.deviceWidth[\s\S]*?sessions\.browser\.deviceHeight[\s\S]*?sessions\.browser\.deviceZoomFit[\s\S]*?@click="rotateDevice"/);
+  assert.match(browser, /const fixedScale = browserDeviceZoomScale\(selectedDeviceZoomId\.value\);/);
+  assert.match(browser, /\.embedded-browser-device-toolbar :deep\(\.embedded-browser-device-zoom-select\) \{ width: 124px/);
+  assert.match(browser, /\.embedded-browser-device-stage \{[^}]*align-items: safe center;[^}]*justify-content: safe center;[^}]*overflow: auto;/);
+  assert.match(browser, /\.embedded-browser-pages-active, \.embedded-browser-device-toggle-active, \.embedded-browser-agent-access-active \{ color: var\(--text\); background: var\(--surface-hover\); \}/);
+  assert.doesNotMatch(browser, /:value="deviceMetrics\.(?:width|height)"[\s\S]{0,120}?:disabled="deviceControlBusy"/);
+  assert.match(browser, /class="embedded-browser-surface" :class="\{ 'device-mode': deviceMode \}"/);
+  assert.match(browser, /\.embedded-browser-surface\.device-mode \.embedded-browser-device-stage \{[^}]*background: #16181d/);
+  assert.match(browser, /\.embedded-browser-surface\.device-mode \.embedded-browser-device-frame \{[^}]*border: 0;[^}]*border-radius: 18px;[^}]*box-shadow: 0 20px 60px/);
+  assert.doesNotMatch(browser, /\.embedded-browser\.device-mode/);
   assert.match(browser, /Emulation\.setDeviceMetricsOverride/);
   assert.match(browser, /Emulation\.clearDeviceMetricsOverride/);
+  assert.match(browser, /Promise\.race\(\[[\s\S]*?sendDeviceCdp\(method, params\)[\s\S]*?DEVICE_COMMAND_TIMEOUT_MS/);
   assert.match(browser, /width: `\$\{deviceMetrics\.width\}px`[\s\S]*?height: `\$\{deviceMetrics\.height\}px`[\s\S]*?transform: `scale\(\$\{deviceScale\.value\}\)`/);
   assert.match(browser, /onDesktopBrowserDeviceMetricsChanged\(\(input\) => handleDeviceMetricsChanged\(input\)\)/);
   assert.match(browser, /input\.source !== "agent"/);
@@ -288,15 +301,19 @@ test("connected contexts stay in the pages menu and are not shown on the start p
   assert.match(browser, /v-if="openPages\.length" class="embedded-browser-start-section"/);
 });
 
-test("browser popovers use the shared compact section spacing", () => {
+test("browser popovers use collision-aware sizing and keep Agent panel actions in the list row", () => {
   const browser = source("instance-detail/EmbeddedBrowserTab.vue");
   assert.match(browser, /<PopoverContent class="embedded-browser-pages-menu p-0"/);
   assert.match(browser, /<PopoverContent class="embedded-browser-agent-access-menu p-0"/);
   assert.match(browser, /\.embedded-browser-pages-menu \{ display: flex; width: min\(360px, var\(--reka-popover-content-available-width\)\)/);
-  assert.match(browser, /\.embedded-browser-agent-access-menu \{ display: flex; width: min\(380px, var\(--reka-popover-content-available-width\)\)/);
+  assert.match(browser, /:global\(\.embedded-browser-agent-access-menu\) \{[^}]*width: min\(360px, var\(--reka-popover-content-available-width\)\); max-height: var\(--reka-popover-content-available-height\)/);
   assert.match(browser, /\.embedded-browser-pages-menu-head \{[^}]*padding: 8px 12px 6px;/);
-  assert.match(browser, /\.embedded-browser-agent-access-summary \{[^}]*padding: 11px 12px 10px;/);
-  assert.match(browser, /\.embedded-browser-creation-context \{[^}]*padding: 10px 12px 12px;/);
+  assert.match(browser, /<ScrollArea v-else-if="creationPanels\.length" class="embedded-browser-creation-panel-scroll"/);
+  assert.match(browser, /<ul class="embedded-browser-creation-panel-list"[^>]*>\s*<li v-for="panel in creationPanels"/);
+  assert.match(browser, /\.embedded-browser-creation-panel \{[^}]*grid-template-columns: 16px minmax\(0, 1fr\) auto;/);
+  assert.match(browser, /<div class="embedded-browser-creation-panel-trailing">[\s\S]*?<Button\s+size="sm"[^>]*>\s*\{\{ t\(hasDefaultCreationContext \? "sessions\.browserDefaultActions\.takeOver" : "sessions\.browserDefaultActions\.set"\) \}\}/);
+  assert.match(browser, /@click="revokeCreationContextForOwnPanel\(panel\)"\s*>\s*\{\{ t\("sessions\.browserDefaultActions\.clear"\) \}\}/);
+  assert.match(browser, /<TooltipContent[^>]*>[\s\S]*?creationContextClaimHint[\s\S]*?<\/TooltipContent>/);
 });
 
 test("the Agent access popover exposes only the current panel's default switch", () => {
@@ -307,7 +324,7 @@ test("the Agent access popover exposes only the current panel's default switch",
   assert.match(browser, /v-else-if="canRevokeCreationPanel\(panel\)"/);
   assert.match(browser, /creationContextTakeOver/);
   assert.match(browser, /creationContextRequestDefault/);
-  assert.match(browser, /\.embedded-browser-agent-access-active \{ color: var\(--text\); background: var\(--surface-hover\); \}/);
+  assert.match(browser, /\.embedded-browser-pages-active, \.embedded-browser-device-toggle-active, \.embedded-browser-agent-access-active \{ color: var\(--text\); background: var\(--surface-hover\); \}/);
 });
 
 test("creation-context changes refresh the authoritative snapshot and explain default handoff", () => {

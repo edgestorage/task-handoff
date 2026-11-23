@@ -230,7 +230,6 @@ export class CodexAppServerClient extends EventEmitter {
   private resolvedVersion?: string;
   private serverUserAgent?: string;
   private forkMethodAvailable = true;
-  private threadItemsListAvailable = true;
   private subagentThreadListAvailable = true;
 
   constructor(options: CodexAppServerClientOptions = {}) {
@@ -491,7 +490,6 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   async listThreadItems(threadId: string, turnId?: string): Promise<CodexThreadItemEntry[] | undefined> {
-    if (!this.threadItemsListAvailable) return undefined;
     const items: CodexThreadItemEntry[] = [];
     let cursor: string | null | undefined;
     try {
@@ -515,11 +513,11 @@ export class CodexAppServerClient extends EventEmitter {
       } while (cursor);
       return items;
     } catch (error) {
-      // A native-history Codex that violates its version contract remains on
-      // the native source; callers surface the capability failure rather than
-      // mixing in adapter-owned history.
+      // `-32601` is thread-scoped here: Codex uses it for a missing/legacy
+      // thread as well as for a missing method. Do not cache it globally, or
+      // one unavailable thread makes every paginated thread unreadable until
+      // the app-server reconnects.
       if (error instanceof CodexAppServerRpcError && error.rpcCode === -32601) {
-        this.threadItemsListAvailable = false;
         return undefined;
       }
       throw error;
@@ -868,7 +866,6 @@ export class CodexAppServerClient extends EventEmitter {
     });
     this.serverUserAgent = typeof result.userAgent === "string" ? result.userAgent : undefined;
     this.forkMethodAvailable = true;
-    this.threadItemsListAvailable = true;
     this.notify("initialized", {});
   }
 

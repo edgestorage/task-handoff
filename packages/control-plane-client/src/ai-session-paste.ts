@@ -1,9 +1,13 @@
-import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES } from "@task-handoff/protocol/ai-sessions";
+import {
+  AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
+  AI_SESSION_LEGACY_ATTACHMENT_ONLY_MESSAGE,
+} from "@task-handoff/protocol/ai-sessions";
 
 export const AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD = 10_000;
 export const AI_SESSION_PASTED_TEXT_SUMMARY_CODE_POINTS = 80;
-// Provider-bound content is intentionally locale-neutral and must not use UI translation resources.
-export const AI_SESSION_ATTACHMENT_ONLY_MESSAGE = "Please review the attached files.";
+// Provider-bound content stays locale-neutral and is only emitted for peers
+// predating attachment-only message support.
+export const AI_SESSION_ATTACHMENT_ONLY_MESSAGE = AI_SESSION_LEGACY_ATTACHMENT_ONLY_MESSAGE;
 
 export type AiSessionPastedTextPresentation = {
   summary: string;
@@ -24,8 +28,8 @@ export type AiSessionPastedTextDecision =
   }
   | { disposition: "rejected"; code: "AI_SESSION_PASTED_TEXT_TOO_LARGE"; size: number };
 
-export function aiSessionMessageText(message: string) {
-  return message || AI_SESSION_ATTACHMENT_ONLY_MESSAGE;
+export function aiSessionMessageText(message: string, attachmentOnlyMessagesSupported = false) {
+  return message || (attachmentOnlyMessagesSupported ? "" : AI_SESSION_ATTACHMENT_ONLY_MESSAGE);
 }
 
 export function normalizeAiSessionPastedText(text: string) {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import Fastify from "fastify";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -6,7 +7,11 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { StoryAgentToolBridge } from "./src/web/story-agent-tool-bridge.ts";
 import { STORY_AGENT_TOOL_NAMES } from "@task-handoff/protocol/story-agent-tools";
 import { AGENT_INVOCATION_TOOL_NAMES } from "@task-handoff/protocol/agent-invocation-tools";
-import { BROWSER_AGENT_TOOL_NAMES } from "@task-handoff/protocol/browser-agent-tools";
+import {
+  BROWSER_AGENT_TOOL_DESCRIPTIONS,
+  BROWSER_AGENT_TOOL_NAMES,
+  BROWSER_CDP_ACCESS_DESCRIPTION,
+} from "@task-handoff/protocol/browser-agent-tools";
 
 function testBridge(invocations) {
   return new StoryAgentToolBridge({
@@ -112,6 +117,10 @@ test("Codex MCP bridge uses trusted request metadata to resolve an existing AI S
       "story_list_automations",
       "story_list_content",
     ]);
+    assert.equal(
+      listed.tools.find((tool) => tool.name === "browser_cdp_access")?.description,
+      BROWSER_CDP_ACCESS_DESCRIPTION,
+    );
     assert.equal(listed.tools.find((tool) => tool.name === "story_get_content")?.annotations?.readOnlyHint, undefined);
     assert.equal(listed.tools.find((tool) => tool.name === "story_set_content")?.annotations?.readOnlyHint, undefined);
     assert.equal(listed.tools.find((tool) => tool.name === "story_delete_content")?.annotations?.readOnlyHint, undefined);
@@ -154,5 +163,28 @@ test("Codex MCP bridge uses trusted request metadata to resolve an existing AI S
   } finally {
     await client.close();
     await app.close();
+  }
+});
+
+test("browser CDP tool description stays aligned across Node and Rust", () => {
+  const definitions = JSON.parse(readFileSync(
+    new URL("../../controlled-instance-rs/crates/instance/src/story_agent_tool_definitions.json", import.meta.url),
+    "utf8",
+  ));
+  const browserTool = definitions.find((tool) => tool.name === "browser_cdp_access");
+
+  assert.ok(browserTool);
+  assert.equal(BROWSER_AGENT_TOOL_DESCRIPTIONS.browser_cdp_access, BROWSER_CDP_ACCESS_DESCRIPTION);
+  assert.equal(browserTool.description, BROWSER_CDP_ACCESS_DESCRIPTION);
+  for (const expected of [
+    "Chrome DevTools HTTP 基础端点",
+    "/json/version",
+    "/json/list",
+    "CDP WebSocket",
+    "Authorization: Bearer",
+    "可复用",
+    "expiresAt",
+  ]) {
+    assert.ok(browserTool.description.includes(expected), `Missing browser CDP tool guidance: ${expected}`);
   }
 });

@@ -7,7 +7,7 @@ import { isAiSessionStorageFailure } from "./ai-session/file-store";
 import { CodexAppServerClient, type CodexAppServerClientOptions } from "./codex-app-server/client/client";
 import type { CodexAppServerClientLike, CodexThreadResumeOptions } from "./codex-app-server/client/contract";
 import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexDynamicToolSpec, CodexThreadStartOptions } from "./codex-app-server/client/contract";
-import { CodexAppServerConnectionManager } from "./codex-app-server/client/connection-manager";
+import { CodexAppServerConnectionManager, type CodexAppServerConnection } from "./codex-app-server/client/connection-manager";
 import type { CodexAppServerEvent, CodexThread, CodexThreadStatus } from "./codex-app-server/protocol/types";
 import { CodexAppServerApprovalCoordinator } from "./codex-app-server/session/approval-coordinator";
 import { CodexAppServerSessionBinding, type CodexAppSession } from "./codex-app-server/session/binding";
@@ -301,8 +301,44 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     if (!ready || !this.connection.isCurrent(ready)) return;
     try {
       await this.discovery.sync(ready.client, () => this.connection.isCurrent(ready));
+      await this.projectAppSessionBindings(ready, () => this.connection.isCurrent(ready));
     } catch {
       this.connection.markUnhealthy(ready);
+    }
+  }
+
+  /**
+   * App-session metadata can bind a thread without any AI session activity,
+   * for example when Open App resumes an idle Direct session. Periodic
+   * discovery intentionally ignores idle threads, so project only the
+   * explicitly missing App binding here.
+   */
+  private async projectAppSessionBindings(
+    ready: CodexAppServerConnection,
+    isCurrent: () => boolean,
+  ) {
+    const candidates = this.registry.list().flatMap((session) => {
+      if (session.agent !== "codex") return [];
+      const threadId = session.providerSessionId;
+      if (!threadId) return [];
+      const appSessionId = this.binding.appSessionIdForThread(threadId);
+      return appSessionId && appSessionId !== session.appSessionId
+        ? [{ threadId, appSessionId }]
+        : [];
+    });
+    for (const { threadId } of candidates) {
+      if (!isCurrent()) return;
+      try {
+        const subscribed = await this.connection.ensureThreadSubscribed(ready, threadId);
+        if (!isCurrent()) return;
+        const thread = subscribed || await ready.client.readThread?.(threadId, { includeTurns: false });
+        if (thread && isCurrent()) {
+          this.upsertThread(thread, { bindAppSession: true });
+        }
+      } catch {
+        // A thread that is still loading will be retried on the next app
+        // session refresh without blocking recovery of other threads.
+      }
     }
   }
 

@@ -423,7 +423,7 @@ const agentDisplayName = computed(() => {
   min-width: 0;
   overflow: visible;
   overflow-wrap: anywhere;
-  color: var(--ai-board-title);
+  color: var(--markdown-text-color, var(--text));
   font-size: 14px;
   font-weight: 400;
   line-height: 1.35;

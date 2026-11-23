@@ -17,7 +17,7 @@ require.extensions[".ts"] = (module, filename) => {
   module._compile(output.outputText, filename);
 };
 
-const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
+const { aiSessionConversationTurns, createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const { AiSessionConversationAttachmentStore } = require("../packages/ai-session-runtime/src/ai-session-conversation-attachment-store.ts");
 const { AiSessionDiscoveryCoordinator } = require("../packages/ai-session-runtime/src/ai-session-discovery.ts");
 const { AiSessionProviderRegistry } = require("../packages/ai-session-runtime/src/ai-session-provider-registry.ts");
@@ -732,6 +732,46 @@ test("OpenCode projects pending model settings before a real prompt applies them
   assert.equal(bridge.pendingSettingsBySession.has("ses_settings"), false);
   assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_new", modelName: "new" });
   assert.equal(registry.get(session.id).reasoningEffort, "high");
+  bridge.close();
+});
+
+test("OpenCode attachment-only prompts do not synthesize a text part", async () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-image-only-")) });
+  const session = registry.start({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: "ses_image_only",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  const prompts = [];
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+  });
+  bridge.client = {
+    promptAsync: async (...args) => prompts.push(args),
+    status: async () => ({}),
+    messages: async () => [],
+    permissions: async () => [],
+  };
+
+  await bridge.startMessage(session, {
+    message: "",
+    messageId: "msg_image_only",
+    attachments: [{
+      id: "image_only",
+      kind: "image",
+      name: "screen.png",
+      mime: "image/png",
+      size: 3,
+      source: { type: "inline", encoding: "base64", data: "cG5n" },
+    }],
+    userMessageAttachments: [{ id: "image_only", kind: "image", name: "screen.png", mime: "image/png", size: 3 }],
+  });
+
+  assert.deepEqual(prompts[0][3], [{ type: "file", mime: "image/png", filename: "screen.png", url: "data:image/png;base64,cG5n" }]);
+  assert.equal(aiSessionConversationTurns(registry.get(session.id)).length, 1);
   bridge.close();
 });
 

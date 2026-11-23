@@ -169,31 +169,35 @@
         tone="board"
         @latest="$emit('latestPrompt')"
       />
-      <AiSessionQueue
-        v-if="(timelineMode === 'full' || queuePlacement === 'composer') && conversationSession.queue.items.length"
-        class="ai-board-floating-compose-queue"
-        :busy="busy"
-        :can-interrupt="canInterrupt"
-        :can-pause="canPauseQueue"
-        placement="composer"
-        :queue="conversationSession.queue"
-        tone="board"
-        @edit-queued-message="$emit('editQueuedMessage', $event)"
-        @remove-queued-message="$emit('removeQueuedMessage', $event)"
-        @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
-        @retry-queued-message="$emit('retryQueuedMessage', $event)"
-        @set-queue-paused="$emit('setQueuePaused', $event)"
-        @steer-queued-message="$emit('steerQueuedMessage', $event)"
-      />
-      <AiSessionGoalBadge
-        v-if="card.session.goal"
-        class="ai-board-floating-compose-goal"
-        :goal="card.session.goal"
-        :disabled="busy || Boolean(editingLabel)"
-        tone="board"
-        @command="executeGoalCommand"
-        @edit="$emit('editGoal')"
-      />
+      <AiSessionHeightTransition>
+        <AiSessionQueue
+          v-if="(timelineMode === 'full' || queuePlacement === 'composer') && conversationSession.queue.items.length"
+          class="ai-board-floating-compose-queue"
+          :busy="busy"
+          :can-interrupt="canInterrupt"
+          :can-pause="canPauseQueue"
+          placement="composer"
+          :queue="conversationSession.queue"
+          tone="board"
+          @edit-queued-message="$emit('editQueuedMessage', $event)"
+          @remove-queued-message="$emit('removeQueuedMessage', $event)"
+          @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
+          @retry-queued-message="$emit('retryQueuedMessage', $event)"
+          @set-queue-paused="$emit('setQueuePaused', $event)"
+          @steer-queued-message="$emit('steerQueuedMessage', $event)"
+        />
+      </AiSessionHeightTransition>
+      <AiSessionHeightTransition>
+        <AiSessionGoalBadge
+          v-if="card.session.goal"
+          class="ai-board-floating-compose-goal"
+          :goal="card.session.goal"
+          :disabled="busy || Boolean(editingLabel)"
+          tone="board"
+          @command="executeGoalCommand"
+          @edit="$emit('editGoal')"
+        />
+      </AiSessionHeightTransition>
       <AiSessionComposer
         ref="composerEl"
         class="ai-board-floating-compose"
@@ -244,6 +248,7 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionGoalBadge from "../../../components/ai-session/AiSessionGoalBadge.vue";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionHeightTransition from "../../../components/ai-session/AiSessionHeightTransition.vue";
 import AiSessionRunningTurnCapsule from "../../../components/ai-session/AiSessionRunningTurnCapsule.vue";
 import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
 import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionCompactPrompt.vue";

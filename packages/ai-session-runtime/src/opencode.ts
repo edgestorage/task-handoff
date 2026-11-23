@@ -889,7 +889,7 @@ async function promptParts(cwd: string, input: AiSessionSendInput): Promise<Open
     parts.push({ type: "file", mime: attachment.mime, filename: attachment.name, url: pathToFileURL(attachment.source.path).href });
   }
   const text = pathReferences.length ? appendAttachmentPaths(input.message, pathReferences) : input.message;
-  return [{ type: "text", text }, ...parts];
+  return text.trim() ? [{ type: "text", text }, ...parts] : parts;
 }
 
 function nextUserMessageId(messages: OpenCodeMessage[], throughUserMessageId: string) {

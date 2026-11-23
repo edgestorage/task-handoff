@@ -12,6 +12,7 @@ test("desktop browser contexts share one instance partition and release by refer
   const socksServers = [];
   const manager = new DesktopBrowserContextManager({
     reapIntervalMs: 0,
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
     fetch: async (url) => {
       requests.push(url);
       return response(url.endsWith("/api/control-plane/identity")
@@ -35,6 +36,7 @@ test("desktop browser contexts share one instance partition and release by refer
           partition,
           proxy: undefined,
           closed: false,
+          setUserAgent(userAgent) { this.userAgent = userAgent; },
           async setProxy(proxy) { this.proxy = proxy; },
           setPermissionCheckHandler(handler) { this.permissionCheckHandler = handler; },
           setPermissionRequestHandler(handler) { this.permissionRequestHandler = handler; },
@@ -54,6 +56,7 @@ test("desktop browser contexts share one instance partition and release by refer
   assert.equal(channels.length, 1);
   assert.equal(sessions[0].proxy.proxyRules, "socks5://127.0.0.1:12345");
   assert.equal(sessions[0].proxy.proxyBypassRules, "<-loopback>");
+  assert.equal(sessions[0].userAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36");
   assert.equal(manager.allows(10, first.partition), true);
   assert.equal(manager.instanceIdForSession(10, sessions[0]), "instance_1");
   assert.equal(manager.instanceIdForSession(11, sessions[0]), undefined);

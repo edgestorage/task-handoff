@@ -237,8 +237,11 @@ pub(crate) fn is_path(path: &str) -> bool {
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/json/version", get(json_version))
+        .route("/json/version/", get(json_version))
         .route("/json/list", get(json_list))
+        .route("/json/list/", get(json_list))
         .route("/json/protocol", get(json_protocol))
+        .route("/json/protocol/", get(json_protocol))
         .route("/json/new", get(json_new).put(json_new))
         .route("/json/close/{tab_ref}", get(json_close))
         .route("/devtools/page/{tab_ref}", get(devtools_page))

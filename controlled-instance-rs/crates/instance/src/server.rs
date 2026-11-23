@@ -11364,12 +11364,15 @@ async fn create_ai_session(
     {
         return *response;
     }
-    if request.message.message.trim().is_empty() || request.message.message.chars().count() > 20_000
+    if request.message.message.chars().count() > 20_000
+        || (request.message.message.trim().is_empty()
+            && request.message.attachments.is_empty()
+            && request.message.references.is_empty())
     {
         return api_error(
             StatusCode::BAD_REQUEST,
             "AI_SESSION_CONTROL_INVALID",
-            "message must be between 1 and 20000 characters.",
+            "A message, attachment, or reference is required; message must be at most 20000 characters.",
         );
     }
     match state.ai_session_controller.create_session(request).await {
@@ -11476,11 +11479,15 @@ async fn send_ai_session_message_inner(
         Ok(payload) => payload,
         Err(error) => return ai_session_body_error(error),
     };
-    if request.message.trim().is_empty() || request.message.chars().count() > 20_000 {
+    if request.message.chars().count() > 20_000
+        || (request.message.trim().is_empty()
+            && request.attachments.is_empty()
+            && request.references.is_empty())
+    {
         return api_error(
             StatusCode::BAD_REQUEST,
             "AI_SESSION_CONTROL_INVALID",
-            "message must be between 1 and 20000 characters.",
+            "A message, attachment, or reference is required; message must be at most 20000 characters.",
         );
     }
     if request.client_request_id.is_some() {
@@ -24095,6 +24102,12 @@ mod tests {
         assert!(version["webSocketDebuggerUrl"]
             .as_str()
             .is_some_and(|url| url.starts_with("ws://127.0.0.1:0/devtools/browser/")));
+        assert_eq!(
+            get_json(&app, &format!("/json/version/?token={token}"))
+                .await
+                .status(),
+            StatusCode::OK
+        );
 
         let listed = get_json(&app, &format!("/json/list?token={token}")).await;
         assert_eq!(listed.status(), StatusCode::OK);
@@ -24104,6 +24117,12 @@ mod tests {
         assert!(targets
             .iter()
             .all(|target| target["browserContextId"] == source.source_ref));
+        assert_eq!(
+            get_json(&app, &format!("/json/list/?token={token}"))
+                .await
+                .status(),
+            StatusCode::OK
+        );
 
         let protocol = get_json(&app, "/json/protocol").await;
         assert_eq!(protocol.status(), StatusCode::OK);
@@ -24111,6 +24130,10 @@ mod tests {
         assert!(protocol["domains"]
             .as_array()
             .is_some_and(|domains| domains.iter().any(|domain| domain["domain"] == "Browser")));
+        assert_eq!(
+            get_json(&app, "/json/protocol/").await.status(),
+            StatusCode::OK
+        );
 
         let capabilities = get_json(&app, "/api/instance/capabilities").await;
         assert_eq!(capabilities.status(), StatusCode::OK);
@@ -24144,6 +24167,62 @@ mod tests {
                 return value;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn browser_cdp_playwright_discovery_accepts_trailing_slash_and_connects() {
+        let (state, _root) = test_state();
+        state
+            .ai_sessions
+            .save(ai_session_record("ses_0000000000001", "aps_0000000000001"))
+            .expect("session");
+        state.browser_control.grant_instance_access();
+        let (token, _) = state
+            .browser_control
+            .issue_cdp_token("ses_0000000000001")
+            .expect("token");
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind browser CDP");
+        let address = listener.local_addr().expect("browser CDP address");
+        state.set_browser_cdp_http_endpoint(format!("http://{address}"));
+        let app = router(state);
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let version = reqwest::Client::new()
+            .get(format!("http://{address}/json/version/"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .expect("Playwright-style discovery")
+            .error_for_status()
+            .expect("discovery status")
+            .json::<Value>()
+            .await
+            .expect("discovery json");
+        let web_socket_url = version["webSocketDebuggerUrl"]
+            .as_str()
+            .expect("browser websocket URL");
+        let (mut client, _) = tokio_tungstenite::connect_async(web_socket_url)
+            .await
+            .expect("browser CDP upgrade");
+
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({ "id": 1, "method": "Browser.getVersion" })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("browser version");
+        let response = browser_cdp_response(&mut client, 1).await;
+        assert_eq!(response["result"]["protocolVersion"], "1.3");
+
+        client.close(None).await.expect("close browser CDP");
+        task.abort();
     }
 
     #[tokio::test]

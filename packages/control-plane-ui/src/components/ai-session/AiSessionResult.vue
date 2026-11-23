@@ -9,20 +9,22 @@
     :style="turnMinHeight ? { minHeight: `${turnMinHeight}px` } : undefined"
   >
     <div ref="turnContentElement" class="ai-session-result-content">
-      <AiSessionQueue
-        v-if="showQueue && isLatest && session.queue?.items.length"
-        :busy="busy"
-        :can-interrupt="canInterrupt"
-        :can-pause="canPauseQueue"
-        :queue="session.queue"
-        :tone="tone"
-        @edit-queued-message="$emit('editQueuedMessage', $event)"
-        @remove-queued-message="$emit('removeQueuedMessage', $event)"
-        @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
-        @retry-queued-message="$emit('retryQueuedMessage', $event)"
-        @set-queue-paused="$emit('setQueuePaused', $event)"
-        @steer-queued-message="$emit('steerQueuedMessage', $event)"
-      />
+      <AiSessionHeightTransition>
+        <AiSessionQueue
+          v-if="showQueue && isLatest && session.queue?.items.length"
+          :busy="busy"
+          :can-interrupt="canInterrupt"
+          :can-pause="canPauseQueue"
+          :queue="session.queue"
+          :tone="tone"
+          @edit-queued-message="$emit('editQueuedMessage', $event)"
+          @remove-queued-message="$emit('removeQueuedMessage', $event)"
+          @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
+          @retry-queued-message="$emit('retryQueuedMessage', $event)"
+          @set-queue-paused="$emit('setQueuePaused', $event)"
+          @steer-queued-message="$emit('steerQueuedMessage', $event)"
+        />
+      </AiSessionHeightTransition>
 
       <AiSessionTurnHistory
         :key="turnId"
@@ -114,6 +116,7 @@ import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessio
 import type { TimelineTurnNode } from "./timelineActivities";
 import { messageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import { createLatestTurnHeightBuffer } from "../../lib/latest-turn-height";
+import AiSessionHeightTransition from "./AiSessionHeightTransition.vue";
 import AiSessionQueue from "./AiSessionQueue.vue";
 import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
 import AiSessionTurnHistory from "./AiSessionTurnHistory.vue";
@@ -400,7 +403,7 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   min-width: 0;
   border: 0;
   background: transparent;
-  color: var(--detail-activity-strong);
+  color: var(--markdown-text-color, var(--detail-activity-text));
   font-size: 14px;
   line-height: var(--detail-response-line-height);
   padding-bottom: 12px;
@@ -458,7 +461,7 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 
 .ai-session-detail-response :deep(.ai-session-streaming-markdown),
 .ai-session-detail-response :deep(.markstream-vue) {
-  color: var(--detail-activity-strong);
+  color: var(--markdown-text-color, var(--detail-activity-text));
   font-size: 14px;
   font-weight: 400;
   line-height: var(--detail-response-line-height);

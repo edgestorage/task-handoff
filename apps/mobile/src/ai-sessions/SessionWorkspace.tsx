@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionGoal, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionQueuedMessage, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
-import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionQueuePause, supportsDirectoryAiSessionSendIdempotency, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionAttachmentOnlyMessages, supportsDirectoryAiSessionQueuePause, supportsDirectoryAiSessionSendIdempotency, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 import { StoryDecisionChangedEventType, type StoryDecision } from '@task-handoff/protocol/stories';
 
@@ -836,7 +836,7 @@ export function SessionWorkspace({
     setComposerFocusRequest((value) => value + 1);
   };
   const saveQueueEdit = async () => {
-    if (!actions || !activeQueueEdit || !draft.trim()) return;
+    if (!actions || !activeQueueEdit || (!draft.trim() && !attachments.length)) return;
     const attachmentIds = attachments.map((attachment) => attachment.localId);
     if (draft.trim() === activeQueueEdit.originalMessage.trim()
       && attachmentIds.length === activeQueueEdit.originalAttachmentIds.length
@@ -870,7 +870,7 @@ export function SessionWorkspace({
     const selectedPermissionMode = requestedPermissionMode && permissionModes.includes(requestedPermissionMode)
       ? requestedPermissionMode
       : permissionModes[0];
-    const result = await performAction(t('composer.send'), () => actions.send(instanceId, session.id, aiSessionMessageText(draft.trim()), selectedPermissionMode, refs, 'auto', { idempotent: supportsSendIdempotency }));
+    const result = await performAction(t('composer.send'), () => actions.send(instanceId, session.id, aiSessionMessageText(draft.trim(), supportsDirectoryAiSessionAttachmentOnlyMessages(instanceCapabilities)), selectedPermissionMode, refs, 'auto', { idempotent: supportsSendIdempotency }));
     if (result.disposition === 'accepted') {
       setDraft('');
       latestDraft.current = '';
@@ -979,6 +979,10 @@ export function SessionWorkspace({
     setComposerFocusRequest((value) => value + 1);
   };
   const hasDraft = Boolean(draft.trim() || attachments.length);
+  const queueEditUnchanged = Boolean(activeQueueEdit
+    && draft.trim() === activeQueueEdit.originalMessage.trim()
+    && attachments.length === activeQueueEdit.originalAttachmentIds.length
+    && attachments.every((attachment, index) => attachment.localId === activeQueueEdit.originalAttachmentIds[index]));
   const composerAction = activeQueueEdit || activeGoalEdit ? 'save' : !hasDraft && canInterrupt ? 'stop' : 'send';
   const composerOperationState = composerAction === 'stop' ? state('interrupt')
     : activeQueueEdit ? state('queue-edit', activeQueueEdit.queueId)
@@ -987,7 +991,7 @@ export function SessionWorkspace({
   const attachmentUploading = attachments.some((attachment) => attachment.phase === 'uploading');
   const composerDisabled = !authoritativeActionsEnabled || !actions || attachmentUploading || ['busy', 'result-unknown'].includes(composerOperationState?.phase || '')
     || (composerAction === 'stop' ? !canInterrupt : composerAction === 'save'
-      ? !hasDraft || draft.trim() === (activeQueueEdit?.originalMessage ?? activeGoalEdit?.originalObjective)?.trim()
+      ? !hasDraft || (activeQueueEdit ? queueEditUnchanged : draft.trim() === activeGoalEdit?.originalObjective?.trim())
       : !session.actions?.send || !hasDraft);
   const runComposerAction = () => {
     if (composerAction === 'stop' && actions) void performAction(t('composer.stop'), () => actions.interrupt(instanceId, session.id));

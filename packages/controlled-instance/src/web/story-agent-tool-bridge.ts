@@ -17,7 +17,7 @@ import {
   AGENT_INVOCATION_TOOL_SCHEMA,
   AgentInvocationToolNameSchema,
 } from "@task-handoff/protocol/agent-invocation-tools";
-import { BROWSER_AGENT_TOOL_NAMES, BrowserAgentToolNameSchema } from "@task-handoff/protocol/browser-agent-tools";
+import { BROWSER_AGENT_TOOL_DESCRIPTIONS, BROWSER_AGENT_TOOL_NAMES, BrowserAgentToolNameSchema } from "@task-handoff/protocol/browser-agent-tools";
 import { EmbeddedBrowserCdpAccessResultSchema, type EmbeddedBrowserCdpAccessResult } from "@task-handoff/protocol/embedded-browser-control";
 
 const InvocationSchema = z.object({
@@ -46,8 +46,6 @@ type StoryAgentToolBridgeOptions = {
   token?: string;
   issueBrowserCdpAccess?: (session: AiSessionStatus) => Promise<EmbeddedBrowserCdpAccessResult>;
 };
-
-const BROWSER_CDP_ACCESS_DESCRIPTION = "Return a short-lived standard CDP (Chrome DevTools Protocol) endpoint and token for this embedded browser — the browser tabs shown in the TaskHandoff browser panel. The endpoint follows Chrome's CDP semantics: use the standard /json discovery endpoints and each target's webSocketDebuggerUrl, then send normal CDP methods and events. This is the embedded browser's endpoint, not a separate local Chromium instance. If browser access is disabled, the call returns status=pending with a requestRef, status=denied, or status=expired; ask the user to approve it in the approval center and call again after approval. When granted, send Authorization: Bearer <token> or ?token=<token> on HTTP requests.";
 
 // MCP tool output schemas must be a single object shape. The strict union is
 // still enforced by EmbeddedBrowserCdpAccessResultSchema before responding.
@@ -197,7 +195,7 @@ export class StoryAgentToolBridge {
     }
     for (const name of BROWSER_AGENT_TOOL_NAMES) {
       server.registerTool(name, {
-        description: BROWSER_CDP_ACCESS_DESCRIPTION,
+        description: BROWSER_AGENT_TOOL_DESCRIPTIONS[name],
         inputSchema: z.object({}).strict(),
         outputSchema: BrowserCdpAccessToolOutputSchema,
       }, async (_args, extra) => {

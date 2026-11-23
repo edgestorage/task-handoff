@@ -722,16 +722,19 @@ test("Codex client asks persistent history for only one turn", async () => {
   assert.equal(requests[0].params.turnId, "turn_2");
 });
 
-test("Codex client disables Timeline reads when thread/items/list is unsupported", async () => {
+test("Codex client keeps thread/items/list support scoped to each thread", async () => {
   const client = new CodexAppServerClient();
-  let requests = 0;
-  client.request = async () => {
-    requests += 1;
-    throw new CodexAppServerRpcError("unsupported", -32601);
+  const requestedThreads = [];
+  client.request = async (_method, params) => {
+    requestedThreads.push(params.threadId);
+    if (params.threadId === "thread_unsupported") {
+      throw new CodexAppServerRpcError("thread/items/list is not supported yet", -32601);
+    }
+    return { data: [{ turnId: "turn_1", item: { id: "message_1", type: "agentMessage", text: "Done" } }], nextCursor: null };
   };
-  assert.equal(await client.listThreadItems("thread_native"), undefined);
-  assert.equal(await client.listThreadItems("thread_legacy"), undefined);
-  assert.equal(requests, 1);
+  assert.equal(await client.listThreadItems("thread_unsupported"), undefined);
+  assert.deepEqual((await client.listThreadItems("thread_paginated")).map((entry) => entry.item.id), ["message_1"]);
+  assert.deepEqual(requestedThreads, ["thread_unsupported", "thread_paginated"]);
 });
 
 test("real Codex app-server exposes restart-safe persistent Timeline items", {

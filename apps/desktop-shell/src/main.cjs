@@ -38,7 +38,7 @@ const { installDesktopApplicationMenu } = require("./desktop-application-menu.cj
 const { activateExistingDesktopWindow } = require("./desktop-window-activation.cjs");
 const { createDesktopTray } = require("./desktop-tray.cjs");
 const { createDesktopDockMenu } = require("./desktop-dock-menu.cjs");
-const { embeddedBrowserCdpIdentity } = require("./embedded-browser-runtime.cjs");
+const { embeddedBrowserCdpIdentity, embeddedBrowserChromeUserAgent } = require("./embedded-browser-runtime.cjs");
 const { createDesktopWindowPreferences } = require("./desktop-window-preferences.cjs");
 const { loadDesktopInstanceDirectory } = require("./desktop-instance-directory.cjs");
 const { createDesktopQuitCoordinator } = require("./desktop-quit-coordinator.cjs");
@@ -63,7 +63,12 @@ const { resolveDesktopBrowserPublisherId } = require("./desktop-browser-publishe
 const { buildEmbeddedBrowserContextMenuTemplate } = require("./embedded-browser-context-menu.cjs");
 const { detectEmbeddedBrowserPagePoolApi, resolveEmbeddedBrowserPageHost } = require("./embedded-browser-page-host.cjs");
 const { DesktopEmbeddedBrowserPopupController } = require("./embedded-browser-popup.cjs");
-const { externalNavigationUrl, isAllowedControlPlaneNavigation } = require("./navigation-policy.cjs");
+const {
+  externalNavigationUrl,
+  isAllowedControlPlaneNavigation,
+  isAllowedEmbeddedBrowserFrameUrl,
+  isAllowedEmbeddedBrowserUrl,
+} = require("./navigation-policy.cjs");
 const { createDesktopClipboardBridge } = require("./desktop-clipboard.cjs");
 
 let mainWindow;
@@ -92,6 +97,10 @@ const desktopClipboard = createDesktopClipboardBridge({
 const windowsTitleBarOverlayHeights = new WeakMap();
 const childProcessSpawnErrors = new WeakMap();
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
+
+function embeddedBrowserUserAgent() {
+  return embeddedBrowserChromeUserAgent({ userAgent: app.userAgentFallback, versions: process.versions });
+}
 
 function desktopIconPath() {
   return resolveDesktopIconPath({
@@ -477,7 +486,7 @@ function configureBrowserTabGuests(host) {
   host.on("will-attach-webview", (event, webPreferences, params) => {
     const partition = String(params.partition || "");
     const hasContext = Boolean(desktopBrowserContexts?.allows(host.id, partition));
-    const allowed = hasContext && browserTabUrlAllowed(params.src);
+    const allowed = hasContext && isAllowedEmbeddedBrowserUrl(params.src);
     const instanceId = hasContext ? desktopBrowserContexts?.instanceIdForPartition(host.id, partition) : undefined;
     logInfo(`[desktop-shell] browser webview will-attach host=${host.id} partition=${partition} instanceId=${instanceId || "unknown"} src=${browserDiagnosticUrl(params.src)} hasContext=${hasContext} allowed=${allowed}`);
     if (!allowed) {
@@ -498,9 +507,13 @@ function configureBrowserTabGuests(host) {
     const instanceId = attachment?.instanceId || sessionInstanceId;
     desktopBrowserRegistry?.addGuest({ host, guest, partition, instanceId });
     logInfo(`[desktop-shell] browser webview did-attach host=${host.id} guest=${guest.id} partition=${partition} instanceId=${instanceId || "unknown"} session=${Boolean(guest.session)} url=${browserDiagnosticUrl(guest.getURL())}`);
-    const allowNavigation = (event, targetUrl) => {
-      const allowed = browserTabUrlAllowed(targetUrl);
-      logInfo(`[desktop-shell] browser webview will-navigate guest=${guest.id} url=${browserDiagnosticUrl(targetUrl)} allowed=${allowed}`);
+    const allowNavigation = (event, fallbackUrl, _isInPlace, fallbackIsMainFrame) => {
+      const targetUrl = typeof event?.url === "string" ? event.url : fallbackUrl;
+      const isMainFrame = typeof event?.isMainFrame === "boolean" ? event.isMainFrame : fallbackIsMainFrame !== false;
+      const allowed = isMainFrame
+        ? isAllowedEmbeddedBrowserUrl(targetUrl)
+        : isAllowedEmbeddedBrowserFrameUrl(targetUrl);
+      logInfo(`[desktop-shell] browser webview navigation guest=${guest.id} url=${browserDiagnosticUrl(targetUrl)} mainFrame=${isMainFrame} allowed=${allowed}`);
       if (allowed) return;
       event.preventDefault();
     };
@@ -562,7 +575,7 @@ function initializeDesktopBrowserControl() {
   const customPagePoolAvailable = detectEmbeddedBrowserPagePoolApi(webContents);
   desktopBrowserPageHostState = resolveEmbeddedBrowserPageHost(process.env, customPagePoolAvailable);
   desktopBrowserPopups = new DesktopEmbeddedBrowserPopupController({
-    isAllowedUrl: browserTabUrlAllowed,
+    isAllowedUrl: isAllowedEmbeddedBrowserUrl,
     sendNewTab: ({ host, instanceId, url }) => {
       if (!host || host.isDestroyed?.()) return false;
       host.send("task-handoff:browser-new-tab", { url, ...(instanceId ? { instanceId } : {}) });
@@ -661,15 +674,6 @@ function notifyBrowserTabsChanged(change) {
     sender.send("task-handoff:browser-tabs-changed", { instanceId });
   } catch (error) {
     logInfo(`[desktop-shell] browser tab list notification failed sender=${senderId} error=${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-function browserTabUrlAllowed(value) {
-  try {
-    const url = new URL(String(value));
-    return url.href === "about:blank" || url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
   }
 }
 
@@ -1443,7 +1447,7 @@ async function ensureDesktopBrowserAgentControl(event, instanceId, senderUrl) {
       hostLabel: BrowserWindow.fromWebContents(event.sender)?.getTitle?.() || `Desktop window ${event.sender.id}`,
       pageHost: desktopBrowserPageHostState.pageHost,
       pageHostCapabilities: desktopBrowserPageHostState.capabilities,
-      cdpIdentity: embeddedBrowserCdpIdentity({ userAgent: app.userAgentFallback }),
+      cdpIdentity: embeddedBrowserCdpIdentity({ userAgent: embeddedBrowserUserAgent() }),
     });
     const source = desktopBrowserChannelManager.infoFor(event.sender.id, instanceId);
     return {
@@ -1827,6 +1831,7 @@ if (!ownsDesktopInstanceLock) {
       fetch: (url, init) => fetchControlPlaneWithSessionCookies(url, init),
       WebSocket,
       session,
+      userAgent: embeddedBrowserUserAgent(),
       logInfo,
       logError,
       onBrowserFailure: (failure) => broadcastBrowserLoadFailure(failure),

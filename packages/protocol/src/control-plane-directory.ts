@@ -43,6 +43,9 @@ export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
   // Compatibility for v0.0.35: older directory producers omit this additive
   // projection, so the AI Session queue pause control normalizes to unsupported.
   aiSessionQueuePause: z.boolean().optional(),
+  // Compatibility for v0.0.59: older instances require a text prompt, so the
+  // client retains its legacy attachment hint unless this capability is true.
+  aiSessionAttachmentOnlyMessages: z.boolean().optional(),
   // Compatibility for v0.0.33: older directory producers omit this additive
   // projection, so clients must not replay an uncertain send automatically.
   aiSessionSendIdempotency: z.boolean().optional(),
@@ -85,6 +88,11 @@ export function supportsDirectoryBrowserTunnel(capabilities: unknown) {
 export function supportsDirectoryAiSessionQueuePause(capabilities: unknown) {
   const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
   return parsed.success && parsed.data.aiSessionQueuePause === true;
+}
+
+export function supportsDirectoryAiSessionAttachmentOnlyMessages(capabilities: unknown) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success && parsed.data.aiSessionAttachmentOnlyMessages === true;
 }
 
 export function supportsDirectoryAiSessionSendIdempotency(capabilities: unknown) {

@@ -976,7 +976,7 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   position: relative;
   border-top: 1px solid var(--ai-session-card-divider);
   background: var(--ai-session-card-content-bg);
-  color: var(--ai-board-title);
+  color: var(--markdown-text-color, var(--text));
   font-size: 14px;
   font-weight: 400;
   line-height: 1.35;

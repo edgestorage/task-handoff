@@ -212,25 +212,33 @@ export class CodexAppServerSessionProjector {
     const existing = this.options.findSession(threadId);
     const lifecycle = this.options.attachApprovalLifecycle(existing?.id, lifecycleForStatus(thread.status || {}));
     const history = summarizeThreadTurns(thread);
+    const historyAuthoritative = Array.isArray(thread.turns);
     const sessionStatus = lifecycle.status === "running" || lifecycle.status === "waiting"
       ? lifecycle.status
       : history.latestTurnStatus === "failed" ? "failed" : lifecycle.status;
-    const activity = Array.isArray(thread.turns)
+    const activity = historyAuthoritative
       ? this.replaceThreadActivity(threadId, history.toolActivity, history.subAgents)
       : this.snapshotThreadActivity(threadId);
     return this.options.registry.applyAdapterSnapshot({
       ...this.threadSnapshotBase(thread, context, existing, { status: sessionStatus, phase: lifecycle.phase }),
-      activeTurnId: history.activeTurnId,
-      userPrompt: history.userPrompt,
-      turns: history.turns,
-      summary: existing ? this.options.latestApprovalSummary(existing.id) || history.summary : history.summary,
-      lastMessage: history.lastMessage,
-      lastMessageItemId: history.lastMessageItemId,
-      error: history.error,
-      currentTool: activity.toolActivity.currentTool,
-      toolCallsSinceLastMessage: activity.toolActivity.toolCallsSinceLastMessage,
-      subAgents: activity.subAgents,
-      replaceActivity: true,
+      // A snapshot without turns carries binding and lifecycle metadata only.
+      // Preserve history loaded by a previous authoritative read instead of
+      // treating the absence of turns as an empty conversation.
+      activeTurnId: historyAuthoritative ? history.activeTurnId : existing?.activeTurnId,
+      userPrompt: historyAuthoritative ? history.userPrompt : existing?.userPrompt,
+      turns: historyAuthoritative ? history.turns : existing?.turns,
+      summary: historyAuthoritative
+        ? existing ? this.options.latestApprovalSummary(existing.id) || history.summary : history.summary
+        : existing?.summary,
+      lastMessage: historyAuthoritative ? history.lastMessage : existing?.lastMessage,
+      lastMessageItemId: historyAuthoritative ? history.lastMessageItemId : existing?.lastMessageItemId,
+      error: historyAuthoritative ? history.error : existing?.error,
+      currentTool: historyAuthoritative ? activity.toolActivity.currentTool : existing?.currentTool,
+      toolCallsSinceLastMessage: historyAuthoritative
+        ? activity.toolActivity.toolCallsSinceLastMessage
+        : existing?.toolCallsSinceLastMessage,
+      subAgents: historyAuthoritative ? activity.subAgents : existing?.subAgents,
+      replaceActivity: historyAuthoritative,
     }, options);
   }
 

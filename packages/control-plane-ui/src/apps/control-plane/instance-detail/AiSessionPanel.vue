@@ -1168,30 +1168,34 @@
             :session-id="selectedSession.id"
             :story-id="selectedSession.storyId"
           />
-          <AiSessionQueue
-            v-if="(effectiveTimelineViewMode === 'full' || queuePlacement === 'composer') && selectedConversationSession?.queue.items.length"
-            class="session-ai-compose-queue"
-            :busy="aiSessionActionBusy"
-            :can-pause="canPauseAiSessionQueue"
-            :can-interrupt="canInterrupt(selectedSession)"
-            placement="composer"
-            :queue="selectedConversationSession.queue"
-            @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
-            @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
-            @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
-            @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
-            @set-queue-paused="setSelectedQueuePaused(selectedSession.id, $event)"
-            @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
-          />
-          <AiSessionGoalBadge
-            v-if="selectedSession.goal"
-            class="session-ai-compose-goal"
-            :goal="selectedSession.goal"
-            :disabled="aiSessionActionBusy || Boolean(goalComposerEdit)"
-            tone="detail"
-            @command="executeSelectedGoalCommand"
-            @edit="editSelectedGoal"
-          />
+          <AiSessionHeightTransition>
+            <AiSessionQueue
+              v-if="(effectiveTimelineViewMode === 'full' || queuePlacement === 'composer') && selectedConversationSession?.queue.items.length"
+              class="session-ai-compose-queue"
+              :busy="aiSessionActionBusy"
+              :can-pause="canPauseAiSessionQueue"
+              :can-interrupt="canInterrupt(selectedSession)"
+              placement="composer"
+              :queue="selectedConversationSession.queue"
+              @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
+              @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
+              @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
+              @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
+              @set-queue-paused="setSelectedQueuePaused(selectedSession.id, $event)"
+              @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
+            />
+          </AiSessionHeightTransition>
+          <AiSessionHeightTransition>
+            <AiSessionGoalBadge
+              v-if="selectedSession.goal"
+              class="session-ai-compose-goal"
+              :goal="selectedSession.goal"
+              :disabled="aiSessionActionBusy || Boolean(goalComposerEdit)"
+              tone="detail"
+              @command="executeSelectedGoalCommand"
+              @edit="editSelectedGoal"
+            />
+          </AiSessionHeightTransition>
           <AiSessionComposer
             ref="composerEl"
             v-model="messageDraft"
@@ -1445,7 +1449,7 @@ import type { StorySessionPreset } from "@task-handoff/protocol/stories";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch, RepositoryWorktree } from "@task-handoff/protocol/repository";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
-import { supportsAiSessionQueuePause, supportsAiSessionWorkspaceCheckout } from "@task-handoff/protocol/control-plane";
+import { supportsAiSessionAttachmentOnlyMessages, supportsAiSessionQueuePause, supportsAiSessionWorkspaceCheckout } from "@task-handoff/protocol/control-plane";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import { supportedAiSessionReasoningEfforts } from "../../../components/ai-session/aiSessionReasoningEfforts";
@@ -1456,6 +1460,7 @@ import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInsta
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionRunningTurnCapsule from "../../../components/ai-session/AiSessionRunningTurnCapsule.vue";
 import AiSessionDecisionPrompt from "../../../components/ai-session/AiSessionDecisionPrompt.vue";
+import AiSessionHeightTransition from "../../../components/ai-session/AiSessionHeightTransition.vue";
 import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
 import { prepareQueuedMessageEditAttachments, queuedMessageComposerAttachments, uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
@@ -2369,7 +2374,7 @@ const creationSubmitReady = computed(() => Boolean(
   && !creationComposerBusy.value
   && newSessionApp.value
   && newSessionFolder.value
-  && newSessionDraft.value.trim()
+  && (newSessionDraft.value.trim() || newSessionAttachments.value.length)
   && (!newSessionWorkspaceLoading.value || newSessionWorkspace.value)
   && (!usesExistingWorktreePicker.value || newSessionManagedWorktreeBranch.value || newSessionCreateNewWorktree.value || newSessionWorktreeId.value),
 ));
@@ -3354,7 +3359,7 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
     await sendAiSessionMessage(
       props.instance.id,
       session.id,
-      aiSessionMessageText(message),
+      aiSessionMessageText(message, supportsAiSessionAttachmentOnlyMessages(props.instance.capabilities)),
       undefined,
       attachments,
       [],
@@ -3783,7 +3788,7 @@ async function confirmNewProject() {
 async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
   const cwdFolderId = newSessionFolder.value?.cwdFolderId;
-  if (!newSessionApp.value || !newSessionFolder.value || !message || creationComposerBusy.value || (newSessionWorkspaceLoading.value && !newSessionWorkspace.value)) return;
+  if (!newSessionApp.value || !newSessionFolder.value || (!message && !newSessionAttachments.value.length) || creationComposerBusy.value || (newSessionWorkspaceLoading.value && !newSessionWorkspace.value)) return;
   const gitSelection: AiSessionGitSelection | undefined = newSessionWorkspace.value?.availability !== "available"
     ? undefined
     : newSessionWorkspaceMode.value === "current-folder" && newSessionBranch.value
@@ -3833,7 +3838,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     cwdFolderId,
     gitSelection,
     workspaceSelection,
-    message: aiSessionMessageText(message),
+    message: aiSessionMessageText(message, supportsAiSessionAttachmentOnlyMessages(props.instance.capabilities)),
     attachments: newSessionAttachments.value.map((attachment) => ({
       id: attachment.id,
       kind: attachment.kind,
@@ -3862,7 +3867,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       ...(cwdFolderId ? { cwdFolderId } : {}),
       ...(gitSelection ? { gitSelection } : {}),
       ...(workspaceSelection ? { workspaceSelection } : {}),
-      message: aiSessionMessageText(message),
+      message: aiSessionMessageText(message, supportsAiSessionAttachmentOnlyMessages(props.instance.capabilities)),
       attachments,
       references,
       permissionMode,
@@ -4009,7 +4014,7 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
-    await sendAiSessionMessage(props.instance.id, session.id, aiSessionMessageText(message), undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
+    await sendAiSessionMessage(props.instance.id, session.id, aiSessionMessageText(message, supportsAiSessionAttachmentOnlyMessages(props.instance.capabilities)), undefined, attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value), permissionMode);
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
@@ -4057,7 +4062,7 @@ async function steerMessageDraft() {
   aiSessionActionBusy.value = true;
   try {
     const attachments = await uploadMessageAttachments(props.instance.id, session.id);
-    await sendAiSessionMessage(props.instance.id, session.id, aiSessionMessageText(message), "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
+    await sendAiSessionMessage(props.instance.id, session.id, aiSessionMessageText(message, supportsAiSessionAttachmentOnlyMessages(props.instance.capabilities)), "steer", attachments, referencesForBindings(messageDraft.value, messageMentionBindings.value));
     clearAiSessionDraft(session.id);
     messageDraft.value = "";
     messageMentionBindings.value = [];
@@ -4159,7 +4164,7 @@ async function saveQueuedMessageEdit() {
   const session = selectedSession.value;
   const edit = queueComposerEdit.value;
   const message = messageDraft.value.trim();
-  if (!session || !edit || !message || aiSessionActionBusy.value) return;
+  if (!session || !edit || (!message && !messageAttachments.value.length) || aiSessionActionBusy.value) return;
   const attachmentIds = messageAttachments.value.map((attachment) => attachment.id);
   if (message === edit.originalMessage.trim() && attachmentIds.length === edit.originalAttachmentIds.length
     && attachmentIds.every((id, index) => id === edit.originalAttachmentIds[index])) {

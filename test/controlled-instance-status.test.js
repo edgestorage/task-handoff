@@ -19,6 +19,7 @@ const { controlledInstanceCapabilities, runtimeDiagnostics } = require("../packa
 const {
   ControlledInstanceCapabilitiesSchema,
   normalizeControlledInstanceCapabilities,
+  supportsAiSessionAttachmentOnlyMessages,
   supportsAiSessionPersistenceSettings,
   supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionQueuePause,
@@ -149,6 +150,8 @@ test("instance capabilities are projected from available inventory items", () =>
   assert.equal(supportsAiSessionPersistenceSettings(capabilities), true);
   assert.equal(capabilities.features.aiSessionQueuePause, true);
   assert.equal(supportsAiSessionQueuePause(capabilities), true);
+  assert.equal(capabilities.features.aiSessionAttachmentOnlyMessages, true);
+  assert.equal(supportsAiSessionAttachmentOnlyMessages(capabilities), true);
   assert.deepEqual(capabilities.features.instanceShell, {
     protocolVersion: INSTANCE_SHELL_PROTOCOL_VERSION,
     interactive: true,

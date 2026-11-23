@@ -3,6 +3,21 @@ export type BrowserLoadFailureInput = {
   tunnelCode?: string;
 };
 
+export type BrowserLoadFailureEvent = {
+  errorCode?: number;
+  validatedURL?: string;
+  isMainFrame?: boolean;
+};
+
+export function isBrowserPageLoadFailure(input: BrowserLoadFailureEvent): boolean {
+  // Chromium reports subframe cancellations (Cloudflare Turnstile's srcdoc
+  // iframes, for example) through the same event as a failed top-level page.
+  if (input.isMainFrame === false) return false;
+  if (input.errorCode === -3) return false;
+  const url = String(input.validatedURL || "");
+  return url !== "about:blank" && url !== "about://blank" && url !== "about:srcdoc" && url !== "about://srcdoc";
+}
+
 // The webview only exposes Chromium's coarse SOCKS error (-120) for every
 // tunnel failure. When the desktop shell forwards the tunnel's own code we
 // prefer it, so the prompt can name the real cause: an unusable relay versus a

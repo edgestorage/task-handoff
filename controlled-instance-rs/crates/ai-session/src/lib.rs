@@ -324,6 +324,21 @@ impl AiSession {
                 turn.get("userPrompt")
                     .and_then(Value::as_str)
                     .is_some_and(|value| !value.trim().is_empty())
+                    || turn
+                        .get("userMessages")
+                        .and_then(Value::as_array)
+                        .is_some_and(|items| {
+                            items.iter().any(|message| {
+                                message
+                                    .get("text")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|text| !text.trim().is_empty())
+                                    || message
+                                        .get("attachments")
+                                        .and_then(Value::as_array)
+                                        .is_some_and(|attachments| !attachments.is_empty())
+                            })
+                        })
             })
             .and_then(|turn| {
                 turn.get("startedAt")
@@ -751,7 +766,9 @@ impl AiSessionRuntime {
         message_id: Option<&str>,
     ) -> Result<Option<EnqueuedAiSessionMessage>, AiSessionStoreError> {
         let message = message.trim();
-        if message.is_empty() || message.chars().count() > 20_000 {
+        if message.chars().count() > 20_000
+            || (message.is_empty() && attachments.is_empty() && references.is_empty())
+        {
             return Err(AiSessionStoreError::QueueItemNotEditable);
         }
         let queue_id = format!("aiq_{}", &Uuid::new_v4().simple().to_string()[..20]);
@@ -903,7 +920,7 @@ impl AiSessionRuntime {
         attachments: Option<Vec<Value>>,
     ) -> Result<AiSession, AiSessionStoreError> {
         let message = message.trim();
-        if message.is_empty() || message.chars().count() > 20_000 {
+        if message.chars().count() > 20_000 {
             return Err(AiSessionStoreError::QueueItemNotEditable);
         }
         self.update(id, |session| {
@@ -921,6 +938,21 @@ impl AiSessionRuntime {
                 return Err(AiSessionStoreError::QueueItemNotFound);
             };
             if item.get("status").and_then(Value::as_str) != Some("queued") {
+                return Err(AiSessionStoreError::QueueItemNotEditable);
+            }
+            let attachments_present = attachments.as_ref().map_or_else(
+                || {
+                    item.get("attachments")
+                        .and_then(Value::as_array)
+                        .is_some_and(|values| !values.is_empty())
+                },
+                |values| !values.is_empty(),
+            );
+            let references_present = item
+                .get("references")
+                .and_then(Value::as_array)
+                .is_some_and(|values| !values.is_empty());
+            if message.is_empty() && !attachments_present && !references_present {
                 return Err(AiSessionStoreError::QueueItemNotEditable);
             }
             if item.get("message").and_then(Value::as_str) == Some(message)
@@ -1263,6 +1295,21 @@ fn is_meaningful_turn(turn: &Value) -> bool {
             .get("contextCompactions")
             .and_then(Value::as_array)
             .is_some_and(|items| !items.is_empty())
+        || turn
+            .get("userMessages")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|message| {
+                    message
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+                        || message
+                            .get("attachments")
+                            .and_then(Value::as_array)
+                            .is_some_and(|attachments| !attachments.is_empty())
+                })
+            })
 }
 
 fn turn_body_revision(turn: &Value) -> String {
@@ -1456,6 +1503,22 @@ mod tests {
         assert_eq!(actions["approval"], false);
         assert_eq!(actions["openApp"], false);
         assert_eq!(actions["close"], true);
+    }
+
+    #[test]
+    fn attachment_only_user_messages_form_a_meaningful_turn() {
+        assert!(is_meaningful_turn(&json!({
+            "id": "turn_image",
+            "userMessages": [{
+                "id": "message_image",
+                "text": "",
+                "attachments": [{ "id": "image", "kind": "image" }]
+            }]
+        })));
+        assert!(!is_meaningful_turn(&json!({
+            "id": "turn_empty",
+            "userMessages": [{ "id": "message_empty", "text": "", "attachments": [] }]
+        })));
     }
 
     #[test]

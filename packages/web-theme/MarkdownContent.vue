@@ -108,7 +108,7 @@ onBeforeUnmount(() => {
 <style scoped>
 :where(.markdown-content) {
   min-width: 0;
-  color: var(--markdown-text-color, var(--text-strong, currentColor));
+  color: var(--markdown-text-color, var(--text, currentColor));
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -243,7 +243,7 @@ onBeforeUnmount(() => {
 
 .markdown-content :deep(.markdown-code-copy:hover) {
   background: var(--surface-hover, rgb(127 127 127 / 12%));
-  color: var(--markdown-text-color, var(--text-strong, currentColor));
+  color: var(--markdown-text-color, var(--text, currentColor));
 }
 
 .markdown-content :deep(.markdown-code-copy:focus-visible) {

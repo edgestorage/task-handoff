@@ -136,8 +136,9 @@ test("streaming Markdown keeps the existing session typography, semantic colors,
   assert.match(message, /--ms-text-body: 1em/);
   assert.match(message, /--ms-leading-body: 1\.55/);
   assert.match(message, /--ms-flow-codeblock-y: 0\.75em/);
-  assert.match(message, /--list-marker: var\(--markdown-text-color, var\(--text-strong, currentColor\)\)/);
-  assert.match(message, /--list-counter-marker: var\(--markdown-text-color, var\(--text-strong, currentColor\)\)/);
+  assert.match(message, /color: var\(--markdown-text-color, var\(--text, inherit\)\)/);
+  assert.match(message, /--list-marker: var\(--markdown-text-color, var\(--text, currentColor\)\)/);
+  assert.match(message, /--list-counter-marker: var\(--markdown-text-color, var\(--text, currentColor\)\)/);
   assert.match(message, /--blockquote-fg: var\(--markdown-muted-color, var\(--text-muted, currentColor\)\)/);
   assert.match(message, /--blockquote-border: var\(--markdown-border-color, var\(--line-strong, currentColor\)\)/);
   assert.match(message, /--hr-border: var\(--markdown-border-color, var\(--line, currentColor\)\)/);
@@ -145,7 +146,9 @@ test("streaming Markdown keeps the existing session typography, semantic colors,
   assert.match(message, /--footnote-border: var\(--markdown-border-color, var\(--line, currentColor\)\)/);
   assert.match(message, /--inline-code-bg: var\(--markdown-code-bg, var\(--surface/);
   assert.match(message, /--inline-code-border: var\(--markdown-border-color, var\(--line-subtle/);
-  assert.match(message, /color: var\(--text, inherit\)/);
+  assert.match(result, /color: var\(--markdown-text-color, var\(--detail-activity-text\)\)/);
+  assert.match(card, /\.ai-board-message \{[^}]*color: var\(--markdown-text-color, var\(--text\)\)/s);
+  assert.match(panelStyles, /\.session-ai-message \{[^}]*color: var\(--markdown-text-color, var\(--text\)\)/s);
   assert.match(message, /setCustomComponents\(markdownScopeId/);
   assert.match(message, /text: AiSessionMarkdownNode/);
   assert.match(message, /code_block: AiSessionMarkdownNode/);

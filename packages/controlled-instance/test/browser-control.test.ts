@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  EMBEDDED_BROWSER_CDP_ACCESS_TTL_MS,
   EMBEDDED_BROWSER_CREATION_WAIT_MS,
   EMBEDDED_BROWSER_MAIN_PAGE_POOL_CAPABILITIES,
   EMBEDDED_BROWSER_RENDERER_WEBVIEW_CAPABILITIES,
@@ -125,6 +126,20 @@ test("instance access is required before any AI Session can receive a CDP token"
   const second = service.issueCdpToken("session_two");
   assert.equal(service.validateCdpToken(first.token), "session_one");
   assert.equal(service.validateCdpToken(second.token), "session_two");
+});
+
+test("a CDP token can be reused for multiple requests until it expires", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 0, 1) });
+  const service = new BrowserControlService();
+  service.grantInstanceAccess();
+  const issued = service.issueCdpToken("session_one");
+
+  assert.equal(service.validateCdpToken(issued.token), "session_one");
+  assert.equal(service.validateCdpToken(issued.token), "session_one");
+  t.mock.timers.tick(EMBEDDED_BROWSER_CDP_ACCESS_TTL_MS - 1);
+  assert.equal(service.validateCdpToken(issued.token), "session_one");
+  t.mock.timers.tick(1);
+  assert.equal(service.validateCdpToken(issued.token), undefined);
 });
 
 test("an AI Session can request instance access and wait for the approval center", async () => {
