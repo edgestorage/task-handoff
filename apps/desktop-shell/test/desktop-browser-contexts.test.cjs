@@ -1,4 +1,7 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
 const { DesktopBrowserContextManager } = require("../src/desktop-browser-contexts.cjs");
 
@@ -66,6 +69,86 @@ test("desktop browser contexts share one instance partition and release by refer
   assert.equal(sessions[0].permissionCheckHandler, null);
   assert.equal(sessions[0].permissionRequestHandler, null);
   assert.equal(requests.filter((url) => url.endsWith("/browser-access")).length, 1);
+});
+
+test("desktop browser downloads follow CDP behavior and emit Chrome progress events", async () => {
+  const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), "th-browser-downloads-"));
+  const events = [];
+  let session;
+  const manager = new DesktopBrowserContextManager({
+    reapIntervalMs: 0,
+    fetch: async (url) => response(url.endsWith("/api/control-plane/identity")
+      ? { identity: { controlPlaneId: "cp_1" } }
+      : { accessId: "access_1", token: "t".repeat(32), expiresAt: new Date(Date.now() + 1000).toISOString(), relayPath: "/browser-relay" }),
+    WebSocket: class {},
+    BrowserTunnelChannel: class { async connect() {} close() {} },
+    BrowserSocksServer: class {
+      async start() { return { host: "127.0.0.1", port: 12345 }; }
+      async close() {}
+    },
+    defaultDownloadPath: downloadDir,
+    session: {
+      fromPartition(partition) {
+        session = {
+          partition,
+          async setProxy() {},
+          setPermissionRequestHandler() {},
+          on(event, handler) { if (event === "will-download") this.downloadHandler = handler; },
+          removeListener() {},
+          async closeAllConnections() {},
+        };
+        return session;
+      },
+    },
+    onDownloadEvent: (event) => events.push(event),
+  });
+  const context = await manager.prepare({ controlPlaneUrl: "https://cp.example/", instanceId: "instance_1", senderId: 10 });
+  const browserContext = [...manager.contexts.values()][0];
+  manager.configureDownloads({ senderId: 10, instanceId: "instance_1", behavior: "allow", eventsEnabled: false });
+  assert.equal(browserContext.downloadConfig.downloadPath, downloadDir);
+  manager.configureDownloads({
+    senderId: 10,
+    instanceId: "instance_1",
+    behavior: "allowAndName",
+    downloadPath: downloadDir,
+    eventsEnabled: true,
+  });
+  let received = 12;
+  let finished = false;
+  const listeners = new Map();
+  const item = {
+    savePath: undefined,
+    getFilename: () => "report.csv",
+    getURL: () => "https://example.com/report.csv",
+    getTotalBytes: () => 12,
+    getReceivedBytes: () => received,
+    setSavePath(value) { this.savePath = value; },
+    cancel() { finished = true; },
+    on(event, handler) { listeners.set(`on:${event}`, handler); },
+    once(event, handler) { listeners.set(`once:${event}`, handler); },
+  };
+  session.downloadHandler({}, item, { id: 77 });
+  assert.equal(path.dirname(item.savePath), downloadDir);
+  assert.match(path.basename(item.savePath), /^[0-9a-f-]{36}$/);
+  assert.equal(events[0].method, "Browser.downloadWillBegin");
+  assert.equal(events[0].instanceId, "instance_1");
+  assert.equal(events[0].webContentsId, 77);
+  assert.equal(events[0].params.guid, path.basename(item.savePath));
+  assert.equal(events[0].params.suggestedFilename, "report.csv");
+  listeners.get("on:updated")({}, "progressing");
+  assert.deepEqual(events.at(-1).params, {
+    guid: path.basename(item.savePath),
+    totalBytes: 12,
+    receivedBytes: 12,
+    state: "inProgress",
+  });
+  listeners.get("once:done")({}, "completed");
+  assert.equal(events.at(-1).params.state, "completed");
+  assert.equal(finished, false);
+
+  manager.cancelDownload({ senderId: 10, instanceId: "instance_1", guid: "missing" });
+  await manager.release(context.contextId, 10);
+  fs.rmSync(downloadDir, { recursive: true, force: true });
 });
 
 test("desktop browser context creation is shared while in flight", async () => {

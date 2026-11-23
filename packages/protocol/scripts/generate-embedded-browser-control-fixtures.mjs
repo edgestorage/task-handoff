@@ -9,6 +9,7 @@ import {
   EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES,
   EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
   EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES,
+  EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES,
   EMBEDDED_BROWSER_FRAME_HEADER_BYTES,
   EMBEDDED_BROWSER_HTTP_RESULT_MAX_BYTES,
   EMBEDDED_BROWSER_HTTP_RESULT_TOTAL_BYTES,
@@ -54,6 +55,7 @@ import {
   EmbeddedBrowserTargetGetBrowserContextsResultSchema,
   EmbeddedBrowserTargetGetTargetInfoParamsSchema,
   EmbeddedBrowserTargetGetTargetInfoResultSchema,
+  EmbeddedBrowserBrowserSetDownloadBehaviorParamsSchema,
   EmbeddedBrowserTargetGetTargetsResultSchema,
   EmbeddedBrowserTargetInfoSchema,
   EmbeddedBrowserTargetSetDiscoverTargetsParamsSchema,
@@ -164,6 +166,7 @@ const fixture = `${JSON.stringify({
   limits: {
     frameHeaderBytes: EMBEDDED_BROWSER_FRAME_HEADER_BYTES,
     controlMaxMessageBytes: EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES,
+    controlMessageMaxBytes: EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES,
     channelMaxBufferedBytes: EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES,
     requestTimeoutMs: EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
     snapshotMaxPagesPerChunk: EMBEDDED_BROWSER_SNAPSHOT_MAX_PAGES_PER_CHUNK,
@@ -320,6 +323,20 @@ const fixture = `${JSON.stringify({
     }),
     targetGetTargetInfo: EmbeddedBrowserTargetGetTargetInfoResultSchema.parse({
       targetInfo: rendererTargetInfo,
+    }),
+    targetGetBrowserTargetInfo: EmbeddedBrowserTargetGetTargetInfoResultSchema.parse({
+      targetInfo: {
+        targetId: "browser-root",
+        type: "browser",
+        title: "",
+        url: "",
+        attached: true,
+      },
+    }),
+    browserSetDownloadBehaviorParams: EmbeddedBrowserBrowserSetDownloadBehaviorParamsSchema.parse({
+      behavior: "allowAndName",
+      downloadPath: "/tmp/task-handoff-downloads",
+      eventsEnabled: true,
     }),
     targetGetBrowserContexts: EmbeddedBrowserTargetGetBrowserContextsResultSchema.parse({
       browserContextIds: [page.sourceRef, source.sourceRef],

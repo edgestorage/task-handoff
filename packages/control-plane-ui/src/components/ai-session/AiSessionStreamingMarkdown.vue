@@ -254,8 +254,8 @@ watch(
   --blockquote-fg: var(--markdown-muted-color, var(--text-muted, currentColor));
   --footnote-border: var(--markdown-border-color, var(--line, currentColor));
   --hr-border: var(--markdown-border-color, var(--line, currentColor));
-  --inline-code-bg: var(--markdown-code-bg, var(--surface-inset, rgb(127 127 127 / 14%)));
-  --inline-code-border: var(--markdown-border-color, var(--line, transparent));
+  --inline-code-bg: var(--markdown-code-bg, var(--surface, rgb(127 127 127 / 14%)));
+  --inline-code-border: var(--markdown-border-color, var(--line-subtle, transparent));
   --link-color: var(--markdown-link-color, var(--brand-accent, currentColor));
   --list-counter-marker: var(--markdown-text-color, var(--text-strong, currentColor));
   --list-marker: var(--markdown-text-color, var(--text-strong, currentColor));
@@ -311,7 +311,7 @@ watch(
   border: 1px solid var(--inline-code-border);
   border-radius: 4px;
   background: var(--inline-code-bg);
-  color: inherit;
+  color: var(--text, inherit);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 0.9em;
   line-height: inherit;

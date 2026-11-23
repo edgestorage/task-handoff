@@ -8,6 +8,8 @@ class DesktopBrowserGuestRegistry {
     this.onChanged = options.onChanged;
     this.onCdpEvent = options.onCdpEvent;
     this.onDebuggerDetached = options.onDebuggerDetached;
+    this.captureSurface = options.captureSurface;
+    this.captureTimeoutMs = Number.isFinite(options.captureTimeoutMs) ? Math.max(1, options.captureTimeoutMs) : 8_000;
     this.logInfo = options.logInfo;
     this.pageHost = options.pageHost || "renderer-webview";
     this.pageHostCapabilities = options.pageHostCapabilities || Object.freeze({
@@ -27,6 +29,9 @@ class DesktopBrowserGuestRegistry {
     const entry = {
       host,
       guest,
+      guestId: guest.id,
+      guestDestroyed: false,
+      removed: false,
       partition: String(partition || ""),
       tabRef: undefined,
       creationRef: undefined,
@@ -36,9 +41,16 @@ class DesktopBrowserGuestRegistry {
       url: "about:blank",
       state: "attached",
       debuggerAttached: false,
+      debuggerApi: undefined,
+      backgroundThrottled: undefined,
+      captureSurface: this.captureSurface,
+      captureTimeoutMs: this.captureTimeoutMs,
     };
     this.byGuestId.set(guest.id, entry);
-    guest.once?.("destroyed", () => this.removeGuest(guest, "destroyed"));
+    guest.once?.("destroyed", () => {
+      entry.guestDestroyed = true;
+      this.removeEntry(entry, "destroyed");
+    });
     return entry;
   }
 
@@ -118,8 +130,19 @@ class DesktopBrowserGuestRegistry {
     return entry;
   }
 
+  setBackgroundThrottled({ webContentsId, senderId, throttled }) {
+    const entry = this.byGuestId.get(Number(webContentsId));
+    if (!entry || (senderId !== undefined && entry.host.id !== senderId)) return false;
+    entry.backgroundThrottled = Boolean(throttled);
+    if (typeof entry.guest.setBackgroundThrottling === "function" && !entry.guestDestroyed) {
+      entry.guest.setBackgroundThrottling(entry.backgroundThrottled);
+    }
+    return true;
+  }
+
   async close({ tabRef, senderId }) {
     const entry = this.requireEntry(tabRef, senderId);
+    entry.guestDestroyed = true;
     if (typeof entry.guest.close === "function") {
       entry.guest.close();
     } else {
@@ -138,24 +161,28 @@ class DesktopBrowserGuestRegistry {
     if (entry.debuggerAttached) return this.publicEntry(entry);
     if (debuggerApi.isAttached?.()) throw browserGuestError("BROWSER_TARGET_BUSY");
     debuggerApi.attach(protocolVersion);
+    entry.debuggerApi = debuggerApi;
     entry.debuggerAttached = true;
-    debuggerApi.on?.("detach", (_event, reason) => {
+    const onDetach = (_event, reason) => {
+      detachGuestDebugger(entry, { alreadyDetached: true });
       if (this.byGuestId.get(entry.guest.id) !== entry) return;
-      entry.debuggerAttached = false;
       try { this.onDebuggerDetached?.({ ...this.publicEntry(entry), reason: String(reason || "detached") }); } catch { /* observer is best effort */ }
-    });
-    debuggerApi.on?.("message", (_event, method, params) => {
+    };
+    const onMessage = (_event, method, params) => {
       if (this.byGuestId.get(entry.guest.id) !== entry || !entry.tabRef) return;
       try { this.onCdpEvent?.({ tabRef: entry.tabRef, method: String(method || ""), params }); } catch { /* observer is best effort */ }
-    });
+    };
+    entry.debuggerDetachHandler = onDetach;
+    entry.debuggerMessageHandler = onMessage;
+    debuggerApi.on?.("detach", onDetach);
+    debuggerApi.on?.("message", onMessage);
     return this.publicEntry(entry);
   }
 
   detachDebugger({ tabRef, senderId }) {
     const entry = this.requireEntry(tabRef, senderId);
     if (!entry.debuggerAttached) return false;
-    entry.guest.debugger?.detach?.();
-    entry.debuggerAttached = false;
+    detachGuestDebugger(entry);
     return true;
   }
 
@@ -196,11 +223,10 @@ class DesktopBrowserGuestRegistry {
   }
 
   removeEntry(entry, reason) {
-    if (entry.debuggerAttached) {
-      try { entry.guest.debugger?.detach?.(); } catch { /* debugger is already gone */ }
-      entry.debuggerAttached = false;
-    }
-    this.byGuestId.delete(entry.guest.id);
+    if (entry.removed) return;
+    entry.removed = true;
+    detachGuestDebugger(entry);
+    this.byGuestId.delete(entry.guestId);
     if (entry.tabRef) this.byTabRef.delete(entry.tabRef);
     if (entry.instanceId && entry.sessionKey) this.bySessionKey.delete(`${entry.instanceId}\0${entry.sessionKey}`);
     try {
@@ -256,8 +282,32 @@ function optionalString(value, maxLength) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 }
 
-function browserGuestError(code) {
-  return Object.assign(new Error(code), { code });
+function browserGuestError(code, message) {
+  return Object.assign(new Error(message || code), { code });
+}
+
+function detachGuestDebugger(entry, options = {}) {
+  let debuggerApi = entry.debuggerApi;
+  if (!debuggerApi) {
+    try {
+      debuggerApi = entry.guest?.debugger;
+    } catch {
+      debuggerApi = undefined;
+    }
+  }
+  if (entry.debuggerMessageHandler) {
+    try { debuggerApi?.removeListener?.("message", entry.debuggerMessageHandler); } catch { /* debugger is already gone */ }
+  }
+  if (entry.debuggerDetachHandler) {
+    try { debuggerApi?.removeListener?.("detach", entry.debuggerDetachHandler); } catch { /* debugger is already gone */ }
+  }
+  entry.debuggerMessageHandler = undefined;
+  entry.debuggerDetachHandler = undefined;
+  entry.debuggerApi = undefined;
+  if (!options.alreadyDetached && !entry.guestDestroyed && entry.debuggerAttached) {
+    try { debuggerApi?.detach?.(); } catch { /* debugger is already gone */ }
+  }
+  entry.debuggerAttached = false;
 }
 
 async function capturePageScreenshot(entry, params) {
@@ -274,9 +324,36 @@ async function capturePageScreenshot(entry, params) {
       height: Math.max(1, Math.ceil(Number(clip.height) || 1)),
     }
     : undefined;
-  const captured = await entry.guest.capturePage(rect);
+  const width = Math.max(rect ? rect.x + rect.width : 0, 1280);
+  const height = Math.max(rect ? rect.y + rect.height : 0, 720);
+  const previousThrottled = typeof entry.backgroundThrottled === "boolean" ? entry.backgroundThrottled : undefined;
+  let surfaceToken;
+  let captured;
+  try {
+    // Chromium only produces frames for webviews that are laid out inside the
+    // visible window. Ask the renderer to expose an invisible (opacity: 0)
+    // capture surface at the page's natural size before reading pixels.
+    if (typeof entry.guest.setBackgroundThrottling === "function" && !entry.guestDestroyed) {
+      entry.guest.setBackgroundThrottling(false);
+    }
+    surfaceToken = await entry.captureSurface?.prepare?.({ entry, width, height });
+    captured = await withCaptureTimeout(
+      entry.guest.capturePage(rect, { stayHidden: true, stayAwake: true }),
+      entry.captureTimeoutMs,
+    );
+  } catch (error) {
+    if (error?.code) throw error;
+    throw browserGuestError("BROWSER_CDP_ERROR", `Screenshot capture failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    try {
+      await entry.captureSurface?.release?.({ entry, token: surfaceToken });
+    } catch { /* releasing the capture surface is best effort */ }
+    if (previousThrottled !== undefined && typeof entry.guest.setBackgroundThrottling === "function" && !entry.guestDestroyed) {
+      try { entry.guest.setBackgroundThrottling(previousThrottled); } catch { /* guest is already gone */ }
+    }
+  }
   if (!captured || typeof captured.isEmpty !== "function" || captured.isEmpty()) {
-    throw browserGuestError("BROWSER_CDP_ERROR");
+    throw browserGuestError("BROWSER_CDP_ERROR", "Screenshot capture returned an empty image.");
   }
   const scale = clip ? Number(clip.scale) : Number.NaN;
   const image = Number.isFinite(scale) && scale > 0 && scale !== 1 && typeof captured.resize === "function"
@@ -289,6 +366,17 @@ async function capturePageScreenshot(entry, params) {
   const quality = Math.max(0, Math.min(100, Math.round(Number(input.quality ?? 100)) || 100));
   const data = format === "jpeg" ? image.toJPEG(quality) : image.toPNG();
   return { data: data.toString("base64") };
+}
+
+function withCaptureTimeout(promise, timeoutMs) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(browserGuestError("BROWSER_CDP_ERROR", `Screenshot capture timed out after ${timeoutMs}ms.`)), timeoutMs);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 module.exports = { DesktopBrowserGuestRegistry };

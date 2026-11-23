@@ -260,7 +260,7 @@ struct BrowserControlInner {
     registry_epoch: String,
     registry_revision: u64,
     sources: HashMap<String, SourceRecord>,
-    source_by_publisher: HashMap<String, String>,
+    source_by_publisher: HashMap<(String, String, String), String>,
     creations: HashMap<String, CreationRecord>,
     leases: HashMap<String, LeaseRecord>,
     tab_lease: HashMap<String, String>,
@@ -330,10 +330,12 @@ impl BrowserControlService {
         validate_registration(&registration)?;
         let now = Utc::now();
         let mut inner = self.lock();
-        let existing_ref = inner
-            .source_by_publisher
-            .get(&registration.publisher_ref)
-            .cloned();
+        let publisher_key = (
+            registration.panel_id.clone(),
+            registration.owner_ref.clone(),
+            registration.publisher_ref.clone(),
+        );
+        let existing_ref = inner.source_by_publisher.get(&publisher_key).cloned();
         let (source_ref, reconnected) = if let Some(source_ref) = existing_ref {
             let existing = inner.sources.get_mut(&source_ref).ok_or_else(|| {
                 BrowserControlError::not_found(
@@ -375,10 +377,9 @@ impl BrowserControlService {
                 snapshot: None,
                 disconnected_at: None,
             };
-            inner.source_by_publisher.insert(
-                record.registration.publisher_ref.clone(),
-                source_ref.clone(),
-            );
+            inner
+                .source_by_publisher
+                .insert(publisher_key, source_ref.clone());
             inner.sources.insert(source_ref.clone(), record);
             (source_ref, false)
         };
@@ -3009,15 +3010,14 @@ mod tests {
     }
 
     #[test]
-    fn source_reconnect_cannot_hijack_another_publishers_identity() {
+    fn the_same_publisher_ref_from_different_owners_creates_independent_sources() {
         let service = BrowserControlService::new();
-        service.register_source(renderer_source()).unwrap();
+        let first = service.register_source(renderer_source()).unwrap();
         let mut takeover = renderer_source();
         takeover.owner_ref = "user_2".to_string();
-        assert_eq!(
-            service.register_source(takeover).unwrap_err().code,
-            "BROWSER_AUTHORIZATION_REQUIRED"
-        );
+        takeover.panel_id = "control_plane_two".to_string();
+        let second = service.register_source(takeover).unwrap();
+        assert_ne!(first.source_ref, second.source_ref);
     }
 
     #[test]

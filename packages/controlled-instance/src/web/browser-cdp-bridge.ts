@@ -4,6 +4,12 @@ import { createEntityId } from "@task-handoff/protocol/control-plane";
 import {
   EMBEDDED_BROWSER_CREATION_WAIT_MS,
   EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
+  EmbeddedBrowserBrowserCancelDownloadParamsSchema,
+  EmbeddedBrowserBrowserSetDownloadBehaviorParamsSchema,
+  EmbeddedBrowserBrowserTargetInfoSchema,
+  EmbeddedBrowserStorageClearCookiesParamsSchema,
+  EmbeddedBrowserStorageGetCookiesParamsSchema,
+  EmbeddedBrowserStorageSetCookiesParamsSchema,
   EmbeddedBrowserTargetAttachToTargetParamsSchema,
   EmbeddedBrowserTargetCloseTargetParamsSchema,
   EmbeddedBrowserTargetCreateTargetParamsSchema,
@@ -55,6 +61,14 @@ type BrowserTargetSession = {
   tabRef: string;
   sourceRef: string;
   generation: number;
+  // Chrome uses the page target id as the main frame id. Electron webviews use
+  // their own frame id, so the bridge translates between the two.
+  mainFrameId?: string;
+};
+
+type FrameIdTranslation = {
+  tabRef: string;
+  mainFrameId?: string;
 };
 
 type BrowserConnection = {
@@ -70,7 +84,8 @@ type BrowserConnection = {
   targets: Map<string, EmbeddedBrowserTargetInfo>;
   sessions: Map<string, BrowserTargetSession>;
   targetSessions: Map<string, string>;
-  queue: Promise<void>;
+  pendingAttachments: Map<string, Promise<string>>;
+  browserSessions: Set<string>;
 };
 
 const EARLY_CDP_MESSAGE_LIMIT = 256;
@@ -85,6 +100,16 @@ function browserVersionResult(identity: EmbeddedBrowserCdpIdentity | undefined) 
     userAgent: identity?.userAgent ?? "TaskHandoff embedded Chromium",
     jsVersion: identity?.v8Version ?? "electron",
   };
+}
+
+function browserTargetInfo(browserRef: string) {
+  return EmbeddedBrowserBrowserTargetInfoSchema.parse({
+    targetId: browserRef,
+    type: "browser",
+    title: "",
+    url: "",
+    attached: true,
+  });
 }
 
 function targetMatchesAutoAttachFilter(target: EmbeddedBrowserTargetInfo, filter: EmbeddedBrowserTargetFilter[] | undefined) {
@@ -102,6 +127,52 @@ function messageBytes(data: unknown) {
   if (Array.isArray(data)) return Buffer.concat(data.map((entry) => Buffer.from(entry)));
   if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
   return Buffer.from(String(data));
+}
+
+function mainFrameIdFromFrameTree(result: unknown) {
+  const frame = (result as { frameTree?: { frame?: { id?: unknown } } } | undefined)?.frameTree?.frame;
+  return typeof frame?.id === "string" && frame.id ? frame.id : undefined;
+}
+
+function replaceStrings(value: unknown, from: string, to: string): unknown {
+  if (typeof value === "string") return value === from ? to : value;
+  if (Array.isArray(value)) return value.map((entry) => replaceStrings(entry, from, to));
+  if (value && typeof value === "object") {
+    const next: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) next[key] = replaceStrings(entry, from, to);
+    return next;
+  }
+  return value;
+}
+
+function replaceFrameIdFields(value: unknown, from: string, to: string): unknown {
+  if (Array.isArray(value)) return value.map((entry) => replaceFrameIdFields(entry, from, to));
+  if (value && typeof value === "object") {
+    const next: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      next[key] = (key === "frameId" || key === "parentFrameId") && entry === from
+        ? to
+        : replaceFrameIdFields(entry, from, to);
+    }
+    return next;
+  }
+  return value;
+}
+
+function clientResult(state: FrameIdTranslation, method: string, result: unknown) {
+  if (method === "Page.getFrameTree") {
+    const mainFrameId = mainFrameIdFromFrameTree(result);
+    if (mainFrameId) state.mainFrameId = mainFrameId;
+  }
+  return state.mainFrameId ? replaceStrings(result, state.mainFrameId, state.tabRef) : result;
+}
+
+function clientEventParams(state: FrameIdTranslation, params: unknown) {
+  return state.mainFrameId ? replaceStrings(params, state.mainFrameId, state.tabRef) : params;
+}
+
+function hostCommandParams(state: FrameIdTranslation, params: unknown) {
+  return state.mainFrameId ? replaceFrameIdFields(params, state.tabRef, state.mainFrameId) : params;
 }
 
 function requestToken(request: FastifyRequest) {
@@ -260,10 +331,20 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
 
   const detachTargetSessionsEverywhere = (tabRef: string, reason: string) => {
     for (const connection of browserConnections) {
+      const leases = new Map<string, BrowserTargetSession>();
       for (const [sessionId, session] of [...connection.sessions]) {
         if (session.tabRef !== tabRef) continue;
         connection.sessions.delete(sessionId);
-        if (connection.targetSessions.get(tabRef) === sessionId) connection.targetSessions.delete(tabRef);
+        leases.set(session.leaseRef, session);
+        if (connection.discover || connection.autoAttach) {
+          sendJson(connection.socket, {
+            method: "Target.detachedFromTarget",
+            params: { sessionId, targetId: session.tabRef },
+          });
+        }
+      }
+      connection.targetSessions.delete(tabRef);
+      for (const session of leases.values()) {
         service.detachLease(connection.sessionRef, session.leaseRef);
         void detachWithTimeout(relay.targetDetach({
           leaseRef: session.leaseRef,
@@ -272,34 +353,15 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
           generation: session.generation,
           reason,
         }));
-        if (connection.discover || connection.autoAttach) {
-          sendJson(connection.socket, {
-            method: "Target.detachedFromTarget",
-            params: { sessionId, targetId: session.tabRef },
-          });
-        }
       }
     }
   };
 
-  const attachTargetSession = async (
+  const createTargetSession = async (
     connection: BrowserConnection,
     targetId: string,
     options: { emitAttached?: boolean; waitingForDebugger?: boolean } = {},
   ) => {
-    const existingSessionId = connection.targetSessions.get(targetId);
-    if (existingSessionId) {
-      const existing = connection.sessions.get(existingSessionId);
-      if (existing) {
-        try {
-          service.leaseCommandTarget(connection.sessionRef, existing.leaseRef);
-          return existing.sessionId;
-        } catch {
-          connection.sessions.delete(existingSessionId);
-          connection.targetSessions.delete(targetId);
-        }
-      }
-    }
     const existingLease = service.leaseForSessionTab(connection.sessionRef, targetId);
     const lease = service.attachTab(connection.sessionRef, targetId);
     const target = service.leaseCommandTarget(connection.sessionRef, lease.leaseRef);
@@ -340,6 +402,37 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
     return sessionId;
   };
 
+  const attachTargetSession = (
+    connection: BrowserConnection,
+    targetId: string,
+    options: { emitAttached?: boolean; waitingForDebugger?: boolean } = {},
+  ) => {
+    const existingSessionId = connection.targetSessions.get(targetId);
+    if (existingSessionId) {
+      const existing = connection.sessions.get(existingSessionId);
+      if (existing) {
+        try {
+          service.leaseCommandTarget(connection.sessionRef, existing.leaseRef);
+          return Promise.resolve(existing.sessionId);
+        } catch {
+          connection.sessions.delete(existingSessionId);
+          connection.targetSessions.delete(targetId);
+        }
+      }
+    }
+    const pending = connection.pendingAttachments.get(targetId);
+    if (pending) return pending;
+    const attachment = createTargetSession(connection, targetId, options);
+    connection.pendingAttachments.set(targetId, attachment);
+    const clearPending = () => {
+      if (connection.pendingAttachments.get(targetId) === attachment) {
+        connection.pendingAttachments.delete(targetId);
+      }
+    };
+    void attachment.then(clearPending, clearPending);
+    return attachment;
+  };
+
   const autoAttachTarget = async (connection: BrowserConnection, targetInfo: EmbeddedBrowserTargetInfo) => {
     if (!connection.autoAttach || connection.closed) return false;
     if (!targetMatchesAutoAttachFilter(targetInfo, connection.autoAttach.filter)) return false;
@@ -356,10 +449,161 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
     }
   };
 
-  const handleTargetMethod = async (connection: BrowserConnection, id: unknown, method: string, rawParams: unknown) => {
+  const storageSession = async (
+    connection: BrowserConnection,
+    browserContextId: string | undefined,
+    preferred: BrowserTargetSession | undefined,
+  ) => {
+    const matches = (session: BrowserTargetSession) => !browserContextId || session.sourceRef === browserContextId;
+    const alive = (session: BrowserTargetSession) => {
+      try {
+        service.page(session.tabRef);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (preferred && matches(preferred) && alive(preferred)) return preferred;
+    for (const session of connection.sessions.values()) {
+      if (matches(session) && alive(session)) return session;
+    }
+    const page = service.allPages().find((candidate) => !browserContextId || candidate.sourceRef === browserContextId);
+    if (!page) return undefined;
+    const sessionId = await attachTargetSession(connection, page.tabRef);
+    return connection.sessions.get(sessionId);
+  };
+
+  const relayPageCommand = async (
+    connection: BrowserConnection,
+    session: BrowserTargetSession,
+    method: string,
+    params: unknown,
+  ) => {
+    const target = service.leaseCommandTarget(connection.sessionRef, session.leaseRef);
+    return relay.cdpSend(target.lease.sourceRef, target.lease.generation, {
+      leaseRef: session.leaseRef,
+      method,
+      params,
+      requestId: `browserws_${session.leaseRef}_${crypto.randomUUID()}`,
+      timeoutMs: EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
+    }, EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS);
+  };
+
+  const attachExplicitTargetSession = async (connection: BrowserConnection, targetId: string) => {
+    const primaryId = connection.targetSessions.get(targetId);
+    const primary = primaryId ? connection.sessions.get(primaryId) : undefined;
+    if (primary) {
+      try {
+        service.leaseCommandTarget(connection.sessionRef, primary.leaseRef);
+        const sessionId = createEntityId("tbs");
+        connection.sessions.set(sessionId, { ...primary, sessionId });
+        return sessionId;
+      } catch {
+        connection.sessions.delete(primary.sessionId);
+        connection.targetSessions.delete(targetId);
+      }
+    }
+    return attachTargetSession(connection, targetId);
+  };
+
+  const downloadSource = (
+    connection: BrowserConnection,
+    browserContextId: string | undefined,
+    requestSession: BrowserTargetSession | undefined,
+  ) => {
+    const sources = service.listSources();
+    const sourceRef = browserContextId
+      ?? requestSession?.sourceRef
+      ?? [...connection.sessions.values()].find((session) => session.sourceRef)?.sourceRef;
+    const source = sourceRef
+      ? sources.find((candidate) => candidate.sourceRef === sourceRef)
+      : sources.length === 1 ? sources[0] : undefined;
+    if (!source) {
+      throw new BrowserControlError("BROWSER_SOURCE_NOT_FOUND", "The browser context for downloads is unavailable.", 404);
+    }
+    return source;
+  };
+
+  const handleTargetMethod = async (
+    connection: BrowserConnection,
+    id: unknown,
+    method: string,
+    rawParams: unknown,
+    responseSessionId?: string,
+    requestSession?: BrowserTargetSession,
+  ) => {
+    const respond = (payload: Record<string, unknown>) => {
+      sendJson(connection.socket, responseSessionId ? { ...payload, sessionId: responseSessionId } : payload);
+    };
     const attachedTabRefs = new Set([...connection.sessions.values()].map((session) => session.tabRef));
     if (method === "Browser.getVersion") {
-      sendJson(connection.socket, { id, result: browserVersionResult(service.browserCdpIdentity(connection.sessionRef)) });
+      respond({ id, result: browserVersionResult(service.browserCdpIdentity(connection.sessionRef)) });
+      return;
+    }
+    if (method === "Browser.setDownloadBehavior") {
+      const params = EmbeddedBrowserBrowserSetDownloadBehaviorParamsSchema.parse(rawParams ?? {});
+      const source = downloadSource(connection, params.browserContextId, requestSession);
+      await relay.downloadsConfigure({
+        sourceRef: source.sourceRef,
+        generation: source.generation,
+        behavior: params.behavior,
+        ...(params.downloadPath ? { downloadPath: params.downloadPath } : {}),
+        ...(params.eventsEnabled === undefined ? {} : { eventsEnabled: params.eventsEnabled }),
+        ...(params.browserContextId ? { browserContextId: params.browserContextId } : {}),
+      });
+      respond({ id, result: {} });
+      return;
+    }
+    if (method === "Browser.cancelDownload") {
+      const params = EmbeddedBrowserBrowserCancelDownloadParamsSchema.parse(rawParams ?? {});
+      const source = downloadSource(connection, params.browserContextId, requestSession);
+      await relay.downloadsCancel({
+        sourceRef: source.sourceRef,
+        generation: source.generation,
+        guid: params.guid,
+        ...(params.browserContextId ? { browserContextId: params.browserContextId } : {}),
+      });
+      respond({ id, result: {} });
+      return;
+    }
+    if (method === "Schema.getDomains") {
+      respond({ id, result: { domains: embeddedBrowserCdpProtocolDocument().domains } });
+      return;
+    }
+    if (method === "Storage.getCookies") {
+      const params = EmbeddedBrowserStorageGetCookiesParamsSchema.parse(rawParams ?? {});
+      const session = await storageSession(connection, params.browserContextId, requestSession);
+      const result = session
+        ? await relayPageCommand(connection, session, "Network.getCookies", {}) as { cookies?: unknown }
+        : undefined;
+      respond({ id, result: { cookies: Array.isArray(result?.cookies) ? result.cookies : [] } });
+      return;
+    }
+    if (method === "Storage.setCookies") {
+      const params = EmbeddedBrowserStorageSetCookiesParamsSchema.parse(rawParams ?? {});
+      const session = await storageSession(connection, params.browserContextId, requestSession);
+      if (session) {
+        for (const cookie of params.cookies) {
+          const result = await relayPageCommand(connection, session, "Network.setCookie", cookie) as { success?: boolean };
+          if (result?.success === false) {
+            throw new BrowserControlError("BROWSER_CDP_ERROR", "The browser rejected a cookie.", 400);
+          }
+        }
+      }
+      respond({ id, result: {} });
+      return;
+    }
+    if (method === "Storage.clearCookies") {
+      const params = EmbeddedBrowserStorageClearCookiesParamsSchema.parse(rawParams ?? {});
+      const session = await storageSession(connection, params.browserContextId, requestSession);
+      if (session) await relayPageCommand(connection, session, "Network.clearBrowserCookies", {});
+      respond({ id, result: {} });
+      return;
+    }
+    if (method === "Target.attachToBrowserTarget") {
+      const sessionId = createEntityId("bws");
+      connection.browserSessions.add(sessionId);
+      respond({ id, result: { sessionId } });
       return;
     }
     if (method === "Target.setAutoAttach") {
@@ -371,7 +615,7 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
           ...(params.filter ? { filter: params.filter } : {}),
         }
         : undefined;
-      sendJson(connection.socket, { id, result: {} });
+      respond({ id, result: {} });
       if (!connection.autoAttach) return;
       for (const page of service.allPages()) {
         await autoAttachTarget(connection, embeddedBrowserTargetInfoFromPage(page, connection.targetSessions.has(page.tabRef)));
@@ -380,16 +624,20 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
       return;
     }
     if (method === "Target.getTargets") {
-      sendJson(connection.socket, { id, result: service.targetInfos(attachedTabRefs) });
+      respond({ id, result: service.targetInfos(attachedTabRefs) });
       return;
     }
     if (method === "Target.getTargetInfo") {
       const params = EmbeddedBrowserTargetGetTargetInfoParamsSchema.parse(rawParams ?? {});
-      sendJson(connection.socket, { id, result: service.targetInfo(params.targetId, attachedTabRefs.has(params.targetId)) });
+      if (!params.targetId) {
+        respond({ id, result: { targetInfo: browserTargetInfo(service.registryEpochValue()) } });
+        return;
+      }
+      respond({ id, result: service.targetInfo(params.targetId, attachedTabRefs.has(params.targetId)) });
       return;
     }
     if (method === "Target.getBrowserContexts") {
-      sendJson(connection.socket, { id, result: service.browserContexts() });
+      respond({ id, result: service.browserContexts() });
       return;
     }
     if (method === "Target.setDiscoverTargets") {
@@ -397,50 +645,62 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
       if (params.discover) {
         connection.discover = true;
         connection.targets = new Map();
-        sendJson(connection.socket, { id, result: {} });
+        respond({ id, result: {} });
         syncDiscovery(connection);
       } else {
         connection.discover = false;
         connection.targets.clear();
-        sendJson(connection.socket, { id, result: {} });
+        respond({ id, result: {} });
       }
       return;
     }
     if (method === "Target.attachToTarget") {
       const raw = rawParams && typeof rawParams === "object" ? rawParams as Record<string, unknown> : {};
       if (raw.flatten !== true) {
-        sendJson(connection.socket, cdpErrorValue(id, -32000, "Only flatten:true target sessions are supported.", "BROWSER_OPERATION_UNSUPPORTED"));
+        respond(cdpErrorValue(id, -32000, "Only flatten:true target sessions are supported.", "BROWSER_OPERATION_UNSUPPORTED"));
         return;
       }
       const params = EmbeddedBrowserTargetAttachToTargetParamsSchema.parse(raw);
-      const sessionId = await attachTargetSession(connection, params.targetId);
-      sendJson(connection.socket, { id, result: { sessionId } });
+      const sessionId = await attachExplicitTargetSession(connection, params.targetId);
+      respond({ id, result: { sessionId } });
       syncDiscovery(connection);
       return;
     }
     if (method === "Target.detachFromTarget") {
       const params = EmbeddedBrowserTargetDetachFromTargetParamsSchema.parse(rawParams ?? {});
+      if (params.sessionId && connection.browserSessions.delete(params.sessionId)) {
+        respond({ id, result: {} });
+        return;
+      }
       const sessionId = params.sessionId ?? (params.targetId ? connection.targetSessions.get(params.targetId) : undefined);
       const session = sessionId ? connection.sessions.get(sessionId) : undefined;
       if (session && (!params.targetId || params.targetId === session.tabRef)) {
         connection.sessions.delete(session.sessionId);
-        if (connection.targetSessions.get(session.tabRef) === session.sessionId) connection.targetSessions.delete(session.tabRef);
-        service.detachLease(connection.sessionRef, session.leaseRef);
-        await detachWithTimeout(relay.targetDetach({
-          leaseRef: session.leaseRef,
-          tabRef: session.tabRef,
-          sourceRef: session.sourceRef,
-          generation: session.generation,
-          reason: "target.detached",
-        }));
-        if (connection.discover || connection.autoAttach) {
-          sendJson(connection.socket, {
-            method: "Target.detachedFromTarget",
-            params: { sessionId: session.sessionId, targetId: session.tabRef },
-          });
+        if (connection.targetSessions.get(session.tabRef) === session.sessionId) {
+          const replacement = [...connection.sessions.values()].find((candidate) =>
+            candidate.tabRef === session.tabRef && candidate.leaseRef === session.leaseRef
+          );
+          if (replacement) {
+            connection.targetSessions.set(session.tabRef, replacement.sessionId);
+          } else {
+            connection.targetSessions.delete(session.tabRef);
+            service.detachLease(connection.sessionRef, session.leaseRef);
+            await detachWithTimeout(relay.targetDetach({
+              leaseRef: session.leaseRef,
+              tabRef: session.tabRef,
+              sourceRef: session.sourceRef,
+              generation: session.generation,
+              reason: "target.detached",
+            }));
+          }
         }
+        sendJson(connection.socket, {
+          ...(responseSessionId ? { sessionId: responseSessionId } : {}),
+          method: "Target.detachedFromTarget",
+          params: { sessionId: session.sessionId, targetId: session.tabRef },
+        });
       }
-      sendJson(connection.socket, { id, result: {} });
+      respond({ id, result: {} });
       syncDiscovery(connection);
       return;
     }
@@ -450,13 +710,13 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
       await relay.tabsClose({ sourceRef: page.sourceRef, generation: page.generation, tabRef: page.tabRef });
       service.invalidateLeasesForTab(page.tabRef);
       detachTargetSessionsEverywhere(page.tabRef, "target.closed");
-      sendJson(connection.socket, { id, result: { success: true } });
+      respond({ id, result: { success: true } });
       return;
     }
     if (method === "Target.createTarget") {
       const params = EmbeddedBrowserTargetCreateTargetParamsSchema.parse(rawParams ?? {});
       if (!browserUrlAllowed(params.url)) {
-        sendJson(connection.socket, cdpErrorValue(id, -32000, "Only http, https, and about:blank browser URLs are supported.", "BROWSER_OPERATION_UNSUPPORTED"));
+        respond(cdpErrorValue(id, -32000, "Only http, https, and about:blank browser URLs are supported.", "BROWSER_OPERATION_UNSUPPORTED"));
         return;
       }
       const creation = service.requestCreation(connection.sessionRef, params.url, undefined, {
@@ -464,31 +724,31 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
       });
       const settled = await service.waitForCreation(connection.sessionRef, creation.creationRef, creationWaitMs);
       if (settled.state === "ready" && settled.tabRef) {
-        sendJson(connection.socket, { id, result: { targetId: settled.tabRef } });
+        respond({ id, result: { targetId: settled.tabRef } });
         return;
       }
       if (settled.state === "expired") {
-        sendJson(connection.socket, cdpErrorValue(id, -32000, "The browser page creation request expired.", "BROWSER_CREATION_EXPIRED", {
+        respond(cdpErrorValue(id, -32000, "The browser page creation request expired.", "BROWSER_CREATION_EXPIRED", {
           creationRef: settled.creationRef,
           expiresAt: settled.expiresAt,
         }));
         return;
       }
       if (settled.state === "failed") {
-        sendJson(connection.socket, cdpErrorValue(id, -32000, "The browser page creation request failed.", "BROWSER_CDP_ERROR", {
+        respond(cdpErrorValue(id, -32000, "The browser page creation request failed.", "BROWSER_CDP_ERROR", {
           creationRef: settled.creationRef,
           expiresAt: settled.expiresAt,
         }));
         return;
       }
       if (settled.state === "declined") {
-        sendJson(connection.socket, cdpErrorValue(id, -32000, "The browser page creation request was declined.", "BROWSER_CREATION_DECLINED", {
+        respond(cdpErrorValue(id, -32000, "The browser page creation request was declined.", "BROWSER_CREATION_DECLINED", {
           creationRef: settled.creationRef,
           expiresAt: settled.expiresAt,
         }));
         return;
       }
-      sendJson(connection.socket, cdpErrorValue(
+      respond(cdpErrorValue(
         id,
         -32000,
         settled.state === "pending"
@@ -501,10 +761,10 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
     }
     if (method === "Target.createBrowserContext" || method === "Target.disposeBrowserContext"
       || method === "Target.sendMessageToTarget") {
-      sendJson(connection.socket, cdpErrorValue(id, -32000, "The requested Target method is not supported.", "BROWSER_OPERATION_UNSUPPORTED"));
+      respond(cdpErrorValue(id, -32000, "The requested Target method is not supported.", "BROWSER_OPERATION_UNSUPPORTED"));
       return;
     }
-    sendJson(connection.socket, cdpErrorValue(id, -32601, "The Target method is outside the embedded browser profile.", "BROWSER_OPERATION_UNSUPPORTED"));
+    respond(cdpErrorValue(id, -32601, "The Target method is outside the embedded browser profile.", "BROWSER_OPERATION_UNSUPPORTED"));
   };
 
   const dispatchSessionMessage = async (
@@ -536,15 +796,24 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
       sendJson(connection.socket, { id, result: {}, sessionId: session.sessionId });
       return;
     }
+    if (record.method === "Target.setAutoAttach") {
+      EmbeddedBrowserTargetSetAutoAttachParamsSchema.parse(record.params ?? {});
+      // The renderer-webview host has no descendant targets. Chrome still
+      // accepts page-session auto-attach setup, so acknowledge it without
+      // forwarding an unsupported command into Electron's page debugger.
+      sendJson(connection.socket, { id, result: {}, sessionId: session.sessionId });
+      return;
+    }
     try {
       const target = service.leaseCommandTarget(connection.sessionRef, session.leaseRef);
-      const result = await relay.cdpSend(target.lease.sourceRef, target.lease.generation, {
+      const rawResult = await relay.cdpSend(target.lease.sourceRef, target.lease.generation, {
         leaseRef: session.leaseRef,
         method: record.method as string,
-        params: record.params === undefined ? {} : record.params,
+        params: hostCommandParams(session, record.params === undefined ? {} : record.params),
         requestId: `browserws_${session.leaseRef}_${crypto.randomUUID()}`,
         timeoutMs: EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
       }, EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS);
+      const result = clientResult(session, record.method as string, rawResult);
       if (!connection.closed) sendJson(connection.socket, { id, result, sessionId: session.sessionId });
     } catch (error) {
       if (!connection.closed) sendSessionError(connection.socket, id, session.sessionId, error);
@@ -582,8 +851,29 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
     const sessionId = typeof record.sessionId === "string" && record.sessionId.trim() ? record.sessionId : undefined;
     if (sessionId) {
       const session = connection.sessions.get(sessionId);
-      if (!session) {
+      const browserSession = connection.browserSessions.has(sessionId);
+      if (!session && !browserSession) {
         sendJson(connection.socket, cdpErrorValue(id, -32000, "The browser target session is unknown or stale.", "BROWSER_LEASE_STALE"));
+        return;
+      }
+      if (record.method !== "Target.setAutoAttach" && supportsEmbeddedBrowserTargetCdpMethod(record.method)) {
+        try {
+          await handleTargetMethod(connection, id, record.method, record.params, sessionId, session);
+        } catch (error) {
+          sendSessionError(connection.socket, id, sessionId, error);
+        }
+        return;
+      }
+      if (!session) {
+        if (record.method === "Runtime.runIfWaitingForDebugger") {
+          sendJson(connection.socket, { id, result: {}, sessionId });
+        } else {
+          sendSessionError(connection.socket, id, sessionId, new BrowserControlError(
+            "BROWSER_OPERATION_UNSUPPORTED",
+            "The CDP method is outside the embedded browser Target profile.",
+            400,
+          ));
+        }
         return;
       }
       await dispatchSessionMessage(connection, id, session, record);
@@ -743,7 +1033,8 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
       targets: new Map(),
       sessions: new Map(),
       targetSessions: new Map(),
-      queue: Promise.resolve(),
+      pendingAttachments: new Map(),
+      browserSessions: new Set(),
     };
     browserConnections.add(connection);
     const unsubscribeRelay = relay.subscribeCdpEvent((event: BrowserControlCdpEvent) => {
@@ -752,17 +1043,33 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
         if (event.leaseRef !== session.leaseRef) continue;
         sendJson(connection.socket, {
           method: event.method,
-          params: event.params ?? {},
+          params: clientEventParams(session, event.params ?? {}),
           sessionId: session.sessionId,
         });
         return;
       }
+    });
+    const unsubscribeDownloads = relay.subscribeDownloadEvent((event) => {
+      if (connection.closed) return;
+      const session = [...connection.sessions.values()].find((candidate) =>
+        candidate.tabRef === event.tabRef && candidate.sourceRef === event.sourceRef
+      );
+      if (!session) return;
+      sendJson(connection.socket, {
+        method: event.method,
+        params: event.method === "Browser.downloadWillBegin"
+          // Playwright sees the page's main frame as tabRef because Page.getFrameTree
+          // is translated at this boundary. Chrome includes frameId in the event.
+          ? { ...event.params, frameId: event.tabRef }
+          : event.params,
+      });
     });
     const close = () => {
       if (connection.closed) return;
       connection.closed = true;
       browserConnections.delete(connection);
       unsubscribeRelay();
+      unsubscribeDownloads();
       for (const session of [...connection.sessions.values()]) {
         let target;
         try { target = service.leaseCommandTarget(connection.sessionRef, session.leaseRef); } catch { target = undefined; }
@@ -779,12 +1086,17 @@ export function registerBrowserCdpBridgeRoutes(options: BrowserCdpBridgeOptions)
       }
       connection.sessions.clear();
       connection.targetSessions.clear();
+      connection.pendingAttachments.clear();
     };
     socket.on("close", close);
     socket.on("error", close);
     socket.on("message", (data: unknown) => {
       if (connection.closed) return;
-      connection.queue = connection.queue.then(() => dispatchBrowserMessage(connection, data)).catch(() => undefined);
+      // Chrome processes CDP commands concurrently. Playwright relies on this
+      // when a command whose promise waits for a Runtime binding needs a second
+      // command to deliver the binding result, and when Fetch pauses a request
+      // while its handler calls Fetch.continueRequest on the same connection.
+      void dispatchBrowserMessage(connection, data).catch(() => undefined);
     });
   });
 
@@ -885,11 +1197,12 @@ type PageSocketOptions = {
 function handlePageSocket(options: PageSocketOptions) {
   const { socket, service, relay, sessionExists, sessionRef, lease } = options;
   let closed = false;
+  const frameIds: FrameIdTranslation = { tabRef: options.tabRef };
   const unsubscribe = relay.subscribeCdpEvent((event: BrowserControlCdpEvent) => {
     if (closed || event.leaseRef !== lease.leaseRef) return;
     sendJson(socket, {
       method: event.method,
-      params: event.params ?? {},
+      params: clientEventParams(frameIds, event.params ?? {}),
       ...(event.frameSessionRef ? { sessionId: event.frameSessionRef } : {}),
     });
   });
@@ -914,15 +1227,15 @@ function handlePageSocket(options: PageSocketOptions) {
   socket.on("error", close);
   socket.on("message", (data: unknown) => {
     if (closed) return;
-    void dispatchPageMessage(options, data, () => closed);
+    void dispatchPageMessage(options, frameIds, data, () => closed);
   });
   for (const data of options.initialMessages ?? []) {
     if (closed) break;
-    void dispatchPageMessage(options, data, () => closed);
+    void dispatchPageMessage(options, frameIds, data, () => closed);
   }
 }
 
-async function dispatchPageMessage(options: PageSocketOptions, data: unknown, isClosed: () => boolean) {
+async function dispatchPageMessage(options: PageSocketOptions, frameIds: FrameIdTranslation, data: unknown, isClosed: () => boolean) {
   const { socket, service, relay, sessionExists, sessionRef, lease } = options;
   if (!sessionExists(sessionRef)) {
     sendJson(socket, cdpErrorValue(null, -32000, "The AI Session bound to this browser CDP token is closed.", "BROWSER_AUTHORIZATION_REVOKED"));
@@ -970,13 +1283,14 @@ async function dispatchPageMessage(options: PageSocketOptions, data: unknown, is
   })();
   if (!target || isClosed()) return;
   try {
-    const result = await relay.cdpSend(target.lease.sourceRef, target.lease.generation, {
+    const rawResult = await relay.cdpSend(target.lease.sourceRef, target.lease.generation, {
       leaseRef: lease.leaseRef,
       method: record.method,
-      params: record.params === undefined ? {} : record.params,
+      params: hostCommandParams(frameIds, record.params === undefined ? {} : record.params),
       requestId: `cdpws_${lease.leaseRef}_${crypto.randomUUID()}`,
       timeoutMs: EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
     }, EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS);
+    const result = clientResult(frameIds, record.method, rawResult);
     if (!isClosed()) sendJson(socket, { id, result });
   } catch (error) {
     if (isClosed()) return;

@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const os = require("node:os");
 const {
   EMBEDDED_BROWSER_MAX_PAGES_PER_SOURCE,
   EMBEDDED_BROWSER_SNAPSHOT_MAX_PAGES_PER_CHUNK,
@@ -16,6 +17,11 @@ function loadEmbeddedBrowserProtocol() {
   }
 }
 
+function desktopDisplayName() {
+  const hostname = String(os.hostname() || "").trim();
+  return hostname ? Array.from(hostname).slice(0, 160).join("") : "TaskHandoff Desktop";
+}
+
 class DesktopEmbeddedBrowserChannelManager {
   constructor(options = {}) {
     this.fetch = options.fetch;
@@ -24,8 +30,15 @@ class DesktopEmbeddedBrowserChannelManager {
     this.ChannelClient = options.ChannelClient || EmbeddedBrowserChannelClient;
     this.logInfo = options.logInfo || (() => undefined);
     this.logError = options.logError || (() => undefined);
+    this.publisherId = String(options.publisherId || crypto.randomUUID()).trim();
+    this.displayName = desktopDisplayName();
     this.sessions = new Map();
+    this.downloadController = options.downloadController;
     this.closed = false;
+  }
+
+  setDownloadController(controller) {
+    this.downloadController = controller;
   }
 
   async ensureSource(input) {
@@ -81,9 +94,9 @@ class DesktopEmbeddedBrowserChannelManager {
     const registration = await this.request(session, `/api/controlled-instances/${encodeURIComponent(session.instanceId)}/browser-control/sources`, {
       method: "POST",
       body: {
-        displayName: "TaskHandoff Desktop",
+        displayName: this.displayName,
         hostLabel: session.hostLabel || `Desktop window ${session.senderId}`,
-        publisherRef: `desktop:${session.senderId}:${session.instanceId}`,
+        publisherRef: `desktop:${this.publisherId}:${session.senderId}:${session.instanceId}`,
         rendererHostBinding: `renderer-host:${crypto.randomUUID()}`,
         pageHost: session.pageHost,
         pageHostCapabilities: session.pageHostCapabilities,
@@ -372,6 +385,30 @@ class DesktopEmbeddedBrowserChannelManager {
         this.notifyDeviceMetrics(session, lease.tabRef, params.method, params.params);
         return result;
       },
+      configureDownloads: async (params) => {
+        if (!session.sourceRef || params.sourceRef !== session.sourceRef || params.generation !== session.generation) {
+          throw browserChannelError("BROWSER_LEASE_STALE", "Browser download configuration belongs to a stale source.");
+        }
+        if (!this.downloadController) throw browserChannelError("BROWSER_OPERATION_UNSUPPORTED", "Download routing is unavailable.");
+        return this.downloadController.configure({
+          senderId: session.senderId,
+          instanceId: session.instanceId,
+          behavior: params.behavior,
+          ...(params.downloadPath ? { downloadPath: params.downloadPath } : {}),
+          ...(params.eventsEnabled === undefined ? {} : { eventsEnabled: params.eventsEnabled }),
+        });
+      },
+      cancelDownload: async (params) => {
+        if (!session.sourceRef || params.sourceRef !== session.sourceRef || params.generation !== session.generation) {
+          throw browserChannelError("BROWSER_LEASE_STALE", "Browser download cancellation belongs to a stale source.");
+        }
+        if (!this.downloadController) throw browserChannelError("BROWSER_OPERATION_UNSUPPORTED", "Download routing is unavailable.");
+        return this.downloadController.cancel({
+          senderId: session.senderId,
+          instanceId: session.instanceId,
+          guid: params.guid,
+        });
+      },
       closeTab: async (params) => {
         const tabRef = String(params?.tabRef || "").trim();
         if (!tabRef) throw browserChannelError("BROWSER_TAB_NOT_FOUND", "Browser tab was not found.");
@@ -416,6 +453,23 @@ class DesktopEmbeddedBrowserChannelManager {
           return;
         }
       }
+    }
+  }
+
+  handleDownloadEvent(event) {
+    if (this.closed || !event?.instanceId || !Number.isInteger(event.webContentsId)) return;
+    for (const senderId of event.senderIds ?? []) {
+      const session = this.sessions.get(sessionKey(senderId, event.instanceId));
+      if (!session || session.closed || session.channel?.state !== "ready") continue;
+      if (event.controlPlaneUrl && session.controlPlaneUrl && new URL(event.controlPlaneUrl).origin !== new URL(session.controlPlaneUrl).origin) continue;
+      const entry = this.registry.getByGuestId?.(event.webContentsId, senderId);
+      if (!entry || entry.instanceId !== event.instanceId) continue;
+      session.channel.notifyDownloadEvent({
+        sourceRef: session.sourceRef,
+        tabRef: entry.tabRef,
+        method: event.method,
+        params: event.params,
+      });
     }
   }
 

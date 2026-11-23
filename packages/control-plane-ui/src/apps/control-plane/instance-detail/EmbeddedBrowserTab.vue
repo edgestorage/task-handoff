@@ -1,5 +1,5 @@
 <template>
-  <div class="embedded-browser" :class="{ 'start-page-active': showStartPage }" :data-state="state">
+  <div class="embedded-browser" :class="{ 'start-page-active': showStartPage, 'capture-active': captureActive }" :data-state="state">
     <div class="embedded-browser-toolbar">
       <Button variant="ghost" size="icon" :disabled="!canGoBack" :title="t('sessions.browser.back')" :aria-label="t('sessions.browser.back')" @click="goBack">
         <ArrowLeft :size="15" />
@@ -62,7 +62,8 @@
                 @pointerenter="activeSuggestionIndex = index"
                 @click="selectSuggestion(suggestion)"
               >
-                <Pin v-if="suggestion.kind === 'pinned'" :size="14" />
+                <Globe2 v-if="suggestion.kind === 'typed'" :size="14" />
+                <Pin v-else-if="suggestion.kind === 'pinned'" :size="14" />
                 <History v-else :size="14" />
                 <span class="embedded-browser-suggestion-copy"><span>{{ suggestion.title }}</span><small>{{ suggestion.url }}</small></span>
               </button>
@@ -407,7 +408,7 @@ type GuestWebView = HTMLElement & {
 
 export type BrowserOpenPage = { key: string; title?: string; url?: string; status?: string };
 
-const props = defineProps<{ instanceId: string; pageKey?: string; initialUrl?: string; creationRef?: string; backgroundThrottled?: boolean; openPages?: BrowserOpenPage[] }>();
+const props = defineProps<{ instanceId: string; pageKey?: string; initialUrl?: string; creationRef?: string; backgroundThrottled?: boolean; captureActive?: boolean; openPages?: BrowserOpenPage[] }>();
 const emit = defineEmits<{
   updateTab: [patch: { title?: string; url?: string; status?: string }];
   closeTab: [];
@@ -1114,6 +1115,7 @@ function navigate(value: string) {
   try {
     clearLoadFailure();
     const url = normalizeDesktopBrowserUrl(value);
+    address.value = url;
     // Queue the request until Electron has confirmed the guest is ready. The
     // guest remains mounted while the start page is shown, so this also works
     // when submitting a second URL from the address bar.
@@ -1483,6 +1485,7 @@ async function revokeCreationContextForOwnPanel(panel: EmbeddedBrowserCreationPa
 .embedded-browser-surface { position: relative; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; pointer-events: auto; background: #fff; }
 .embedded-browser-surface webview { display: flex; width: 100%; height: 100%; }
 .embedded-browser.start-page-active .embedded-browser-surface webview { visibility: hidden; }
+.embedded-browser.start-page-active.capture-active .embedded-browser-surface webview { visibility: visible; }
 .embedded-browser-device-toolbar { display: flex; flex: 0 0 auto; align-items: center; min-height: 38px; gap: 7px; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 4px 8px; background: var(--surface-inset); color: var(--text-muted); }
 .embedded-browser-device-toolbar > button { width: 28px; height: 28px; flex: 0 0 28px; }
 .embedded-browser-device-toolbar :deep(.embedded-browser-device-select) { width: 160px; min-height: 28px; height: 28px; padding: 0 7px; font-size: 12px; }

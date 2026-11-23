@@ -20,6 +20,15 @@ function fakeHost(id = 11) {
   return { id };
 }
 
+function fakeDebuggerApi() {
+  const api = new EventEmitter();
+  api.attach = () => undefined;
+  api.detach = () => undefined;
+  api.isAttached = () => false;
+  api.sendCommand = async () => ({});
+  return api;
+}
+
 function registry(options = {}) {
   let sequence = 0;
   return new DesktopBrowserGuestRegistry({ createId: () => `browser_tab_test_${++sequence}`, ...options });
@@ -165,6 +174,34 @@ test("CDP attach, send and detach stay bound to the registered guest", async () 
   assert.deepEqual(calls.map(([name]) => name), ["attach", "attach", "detach"]);
 });
 
+test("CDP debugger listeners are removed on detach instead of accumulating", () => {
+  const events = [];
+  const debuggerApi = new EventEmitter();
+  debuggerApi.attach = () => undefined;
+  debuggerApi.detach = () => undefined;
+  debuggerApi.isAttached = () => false;
+  debuggerApi.sendCommand = async () => ({});
+  const store = registry({ onCdpEvent: (event) => events.push(event) });
+  const host = fakeHost();
+  const guest = fakeGuest(41, debuggerApi);
+  store.addGuest({ host, guest, partition: "persist:instance-a" });
+  const tab = store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "key-a", partition: "persist:instance-a" });
+
+  store.attachDebugger({ tabRef: tab.tabRef, senderId: host.id });
+  assert.equal(debuggerApi.listenerCount("message"), 1);
+  debuggerApi.emit("message", {}, "Page.loadEventFired", { timestamp: 1 });
+  assert.equal(events.length, 1);
+
+  store.detachDebugger({ tabRef: tab.tabRef, senderId: host.id });
+  assert.equal(debuggerApi.listenerCount("message"), 0);
+  assert.equal(debuggerApi.listenerCount("detach"), 0);
+
+  store.attachDebugger({ tabRef: tab.tabRef, senderId: host.id });
+  assert.equal(debuggerApi.listenerCount("message"), 1);
+  debuggerApi.emit("message", {}, "Page.loadEventFired", { timestamp: 2 });
+  assert.equal(events.length, 2);
+});
+
 test("Page.reload stays scoped to the guest webContents instead of the embedding renderer", async () => {
   const debuggerCalls = [];
   const reloads = [];
@@ -208,8 +245,8 @@ test("Page.captureScreenshot uses the guest webContents instead of the debugger"
   const store = registry();
   const host = fakeHost();
   const guest = fakeGuest(41, debuggerApi);
-  guest.capturePage = async (rect) => {
-    captures.push(rect);
+  guest.capturePage = async (rect, options) => {
+    captures.push({ rect, options });
     return image;
   };
   store.addGuest({ host, guest, partition: "persist:instance-a" });
@@ -221,11 +258,106 @@ test("Page.captureScreenshot uses the guest webContents instead of the debugger"
     quality: 75,
     clip: { x: 10, y: 20, width: 300, height: 200, scale: 2 },
   } }), { data: Buffer.from("jpeg-75").toString("base64") });
-  assert.deepEqual(captures, [{ x: 10, y: 20, width: 300, height: 200 }]);
+  assert.deepEqual(captures, [{ rect: { x: 10, y: 20, width: 300, height: 200 }, options: { stayHidden: true, stayAwake: true } }]);
   assert.deepEqual(debuggerCalls, []);
 });
 
-test("guest and host destruction clear tabRefs and debugger ownership", () => {
+test("Page.captureScreenshot exposes a capture surface and restores throttling", async () => {
+  const order = [];
+  const throttled = [];
+  const image = {
+    isEmpty: () => false,
+    toPNG: () => Buffer.from("png-bytes"),
+    toJPEG: () => Buffer.from("jpeg-bytes"),
+  };
+  const store = registry({
+    captureSurface: {
+      prepare: async ({ width, height }) => {
+        order.push(`prepare:${width}x${height}`);
+        return { requestId: "capture-1" };
+      },
+      release: async ({ token }) => order.push(`release:${token?.requestId}`),
+    },
+  });
+  const host = fakeHost();
+  const guest = fakeGuest(43, fakeDebuggerApi());
+  guest.capturePage = async () => {
+    order.push("capture");
+    return image;
+  };
+  guest.setBackgroundThrottling = (value) => {
+    throttled.push(value);
+    order.push(`throttled:${value}`);
+  };
+  store.addGuest({ host, guest, partition: "persist:instance-a" });
+  const tab = store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "page-a", partition: "persist:instance-a" });
+  store.attachDebugger({ tabRef: tab.tabRef, senderId: host.id });
+  store.setBackgroundThrottled({ webContentsId: guest.id, senderId: host.id, throttled: true });
+  order.length = 0;
+  throttled.length = 0;
+
+  const result = await store.sendCommand({ tabRef: tab.tabRef, senderId: host.id, method: "Page.captureScreenshot", params: { format: "png" } });
+
+  assert.deepEqual(result, { data: Buffer.from("png-bytes").toString("base64") });
+  assert.deepEqual(order, ["throttled:false", "prepare:1280x720", "capture", "release:capture-1", "throttled:true"]);
+  assert.deepEqual(throttled, [false, true]);
+});
+
+test("Page.captureScreenshot fails with a structured error and releases the surface when capture hangs", async () => {
+  const releases = [];
+  const store = registry({
+    captureTimeoutMs: 20,
+    captureSurface: {
+      prepare: async () => ({ requestId: "capture-2" }),
+      release: async ({ token }) => releases.push(token?.requestId),
+    },
+  });
+  const host = fakeHost();
+  const guest = fakeGuest(44, fakeDebuggerApi());
+  guest.capturePage = () => new Promise(() => undefined);
+  store.addGuest({ host, guest, partition: "persist:instance-a" });
+  const tab = store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "page-b", partition: "persist:instance-a" });
+  store.attachDebugger({ tabRef: tab.tabRef, senderId: host.id });
+
+  await assert.rejects(
+    store.sendCommand({ tabRef: tab.tabRef, senderId: host.id, method: "Page.captureScreenshot", params: {} }),
+    (error) => error.code === "BROWSER_CDP_ERROR" && /timed out/.test(error.message),
+  );
+  assert.deepEqual(releases, ["capture-2"]);
+});
+
+test("closing a tab with an attached debugger is safe after the guest is destroyed", () => {
+  const debuggerApi = new EventEmitter();
+  debuggerApi.attach = () => undefined;
+  debuggerApi.detach = () => undefined;
+  debuggerApi.isAttached = () => false;
+  debuggerApi.sendCommand = async () => ({});
+  const guest = fakeGuest(42);
+  let destroyed = false;
+  Object.defineProperty(guest, "debugger", {
+    get() {
+      if (destroyed) throw new Error("Object has been destroyed");
+      return debuggerApi;
+    },
+  });
+  const originalClose = guest.close;
+  guest.close = () => {
+    destroyed = true;
+    originalClose();
+  };
+  const store = registry();
+  const host = fakeHost();
+  store.addGuest({ host, guest, partition: "persist:instance-a" });
+  const tab = store.register({ senderId: host.id, webContentsId: guest.id, instanceId: "instance-a", sessionKey: "key-a", partition: "persist:instance-a" });
+  store.attachDebugger({ tabRef: tab.tabRef, senderId: host.id });
+
+  assert.doesNotThrow(() => store.close({ tabRef: tab.tabRef, senderId: host.id }));
+  assert.equal(store.get(tab.tabRef), undefined);
+  assert.equal(debuggerApi.listenerCount("message"), 0);
+  assert.equal(debuggerApi.listenerCount("detach"), 0);
+});
+
+test("guest and host destruction clear tabRefs without touching a destroyed debugger", () => {
   const removals = [];
   const store = registry({ onRemoved: (entry) => removals.push(entry) });
   const host = fakeHost();
@@ -239,7 +371,7 @@ test("guest and host destruction clear tabRefs and debugger ownership", () => {
   assert.equal(store.get(tab.tabRef), undefined);
   assert.equal(store.getByGuestId(guest.id), undefined);
   assert.equal(removals.find((entry) => entry.reason === "destroyed")?.tabRef, tab.tabRef);
-  assert.equal(removals.some((entry) => entry.detached), true);
+  assert.equal(removals.some((entry) => entry.detached), false);
 
   const secondGuest = fakeGuest(42);
   store.addGuest({ host, guest: secondGuest, partition: "persist:instance-a" });

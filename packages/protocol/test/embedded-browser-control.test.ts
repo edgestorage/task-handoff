@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   EMBEDDED_BROWSER_CDP_PROFILE,
   EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES,
+  EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES,
   EMBEDDED_BROWSER_FRAME_HEADER_BYTES,
   EMBEDDED_BROWSER_HTTP_RESULT_MAX_BYTES,
   EMBEDDED_BROWSER_TARGET_CDP_PROFILE,
@@ -32,6 +33,7 @@ import {
   EmbeddedBrowserTargetCreateTargetParamsSchema,
   EmbeddedBrowserTargetDetachFromTargetParamsSchema,
   EmbeddedBrowserTargetGetBrowserContextsResultSchema,
+  EmbeddedBrowserTargetGetTargetInfoResultSchema,
   EmbeddedBrowserTargetInfoSchema,
   EmbeddedBrowserTargetSetAutoAttachParamsSchema,
   EmbeddedBrowserTabsOpenParamsSchema,
@@ -170,12 +172,19 @@ test("the CDP profile is a method and namespace allowlist with stable classes an
   assert.equal(embeddedBrowserCdpMethodKind("Accessibility.getFullAXTree"), "read");
   assert.equal(embeddedBrowserCdpMethodKind("Network.enable"), "session");
   assert.equal(embeddedBrowserCdpMethodKind("Runtime.releaseObject"), "session");
+  assert.equal(embeddedBrowserCdpMethodKind("Fetch.continueRequest"), "page-write");
+  assert.equal(embeddedBrowserCdpMethodKind("Network.emulateNetworkConditions"), "session");
+  assert.equal(embeddedBrowserCdpMethodKind("Page.handleJavaScriptDialog"), "page-write");
+  assert.equal(embeddedBrowserCdpMethodKind("Page.navigateToHistoryEntry"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Emulation.setDeviceMetricsOverride"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Emulation.setUserAgentOverride"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Target.attachToTarget"), undefined);
   assert.equal(embeddedBrowserCdpMethodKind("Browser.getVersion"), undefined);
   assert.equal(embeddedBrowserCdpMethodKind("Page.navigate\nRuntime.evaluate"), undefined);
   assert.equal(supportsEmbeddedBrowserCdpEvent("Page.lifecycleEvent"), true);
+  assert.equal(supportsEmbeddedBrowserCdpEvent("Runtime.bindingCalled"), true);
+  assert.equal(supportsEmbeddedBrowserCdpEvent("Fetch.requestPaused"), true);
+  assert.equal(supportsEmbeddedBrowserCdpEvent("Page.fileChooserOpened"), true);
   assert.equal(supportsEmbeddedBrowserCdpEvent("Target.targetCreated"), false);
   assert.throws(() => assertEmbeddedBrowserCdpMethod("Target.attachToTarget"), { code: "BROWSER_OPERATION_UNSUPPORTED" });
   assert.equal(assertEmbeddedBrowserCdpMethod("Network.enable"), "Network.enable");
@@ -208,13 +217,41 @@ test("source registration carries the desktop host's CDP identity", () => {
 test("the CDP protocol document lists the browser and page methods Chrome clients discover", () => {
   const document = embeddedBrowserCdpProtocolDocument();
   const domain = (name: string) => document.domains.find((entry) => entry.domain === name);
-  assert.deepEqual(domain("Browser")?.commands, [{ name: "getVersion" }]);
+  assert.deepEqual(domain("Browser")?.commands, [
+    { name: "cancelDownload" },
+    { name: "getVersion" },
+    { name: "setDownloadBehavior" },
+  ]);
+  assert.deepEqual(domain("Browser")?.events, [{ name: "downloadProgress" }, { name: "downloadWillBegin" }]);
+  assert.ok(domain("Schema")?.commands?.some((command) => command.name === "getDomains"));
   assert.ok(domain("Target")?.commands?.some((command) => command.name === "setAutoAttach"));
   assert.ok(domain("Target")?.events?.some((event) => event.name === "attachedToTarget"));
   assert.ok(domain("Page")?.commands?.some((command) => command.name === "captureScreenshot"));
   assert.ok(domain("Emulation")?.commands?.some((command) => command.name === "setFocusEmulationEnabled"));
   assert.equal(document.version.major, "1");
   assert.equal(document.version.minor, "3");
+});
+
+test("control messages may exceed one frame while the frame payload stays bounded", () => {
+  assert.equal(EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES, 16 * 1024 * 1024);
+  const large = encodeEmbeddedBrowserControlMessage({ data: "x".repeat(EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES * 2) });
+  assert.ok(large.byteLength > EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES);
+  const decoder = new EmbeddedBrowserControlMessageDecoder();
+  const values = [];
+  for (let offset = 0; offset < large.byteLength; offset += EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES) {
+    values.push(...decoder.push(large.subarray(offset, offset + EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES)));
+  }
+  assert.equal(values.length, 1);
+  assert.equal((values[0] as { data: string }).data.length, EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES * 2);
+  decoder.finish();
+});
+
+test("Target.getTargetInfo accepts browser-root discovery without a target id", () => {
+  const parsed = EmbeddedBrowserTargetGetTargetInfoResultSchema.parse({
+    targetInfo: { targetId: "browser-root", type: "browser", title: "", url: "", attached: true },
+  });
+  assert.equal(parsed.targetInfo.type, "browser");
+  assert.equal(parsed.targetInfo.targetId, "browser-root");
 });
 
 test("Target.setAutoAttach accepts Chrome filters and requires flattened sessions", () => {

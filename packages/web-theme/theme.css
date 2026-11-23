@@ -1,6 +1,6 @@
 @layer base {
   :root,
-  [data-theme="light"] {
+  :root[data-theme="light"] {
     color-scheme: light;
     --background: 210 20% 98%;
     --foreground: 222 47% 11%;
@@ -259,8 +259,8 @@
     --ai-session-detail-open-text: var(--ai-board-floating-hover-text);
   }
 
-  .dark,
-  [data-theme="dark"] {
+  :root.dark,
+  :root[data-theme="dark"] {
     color-scheme: dark;
     --background: 195 45% 5%;
     --foreground: 190 28% 93%;

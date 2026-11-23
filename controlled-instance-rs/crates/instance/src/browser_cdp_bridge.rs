@@ -10,8 +10,11 @@ use axum::{
 };
 use controlled_instance_protocol::{
     assert_embedded_browser_cdp_method, embedded_browser_cdp_protocol_document, mint_entity_id,
-    EmbeddedBrowserCdpCommand, EmbeddedBrowserCreationStatus, EmbeddedBrowserLease,
-    EmbeddedBrowserTabsCloseParams, EmbeddedBrowserTargetAttachParams,
+    supports_embedded_browser_target_cdp_method, EmbeddedBrowserBrowserCancelDownloadParams,
+    EmbeddedBrowserBrowserSetDownloadBehaviorParams, EmbeddedBrowserBrowserTargetInfo,
+    EmbeddedBrowserCdpCommand, EmbeddedBrowserCdpTargetInfo, EmbeddedBrowserCreationStatus,
+    EmbeddedBrowserDownloadsCancelParams, EmbeddedBrowserDownloadsConfigureParams,
+    EmbeddedBrowserLease, EmbeddedBrowserTabsCloseParams, EmbeddedBrowserTargetAttachParams,
     EmbeddedBrowserTargetAttachToTargetParams, EmbeddedBrowserTargetAttachToTargetResult,
     EmbeddedBrowserTargetCloseTargetParams, EmbeddedBrowserTargetCloseTargetResult,
     EmbeddedBrowserTargetCreateTargetParams, EmbeddedBrowserTargetCreateTargetResult,
@@ -28,6 +31,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -56,7 +60,9 @@ struct BrowserAutoAttach {
 struct BrowserCdpConnection {
     session_ref: String,
     attached: HashMap<String, EmbeddedBrowserLease>,
+    browser_sessions: HashSet<String>,
     target_sessions: HashMap<String, String>,
+    main_frame_ids: Arc<Mutex<HashMap<String, String>>>,
     auto_attach: Option<BrowserAutoAttach>,
     discover: bool,
     known_targets: BTreeMap<String, EmbeddedBrowserTargetInfo>,
@@ -67,12 +73,155 @@ impl BrowserCdpConnection {
         Self {
             session_ref,
             attached: HashMap::new(),
+            browser_sessions: HashSet::new(),
             target_sessions: HashMap::new(),
+            main_frame_ids: Arc::new(Mutex::new(HashMap::new())),
             auto_attach: None,
             discover: false,
             known_targets: BTreeMap::new(),
         }
     }
+}
+
+struct ParsedBrowserCommand {
+    id: Value,
+    method: String,
+    params: Value,
+    session_id: Option<String>,
+}
+
+fn parse_browser_command(bytes: &[u8]) -> Result<ParsedBrowserCommand, Value> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| cdp_error_value(Value::Null, -32700, "Parse error", None))?;
+    let Some(object) = value.as_object() else {
+        return Err(cdp_error_value(
+            Value::Null,
+            -32600,
+            "Invalid request",
+            None,
+        ));
+    };
+    let id = object.get("id").cloned().unwrap_or(Value::Null);
+    if id.is_null() {
+        return Err(cdp_error_value(
+            id,
+            -32600,
+            "A CDP command id is required.",
+            None,
+        ));
+    }
+    let Some(method) = object.get("method").and_then(Value::as_str) else {
+        return Err(cdp_error_value(
+            id,
+            -32600,
+            "A CDP method is required.",
+            None,
+        ));
+    };
+    let session_id = object
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    Ok(ParsedBrowserCommand {
+        id,
+        method: method.to_string(),
+        params: object.get("params").cloned().unwrap_or_else(|| json!({})),
+        session_id,
+    })
+}
+
+fn send_browser_command_response(
+    outbound: &mpsc::Sender<Message>,
+    mut response: Value,
+    session_id: Option<&str>,
+) {
+    if let (Some(session_id), Some(object)) = (session_id, response.as_object_mut()) {
+        object
+            .entry("sessionId".to_string())
+            .or_insert_with(|| Value::String(session_id.to_string()));
+    }
+    let _ = outbound.try_send(Message::Text(response.to_string().into()));
+}
+
+fn main_frame_id_from_frame_tree(result: &Value) -> Option<String> {
+    result
+        .pointer("/frameTree/frame/id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn replace_strings(value: &Value, from: &str, to: &str) -> Value {
+    match value {
+        Value::String(current) if current == from => Value::String(to.to_string()),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| replace_strings(item, from, to))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, item)| (key.clone(), replace_strings(item, from, to)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn replace_frame_id_fields(value: &Value, from: &str, to: &str) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| replace_frame_id_fields(item, from, to))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, item)| {
+                    let next = if (key == "frameId" || key == "parentFrameId")
+                        && item.as_str() == Some(from)
+                    {
+                        Value::String(to.to_string())
+                    } else {
+                        replace_frame_id_fields(item, from, to)
+                    };
+                    (key.clone(), next)
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn download_source(
+    state: &AppState,
+    connection: &BrowserCdpConnection,
+    browser_context_id: Option<&str>,
+    request_session_id: Option<&str>,
+) -> Option<(String, u64)> {
+    let session_lease =
+        request_session_id.and_then(|session_id| connection.attached.get(session_id));
+    let source_ref = browser_context_id
+        .map(str::to_string)
+        .or_else(|| session_lease.map(|lease| lease.source_ref.clone()))
+        .or_else(|| {
+            connection
+                .attached
+                .values()
+                .next()
+                .map(|lease| lease.source_ref.clone())
+        })?;
+    let generation = connection
+        .attached
+        .values()
+        .find(|lease| lease.source_ref == source_ref)
+        .map(|lease| lease.generation)
+        .or_else(|| state.browser_control.source_generation(&source_ref))?;
+    Some((source_ref, generation))
 }
 
 pub(crate) fn is_path(path: &str) -> bool {
@@ -376,10 +525,10 @@ async fn handle_browser_socket(state: AppState, socket: WebSocket, session_ref: 
                 let Some(Ok(message)) = incoming else { break; };
                 match message {
                     Message::Text(text) => {
-                        dispatch_browser_command(&state, &mut connection, &outbound, text.as_bytes()).await;
+                        handle_browser_socket_message(&state, &mut connection, &outbound, text.as_bytes()).await;
                     }
                     Message::Binary(bytes) => {
-                        dispatch_browser_command(&state, &mut connection, &outbound, &bytes).await;
+                        handle_browser_socket_message(&state, &mut connection, &outbound, &bytes).await;
                     }
                     Message::Close(_) => break,
                     Message::Ping(_) | Message::Pong(_) => {}
@@ -397,17 +546,56 @@ async fn handle_browser_socket(state: AppState, socket: WebSocket, session_ref: 
                         continue;
                     }
                     let Some(lease_ref) = payload.get("leaseRef").and_then(Value::as_str) else { continue; };
-                    let Some(session_id) = connection
+                    let Some((session_id, tab_ref)) = connection
                         .attached
                         .iter()
-                        .find_map(|(session_id, lease)| (lease.lease_ref == lease_ref).then(|| session_id.clone()))
+                        .find_map(|(session_id, lease)| {
+                            (lease.lease_ref == lease_ref)
+                                .then(|| (session_id.clone(), lease.tab_ref.clone()))
+                        })
                     else { continue; };
                     let Some(method) = payload.get("method").and_then(Value::as_str) else { continue; };
+                    let params = payload.get("params").cloned().unwrap_or_else(|| json!({}));
+                    let main_frame_id = connection
+                        .main_frame_ids
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .get(&session_id)
+                        .cloned();
+                    let params = main_frame_id
+                        .as_deref()
+                        .map(|main_frame_id| replace_strings(&params, main_frame_id, &tab_ref))
+                        .unwrap_or(params);
                     let notification = json!({
                         "method": method,
-                        "params": payload.get("params").cloned().unwrap_or_else(|| json!({})),
+                        "params": params,
                         "sessionId": session_id,
                     });
+                    if outbound.try_send(Message::Text(notification.to_string().into())).is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                if event.r#type == "browser.control.download-event" {
+                    let Some(payload) = event.payload.as_object() else { continue; };
+                    let Some(source_ref) = payload.get("sourceRef").and_then(Value::as_str) else { continue; };
+                    let Some(generation) = payload.get("generation").and_then(Value::as_u64) else { continue; };
+                    let Some(tab_ref) = payload.get("tabRef").and_then(Value::as_str) else { continue; };
+                    if !connection.attached.values().any(|lease| {
+                        lease.source_ref == source_ref
+                            && lease.generation == generation
+                            && lease.tab_ref == tab_ref
+                    }) {
+                        continue;
+                    }
+                    let Some(method) = payload.get("method").and_then(Value::as_str) else { continue; };
+                    let mut params = payload.get("params").cloned().unwrap_or_else(|| json!({}));
+                    if method == "Browser.downloadWillBegin" {
+                        if let Some(object) = params.as_object_mut() {
+                            object.insert("frameId".to_string(), json!(tab_ref));
+                        }
+                    }
+                    let notification = json!({ "method": method, "params": params });
                     if outbound.try_send(Message::Text(notification.to_string().into())).is_err() {
                         break;
                     }
@@ -432,67 +620,75 @@ async fn handle_browser_socket(state: AppState, socket: WebSocket, session_ref: 
     tracing::debug!("CDP browser websocket closed");
 }
 
-async fn dispatch_browser_command(
+async fn handle_browser_socket_message(
     state: &AppState,
     connection: &mut BrowserCdpConnection,
     outbound: &mpsc::Sender<Message>,
     bytes: &[u8],
 ) {
-    let value: Value = match serde_json::from_slice(bytes) {
-        Ok(value) => value,
-        Err(_) => {
-            let _ = outbound.try_send(Message::Text(
-                cdp_error_value(Value::Null, -32700, "Parse error", None)
-                    .to_string()
-                    .into(),
-            ));
+    let command = match parse_browser_command(bytes) {
+        Ok(command) => command,
+        Err(error) => {
+            let _ = outbound.try_send(Message::Text(error.to_string().into()));
             return;
         }
     };
-    let Some(object) = value.as_object() else {
-        let _ = outbound.try_send(Message::Text(
-            cdp_error_value(Value::Null, -32600, "Invalid request", None)
-                .to_string()
-                .into(),
-        ));
-        return;
-    };
-    let id = object.get("id").cloned().unwrap_or(Value::Null);
-    if id.is_null() {
-        let _ = outbound.try_send(Message::Text(
-            cdp_error_value(id, -32600, "A CDP command id is required.", None)
-                .to_string()
-                .into(),
-        ));
-        return;
-    }
-    let Some(method) = object.get("method").and_then(Value::as_str) else {
-        let _ = outbound.try_send(Message::Text(
-            cdp_error_value(id, -32600, "A CDP method is required.", None)
-                .to_string()
-                .into(),
-        ));
-        return;
-    };
-    let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
-    let session_id = object
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let (mut response, notifications) = if let Some(session_id) = session_id {
-        dispatch_browser_session_command(state, connection, &id, session_id, method, params).await
-    } else {
-        dispatch_browser_target_command(state, connection, &id, method, params).await
-    };
-    if let Some(session_id) = session_id {
-        if let Some(object) = response.as_object_mut() {
-            object
-                .entry("sessionId".to_string())
-                .or_insert_with(|| Value::String(session_id.to_string()));
+    if let Some(session_id) = command.session_id.clone() {
+        let page_session = connection.attached.contains_key(&session_id);
+        let browser_session = connection.browser_sessions.contains(&session_id);
+        if !page_session && !browser_session {
+            let response = cdp_error_value(
+                command.id,
+                -32000,
+                "The browser target session is unknown or stale.",
+                Some("BROWSER_LEASE_STALE"),
+            );
+            send_browser_command_response(outbound, response, Some(&session_id));
+            return;
         }
+        if command.method != "Target.setAutoAttach"
+            && supports_embedded_browser_target_cdp_method(&command.method)
+        {
+            let ParsedBrowserCommand {
+                id, method, params, ..
+            } = command;
+            let (response, notifications) = dispatch_browser_target_command(
+                state,
+                connection,
+                &id,
+                &method,
+                params,
+                Some(&session_id),
+            )
+            .await;
+            send_browser_command_response(outbound, response, Some(&session_id));
+            for mut notification in notifications {
+                if let Some(object) = notification.as_object_mut() {
+                    object
+                        .entry("sessionId".to_string())
+                        .or_insert_with(|| Value::String(session_id.clone()));
+                }
+                let _ = outbound.try_send(Message::Text(notification.to_string().into()));
+            }
+            prune_stale_browser_attachments(state, connection, outbound);
+            if connection.discover {
+                emit_discovery_changes(state, connection, outbound);
+            }
+            return;
+        }
+        start_browser_session_command(state, connection, outbound, command, session_id);
+        prune_stale_browser_attachments(state, connection, outbound);
+        if connection.discover {
+            emit_discovery_changes(state, connection, outbound);
+        }
+        return;
     }
-    let _ = outbound.try_send(Message::Text(response.to_string().into()));
+    let id = command.id;
+    let method = command.method;
+    let params = command.params;
+    let (response, notifications) =
+        dispatch_browser_target_command(state, connection, &id, &method, params, None).await;
+    send_browser_command_response(outbound, response, None);
     for notification in notifications {
         let _ = outbound.try_send(Message::Text(notification.to_string().into()));
     }
@@ -502,81 +698,166 @@ async fn dispatch_browser_command(
     }
 }
 
-async fn dispatch_browser_session_command(
+fn start_browser_session_command(
     state: &AppState,
     connection: &mut BrowserCdpConnection,
-    id: &Value,
-    session_id: &str,
-    method: &str,
-    params: Value,
-) -> (Value, Vec<Value>) {
+    outbound: &mpsc::Sender<Message>,
+    command: ParsedBrowserCommand,
+    session_id: String,
+) {
+    let ParsedBrowserCommand {
+        id, method, params, ..
+    } = command;
+    if method == "Target.setAutoAttach" {
+        let params: EmbeddedBrowserTargetSetAutoAttachParams = match serde_json::from_value(params)
+        {
+            Ok(params) => params,
+            Err(_) => {
+                send_browser_command_response(
+                    outbound,
+                    invalid_browser_params(&id),
+                    Some(&session_id),
+                );
+                return;
+            }
+        };
+        if params.validate().is_err() {
+            send_browser_command_response(outbound, invalid_browser_params(&id), Some(&session_id));
+            return;
+        }
+        // The renderer-webview host has no descendant targets, but Chrome
+        // clients configure page-session auto-attach during initialization.
+        send_browser_command_response(
+            outbound,
+            json!({ "id": id, "result": {} }),
+            Some(&session_id),
+        );
+        return;
+    }
     if method.starts_with("Target.") {
-        return (
+        send_browser_command_response(
+            outbound,
             unsupported_browser_method(
-                id,
+                &id,
                 "Target methods cannot be nested inside a target session.",
             ),
-            Vec::new(),
+            Some(&session_id),
         );
+        return;
     }
-    if assert_embedded_browser_cdp_method(method).is_err() {
-        return (
-            unsupported_browser_method(id, "The CDP method is outside the embedded page profile."),
-            Vec::new(),
+    if assert_embedded_browser_cdp_method(&method).is_err() {
+        send_browser_command_response(
+            outbound,
+            unsupported_browser_method(&id, "The CDP method is outside the embedded page profile."),
+            Some(&session_id),
         );
+        return;
     }
     if method == "Runtime.runIfWaitingForDebugger" {
-        return (json!({ "id": id, "result": {} }), Vec::new());
+        send_browser_command_response(
+            outbound,
+            json!({ "id": id, "result": {} }),
+            Some(&session_id),
+        );
+        return;
     }
-    let Some(lease) = connection.attached.get(session_id).cloned() else {
-        return (
+    let Some(lease) = connection.attached.get(&session_id).cloned() else {
+        send_browser_command_response(
+            outbound,
             cdp_error_value(
-                id.clone(),
+                id,
                 -32000,
                 "The browser target session is stale.",
                 Some("BROWSER_LEASE_STALE"),
             ),
-            Vec::new(),
+            Some(&session_id),
         );
+        return;
     };
     if state
         .browser_control
         .lease_command_target(&connection.session_ref, &lease.lease_ref)
         .is_err()
     {
-        connection.attached.remove(session_id);
-        return (
+        connection.attached.remove(&session_id);
+        connection
+            .main_frame_ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&session_id);
+        send_browser_command_response(
+            outbound,
             cdp_error_value(
-                id.clone(),
+                id,
                 -32000,
                 "The browser target session is stale.",
                 Some("BROWSER_LEASE_STALE"),
             ),
-            vec![detached_notification(session_id, &lease.tab_ref)],
+            Some(&session_id),
         );
+        let _ = outbound.try_send(Message::Text(
+            detached_notification(&session_id, &lease.tab_ref)
+                .to_string()
+                .into(),
+        ));
+        return;
     }
-    let request_id = format!("cdpws_{}_{}", lease.lease_ref, uuid::Uuid::new_v4());
-    let command = EmbeddedBrowserCdpCommand {
-        lease_ref: lease.lease_ref.clone(),
-        method: method.to_string(),
-        params: Some(params),
-        frame_session_ref: None,
-        request_id,
-        timeout_ms: EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
-    };
-    match state
-        .browser_control_relay
-        .cdp_send(
-            &lease.source_ref,
-            lease.generation,
-            command,
-            Duration::from_millis(EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS),
-        )
-        .await
-    {
-        Ok(result) => (json!({ "id": id, "result": result }), Vec::new()),
-        Err(error) => (browser_error_value(id.clone(), &error), Vec::new()),
-    }
+    let main_frame_id = connection
+        .main_frame_ids
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&session_id)
+        .cloned();
+    let params = main_frame_id
+        .as_deref()
+        .map(|main_frame_id| replace_frame_id_fields(&params, &lease.tab_ref, main_frame_id))
+        .unwrap_or(params);
+    let state = state.clone();
+    let outbound = outbound.clone();
+    let main_frame_ids = Arc::clone(&connection.main_frame_ids);
+    tokio::spawn(async move {
+        let command = EmbeddedBrowserCdpCommand {
+            lease_ref: lease.lease_ref.clone(),
+            method: method.clone(),
+            params: Some(params),
+            frame_session_ref: None,
+            request_id: format!("cdpws_{}_{}", lease.lease_ref, uuid::Uuid::new_v4()),
+            timeout_ms: EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
+        };
+        let response = match state
+            .browser_control_relay
+            .cdp_send(
+                &lease.source_ref,
+                lease.generation,
+                command,
+                Duration::from_millis(EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS),
+            )
+            .await
+        {
+            Ok(result) => {
+                if method == "Page.getFrameTree" {
+                    if let Some(main_frame_id) = main_frame_id_from_frame_tree(&result) {
+                        main_frame_ids
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .insert(session_id.clone(), main_frame_id);
+                    }
+                }
+                let main_frame_id = main_frame_ids
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get(&session_id)
+                    .cloned();
+                let result = main_frame_id
+                    .as_deref()
+                    .map(|main_frame_id| replace_strings(&result, main_frame_id, &lease.tab_ref))
+                    .unwrap_or(result);
+                json!({ "id": id, "result": result })
+            }
+            Err(error) => browser_error_value(id.clone(), &error),
+        };
+        send_browser_command_response(&outbound, response, Some(&session_id));
+    });
 }
 
 async fn dispatch_browser_target_command(
@@ -585,6 +866,7 @@ async fn dispatch_browser_target_command(
     id: &Value,
     method: &str,
     params: Value,
+    request_session_id: Option<&str>,
 ) -> (Value, Vec<Value>) {
     match method {
         "Browser.getVersion" => {
@@ -611,6 +893,171 @@ async fn dispatch_browser_target_command(
                 });
             (json!({ "id": id, "result": result }), Vec::new())
         }
+        "Browser.setDownloadBehavior" => {
+            let params = match serde_json::from_value::<
+                EmbeddedBrowserBrowserSetDownloadBehaviorParams,
+            >(params)
+            {
+                Ok(params) => params,
+                Err(_) => return (invalid_browser_params(id), Vec::new()),
+            };
+            let Some((source_ref, generation)) = download_source(
+                state,
+                connection,
+                params.browser_context_id.as_deref(),
+                request_session_id,
+            ) else {
+                return (
+                    cdp_error_value(
+                        id.clone(),
+                        -32000,
+                        "The browser context for downloads is unavailable.",
+                        Some("BROWSER_SOURCE_NOT_FOUND"),
+                    ),
+                    Vec::new(),
+                );
+            };
+            let configure = EmbeddedBrowserDownloadsConfigureParams {
+                source_ref,
+                generation,
+                behavior: params.behavior,
+                download_path: params.download_path,
+                events_enabled: params.events_enabled,
+                browser_context_id: params.browser_context_id,
+            };
+            match state
+                .browser_control_relay
+                .downloads_configure(configure)
+                .await
+            {
+                Ok(_) => (json!({ "id": id, "result": {} }), Vec::new()),
+                Err(error) => (browser_error_value(id.clone(), &error), Vec::new()),
+            }
+        }
+        "Browser.cancelDownload" => {
+            let params = match serde_json::from_value::<EmbeddedBrowserBrowserCancelDownloadParams>(
+                params,
+            ) {
+                Ok(params) => params,
+                Err(_) => return (invalid_browser_params(id), Vec::new()),
+            };
+            let Some((source_ref, generation)) = download_source(
+                state,
+                connection,
+                params.browser_context_id.as_deref(),
+                request_session_id,
+            ) else {
+                return (
+                    cdp_error_value(
+                        id.clone(),
+                        -32000,
+                        "The browser context for downloads is unavailable.",
+                        Some("BROWSER_SOURCE_NOT_FOUND"),
+                    ),
+                    Vec::new(),
+                );
+            };
+            match state
+                .browser_control_relay
+                .downloads_cancel(EmbeddedBrowserDownloadsCancelParams {
+                    source_ref,
+                    generation,
+                    guid: params.guid,
+                    browser_context_id: params.browser_context_id,
+                })
+                .await
+            {
+                Ok(_) => (json!({ "id": id, "result": {} }), Vec::new()),
+                Err(error) => (browser_error_value(id.clone(), &error), Vec::new()),
+            }
+        }
+        "Storage.getCookies" | "Storage.setCookies" | "Storage.clearCookies" => {
+            let browser_context_id = params
+                .get("browserContextId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let preferred = request_session_id
+                .and_then(|session_id| connection.attached.get(session_id).cloned());
+            let lease =
+                storage_lease(state, connection, browser_context_id.as_deref(), preferred).await;
+            let Some(lease) = lease else {
+                let result = if method == "Storage.getCookies" {
+                    json!({ "cookies": [] })
+                } else {
+                    json!({})
+                };
+                return (json!({ "id": id, "result": result }), Vec::new());
+            };
+            if method == "Storage.getCookies" {
+                return match relay_storage_command(state, &lease, "Network.getCookies", json!({}))
+                    .await
+                {
+                    Ok(result) => {
+                        let cookies = result.get("cookies").cloned().unwrap_or_else(|| json!([]));
+                        (
+                            json!({ "id": id, "result": { "cookies": cookies } }),
+                            Vec::new(),
+                        )
+                    }
+                    Err(error) => (browser_error_value(id.clone(), &error), Vec::new()),
+                };
+            }
+            if method == "Storage.clearCookies" {
+                return match relay_storage_command(
+                    state,
+                    &lease,
+                    "Network.clearBrowserCookies",
+                    json!({}),
+                )
+                .await
+                {
+                    Ok(_) => (json!({ "id": id, "result": {} }), Vec::new()),
+                    Err(error) => (browser_error_value(id.clone(), &error), Vec::new()),
+                };
+            }
+            let cookies = params
+                .get("cookies")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for cookie in cookies {
+                match relay_storage_command(state, &lease, "Network.setCookie", cookie).await {
+                    Ok(result) if result.get("success").and_then(Value::as_bool) == Some(false) => {
+                        return (
+                            cdp_error_value(
+                                id.clone(),
+                                -32000,
+                                "The browser rejected a cookie.",
+                                Some("BROWSER_CDP_ERROR"),
+                            ),
+                            Vec::new(),
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => return (browser_error_value(id.clone(), &error), Vec::new()),
+                }
+            }
+            (json!({ "id": id, "result": {} }), Vec::new())
+        }
+        "Target.attachToBrowserTarget" => {
+            let session_id = mint_entity_id("bws");
+            connection.browser_sessions.insert(session_id.clone());
+            (
+                json!({ "id": id, "result": { "sessionId": session_id } }),
+                Vec::new(),
+            )
+        }
+        "Schema.getDomains" => {
+            let document = embedded_browser_cdp_protocol_document();
+            let domains = document
+                .get("domains")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new()));
+            (
+                json!({ "id": id, "result": { "domains": domains } }),
+                Vec::new(),
+            )
+        }
         "Target.getTargets" => {
             let attached: HashSet<String> = connection
                 .attached
@@ -628,18 +1075,34 @@ async fn dispatch_browser_target_command(
                     Ok(params) => params,
                     Err(_) => return (invalid_browser_params(id), Vec::new()),
                 };
+            let Some(target_id) = params.target_id else {
+                let target_info = EmbeddedBrowserCdpTargetInfo::Browser(
+                    EmbeddedBrowserBrowserTargetInfo::from_browser_ref(
+                        &state.browser_control.registry_epoch(),
+                    ),
+                );
+                return (
+                    json!({
+                        "id": id,
+                        "result": EmbeddedBrowserTargetGetTargetInfoResult { target_info },
+                    }),
+                    Vec::new(),
+                );
+            };
             let attached = connection
                 .attached
                 .values()
-                .any(|lease| lease.tab_ref == params.target_id);
+                .any(|lease| lease.tab_ref == target_id);
             match state
                 .browser_control
-                .target_info_with_attached(&params.target_id, attached)
+                .target_info_with_attached(&target_id, attached)
             {
                 Ok(target_info) => (
                     json!({
                         "id": id,
-                        "result": EmbeddedBrowserTargetGetTargetInfoResult { target_info },
+                        "result": EmbeddedBrowserTargetGetTargetInfoResult {
+                            target_info: EmbeddedBrowserCdpTargetInfo::Page(target_info),
+                        },
                     }),
                     Vec::new(),
                 ),
@@ -690,11 +1153,11 @@ async fn dispatch_browser_target_command(
                     Vec::new(),
                 );
             }
-            let session_id = match ensure_target_session(state, connection, &params.target_id).await
-            {
-                Ok(session_id) => session_id,
-                Err(error) => return (browser_error_value(id.clone(), &error), Vec::new()),
-            };
+            let session_id =
+                match attach_explicit_target_session(state, connection, &params.target_id).await {
+                    Ok(session_id) => session_id,
+                    Err(error) => return (browser_error_value(id.clone(), &error), Vec::new()),
+                };
             (
                 json!({
                     "id": id,
@@ -713,6 +1176,19 @@ async fn dispatch_browser_target_command(
                 };
             if params.validate().is_err() {
                 return (invalid_browser_params(id), Vec::new());
+            }
+            if params
+                .session_id
+                .as_deref()
+                .is_some_and(|session_id| connection.browser_sessions.remove(session_id))
+            {
+                return (
+                    json!({
+                        "id": id,
+                        "result": EmbeddedBrowserTargetDetachFromTargetResult {},
+                    }),
+                    Vec::new(),
+                );
             }
             let selected_session = if let Some(session_id) = params.session_id.as_deref() {
                 connection
@@ -754,29 +1230,46 @@ async fn dispatch_browser_target_command(
                     Vec::new(),
                 );
             }
-            if connection.target_sessions.get(&lease.tab_ref) == Some(&session_id) {
-                connection.target_sessions.remove(&lease.tab_ref);
+            let mut release_lease =
+                connection.target_sessions.get(&lease.tab_ref) == Some(&session_id);
+            if release_lease {
+                let replacement =
+                    connection
+                        .attached
+                        .iter()
+                        .find_map(|(candidate_id, candidate)| {
+                            (candidate_id != &session_id && candidate.lease_ref == lease.lease_ref)
+                                .then(|| candidate_id.clone())
+                        });
+                if let Some(replacement) = replacement {
+                    connection
+                        .target_sessions
+                        .insert(lease.tab_ref.clone(), replacement);
+                    release_lease = false;
+                } else {
+                    connection.target_sessions.remove(&lease.tab_ref);
+                }
             }
-            let _ = tokio::time::timeout(
-                Duration::from_secs(3),
+            if release_lease {
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    state
+                        .browser_control_relay
+                        .target_detach(EmbeddedBrowserTargetDetachParams {
+                            lease_ref: lease.lease_ref.clone(),
+                            tab_ref: lease.tab_ref.clone(),
+                            source_ref: lease.source_ref.clone(),
+                            generation: lease.generation,
+                            reason: "target-detached".to_string(),
+                        }),
+                )
+                .await;
                 state
-                    .browser_control_relay
-                    .target_detach(EmbeddedBrowserTargetDetachParams {
-                        lease_ref: lease.lease_ref.clone(),
-                        tab_ref: lease.tab_ref.clone(),
-                        source_ref: lease.source_ref.clone(),
-                        generation: lease.generation,
-                        reason: "target-detached".to_string(),
-                    }),
-            )
-            .await;
-            state
-                .browser_control
-                .detach_lease(&connection.session_ref, &lease.lease_ref);
-            crate::browser_control_routes::publish_browser_events(state);
-            let notification = connection
-                .discover
-                .then(|| detached_notification(&session_id, &lease.tab_ref));
+                    .browser_control
+                    .detach_lease(&connection.session_ref, &lease.lease_ref);
+                crate::browser_control_routes::publish_browser_events(state);
+            }
+            let notification = Some(detached_notification(&session_id, &lease.tab_ref));
             (
                 json!({
                     "id": id,
@@ -818,6 +1311,11 @@ async fn dispatch_browser_target_command(
                 .collect::<Vec<_>>();
             for (session_id, lease) in detached {
                 connection.attached.remove(&session_id);
+                connection
+                    .main_frame_ids
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&session_id);
                 if connection.target_sessions.get(&lease.tab_ref) == Some(&session_id) {
                     connection.target_sessions.remove(&lease.tab_ref);
                 }
@@ -1026,6 +1524,11 @@ async fn ensure_target_session(
             }
         }
         connection.attached.remove(&existing_session_id);
+        connection
+            .main_frame_ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&existing_session_id);
         connection.target_sessions.remove(target_id);
     }
 
@@ -1074,6 +1577,84 @@ async fn ensure_target_session(
         .insert(lease.tab_ref.clone(), session_id.clone());
     crate::browser_control_routes::publish_browser_events(state);
     Ok(session_id)
+}
+
+async fn attach_explicit_target_session(
+    state: &AppState,
+    connection: &mut BrowserCdpConnection,
+    target_id: &str,
+) -> Result<String, BrowserControlError> {
+    if let Some(primary_id) = connection.target_sessions.get(target_id).cloned() {
+        if let Some(primary) = connection.attached.get(&primary_id).cloned() {
+            if state
+                .browser_control
+                .lease_command_target(&connection.session_ref, &primary.lease_ref)
+                .is_ok()
+            {
+                let session_id = mint_entity_id("tbs");
+                connection.attached.insert(session_id.clone(), primary);
+                return Ok(session_id);
+            }
+        }
+        connection.attached.remove(&primary_id);
+        connection
+            .main_frame_ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&primary_id);
+        connection.target_sessions.remove(target_id);
+    }
+    ensure_target_session(state, connection, target_id).await
+}
+
+async fn storage_lease(
+    state: &AppState,
+    connection: &mut BrowserCdpConnection,
+    browser_context_id: Option<&str>,
+    preferred: Option<EmbeddedBrowserLease>,
+) -> Option<EmbeddedBrowserLease> {
+    let matches = |lease: &EmbeddedBrowserLease| {
+        browser_context_id.is_none_or(|context_id| lease.source_ref == context_id)
+    };
+    if let Some(lease) = preferred.filter(matches) {
+        return Some(lease);
+    }
+    if let Some(lease) = connection.attached.values().find(|lease| matches(lease)) {
+        return Some(lease.clone());
+    }
+    let page =
+        state.browser_control.all_pages().into_iter().find(|page| {
+            browser_context_id.is_none_or(|context_id| page.source_ref == context_id)
+        })?;
+    let session_id = ensure_target_session(state, connection, &page.tab_ref)
+        .await
+        .ok()?;
+    connection.attached.get(&session_id).cloned()
+}
+
+async fn relay_storage_command(
+    state: &AppState,
+    lease: &EmbeddedBrowserLease,
+    method: &str,
+    params: Value,
+) -> Result<Value, BrowserControlError> {
+    let command = EmbeddedBrowserCdpCommand {
+        lease_ref: lease.lease_ref.clone(),
+        method: method.to_string(),
+        params: Some(params),
+        frame_session_ref: None,
+        request_id: format!("browserws_{}_{}", lease.lease_ref, uuid::Uuid::new_v4()),
+        timeout_ms: EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
+    };
+    state
+        .browser_control_relay
+        .cdp_send(
+            &lease.source_ref,
+            lease.generation,
+            command,
+            Duration::from_millis(EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS),
+        )
+        .await
 }
 
 async fn auto_attach_new_targets(
@@ -1206,14 +1787,15 @@ async fn handle_page_socket(
         }
     });
     let mut events = state.events.subscribe();
+    let main_frame_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     loop {
         tokio::select! {
             incoming = stream.next() => {
                 let Some(Ok(message)) = incoming else { break; };
                 match message {
-                    Message::Text(text) => dispatch_command(&state, &session_ref, &lease, &outbound, text.as_bytes()).await,
-                    Message::Binary(bytes) => dispatch_command(&state, &session_ref, &lease, &outbound, &bytes).await,
+                    Message::Text(text) => handle_page_socket_message(&state, &session_ref, &lease, &main_frame_id, &outbound, text.as_bytes()),
+                    Message::Binary(bytes) => handle_page_socket_message(&state, &session_ref, &lease, &main_frame_id, &outbound, &bytes),
                     Message::Close(_) => break,
                     Message::Ping(_) | Message::Pong(_) => {}
                 }
@@ -1226,9 +1808,18 @@ async fn handle_page_socket(
                     continue;
                 }
                 let Some(method) = payload.get("method").and_then(Value::as_str) else { continue; };
+                let params = payload.get("params").cloned().unwrap_or_else(|| json!({}));
+                let main_frame_id = main_frame_id
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let params = main_frame_id
+                    .as_deref()
+                    .map(|main| replace_strings(&params, main, &tab_ref))
+                    .unwrap_or(params);
                 let mut notification = json!({
                     "method": method,
-                    "params": payload.get("params").cloned().unwrap_or_else(|| json!({})),
+                    "params": params,
                 });
                 if let Some(frame_session_ref) = payload.get("frameSessionRef").and_then(Value::as_str) {
                     notification["sessionId"] = Value::String(frame_session_ref.to_string());
@@ -1266,54 +1857,28 @@ async fn handle_page_socket(
     tracing::debug!(tab_ref, "CDP page websocket closed");
 }
 
-async fn dispatch_command(
+fn handle_page_socket_message(
     state: &AppState,
     session_ref: &str,
     lease: &controlled_instance_protocol::EmbeddedBrowserLease,
+    main_frame_id: &Arc<Mutex<Option<String>>>,
     outbound: &mpsc::Sender<Message>,
     bytes: &[u8],
 ) {
-    let value: Value = match serde_json::from_slice(bytes) {
-        Ok(value) => value,
-        Err(_) => {
-            let _ = outbound.try_send(Message::Text(
-                cdp_error_value(Value::Null, -32700, "Parse error", None)
-                    .to_string()
-                    .into(),
-            ));
+    let command = match parse_browser_command(bytes) {
+        Ok(command) => command,
+        Err(error) => {
+            let _ = outbound.try_send(Message::Text(error.to_string().into()));
             return;
         }
     };
-    let Some(object) = value.as_object() else {
-        let _ = outbound.try_send(Message::Text(
-            cdp_error_value(Value::Null, -32600, "Invalid request", None)
-                .to_string()
-                .into(),
-        ));
-        return;
-    };
-    let id = object.get("id").cloned().unwrap_or(Value::Null);
-    if id.is_null() {
-        let _ = outbound.try_send(Message::Text(
-            cdp_error_value(id, -32600, "A CDP command id is required.", None)
-                .to_string()
-                .into(),
-        ));
-        return;
-    }
-    let Some(method) = object.get("method").and_then(Value::as_str) else {
-        let _ = outbound.try_send(Message::Text(
-            cdp_error_value(id, -32600, "A CDP method is required.", None)
-                .to_string()
-                .into(),
-        ));
-        return;
-    };
-    if object
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty())
-    {
+    let ParsedBrowserCommand {
+        id,
+        method,
+        params,
+        session_id,
+    } = command;
+    if session_id.is_some() {
         let _ = outbound.try_send(Message::Text(
             cdp_error_value(
                 id,
@@ -1326,7 +1891,7 @@ async fn dispatch_command(
         ));
         return;
     }
-    if assert_embedded_browser_cdp_method(method).is_err() {
+    if assert_embedded_browser_cdp_method(&method).is_err() {
         let _ = outbound.try_send(Message::Text(
             cdp_error_value(
                 id,
@@ -1339,34 +1904,66 @@ async fn dispatch_command(
         ));
         return;
     }
-    let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
-    let request_id = format!("cdpws_{}_{}", lease.lease_ref, uuid::Uuid::new_v4());
-    let command = EmbeddedBrowserCdpCommand {
-        lease_ref: lease.lease_ref.clone(),
-        method: method.to_string(),
-        params: Some(params),
-        frame_session_ref: None,
-        request_id,
-        timeout_ms: EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
-    };
-    let result = state
-        .browser_control
-        .lease_command_target(session_ref, &lease.lease_ref);
-    let response = match result {
-        Ok(target) => state
-            .browser_control_relay
-            .cdp_send(
-                &target.lease.source_ref,
-                target.lease.generation,
-                command,
-                Duration::from_millis(EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS),
-            )
-            .await
-            .map(|result| json!({ "id": id, "result": result }))
-            .unwrap_or_else(|error| cdp_error_value(id, -32000, &error.message, Some(error.code))),
-        Err(error) => cdp_error_value(id, -32000, &error.message, Some(error.code)),
-    };
-    let _ = outbound.try_send(Message::Text(response.to_string().into()));
+    let main_frame = main_frame_id
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let params = main_frame
+        .as_deref()
+        .map(|main| replace_frame_id_fields(&params, &lease.tab_ref, main))
+        .unwrap_or(params);
+    let state = state.clone();
+    let session_ref = session_ref.to_string();
+    let lease = lease.clone();
+    let main_frame_id = Arc::clone(main_frame_id);
+    let outbound = outbound.clone();
+    tokio::spawn(async move {
+        let command = EmbeddedBrowserCdpCommand {
+            lease_ref: lease.lease_ref.clone(),
+            method: method.clone(),
+            params: Some(params),
+            frame_session_ref: None,
+            request_id: format!("cdpws_{}_{}", lease.lease_ref, uuid::Uuid::new_v4()),
+            timeout_ms: EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
+        };
+        let result = state
+            .browser_control
+            .lease_command_target(&session_ref, &lease.lease_ref);
+        let response = match result {
+            Ok(target) => state
+                .browser_control_relay
+                .cdp_send(
+                    &target.lease.source_ref,
+                    target.lease.generation,
+                    command,
+                    Duration::from_millis(EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS),
+                )
+                .await
+                .map(|result| {
+                    if method == "Page.getFrameTree" {
+                        if let Some(main) = main_frame_id_from_frame_tree(&result) {
+                            *main_frame_id
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(main);
+                        }
+                    }
+                    let main_frame_id = main_frame_id
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clone();
+                    let result = main_frame_id
+                        .as_deref()
+                        .map(|main| replace_strings(&result, main, &lease.tab_ref))
+                        .unwrap_or(result);
+                    json!({ "id": id, "result": result })
+                })
+                .unwrap_or_else(|error| {
+                    cdp_error_value(id, -32000, &error.message, Some(error.code))
+                }),
+            Err(error) => cdp_error_value(id, -32000, &error.message, Some(error.code)),
+        };
+        let _ = outbound.try_send(Message::Text(response.to_string().into()));
+    });
 }
 
 fn prune_stale_browser_attachments(
@@ -1387,6 +1984,11 @@ fn prune_stale_browser_attachments(
         .collect::<Vec<_>>();
     for (session_id, lease) in stale {
         connection.attached.remove(&session_id);
+        connection
+            .main_frame_ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&session_id);
         if connection.target_sessions.get(&lease.tab_ref) == Some(&session_id) {
             connection.target_sessions.remove(&lease.tab_ref);
         }
@@ -1401,12 +2003,19 @@ fn prune_stale_browser_attachments(
 }
 
 async fn cleanup_browser_attachments(state: &AppState, connection: &mut BrowserCdpConnection) {
+    let mut seen_leases = HashSet::new();
     let leases = connection
         .attached
         .drain()
         .map(|(_, lease)| lease)
+        .filter(|lease| seen_leases.insert(lease.lease_ref.clone()))
         .collect::<Vec<_>>();
     connection.target_sessions.clear();
+    connection
+        .main_frame_ids
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
     let mut changed = false;
     for lease in leases {
         let _ = state
@@ -1579,4 +2188,49 @@ fn cdp_error(status: StatusCode, code: &str, message: &str) -> Response {
         Json(json!({ "error": { "code": code, "message": message } })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod frame_id_translation_tests {
+    use super::*;
+
+    #[test]
+    fn frame_tree_discovers_the_real_main_frame_id() {
+        let result = json!({ "frameTree": { "frame": { "id": "REAL_ELECTRON_FRAME" } } });
+        assert_eq!(
+            main_frame_id_from_frame_tree(&result).as_deref(),
+            Some("REAL_ELECTRON_FRAME")
+        );
+        assert!(main_frame_id_from_frame_tree(&json!({})).is_none());
+    }
+
+    #[test]
+    fn client_payloads_replace_the_main_frame_id_with_the_target_id() {
+        let payload = json!({
+            "frameTree": { "frame": { "id": "REAL", "parentFrameId": "REAL" } },
+            "context": { "auxData": { "frameId": "REAL" } },
+        });
+        assert_eq!(
+            replace_strings(&payload, "REAL", "tab_frame"),
+            json!({
+                "frameTree": { "frame": { "id": "tab_frame", "parentFrameId": "tab_frame" } },
+                "context": { "auxData": { "frameId": "tab_frame" } },
+            })
+        );
+    }
+
+    #[test]
+    fn host_params_only_replace_frame_id_fields() {
+        let params = json!({
+            "frameId": "tab_frame",
+            "nested": { "parentFrameId": "tab_frame", "url": "https://example.com/tab_frame" },
+        });
+        assert_eq!(
+            replace_frame_id_fields(&params, "tab_frame", "REAL"),
+            json!({
+                "frameId": "REAL",
+                "nested": { "parentFrameId": "REAL", "url": "https://example.com/tab_frame" },
+            })
+        );
+    }
 }

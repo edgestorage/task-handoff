@@ -22,8 +22,11 @@ pub fn supports_embedded_browser_tab_origin(protocol_version: &str) -> bool {
 pub const EMBEDDED_BROWSER_TARGET_CDP_PROFILE: &str = "embedded-browser-target-cdp";
 pub const EMBEDDED_BROWSER_TARGET_CDP_PROTOCOL_VERSION: &str = "1.3";
 pub const EMBEDDED_BROWSER_FRAME_HEADER_BYTES: usize = 9;
+/// Maximum payload carried by one binary frame. Logical control messages may be
+/// larger and are split into these frames.
 pub const EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES: usize = 256 * 1024;
-pub const EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES: usize = 2 * 1024 * 1024;
+pub const EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES: usize = 16 * 1024 * 1024;
+pub const EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES: usize = 16 * 1024 * 1024;
 pub const EMBEDDED_BROWSER_INITIAL_WINDOW_BYTES: u32 = 256 * 1024;
 pub const EMBEDDED_BROWSER_MAX_IN_FLIGHT_REQUESTS: usize = 32;
 pub const EMBEDDED_BROWSER_MAX_SIDE_EFFECT_QUEUE: usize = 16;
@@ -46,15 +49,22 @@ pub const EMBEDDED_BROWSER_CDP_ACCESS_TTL_MS: u64 = 8 * 60 * 60 * 1_000;
 
 pub const EMBEDDED_BROWSER_TARGET_CDP_METHODS: &[&str] = &[
     "Browser.getVersion",
+    "Browser.setDownloadBehavior",
+    "Browser.cancelDownload",
+    "Storage.getCookies",
+    "Storage.setCookies",
+    "Storage.clearCookies",
     "Target.getTargets",
     "Target.getTargetInfo",
     "Target.getBrowserContexts",
+    "Target.attachToBrowserTarget",
     "Target.attachToTarget",
     "Target.detachFromTarget",
     "Target.closeTarget",
     "Target.createTarget",
     "Target.setDiscoverTargets",
     "Target.setAutoAttach",
+    "Schema.getDomains",
 ];
 
 pub const EMBEDDED_BROWSER_TARGET_CDP_EVENTS: &[&str] = &[
@@ -64,6 +74,9 @@ pub const EMBEDDED_BROWSER_TARGET_CDP_EVENTS: &[&str] = &[
     "Target.targetInfoChanged",
     "Target.detachedFromTarget",
 ];
+
+pub const EMBEDDED_BROWSER_DOWNLOAD_CDP_EVENTS: &[&str] =
+    &["Browser.downloadWillBegin", "Browser.downloadProgress"];
 
 pub fn supports_embedded_browser_target_cdp_method(method: &str) -> bool {
     EMBEDDED_BROWSER_TARGET_CDP_METHODS.contains(&method)
@@ -387,6 +400,39 @@ impl EmbeddedBrowserTargetInfo {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserBrowserTargetInfo {
+    pub target_id: EmbeddedBrowserCdpTargetId,
+    #[serde(rename = "type")]
+    pub target_type: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default = "default_true")]
+    pub attached: bool,
+}
+
+impl EmbeddedBrowserBrowserTargetInfo {
+    pub fn from_browser_ref(browser_ref: &str) -> Self {
+        Self {
+            target_id: browser_ref.to_string(),
+            target_type: "browser".to_string(),
+            title: String::new(),
+            url: String::new(),
+            attached: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum EmbeddedBrowserCdpTargetInfo {
+    Page(EmbeddedBrowserTargetInfo),
+    Browser(EmbeddedBrowserBrowserTargetInfo),
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedBrowserTargetGetTargetsParams {}
@@ -400,14 +446,39 @@ pub struct EmbeddedBrowserTargetGetTargetsResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedBrowserTargetGetTargetInfoParams {
-    pub target_id: EmbeddedBrowserCdpTargetId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<EmbeddedBrowserCdpTargetId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedBrowserTargetGetTargetInfoResult {
-    pub target_info: EmbeddedBrowserTargetInfo,
+    pub target_info: EmbeddedBrowserCdpTargetInfo,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserBrowserSetDownloadBehaviorParams {
+    pub behavior: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_context_id: Option<EmbeddedBrowserCdpBrowserContextId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserBrowserCancelDownloadParams {
+    pub guid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_context_id: Option<EmbeddedBrowserCdpBrowserContextId>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserBrowserSetDownloadBehaviorResult {}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -954,6 +1025,40 @@ pub struct EmbeddedBrowserTabsCloseParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserDownloadsConfigureParams {
+    pub source_ref: String,
+    pub generation: u64,
+    pub behavior: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_context_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserDownloadsCancelParams {
+    pub source_ref: String,
+    pub generation: u64,
+    pub guid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_context_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBrowserDownloadEvent {
+    pub source_ref: String,
+    pub generation: u64,
+    pub tab_ref: String,
+    pub method: String,
+    pub params: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct EmbeddedBrowserTargetAttachParams {
     pub lease_ref: String,
     pub tab_ref: String,
@@ -1093,6 +1198,10 @@ pub const EMBEDDED_BROWSER_CDP_METHODS: &[(&str, EmbeddedBrowserCdpMethodKind)] 
     ("DOM.getNodeForLocation", EmbeddedBrowserCdpMethodKind::Read),
     ("DOM.querySelector", EmbeddedBrowserCdpMethodKind::Read),
     ("DOM.querySelectorAll", EmbeddedBrowserCdpMethodKind::Read),
+    (
+        "DOM.scrollIntoViewIfNeeded",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
     ("DOM.getAttributes", EmbeddedBrowserCdpMethodKind::Read),
     ("DOM.getOuterHTML", EmbeddedBrowserCdpMethodKind::Read),
     ("DOMSnapshot.enable", EmbeddedBrowserCdpMethodKind::Session),
@@ -1101,6 +1210,8 @@ pub const EMBEDDED_BROWSER_CDP_METHODS: &[(&str, EmbeddedBrowserCdpMethodKind)] 
         "DOMSnapshot.captureSnapshot",
         EmbeddedBrowserCdpMethodKind::Read,
     ),
+    ("Inspector.enable", EmbeddedBrowserCdpMethodKind::Session),
+    ("Inspector.disable", EmbeddedBrowserCdpMethodKind::Session),
     (
         "Input.dispatchMouseEvent",
         EmbeddedBrowserCdpMethodKind::PageWrite,
@@ -1119,12 +1230,53 @@ pub const EMBEDDED_BROWSER_CDP_METHODS: &[(&str, EmbeddedBrowserCdpMethodKind)] 
     ("Network.enable", EmbeddedBrowserCdpMethodKind::Session),
     ("Network.disable", EmbeddedBrowserCdpMethodKind::Session),
     (
+        "Network.clearBrowserCache",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    (
+        "Network.emulateNetworkConditions",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    (
         "Network.getResponseBody",
         EmbeddedBrowserCdpMethodKind::Read,
     ),
     (
         "Network.getRequestPostData",
         EmbeddedBrowserCdpMethodKind::Read,
+    ),
+    (
+        "Network.setCacheDisabled",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    (
+        "Network.setExtraHTTPHeaders",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    ("Network.getCookies", EmbeddedBrowserCdpMethodKind::Read),
+    ("Network.setCookie", EmbeddedBrowserCdpMethodKind::Session),
+    (
+        "Network.clearBrowserCookies",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    ("Fetch.enable", EmbeddedBrowserCdpMethodKind::Session),
+    ("Fetch.disable", EmbeddedBrowserCdpMethodKind::Session),
+    (
+        "Fetch.continueRequest",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
+    (
+        "Fetch.continueResponse",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
+    (
+        "Fetch.continueWithAuth",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
+    ("Fetch.failRequest", EmbeddedBrowserCdpMethodKind::PageWrite),
+    (
+        "Fetch.fulfillRequest",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
     ),
     ("Page.enable", EmbeddedBrowserCdpMethodKind::Session),
     ("Page.disable", EmbeddedBrowserCdpMethodKind::Session),
@@ -1134,10 +1286,44 @@ pub const EMBEDDED_BROWSER_CDP_METHODS: &[(&str, EmbeddedBrowserCdpMethodKind)] 
     ),
     ("Page.getFrameTree", EmbeddedBrowserCdpMethodKind::Read),
     ("Page.getLayoutMetrics", EmbeddedBrowserCdpMethodKind::Read),
+    ("Page.bringToFront", EmbeddedBrowserCdpMethodKind::PageWrite),
+    (
+        "Page.handleJavaScriptDialog",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
     ("Page.navigate", EmbeddedBrowserCdpMethodKind::PageWrite),
+    (
+        "Page.navigateToHistoryEntry",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
     ("Page.reload", EmbeddedBrowserCdpMethodKind::PageWrite),
     ("Page.stopLoading", EmbeddedBrowserCdpMethodKind::PageWrite),
     ("Page.captureScreenshot", EmbeddedBrowserCdpMethodKind::Read),
+    (
+        "Page.setInterceptFileChooserDialog",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
+    (
+        "Page.setLifecycleEventsEnabled",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    (
+        "Page.addScriptToEvaluateOnNewDocument",
+        EmbeddedBrowserCdpMethodKind::PageWrite,
+    ),
+    (
+        "Page.removeScriptToEvaluateOnNewDocument",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    (
+        "Page.createIsolatedWorld",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
+    ("Runtime.addBinding", EmbeddedBrowserCdpMethodKind::Session),
+    (
+        "Runtime.removeBinding",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
     ("Runtime.enable", EmbeddedBrowserCdpMethodKind::Session),
     ("Runtime.disable", EmbeddedBrowserCdpMethodKind::Session),
     ("Runtime.evaluate", EmbeddedBrowserCdpMethodKind::PageWrite),
@@ -1155,6 +1341,10 @@ pub const EMBEDDED_BROWSER_CDP_METHODS: &[(&str, EmbeddedBrowserCdpMethodKind)] 
         EmbeddedBrowserCdpMethodKind::Session,
     ),
     ("Schema.getDomains", EmbeddedBrowserCdpMethodKind::Read),
+    (
+        "Target.setAutoAttach",
+        EmbeddedBrowserCdpMethodKind::Session,
+    ),
 ];
 
 pub fn embedded_browser_cdp_method_kind(method: &str) -> Option<EmbeddedBrowserCdpMethodKind> {
@@ -1180,13 +1370,22 @@ pub fn assert_embedded_browser_cdp_method(
 
 pub const EMBEDDED_BROWSER_CDP_EVENTS: &[&str] = &[
     "Console.messageAdded",
+    "Fetch.authRequired",
+    "Fetch.requestPaused",
+    "Inspector.detached",
+    "Inspector.targetCrashed",
     "Log.entryAdded",
     "Network.loadingFailed",
     "Network.loadingFinished",
     "Network.requestServedFromCache",
+    "Network.requestWillBeSentExtraInfo",
+    "Network.responseReceivedExtraInfo",
     "Network.requestWillBeSent",
     "Network.responseReceived",
     "Page.domContentEventFired",
+    "Page.fileChooserOpened",
+    "Page.frameAttached",
+    "Page.frameDetached",
     "Page.frameNavigated",
     "Page.frameStartedLoading",
     "Page.frameStoppedLoading",
@@ -1194,7 +1393,9 @@ pub const EMBEDDED_BROWSER_CDP_EVENTS: &[&str] = &[
     "Page.javascriptDialogOpening",
     "Page.lifecycleEvent",
     "Page.loadEventFired",
+    "Page.navigatedWithinDocument",
     "Runtime.consoleAPICalled",
+    "Runtime.bindingCalled",
     "Runtime.exceptionThrown",
     "Runtime.executionContextCreated",
     "Runtime.executionContextDestroyed",
@@ -1245,6 +1446,9 @@ pub fn embedded_browser_cdp_protocol_document() -> Value {
         add(&mut events, method);
     }
     for method in EMBEDDED_BROWSER_TARGET_CDP_EVENTS {
+        add(&mut events, method);
+    }
+    for method in EMBEDDED_BROWSER_DOWNLOAD_CDP_EVENTS {
         add(&mut events, method);
     }
     let domains = commands
@@ -1478,7 +1682,7 @@ pub fn encode_embedded_browser_control_message(
     let json = serde_json::to_vec(value).map_err(|_| {
         EmbeddedBrowserProtocolError::protocol("Embedded browser control message is invalid.")
     })?;
-    if json.is_empty() || json.len() > EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES {
+    if json.is_empty() || json.len() > EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES {
         return Err(EmbeddedBrowserProtocolError::protocol(
             "Embedded browser control message exceeds the limit.",
         ));
@@ -1501,7 +1705,7 @@ pub struct EmbeddedBrowserControlMessageDecoder {
 
 impl EmbeddedBrowserControlMessageDecoder {
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<Value>, EmbeddedBrowserProtocolError> {
-        if self.pending.len() + chunk.len() > EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES {
+        if self.pending.len() + chunk.len() > EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES {
             return Err(EmbeddedBrowserProtocolError::protocol(
                 "Embedded browser control buffer exceeds the limit.",
             ));
@@ -1516,7 +1720,7 @@ impl EmbeddedBrowserControlMessageDecoder {
                 self.pending[offset + 2],
                 self.pending[offset + 3],
             ]) as usize;
-            if length == 0 || length > EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES {
+            if length == 0 || length > EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES {
                 return Err(EmbeddedBrowserProtocolError::protocol(
                     "Embedded browser control message length is invalid.",
                 ));
@@ -1826,6 +2030,27 @@ mod tests {
         let targets: EmbeddedBrowserTargetGetTargetsResult =
             serde_json::from_value(fixture["messages"]["targetGetTargets"].clone()).unwrap();
         assert_eq!(targets.target_infos.len(), 2);
+        let page_info: EmbeddedBrowserTargetGetTargetInfoResult =
+            serde_json::from_value(fixture["messages"]["targetGetTargetInfo"].clone()).unwrap();
+        assert!(matches!(
+            page_info.target_info,
+            EmbeddedBrowserCdpTargetInfo::Page(_)
+        ));
+        let browser_info: EmbeddedBrowserTargetGetTargetInfoResult =
+            serde_json::from_value(fixture["messages"]["targetGetBrowserTargetInfo"].clone())
+                .unwrap();
+        match browser_info.target_info {
+            EmbeddedBrowserCdpTargetInfo::Browser(info) => {
+                assert_eq!(info.target_type, "browser");
+                assert!(info.attached);
+            }
+            EmbeddedBrowserCdpTargetInfo::Page(_) => panic!("expected browser target info"),
+        }
+        let downloads: EmbeddedBrowserBrowserSetDownloadBehaviorParams =
+            serde_json::from_value(fixture["messages"]["browserSetDownloadBehaviorParams"].clone())
+                .unwrap();
+        assert_eq!(downloads.behavior, "allowAndName");
+        assert!(downloads.events_enabled.unwrap_or(false));
         let contexts: EmbeddedBrowserTargetGetBrowserContextsResult =
             serde_json::from_value(fixture["messages"]["targetGetBrowserContexts"].clone())
                 .unwrap();

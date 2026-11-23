@@ -1,4 +1,5 @@
 const { spawn } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
@@ -58,8 +59,10 @@ const { markLogStreamUnavailable, writeLogLine } = require("./log-sink.cjs");
 const { DesktopBrowserContextManager } = require("./desktop-browser-contexts.cjs");
 const { DesktopBrowserGuestRegistry } = require("./desktop-browser-guest-registry.cjs");
 const { DesktopEmbeddedBrowserChannelManager } = require("./desktop-embedded-browser-channel-manager.cjs");
+const { resolveDesktopBrowserPublisherId } = require("./desktop-browser-publisher-id.cjs");
 const { buildEmbeddedBrowserContextMenuTemplate } = require("./embedded-browser-context-menu.cjs");
 const { detectEmbeddedBrowserPagePoolApi, resolveEmbeddedBrowserPageHost } = require("./embedded-browser-page-host.cjs");
+const { DesktopEmbeddedBrowserPopupController } = require("./embedded-browser-popup.cjs");
 const { externalNavigationUrl, isAllowedControlPlaneNavigation } = require("./navigation-policy.cjs");
 const { createDesktopClipboardBridge } = require("./desktop-clipboard.cjs");
 
@@ -78,6 +81,7 @@ let desktopBrowserContexts;
 let desktopBrowserRegistry;
 let desktopBrowserChannelManager;
 let desktopBrowserPageHostState;
+let desktopBrowserPopups;
 let lastActiveControlPlaneWindow;
 const desktopServiceSupervisor = createDesktopServiceSupervisor();
 const controlPlaneWindows = createControlPlaneWindowRegistry();
@@ -537,18 +541,19 @@ function configureBrowserTabGuests(host) {
     });
     guest.on("will-navigate", allowNavigation);
     guest.on("will-frame-navigate", allowNavigation);
-    guest.setWindowOpenHandler(({ url }) => {
-      const allowed = browserTabUrlAllowed(url);
-      logInfo(`[desktop-shell] browser webview popup guest=${guest.id} instance=${instanceId || "unknown"} url=${browserDiagnosticUrl(url)} allowed=${allowed}`);
-      if (allowed) {
-        try {
-          host.send("task-handoff:browser-new-tab", { url: String(url), ...(instanceId ? { instanceId } : {}) });
-          logInfo(`[desktop-shell] browser webview popup dispatched host=${host.id} guest=${guest.id}`);
-        } catch (error) {
-          logError(`[desktop-shell] browser webview popup dispatch failed host=${host.id} guest=${guest.id} error=${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-      return { action: "deny" };
+    guest.setWindowOpenHandler((details) => desktopBrowserPopups?.windowOpenResponse({
+      guest,
+      details,
+      parentWindow: BrowserWindow.fromWebContents(host),
+    }) || { action: "deny" });
+    guest.on("did-create-window", (popupWindow, details) => {
+      desktopBrowserPopups?.handleCreatedWindow({
+        guest,
+        window: popupWindow,
+        details,
+        host,
+        instanceId,
+      });
     });
   });
 }
@@ -556,9 +561,23 @@ function configureBrowserTabGuests(host) {
 function initializeDesktopBrowserControl() {
   const customPagePoolAvailable = detectEmbeddedBrowserPagePoolApi(webContents);
   desktopBrowserPageHostState = resolveEmbeddedBrowserPageHost(process.env, customPagePoolAvailable);
+  desktopBrowserPopups = new DesktopEmbeddedBrowserPopupController({
+    isAllowedUrl: browserTabUrlAllowed,
+    sendNewTab: ({ host, instanceId, url }) => {
+      if (!host || host.isDestroyed?.()) return false;
+      host.send("task-handoff:browser-new-tab", { url, ...(instanceId ? { instanceId } : {}) });
+      return true;
+    },
+    logInfo,
+    logError,
+  });
   desktopBrowserRegistry = new DesktopBrowserGuestRegistry({
     pageHost: desktopBrowserPageHostState.pageHost,
     pageHostCapabilities: desktopBrowserPageHostState.capabilities,
+    captureSurface: {
+      prepare: ({ entry, width, height }) => requestBrowserCaptureSurface(entry, { width, height }),
+      release: ({ entry, token }) => releaseBrowserCaptureSurface(entry, token),
+    },
     logInfo,
     onChanged: (change) => {
       desktopBrowserChannelManager?.handleRegistryChange(change);
@@ -571,10 +590,65 @@ function initializeDesktopBrowserControl() {
     fetch: (url, init) => fetchControlPlaneWithSessionCookies(url, init),
     WebSocket,
     registry: desktopBrowserRegistry,
+    publisherId: resolveDesktopBrowserPublisherId({
+      userDataDir: app.getPath("userData"),
+      logInfo,
+    }),
     logInfo,
     logError,
   });
   logInfo(`[desktop-shell] embedded browser pageHost requested=${desktopBrowserPageHostState.requestedPageHost} actual=${desktopBrowserPageHostState.pageHost} customApi=${customPagePoolAvailable} degraded=${desktopBrowserPageHostState.degraded}${desktopBrowserPageHostState.degradedReason ? ` reason=${desktopBrowserPageHostState.degradedReason}` : ""}`);
+}
+
+const pendingBrowserCaptureSurfaces = new Map();
+
+// A background <webview> is laid out at 0x0 and never produces a frame, so
+// Electron's capturePage either times out or reports an empty image. Ask the
+// renderer to expose the page on an invisible surface with a real size for the
+// duration of the screenshot. The token is always returned so the renderer can
+// undo the surface even when its acknowledgement arrives late.
+function requestBrowserCaptureSurface(entry, size) {
+  const host = entry?.host;
+  const requestId = crypto.randomUUID();
+  const token = { requestId };
+  if (!host || host.isDestroyed?.() || !entry.instanceId || !entry.sessionKey) return Promise.resolve(token);
+  return new Promise((resolve) => {
+    const settle = () => {
+      const pending = pendingBrowserCaptureSurfaces.get(requestId);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      pendingBrowserCaptureSurfaces.delete(requestId);
+      resolve(token);
+    };
+    const timer = setTimeout(settle, 1_500);
+    timer.unref?.();
+    pendingBrowserCaptureSurfaces.set(requestId, { settle, timer });
+    try {
+      host.send("task-handoff:browser-capture-surface", {
+        requestId,
+        instanceId: entry.instanceId,
+        pageKey: entry.sessionKey,
+        width: size.width,
+        height: size.height,
+      });
+    } catch {
+      settle();
+    }
+  });
+}
+
+function releaseBrowserCaptureSurface(entry, token) {
+  const requestId = token?.requestId;
+  if (!requestId) return;
+  const pending = pendingBrowserCaptureSurfaces.get(requestId);
+  if (pending) {
+    pending.settle();
+  }
+  const host = entry?.host;
+  if (!host || host.isDestroyed?.()) return;
+  try {
+    host.send("task-handoff:browser-capture-surface-release", { requestId });
+  } catch { /* the renderer is already gone */ }
 }
 
 function notifyBrowserTabsChanged(change) {
@@ -1556,8 +1630,13 @@ ipcMain.handle("task-handoff:browser-tab-throttled", (event, webContentsId, thro
   const id = Number(webContentsId);
   const entry = desktopBrowserRegistry?.getByGuestId(id, event.sender.id);
   if (!entry || typeof entry.guest.setBackgroundThrottling !== "function") return { ok: false };
-  entry.guest.setBackgroundThrottling(Boolean(throttled));
+  desktopBrowserRegistry.setBackgroundThrottled({ webContentsId: id, senderId: event.sender.id, throttled });
   return { ok: true };
+});
+
+ipcMain.on("task-handoff:browser-capture-surface-ready", (_event, requestId) => {
+  const pending = pendingBrowserCaptureSurfaces.get(String(requestId || ""));
+  pending?.settle();
 });
 
 ipcMain.on("task-handoff:browser-diagnostic", (event, input) => {
@@ -1751,7 +1830,13 @@ if (!ownsDesktopInstanceLock) {
       logInfo,
       logError,
       onBrowserFailure: (failure) => broadcastBrowserLoadFailure(failure),
+      onDownloadEvent: (event) => desktopBrowserChannelManager?.handleDownloadEvent(event),
+      defaultDownloadPath: app.getPath("downloads"),
       chooseDownloadPath: (filename) => dialog.showSaveDialogSync({ defaultPath: path.join(app.getPath("downloads"), filename) }),
+    });
+    desktopBrowserChannelManager.setDownloadController({
+      configure: (params) => desktopBrowserContexts.configureDownloads(params),
+      cancel: (params) => desktopBrowserContexts.cancelDownload(params),
     });
     setDesktopDockIcon();
     desktopWindowPreferences = createDesktopWindowPreferences({

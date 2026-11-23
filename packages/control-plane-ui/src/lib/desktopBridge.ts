@@ -64,6 +64,14 @@ export type DesktopBrowserDeviceMetrics = {
 
 export type DesktopBrowserTabResult = { ok: boolean; code?: string; message?: string; tab?: DesktopBrowserTab };
 
+export type DesktopBrowserCaptureSurface = {
+  requestId: string;
+  instanceId: string;
+  pageKey: string;
+  width: number;
+  height: number;
+};
+
 type DesktopBridge = {
   openLocalPath?: (path: string) => Promise<OpenLocalPathResult>;
   revealLocalPath?: (path: string) => Promise<OpenLocalPathResult>;
@@ -82,6 +90,9 @@ type DesktopBridge = {
   detachBrowserTarget?: (tabRef: string) => Promise<{ ok: boolean; code?: string }>;
   sendBrowserCdpCommand?: (input: { tabRef: string; method: string; params?: unknown }) => Promise<{ ok: boolean; code?: string; message?: string; result?: unknown }>;
   setBrowserTabThrottled?: (webContentsId: number, throttled: boolean) => Promise<{ ok: boolean }>;
+  ackBrowserCaptureSurface?: (requestId: string) => void;
+  onBrowserCaptureSurface?: (listener: (input: DesktopBrowserCaptureSurface) => void) => () => void;
+  onBrowserCaptureSurfaceRelease?: (listener: (input: { requestId: string }) => void) => () => void;
   onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string; title?: string; creationRef?: string; requesterSessionRef?: string }) => void) => () => void;
   onBrowserFocusAddress?: (listener: (input: { webContentsId?: number }) => void) => () => void;
   onBrowserLoadFailure?: (listener: (input: DesktopBrowserLoadFailure) => void) => () => void;
@@ -189,6 +200,18 @@ export function sendDesktopBrowserCdpCommand(input: { tabRef: string; method: st
 
 export function setDesktopBrowserTabThrottled(webContentsId: number, throttled: boolean) {
   return desktopBridge()?.setBrowserTabThrottled?.(webContentsId, throttled) ?? Promise.resolve({ ok: false });
+}
+
+export function ackDesktopBrowserCaptureSurface(requestId: string) {
+  desktopBridge()?.ackBrowserCaptureSurface?.(requestId);
+}
+
+export function onDesktopBrowserCaptureSurface(listener: (input: DesktopBrowserCaptureSurface) => void) {
+  return desktopBridge()?.onBrowserCaptureSurface?.(listener);
+}
+
+export function onDesktopBrowserCaptureSurfaceRelease(listener: (input: { requestId: string }) => void) {
+  return desktopBridge()?.onBrowserCaptureSurfaceRelease?.(listener);
 }
 
 export function canRenewDesktopBrowserContext() {

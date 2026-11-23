@@ -325,8 +325,9 @@ test("closing the websocket terminates the process session and releases the acti
   assert.equal(runtime.activeCount, 0);
 });
 
-test("socket close escalates a signal-ignoring process group to SIGKILL", { skip: process.platform === "win32" }, async () => {
+test("socket close escalates a signal-ignoring process group to SIGKILL", { skip: process.platform === "win32", timeout: 10_000 }, async () => {
   let childPid: number | undefined;
+  let childProcess: ReturnType<typeof spawn> | undefined;
   const runtime = new InstanceShellRuntime({
     workspace: () => process.cwd(),
     stopTimeoutMs: 10,
@@ -334,6 +335,7 @@ test("socket close escalates a signal-ignoring process group to SIGKILL", { skip
     spawnChild: ((...args: Parameters<typeof spawn>) => {
       const child = spawn(...args);
       childPid = child.pid;
+      childProcess = child;
       return child;
     }) as typeof spawn,
   });
@@ -347,23 +349,14 @@ test("socket close escalates a signal-ignoring process group to SIGKILL", { skip
   });
   await socket.waitForOutput("ready");
   assert.ok(childPid);
+  assert.ok(childProcess);
   assert.doesNotThrow(() => process.kill(-childPid!, 0));
   socket.close(1000, "client disconnected");
-  const deadline = Date.now() + 1_000;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(-childPid!, 0);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ESRCH") return;
-      // Some process-group probes briefly report EPERM after SIGKILL even
-      // though the group can no longer be signalled by this process. Keep
-      // waiting until the deadline instead of treating that probe as success.
-      if (code !== "EPERM") throw error;
-    }
-  }
-  assert.fail("the signal-ignoring shell process tree was not terminated");
+  // The child ignores SIGTERM, so completing means the runtime escalated to
+  // SIGKILL. Waiting for the reaped child avoids treating a transient zombie
+  // process group as an escalation failure under a loaded test runner.
+  await once(childProcess, "close");
+  assert.throws(() => process.kill(-childPid!, 0), (error: NodeJS.ErrnoException) => error.code === "ESRCH");
 });
 
 test("runtime shutdown drains active shells and process groups before restart", { skip: process.platform === "win32" }, async () => {

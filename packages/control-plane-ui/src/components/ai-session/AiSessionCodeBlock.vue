@@ -32,9 +32,10 @@ const html = computed(() => renderCodeBlock(
   max-width: 100%;
   margin: 0;
   overflow: hidden;
-  border: 1px solid var(--line, transparent);
+  border: 1px solid var(--line-subtle, var(--line, transparent));
   border-radius: 7px;
-  background: var(--surface-inset, rgb(127 127 127 / 14%));
+  background: var(--surface, rgb(127 127 127 / 14%));
+  color: var(--text, inherit);
 }
 
 .ai-session-highlighted-code :deep(.markdown-code-toolbar) {
@@ -43,7 +44,8 @@ const html = computed(() => renderCodeBlock(
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid var(--line, transparent);
+  border-bottom: 1px solid var(--line-subtle, var(--line, transparent));
+  background: var(--surface-raised);
   padding: 0 10px 0 12px;
   color: var(--text-muted, currentColor);
   font-size: 12px;

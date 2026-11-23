@@ -81,6 +81,11 @@ test("browser address suggestions use local history and accessible keyboard navi
   assert.match(browser, /onDesktopBrowserFocusAddress\(\(\{ webContentsId \}\) => \{[\s\S]*?getWebContentsId\?\.\(\) !== webContentsId[\s\S]*?focusAddress\(\)/);
 });
 
+test("browser address submission writes the completed URL back before navigation", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  assert.match(browser, /function navigate\(value: string\)[\s\S]*?const url = normalizeDesktopBrowserUrl\(value\);[\s\S]*?address\.value = url;[\s\S]*?pendingNavigation\.value = url;/);
+});
+
 test("ordinary web builds keep the browser launcher behind desktop bridge and capability", () => {
   const sessions = source("instance-detail/useActiveInstanceSessions.ts");
   assert.match(sessions, /supportsBrowserTunnel\(activeInstance\.value\.capabilities\) \|\| supportsDirectoryBrowserTunnel\(activeInstance\.value\.capabilities\)/);

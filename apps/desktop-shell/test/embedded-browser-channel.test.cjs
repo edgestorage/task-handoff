@@ -138,3 +138,80 @@ test("tab notifications carry only source identity and opaque tabRef", async () 
     state: "ready",
   });
 });
+
+test("download control requests reach the desktop adapter and events stay source-scoped", async () => {
+  FakeWebSocket.instances.length = 0;
+  const configured = [];
+  const cancelled = [];
+  const client = new EmbeddedBrowserChannelClient({
+    url: "ws://control-plane/browser-channel-relay",
+    token: "ticket",
+    WebSocket: FakeWebSocket,
+    sourceRef: "bsr_1",
+    generation: 3,
+    registryEpoch: "bep_1",
+    registryRevision: 5,
+    pageHost: "renderer-webview",
+    pageHostCapabilities: { backgroundCreation: false, surviveHostWindowClose: false, crossWindowAdopt: false },
+    adapter: {
+      async configureDownloads(params) { configured.push(params); return {}; },
+      async cancelDownload(params) { cancelled.push(params); return {}; },
+    },
+  });
+  const connecting = client.connect();
+  const socket = FakeWebSocket.instances[0];
+  socket.serverOpenOk();
+  socket.serverSend({
+    jsonrpc: "2.0",
+    method: "control.ready",
+    params: { protocolVersion: "2026-11-22", sourceRef: "bsr_1", generation: 3 },
+  });
+  socket.serverSend({
+    jsonrpc: "2.0",
+    method: "control.synced",
+    params: { sourceRef: "bsr_1", generation: 3, registryEpoch: "bep_1", registryRevision: 5 },
+  });
+  await connecting;
+  client.socket.serverSend({
+    jsonrpc: "2.0",
+    id: "req_download",
+    method: "downloads.configure",
+    params: {
+      sourceRef: "bsr_1",
+      generation: 3,
+      behavior: "allowAndName",
+      downloadPath: "/tmp/downloads",
+      eventsEnabled: true,
+      browserContextId: "bsr_1",
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(configured.length, 1);
+  assert.equal(configured[0].behavior, "allowAndName");
+  const response = new protocol.EmbeddedBrowserControlMessageDecoder().push(
+    protocol.decodeEmbeddedBrowserFrame(client.socket.sent.at(-1)).payload,
+  )[0];
+  assert.equal(response.id, "req_download");
+
+  client.socket.serverSend({
+    jsonrpc: "2.0",
+    id: "req_cancel",
+    method: "downloads.cancel",
+    params: { sourceRef: "bsr_1", generation: 3, guid: "download_1", browserContextId: "bsr_1" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(cancelled, [{ sourceRef: "bsr_1", generation: 3, guid: "download_1", browserContextId: "bsr_1" }]);
+
+  client.notifyDownloadEvent({
+    sourceRef: "bsr_1",
+    tabRef: "browser_tab_1",
+    method: "Browser.downloadWillBegin",
+    params: { guid: "download_1", url: "https://example.com/file.txt", suggestedFilename: "file.txt" },
+  });
+  const notification = new protocol.EmbeddedBrowserControlMessageDecoder().push(
+    protocol.decodeEmbeddedBrowserFrame(client.socket.sent.at(-1)).payload,
+  )[0];
+  assert.equal(notification.method, "downloads.event");
+  assert.equal(notification.params.generation, 3);
+  assert.equal(notification.params.tabRef, "browser_tab_1");
+});

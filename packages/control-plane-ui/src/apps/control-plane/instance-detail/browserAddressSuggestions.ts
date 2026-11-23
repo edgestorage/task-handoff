@@ -3,7 +3,7 @@ export type RecentBrowserPage = { title: string; url: string; visitedAt: number 
 
 export type BrowserAddressSuggestion = {
   id: string;
-  kind: "pinned" | "recent";
+  kind: "typed" | "pinned" | "recent";
   title: string;
   url: string;
   host: string;
@@ -20,7 +20,10 @@ const MAX_SUGGESTIONS = 8;
 
 export function normalizeDesktopBrowserUrl(value: string) {
   const trimmed = value.trim();
-  const candidate = /^[a-z][a-z\d+.-]*:/i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  const hasExplicitScheme = /^(?:https?:|[a-z][a-z\d+.-]*:\/\/)/i.test(trimmed);
+  const candidate = hasExplicitScheme
+    ? trimmed
+    : `${defaultProtocolForSchemeLessUrl(trimmed)}//${trimmed}`;
   const url = new URL(candidate);
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Unsupported URL protocol.");
   return url.toString();
@@ -44,7 +47,9 @@ export function browserAddressSuggestions(
   limit = MAX_SUGGESTIONS,
 ): BrowserAddressSuggestion[] {
   const normalizedQuery = searchable(query);
+  const typed = typedAddressCandidate(query);
   const candidates = [
+    ...(typed ? [typed] : []),
     ...pinned.map((item, index) => suggestionCandidate("pinned", item.id, item.name, item.url, index)),
     ...recent.map((item, index) => suggestionCandidate("recent", item.url, item.title || item.url, item.url, index)),
   ];
@@ -55,6 +60,7 @@ export function browserAddressSuggestions(
 
   return [...deduplicated.values()]
     .flatMap((candidate) => {
+      if (candidate.suggestion.kind === "typed") return [{ ...candidate, match: -1 }];
       const match = suggestionMatch(candidate, normalizedQuery);
       return match === undefined ? [] : [{ ...candidate, match }];
     })
@@ -95,6 +101,32 @@ function suggestionCandidate(kind: BrowserAddressSuggestion["kind"], id: string,
     fields: [title, host, url, url.replace(/^[a-z]+:\/\/(?:www\.)?/i, "")].map(searchable),
     order,
   };
+}
+
+function typedAddressCandidate(query: string): ReturnType<typeof suggestionCandidate> | undefined {
+  const trimmed = query.trim();
+  if (!trimmed) return undefined;
+  try {
+    const url = normalizeDesktopBrowserUrl(trimmed);
+    return suggestionCandidate("typed", trimmed, trimmed, url, -1);
+  } catch {
+    return undefined;
+  }
+}
+
+function defaultProtocolForSchemeLessUrl(value: string) {
+  try {
+    const host = new URL(`http://${value}`).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    const local = host === "localhost"
+      || host.endsWith(".localhost")
+      || host.endsWith(".local")
+      || !host.includes(".")
+      || host.includes(":")
+      || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
+    return local ? "http:" : "https:";
+  } catch {
+    return "https:";
+  }
 }
 
 function suggestionMatch(candidate: ReturnType<typeof suggestionCandidate>, query: string) {

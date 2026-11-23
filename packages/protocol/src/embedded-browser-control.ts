@@ -17,8 +17,12 @@ export function supportsEmbeddedBrowserTabOrigin(protocolVersion: unknown) {
 export const EMBEDDED_BROWSER_TARGET_CDP_PROFILE = "embedded-browser-target-cdp";
 export const EMBEDDED_BROWSER_TARGET_CDP_PROTOCOL_VERSION = "1.3";
 export const EMBEDDED_BROWSER_FRAME_HEADER_BYTES = 9;
+// Frame payloads stay small so the reverse channel can interleave control
+// messages. A logical JSON control message may be larger because it is split
+// into frames; screenshots are the main reason for the higher bound.
 export const EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES = 256 * 1024;
-export const EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+export const EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES = 16 * 1024 * 1024;
+export const EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
 export const EMBEDDED_BROWSER_INITIAL_WINDOW_BYTES = 256 * 1024;
 export const EMBEDDED_BROWSER_MAX_IN_FLIGHT_REQUESTS = 32;
 export const EMBEDDED_BROWSER_MAX_SIDE_EFFECT_QUEUE = 16;
@@ -31,7 +35,7 @@ export const EMBEDDED_BROWSER_MAX_DEDUPE_ENTRIES = 1_024;
 export const EMBEDDED_BROWSER_SNAPSHOT_MAX_PAGES_PER_CHUNK = 100;
 export const EMBEDDED_BROWSER_MAX_PAGES_PER_SOURCE = 256;
 export const EMBEDDED_BROWSER_MAX_SOURCES = 32;
-export const EMBEDDED_BROWSER_INLINE_RESULT_MAX_BYTES = EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES;
+export const EMBEDDED_BROWSER_INLINE_RESULT_MAX_BYTES = EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES;
 export const EMBEDDED_BROWSER_HTTP_RESULT_MAX_BYTES = 16 * 1024 * 1024;
 export const EMBEDDED_BROWSER_HTTP_RESULT_TOTAL_BYTES = 64 * 1024 * 1024;
 export const EMBEDDED_BROWSER_RESULT_TTL_MS = 120_000;
@@ -159,11 +163,14 @@ export const EMBEDDED_BROWSER_CDP_METHODS = Object.freeze({
   "DOM.getNodeForLocation": "read",
   "DOM.querySelector": "read",
   "DOM.querySelectorAll": "read",
+  "DOM.scrollIntoViewIfNeeded": "page-write",
   "DOM.getAttributes": "read",
   "DOM.getOuterHTML": "read",
   "DOMSnapshot.enable": "session",
   "DOMSnapshot.disable": "session",
   "DOMSnapshot.captureSnapshot": "read",
+  "Inspector.enable": "session",
+  "Inspector.disable": "session",
   "Input.dispatchMouseEvent": "page-write",
   "Input.dispatchKeyEvent": "page-write",
   "Input.dispatchTouchEvent": "page-write",
@@ -172,17 +179,41 @@ export const EMBEDDED_BROWSER_CDP_METHODS = Object.freeze({
   "Log.disable": "session",
   "Network.enable": "session",
   "Network.disable": "session",
+  "Network.clearBrowserCache": "session",
+  "Network.emulateNetworkConditions": "session",
   "Network.getResponseBody": "read",
   "Network.getRequestPostData": "read",
+  "Network.setCacheDisabled": "session",
+  "Network.setExtraHTTPHeaders": "session",
+  "Network.getCookies": "read",
+  "Network.setCookie": "session",
+  "Network.clearBrowserCookies": "session",
+  "Fetch.enable": "session",
+  "Fetch.disable": "session",
+  "Fetch.continueRequest": "page-write",
+  "Fetch.continueResponse": "page-write",
+  "Fetch.continueWithAuth": "page-write",
+  "Fetch.failRequest": "page-write",
+  "Fetch.fulfillRequest": "page-write",
   "Page.enable": "session",
   "Page.disable": "session",
   "Page.getNavigationHistory": "read",
   "Page.getFrameTree": "read",
   "Page.getLayoutMetrics": "read",
+  "Page.bringToFront": "page-write",
+  "Page.handleJavaScriptDialog": "page-write",
   "Page.navigate": "page-write",
+  "Page.navigateToHistoryEntry": "page-write",
   "Page.reload": "page-write",
   "Page.stopLoading": "page-write",
   "Page.captureScreenshot": "read",
+  "Page.setInterceptFileChooserDialog": "page-write",
+  "Page.setLifecycleEventsEnabled": "session",
+  "Page.addScriptToEvaluateOnNewDocument": "page-write",
+  "Page.removeScriptToEvaluateOnNewDocument": "session",
+  "Page.createIsolatedWorld": "session",
+  "Runtime.addBinding": "session",
+  "Runtime.removeBinding": "session",
   "Runtime.enable": "session",
   "Runtime.disable": "session",
   "Runtime.evaluate": "page-write",
@@ -191,18 +222,30 @@ export const EMBEDDED_BROWSER_CDP_METHODS = Object.freeze({
   "Runtime.releaseObject": "session",
   "Runtime.runIfWaitingForDebugger": "session",
   "Schema.getDomains": "read",
+  // Child targets are not exposed by the renderer-webview host. Playwright
+  // still configures auto-attach on each page session during initialization.
+  "Target.setAutoAttach": "session",
   "Emulation.*": "page-write",
 } satisfies Record<string, EmbeddedBrowserCdpMethodKind>);
 
 export const EMBEDDED_BROWSER_CDP_EVENTS = Object.freeze([
   "Console.messageAdded",
+  "Fetch.authRequired",
+  "Fetch.requestPaused",
+  "Inspector.detached",
+  "Inspector.targetCrashed",
   "Log.entryAdded",
   "Network.loadingFailed",
   "Network.loadingFinished",
   "Network.requestServedFromCache",
+  "Network.requestWillBeSentExtraInfo",
+  "Network.responseReceivedExtraInfo",
   "Network.requestWillBeSent",
   "Network.responseReceived",
   "Page.domContentEventFired",
+  "Page.fileChooserOpened",
+  "Page.frameAttached",
+  "Page.frameDetached",
   "Page.frameNavigated",
   "Page.frameStartedLoading",
   "Page.frameStoppedLoading",
@@ -210,7 +253,9 @@ export const EMBEDDED_BROWSER_CDP_EVENTS = Object.freeze([
   "Page.javascriptDialogOpening",
   "Page.lifecycleEvent",
   "Page.loadEventFired",
+  "Page.navigatedWithinDocument",
   "Runtime.consoleAPICalled",
+  "Runtime.bindingCalled",
   "Runtime.exceptionThrown",
   "Runtime.executionContextCreated",
   "Runtime.executionContextDestroyed",
@@ -246,15 +291,22 @@ export type EmbeddedBrowserCdpSessionId = z.infer<typeof EmbeddedBrowserCdpSessi
 
 export const EMBEDDED_BROWSER_TARGET_CDP_METHODS = Object.freeze([
   "Browser.getVersion",
+  "Browser.setDownloadBehavior",
+  "Browser.cancelDownload",
+  "Storage.getCookies",
+  "Storage.setCookies",
+  "Storage.clearCookies",
   "Target.getTargets",
   "Target.getTargetInfo",
   "Target.getBrowserContexts",
+  "Target.attachToBrowserTarget",
   "Target.attachToTarget",
   "Target.detachFromTarget",
   "Target.closeTarget",
   "Target.createTarget",
   "Target.setDiscoverTargets",
   "Target.setAutoAttach",
+  "Schema.getDomains",
 ] as const);
 export type EmbeddedBrowserTargetCdpMethod = (typeof EMBEDDED_BROWSER_TARGET_CDP_METHODS)[number];
 
@@ -266,6 +318,15 @@ export const EMBEDDED_BROWSER_TARGET_CDP_EVENTS = Object.freeze([
   "Target.detachedFromTarget",
 ] as const);
 export type EmbeddedBrowserTargetCdpEventMethod = (typeof EMBEDDED_BROWSER_TARGET_CDP_EVENTS)[number];
+
+// Browser-level download events are emitted by the desktop host rather than a
+// page target. They share Chrome's root browser session and carry frameId, so
+// they are advertised separately from Target discovery events.
+export const EMBEDDED_BROWSER_DOWNLOAD_CDP_EVENTS = Object.freeze([
+  "Browser.downloadWillBegin",
+  "Browser.downloadProgress",
+] as const);
+export type EmbeddedBrowserDownloadCdpEventMethod = (typeof EMBEDDED_BROWSER_DOWNLOAD_CDP_EVENTS)[number];
 
 export function supportsEmbeddedBrowserTargetCdpMethod(method: unknown): method is EmbeddedBrowserTargetCdpMethod {
   return typeof method === "string" && (EMBEDDED_BROWSER_TARGET_CDP_METHODS as readonly string[]).includes(method);
@@ -291,6 +352,21 @@ export const EmbeddedBrowserTargetInfoSchema = z.object({
 }).strip();
 export type EmbeddedBrowserTargetInfo = z.infer<typeof EmbeddedBrowserTargetInfoSchema>;
 
+export const EmbeddedBrowserBrowserTargetInfoSchema = z.object({
+  targetId: EmbeddedBrowserCdpTargetIdSchema,
+  type: z.literal("browser"),
+  title: z.string().max(512).default(""),
+  url: z.string().max(4_096).default(""),
+  attached: z.boolean().default(true),
+}).strip();
+export type EmbeddedBrowserBrowserTargetInfo = z.infer<typeof EmbeddedBrowserBrowserTargetInfoSchema>;
+
+export const EmbeddedBrowserCdpTargetInfoSchema = z.union([
+  EmbeddedBrowserTargetInfoSchema,
+  EmbeddedBrowserBrowserTargetInfoSchema,
+]);
+export type EmbeddedBrowserCdpTargetInfo = z.infer<typeof EmbeddedBrowserCdpTargetInfoSchema>;
+
 export const EmbeddedBrowserTargetGetTargetsParamsSchema = z.object({}).strip();
 export type EmbeddedBrowserTargetGetTargetsParams = z.infer<typeof EmbeddedBrowserTargetGetTargetsParamsSchema>;
 export const EmbeddedBrowserTargetGetTargetsResultSchema = z.object({
@@ -299,13 +375,31 @@ export const EmbeddedBrowserTargetGetTargetsResultSchema = z.object({
 export type EmbeddedBrowserTargetGetTargetsResult = z.infer<typeof EmbeddedBrowserTargetGetTargetsResultSchema>;
 
 export const EmbeddedBrowserTargetGetTargetInfoParamsSchema = z.object({
-  targetId: EmbeddedBrowserCdpTargetIdSchema,
+  targetId: EmbeddedBrowserCdpTargetIdSchema.optional(),
 }).strip();
 export type EmbeddedBrowserTargetGetTargetInfoParams = z.infer<typeof EmbeddedBrowserTargetGetTargetInfoParamsSchema>;
 export const EmbeddedBrowserTargetGetTargetInfoResultSchema = z.object({
-  targetInfo: EmbeddedBrowserTargetInfoSchema,
+  targetInfo: EmbeddedBrowserCdpTargetInfoSchema,
 }).strip();
 export type EmbeddedBrowserTargetGetTargetInfoResult = z.infer<typeof EmbeddedBrowserTargetGetTargetInfoResultSchema>;
+
+export const EmbeddedBrowserBrowserSetDownloadBehaviorParamsSchema = z.object({
+  behavior: z.enum(["deny", "allow", "allowAndName", "default"]),
+  downloadPath: z.string().trim().min(1).max(4_096).optional(),
+  eventsEnabled: z.boolean().optional(),
+  browserContextId: EmbeddedBrowserCdpBrowserContextIdSchema.optional(),
+}).strip();
+export type EmbeddedBrowserBrowserSetDownloadBehaviorParams = z.infer<typeof EmbeddedBrowserBrowserSetDownloadBehaviorParamsSchema>;
+export const EmbeddedBrowserBrowserSetDownloadBehaviorResultSchema = z.object({}).strip();
+export type EmbeddedBrowserBrowserSetDownloadBehaviorResult = z.infer<typeof EmbeddedBrowserBrowserSetDownloadBehaviorResultSchema>;
+
+export const EmbeddedBrowserBrowserCancelDownloadParamsSchema = z.object({
+  guid: z.string().trim().min(1).max(240),
+  browserContextId: EmbeddedBrowserCdpBrowserContextIdSchema.optional(),
+}).strip();
+export type EmbeddedBrowserBrowserCancelDownloadParams = z.infer<typeof EmbeddedBrowserBrowserCancelDownloadParamsSchema>;
+export const EmbeddedBrowserBrowserCancelDownloadResultSchema = z.object({}).strip();
+export type EmbeddedBrowserBrowserCancelDownloadResult = z.infer<typeof EmbeddedBrowserBrowserCancelDownloadResultSchema>;
 
 export const EmbeddedBrowserTargetGetBrowserContextsParamsSchema = z.object({}).strip();
 export type EmbeddedBrowserTargetGetBrowserContextsParams = z.infer<typeof EmbeddedBrowserTargetGetBrowserContextsParamsSchema>;
@@ -383,6 +477,26 @@ export type EmbeddedBrowserTargetSetAutoAttachParams = z.infer<typeof EmbeddedBr
 export const EmbeddedBrowserTargetSetAutoAttachResultSchema = z.object({}).strip();
 export type EmbeddedBrowserTargetSetAutoAttachResult = z.infer<typeof EmbeddedBrowserTargetSetAutoAttachResultSchema>;
 
+export const EmbeddedBrowserStorageCookieSchema = z.record(z.string(), z.unknown());
+export type EmbeddedBrowserStorageCookie = z.infer<typeof EmbeddedBrowserStorageCookieSchema>;
+export const EmbeddedBrowserStorageGetCookiesParamsSchema = z.object({
+  browserContextId: EmbeddedBrowserCdpBrowserContextIdSchema.optional(),
+}).strip();
+export type EmbeddedBrowserStorageGetCookiesParams = z.infer<typeof EmbeddedBrowserStorageGetCookiesParamsSchema>;
+export const EmbeddedBrowserStorageSetCookiesParamsSchema = z.object({
+  cookies: z.array(EmbeddedBrowserStorageCookieSchema).max(2_048),
+  browserContextId: EmbeddedBrowserCdpBrowserContextIdSchema.optional(),
+}).strip();
+export type EmbeddedBrowserStorageSetCookiesParams = z.infer<typeof EmbeddedBrowserStorageSetCookiesParamsSchema>;
+export const EmbeddedBrowserStorageClearCookiesParamsSchema = z.object({
+  browserContextId: EmbeddedBrowserCdpBrowserContextIdSchema.optional(),
+}).strip();
+export type EmbeddedBrowserStorageClearCookiesParams = z.infer<typeof EmbeddedBrowserStorageClearCookiesParamsSchema>;
+export const EmbeddedBrowserTargetAttachToBrowserTargetResultSchema = z.object({
+  sessionId: EmbeddedBrowserCdpSessionIdSchema,
+}).strip();
+export type EmbeddedBrowserTargetAttachToBrowserTargetResult = z.infer<typeof EmbeddedBrowserTargetAttachToBrowserTargetResultSchema>;
+
 const EMBEDDED_BROWSER_EMULATION_PROTOCOL_COMMANDS = Object.freeze([
   "clearDeviceMetricsOverride",
   "setDeviceMetricsOverride",
@@ -413,6 +527,7 @@ export function embeddedBrowserCdpProtocolDocument() {
   for (const method of EMBEDDED_BROWSER_TARGET_CDP_METHODS) add(commands, method);
   for (const method of EMBEDDED_BROWSER_CDP_EVENTS) add(events, method);
   for (const method of EMBEDDED_BROWSER_TARGET_CDP_EVENTS) add(events, method);
+  for (const method of EMBEDDED_BROWSER_DOWNLOAD_CDP_EVENTS) add(events, method);
   const domains = [...new Set([...commands.keys(), ...events.keys()])].sort().map((domain) => ({
     domain,
     ...(commands.has(domain) ? { commands: [...commands.get(domain)!].sort().map((name) => ({ name })) } : {}),
@@ -1021,6 +1136,33 @@ export const EmbeddedBrowserTabsCloseParamsSchema = z.object({
 }).strict();
 export type EmbeddedBrowserTabsCloseParams = z.infer<typeof EmbeddedBrowserTabsCloseParamsSchema>;
 
+export const EmbeddedBrowserDownloadsConfigureParamsSchema = z.object({
+  sourceRef: z.string().trim().min(1).max(240),
+  generation: z.number().int().nonnegative(),
+  behavior: z.enum(["deny", "allow", "allowAndName", "default"]),
+  downloadPath: z.string().trim().min(1).max(4_096).optional(),
+  eventsEnabled: z.boolean().optional(),
+  browserContextId: z.string().trim().min(1).max(240).optional(),
+}).strict();
+export type EmbeddedBrowserDownloadsConfigureParams = z.infer<typeof EmbeddedBrowserDownloadsConfigureParamsSchema>;
+
+export const EmbeddedBrowserDownloadsCancelParamsSchema = z.object({
+  sourceRef: z.string().trim().min(1).max(240),
+  generation: z.number().int().nonnegative(),
+  guid: z.string().trim().min(1).max(240),
+  browserContextId: z.string().trim().min(1).max(240).optional(),
+}).strict();
+export type EmbeddedBrowserDownloadsCancelParams = z.infer<typeof EmbeddedBrowserDownloadsCancelParamsSchema>;
+
+export const EmbeddedBrowserDownloadEventSchema = z.object({
+  sourceRef: z.string().trim().min(1).max(240),
+  generation: z.number().int().nonnegative(),
+  tabRef: z.string().trim().min(1).max(240),
+  method: z.enum(EMBEDDED_BROWSER_DOWNLOAD_CDP_EVENTS),
+  params: z.record(z.string(), z.unknown()),
+}).strict();
+export type EmbeddedBrowserDownloadEvent = z.infer<typeof EmbeddedBrowserDownloadEventSchema>;
+
 export const EmbeddedBrowserTargetAttachParamsSchema = z.object({
   leaseRef: z.string().trim().min(1).max(240),
   tabRef: z.string().trim().min(1).max(240),
@@ -1145,7 +1287,7 @@ export class EmbeddedBrowserFrameDecoder {
 
 export function encodeEmbeddedBrowserControlMessage(value: unknown): Uint8Array {
   const json = new TextEncoder().encode(JSON.stringify(value));
-  if (!json.byteLength || json.byteLength > EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES) throw embeddedBrowserProtocolError();
+  if (!json.byteLength || json.byteLength > EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES) throw embeddedBrowserProtocolError();
   const bytes = new Uint8Array(4 + json.byteLength);
   new DataView(bytes.buffer).setUint32(0, json.byteLength, false);
   bytes.set(json, 4);
@@ -1157,7 +1299,7 @@ export class EmbeddedBrowserControlMessageDecoder {
 
   push(chunk: Uint8Array): unknown[] {
     if (!(chunk instanceof Uint8Array)) throw embeddedBrowserProtocolError();
-    if (this.pending.byteLength + chunk.byteLength > EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES) throw embeddedBrowserProtocolError();
+    if (this.pending.byteLength + chunk.byteLength > EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES) throw embeddedBrowserProtocolError();
     const merged = new Uint8Array(this.pending.byteLength + chunk.byteLength);
     merged.set(this.pending);
     merged.set(chunk, this.pending.byteLength);
@@ -1166,7 +1308,7 @@ export class EmbeddedBrowserControlMessageDecoder {
     let offset = 0;
     while (this.pending.byteLength - offset >= 4) {
       const length = new DataView(this.pending.buffer, this.pending.byteOffset + offset, this.pending.byteLength - offset).getUint32(0, false);
-      if (!length || length > EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES) throw embeddedBrowserProtocolError();
+      if (!length || length > EMBEDDED_BROWSER_CONTROL_MESSAGE_MAX_BYTES) throw embeddedBrowserProtocolError();
       if (this.pending.byteLength - offset < 4 + length) break;
       const text = new TextDecoder().decode(this.pending.subarray(offset + 4, offset + 4 + length));
       let parsed: unknown;

@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const main = fs.readFileSync(path.resolve(__dirname, "../src/main.cjs"), "utf8");
 const preload = fs.readFileSync(path.resolve(__dirname, "../src/preload.cjs"), "utf8");
+const popup = fs.readFileSync(path.resolve(__dirname, "../src/embedded-browser-popup.cjs"), "utf8");
 
 test("trusted control plane windows enable webview tags with enforced guest isolation", () => {
   assert.match(main, /desktopWindowWebPreferences\(webviewTag = false\)/);
@@ -24,8 +25,13 @@ test("guest navigation is limited to HTTP(S) while browser credentials remain in
   assert.match(preload, /releaseBrowserContext/);
 });
 
-test("guest popups are routed to the renderer as browser tabs", () => {
-  assert.match(main, /guest\.setWindowOpenHandler\(\(\{ url \}\) => \{[\s\S]*?host\.send\("task-handoff:browser-new-tab", \{ url: String\(url\),/);
+test("guest popups preserve popup semantics while plain tabs stay renderer-owned", () => {
+  assert.match(main, /guest\.setWindowOpenHandler\(\(details\) => desktopBrowserPopups\?\.windowOpenResponse\(\{/);
+  assert.match(main, /guest\.on\("did-create-window", \(popupWindow, details\) => \{[\s\S]*?desktopBrowserPopups\?\.handleCreatedWindow\(\{/);
+  assert.match(popup, /function embeddedBrowserPopupKind\(details = \{\}\)/);
+  assert.match(popup, /return "popup"[\s\S]*?return "tab"/);
+  assert.match(popup, /show: false, skipTaskbar: true/);
+  assert.match(popup, /show: true, autoHideMenuBar: true/);
   assert.match(preload, /onBrowserNewTab/);
 });
 

@@ -6,6 +6,7 @@ import {
   EMBEDDED_BROWSER_MAX_REQUEST_TIMEOUT_MS,
   EMBEDDED_BROWSER_REQUEST_TIMEOUT_MS,
   EmbeddedBrowserCdpEventSchema,
+  EmbeddedBrowserDownloadEventSchema,
   EmbeddedBrowserChannelErrorSchema,
   EmbeddedBrowserControlHelloSchema,
   EmbeddedBrowserControlMessageDecoder,
@@ -20,6 +21,8 @@ import {
   encodeEmbeddedBrowserFrame,
   encodeEmbeddedBrowserStreamOpenOk,
   type EmbeddedBrowserCdpCommand,
+  type EmbeddedBrowserDownloadsCancelParams,
+  type EmbeddedBrowserDownloadsConfigureParams,
   type EmbeddedBrowserFrame,
   type EmbeddedBrowserTabsCloseParams,
   type EmbeddedBrowserTabsOpenParams,
@@ -55,6 +58,14 @@ export type BrowserControlCdpEvent = {
   frameSessionRef?: string;
   method: string;
   params?: unknown;
+};
+
+export type BrowserControlDownloadEvent = {
+  sourceRef: string;
+  generation: number;
+  tabRef: string;
+  method: string;
+  params: Record<string, unknown>;
 };
 
 type PendingReply = {
@@ -106,6 +117,7 @@ function staticErrorCode(value: unknown) {
 export class BrowserControlRelayRegistry {
   private readonly connections = new Map<string, RelayConnection>();
   private readonly cdpListeners = new Set<(event: BrowserControlCdpEvent) => void>();
+  private readonly downloadListeners = new Set<(event: BrowserControlDownloadEvent) => void>();
   private nextConnection = 0;
   private nextRequest = 0;
 
@@ -114,6 +126,11 @@ export class BrowserControlRelayRegistry {
   subscribeCdpEvent(listener: (event: BrowserControlCdpEvent) => void) {
     this.cdpListeners.add(listener);
     return () => this.cdpListeners.delete(listener);
+  }
+
+  subscribeDownloadEvent(listener: (event: BrowserControlDownloadEvent) => void) {
+    this.downloadListeners.add(listener);
+    return () => this.downloadListeners.delete(listener);
   }
 
   notifyBrowserStateChanged() {
@@ -178,6 +195,14 @@ export class BrowserControlRelayRegistry {
 
   async cdpSend(sourceRef: string, generation: number, params: EmbeddedBrowserCdpCommand, timeoutMs = RELAY_RESPONSE_TIMEOUT_MS) {
     return this.request(sourceRef, generation, "cdp.send", params, timeoutMs);
+  }
+
+  async downloadsConfigure(params: EmbeddedBrowserDownloadsConfigureParams) {
+    return this.request(params.sourceRef, params.generation, "downloads.configure", params, RELAY_RESPONSE_TIMEOUT_MS);
+  }
+
+  async downloadsCancel(params: EmbeddedBrowserDownloadsCancelParams) {
+    return this.request(params.sourceRef, params.generation, "downloads.cancel", params, RELAY_RESPONSE_TIMEOUT_MS);
   }
 
   private request(sourceRef: string, generation: number, method: string, params: unknown, timeoutMs: number) {
@@ -346,6 +371,26 @@ export class BrowserControlRelayRegistry {
         for (const listener of [...this.cdpListeners]) {
           try { listener(payload); } catch { /* A CDP subscriber must not break the relay. */ }
         }
+      }
+      return {};
+    }
+    if (method === "downloads.event") {
+      const event = EmbeddedBrowserDownloadEventSchema.parse(params);
+      this.requireBinding(state, event.sourceRef, event.generation);
+      const page = this.service.page(event.tabRef);
+      if (page.sourceRef !== event.sourceRef || page.generation !== event.generation) {
+        throw new BrowserControlError("BROWSER_LEASE_STALE", "Browser download target does not belong to the bound generation.", 409);
+      }
+      for (const listener of [...this.downloadListeners]) {
+        try {
+          listener({
+            sourceRef: event.sourceRef,
+            generation: event.generation,
+            tabRef: event.tabRef,
+            method: event.method,
+            params: event.params,
+          });
+        } catch { /* A CDP subscriber must not break the relay. */ }
       }
       return {};
     }

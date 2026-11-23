@@ -30,8 +30,8 @@ test("expanded instance preview removes only the detail gutter", () => {
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip \{[\s\S]*?mask-image: none;/);
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::before \{[\s\S]*?linear-gradient\(90deg, var\(--titlebar-overflow-fade\), transparent\)/);
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::after \{[\s\S]*?linear-gradient\(270deg, var\(--titlebar-overflow-fade\), transparent\)/);
-  assert.match(themeStyles, /:root,\s*\[data-theme="light"\] \{[\s\S]*?--titlebar-overflow-fade: #ffffff;/);
-  assert.match(themeStyles, /\.dark,\s*\[data-theme="dark"\] \{[\s\S]*?--titlebar-overflow-fade: #0b1519;/);
+  assert.match(themeStyles, /:root,\s*:root\[data-theme="light"\] \{[\s\S]*?--titlebar-overflow-fade: #ffffff;/);
+  assert.match(themeStyles, /:root\.dark,\s*:root\[data-theme="dark"\] \{[\s\S]*?--titlebar-overflow-fade: #0b1519;/);
 });
 
 test("main and standalone windows persist expanded preview independently", () => {

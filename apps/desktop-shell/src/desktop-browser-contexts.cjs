@@ -1,4 +1,6 @@
 const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
 const { BrowserTunnelChannel } = require("./browser-tunnel-channel.cjs");
 const { BrowserSocksServer } = require("./browser-socks-server.cjs");
 
@@ -8,11 +10,13 @@ class DesktopBrowserContextManager {
     this.WebSocket = options.WebSocket;
     this.session = options.session;
     this.chooseDownloadPath = options.chooseDownloadPath;
+    this.defaultDownloadPath = options.defaultDownloadPath;
     this.BrowserTunnelChannel = options.BrowserTunnelChannel || BrowserTunnelChannel;
     this.BrowserSocksServer = options.BrowserSocksServer || BrowserSocksServer;
     this.logInfo = options.logInfo;
     this.logError = options.logError;
     this.onBrowserFailure = options.onBrowserFailure;
+    this.onDownloadEvent = options.onDownloadEvent;
     this.now = options.now || Date.now;
     this.leaseTimeoutMs = options.leaseTimeoutMs ?? 60_000;
     this.contexts = new Map();
@@ -67,6 +71,7 @@ class DesktopBrowserContextManager {
         }
         context = await creation;
       }
+      context.senderIds.add(input.senderId);
       if (this.closed || this.senderGenerations.get(input.senderId) !== senderGeneration) throw browserContextCancelled();
       const contextId = `browser_context_${crypto.randomUUID().replace(/-/g, "")}`;
       this.references.set(contextId, { key, senderId: input.senderId, lastSeenAt: this.now() });
@@ -114,13 +119,23 @@ class DesktopBrowserContextManager {
       });
       browserSession.setPermissionCheckHandler?.(() => false);
       browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-      const downloadHandler = (_event, item) => {
-        const savePath = this.chooseDownloadPath?.(item.getFilename());
-        if (savePath) item.setSavePath(savePath);
-        else item.cancel();
+      const context = {
+        ...input,
+        controlPlaneUrl: input.origin,
+        partition,
+        browserSession,
+        channel,
+        socks,
+        senderIds: new Set(),
+        downloadConfig: { behavior: "default", eventsEnabled: false },
+        activeDownloads: new Map(),
+        downloadHandler: undefined,
       };
-      browserSession.on("will-download", downloadHandler);
-      return { ...input, partition, browserSession, channel, socks, downloadHandler };
+      context.downloadHandler = (event, item, webContents) => {
+        this.handleDownload(context, event, item, webContents);
+      };
+      browserSession.on("will-download", context.downloadHandler);
+      return context;
     } catch (error) {
       channel.close();
       await socks?.close().catch(() => undefined);
@@ -152,6 +167,103 @@ class DesktopBrowserContextManager {
       if (reference.senderId !== senderId) continue;
       const context = this.contexts.get(reference.key);
       if (context?.browserSession === session) return context.instanceId;
+    }
+    return undefined;
+  }
+
+  configureDownloads({ senderId, instanceId, behavior, downloadPath, eventsEnabled }) {
+    const context = this.contextForSenderInstance(senderId, instanceId);
+    if (!context) throw browserContextError("BROWSER_SOURCE_NOT_FOUND", "The browser context for downloads is unavailable.");
+    if (!["default", "deny", "allow", "allowAndName"].includes(behavior)) {
+      throw browserContextError("BROWSER_OPERATION_UNSUPPORTED", "The download behavior is not supported.");
+    }
+    let resolvedDownloadPath;
+    if (behavior === "allow" || behavior === "allowAndName") {
+      resolvedDownloadPath = downloadPath || this.defaultDownloadPath;
+      if (!resolvedDownloadPath || !path.isAbsolute(resolvedDownloadPath) || resolvedDownloadPath.includes("\0")) {
+        throw browserContextError("BROWSER_OPERATION_UNSUPPORTED", "CDP downloads require an absolute downloadPath.");
+      }
+    }
+    context.downloadConfig = {
+      behavior,
+      eventsEnabled: eventsEnabled === true,
+      ...(resolvedDownloadPath ? { downloadPath: resolvedDownloadPath } : {}),
+    };
+    return {};
+  }
+
+  cancelDownload({ senderId, instanceId, guid }) {
+    const context = this.contextForSenderInstance(senderId, instanceId);
+    if (!context) throw browserContextError("BROWSER_SOURCE_NOT_FOUND", "The browser context for downloads is unavailable.");
+    const download = context.activeDownloads.get(guid);
+    if (!download) return {};
+    try { download.item.cancel(); } catch { /* The download may have already finished. */ }
+    context.activeDownloads.delete(guid);
+    return {};
+  }
+
+  handleDownload(context, _event, item, webContents) {
+    const config = context.downloadConfig ?? { behavior: "default", eventsEnabled: false };
+    if (config.behavior === "deny") {
+      item.cancel();
+      return;
+    }
+    const guid = crypto.randomUUID();
+    const suggestedFilename = item.getFilename();
+    if (config.behavior === "allowAndName") {
+      fs.mkdirSync(config.downloadPath, { recursive: true });
+      item.setSavePath(path.join(config.downloadPath, guid));
+    } else if (config.behavior === "allow") {
+      fs.mkdirSync(config.downloadPath, { recursive: true });
+      item.setSavePath(path.join(config.downloadPath, safeDownloadFilename(suggestedFilename)));
+    } else {
+      const savePath = this.chooseDownloadPath?.(suggestedFilename);
+      if (savePath) item.setSavePath(savePath);
+      else item.cancel();
+    }
+    context.activeDownloads.set(guid, { item, webContentsId: webContents?.id, guid });
+    const send = (method, params) => {
+      try {
+        this.onDownloadEvent?.({
+          controlPlaneUrl: context.controlPlaneUrl,
+          instanceId: context.instanceId,
+          senderIds: [...context.senderIds],
+          webContentsId: webContents?.id,
+          method,
+          params: { guid, ...params },
+        });
+      } catch { /* Download observers must not affect the download itself. */ }
+    };
+    if (config.eventsEnabled) {
+      send("Browser.downloadWillBegin", {
+        url: item.getURL(),
+        suggestedFilename,
+      });
+    }
+    item.on?.("updated", (_downloadEvent, state) => {
+      if (!config.eventsEnabled || state !== "progressing") return;
+      send("Browser.downloadProgress", {
+        totalBytes: Math.max(0, Number(item.getTotalBytes()) || 0),
+        receivedBytes: Math.max(0, Number(item.getReceivedBytes()) || 0),
+        state: "inProgress",
+      });
+    });
+    item.once?.("done", (_downloadEvent, state) => {
+      if (config.eventsEnabled) {
+        send("Browser.downloadProgress", {
+          totalBytes: Math.max(0, Number(item.getTotalBytes()) || 0),
+          receivedBytes: Math.max(0, Number(item.getReceivedBytes()) || 0),
+          state: state === "completed" ? "completed" : "canceled",
+        });
+      }
+      context.activeDownloads.delete(guid);
+    });
+  }
+
+  contextForSenderInstance(senderId, instanceId) {
+    for (const [key, context] of this.contexts) {
+      if (context.instanceId !== instanceId) continue;
+      if ([...this.references.values()].some((reference) => reference.key === key && reference.senderId === senderId)) return context;
     }
     return undefined;
   }
@@ -232,6 +344,10 @@ class DesktopBrowserContextManager {
   }
 
   async disposeContext(context) {
+    for (const download of context.activeDownloads?.values?.() ?? []) {
+      try { download.item.cancel(); } catch { /* The download may have already finished. */ }
+    }
+    context.activeDownloads?.clear?.();
     context.channel.close();
     await context.socks.close();
     context.browserSession.removeListener?.("will-download", context.downloadHandler);
@@ -243,6 +359,15 @@ class DesktopBrowserContextManager {
 
 function browserContextCancelled() {
   return Object.assign(new Error("Browser context preparation was cancelled because its renderer is no longer active."), { code: "BROWSER_CONTEXT_CANCELLED" });
+}
+
+function browserContextError(code, message) {
+  return Object.assign(new Error(message || code), { code });
+}
+
+function safeDownloadFilename(value) {
+  const name = path.basename(String(value || "").replace(/\0/g, "")).trim();
+  return name && name !== "." && name !== ".." ? name.slice(0, 255) : "download";
 }
 
 function canonicalOrigin(value) {

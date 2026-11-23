@@ -5,6 +5,8 @@ const {
   EMBEDDED_BROWSER_CONTROL_MAX_MESSAGE_BYTES,
   EmbeddedBrowserCdpCommandSchema,
   EmbeddedBrowserControlMessageDecoder,
+  EmbeddedBrowserDownloadsCancelParamsSchema,
+  EmbeddedBrowserDownloadsConfigureParamsSchema,
   EmbeddedBrowserFrameDecoder,
   EmbeddedBrowserStreamOpenOkSchema,
   EmbeddedBrowserTargetAttachParamsSchema,
@@ -174,6 +176,10 @@ class EmbeddedBrowserChannelClient extends EventEmitter {
         result = await this.adapter.detachTarget(EmbeddedBrowserTargetDetachParamsSchema.parse(params));
       } else if (request.method === "cdp.send") {
         result = await this.adapter.sendCdp(EmbeddedBrowserCdpCommandSchema.parse(params));
+      } else if (request.method === "downloads.configure") {
+        result = await this.adapter.configureDownloads(EmbeddedBrowserDownloadsConfigureParamsSchema.parse(params));
+      } else if (request.method === "downloads.cancel") {
+        result = await this.adapter.cancelDownload(EmbeddedBrowserDownloadsCancelParamsSchema.parse(params));
       } else if (request.method === "tabs.close") {
         result = await this.adapter.closeTab(params);
       } else if (request.method === "request.cancel") {
@@ -229,6 +235,10 @@ class EmbeddedBrowserChannelClient extends EventEmitter {
 
   notifyCdpEvent(event) {
     return this.sendNotification("cdp.event", { ...event, generation: this.generation });
+  }
+
+  notifyDownloadEvent(event) {
+    return this.sendNotification("downloads.event", { ...event, generation: this.generation });
   }
 
   sendNotification(method, params) {

@@ -13,11 +13,17 @@ test("the embedded browser accepts page-profile CDP domains and the Emulation na
   }
   assert.equal(assertEmbeddedBrowserCdpMethod("Network.enable"), "Network.enable");
   assert.equal(assertEmbeddedBrowserCdpMethod("Runtime.releaseObject"), "Runtime.releaseObject");
+  assert.equal(assertEmbeddedBrowserCdpMethod("Page.handleJavaScriptDialog"), "Page.handleJavaScriptDialog");
+  assert.equal(assertEmbeddedBrowserCdpMethod("Page.navigateToHistoryEntry"), "Page.navigateToHistoryEntry");
+  assert.equal(assertEmbeddedBrowserCdpMethod("Network.emulateNetworkConditions"), "Network.emulateNetworkConditions");
+  assert.equal(assertEmbeddedBrowserCdpMethod("Fetch.continueRequest"), "Fetch.continueRequest");
   assert.equal(embeddedBrowserCdpMethodKind("Page.navigate"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Runtime.evaluate"), "page-write");
   assert.equal(embeddedBrowserCdpMethodKind("Accessibility.getFullAXTree"), "read");
   assert.equal(embeddedBrowserCdpMethodKind("Emulation.setDeviceMetricsOverride"), "page-write");
   assert.equal(supportsEmbeddedBrowserCdpEvent("Page.lifecycleEvent"), true);
+  assert.equal(supportsEmbeddedBrowserCdpEvent("Runtime.bindingCalled"), true);
+  assert.equal(supportsEmbeddedBrowserCdpEvent("Fetch.requestPaused"), true);
 });
 
 test("the embedded browser rejects browser-level, target, and malformed CDP methods", () => {

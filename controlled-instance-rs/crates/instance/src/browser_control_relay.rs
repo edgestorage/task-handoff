@@ -5,8 +5,10 @@ use controlled_instance_protocol::{
     encode_embedded_browser_stream_open_ok, supports_embedded_browser_cdp_event,
     supports_embedded_browser_tab_origin, EmbeddedBrowserCdpEvent, EmbeddedBrowserChannelError,
     EmbeddedBrowserControlHello, EmbeddedBrowserControlMessageDecoder, EmbeddedBrowserControlReady,
-    EmbeddedBrowserControlSynced, EmbeddedBrowserFrame, EmbeddedBrowserFrameDecoder,
-    EmbeddedBrowserFrameType, EmbeddedBrowserProtocolErrorCode, EmbeddedBrowserTabsCloseParams,
+    EmbeddedBrowserControlSynced, EmbeddedBrowserDownloadEvent,
+    EmbeddedBrowserDownloadsCancelParams, EmbeddedBrowserDownloadsConfigureParams,
+    EmbeddedBrowserFrame, EmbeddedBrowserFrameDecoder, EmbeddedBrowserFrameType,
+    EmbeddedBrowserProtocolErrorCode, EmbeddedBrowserTabsCloseParams,
     EmbeddedBrowserTabsCreatedParams, EmbeddedBrowserTabsDestroyedParams,
     EmbeddedBrowserTabsOpenParams, EmbeddedBrowserTargetDetachParams,
     EMBEDDED_BROWSER_CHANNEL_MAX_BUFFERED_BYTES, EMBEDDED_BROWSER_CHANNEL_PROTOCOL_VERSION,
@@ -313,6 +315,34 @@ impl BrowserControlRelayRegistry {
             &params.source_ref,
             params.generation,
             "target.detach",
+            serde_json::to_value(&params).unwrap_or(Value::Null),
+            RELAY_RESPONSE_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn downloads_configure(
+        &self,
+        params: EmbeddedBrowserDownloadsConfigureParams,
+    ) -> Result<Value, BrowserControlError> {
+        self.request(
+            &params.source_ref,
+            params.generation,
+            "downloads.configure",
+            serde_json::to_value(&params).unwrap_or(Value::Null),
+            RELAY_RESPONSE_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn downloads_cancel(
+        &self,
+        params: EmbeddedBrowserDownloadsCancelParams,
+    ) -> Result<Value, BrowserControlError> {
+        self.request(
+            &params.source_ref,
+            params.generation,
+            "downloads.cancel",
             serde_json::to_value(&params).unwrap_or(Value::Null),
             RELAY_RESPONSE_TIMEOUT,
         )
@@ -815,6 +845,52 @@ fn handle_control_value(
             Err(_) => Err(BrowserControlError::new(
                 "BROWSER_CHANNEL_PROTOCOL_ERROR",
                 "cdp.event params are invalid.",
+                400,
+            )),
+        },
+        "downloads.event" => match serde_json::from_value::<EmbeddedBrowserDownloadEvent>(params) {
+            Ok(event) => {
+                if !binding.as_ref().is_some_and(|binding| {
+                    binding.source_ref == event.source_ref && binding.generation == event.generation
+                }) {
+                    return send_request_error(
+                        writer,
+                        request_id.as_deref(),
+                        -32000,
+                        "Browser source generation is stale.",
+                        "BROWSER_LEASE_STALE",
+                    );
+                }
+                let belongs = state
+                    .browser_control
+                    .page(&event.tab_ref)
+                    .is_ok_and(|page| {
+                        page.source_ref == event.source_ref && page.generation == event.generation
+                    });
+                if !belongs {
+                    return send_request_error(
+                        writer,
+                        request_id.as_deref(),
+                        -32000,
+                        "Browser download target does not belong to the bound generation.",
+                        "BROWSER_LEASE_STALE",
+                    );
+                }
+                state.events.publish(
+                    "browser.control.download-event",
+                    json!({
+                        "sourceRef": event.source_ref,
+                        "generation": event.generation,
+                        "tabRef": event.tab_ref,
+                        "method": event.method,
+                        "params": event.params,
+                    }),
+                );
+                Ok(())
+            }
+            Err(_) => Err(BrowserControlError::new(
+                "BROWSER_CHANNEL_PROTOCOL_ERROR",
+                "downloads.event params are invalid.",
                 400,
             )),
         },

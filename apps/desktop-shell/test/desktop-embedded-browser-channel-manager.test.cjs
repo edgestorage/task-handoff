@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const os = require("node:os");
 const test = require("node:test");
 const { DesktopEmbeddedBrowserChannelManager } = require("../src/desktop-embedded-browser-channel-manager.cjs");
 
@@ -19,6 +20,7 @@ class FakeChannel extends EventEmitter {
   notifyTabDestroyed(tabRef, reason) { this.notifications.push(["tabs.destroyed", tabRef, reason]); return true; }
   notifyTargetDetached(leaseRef, tabRef, reason) { this.notifications.push(["target.detached", leaseRef, tabRef, reason]); return true; }
   notifyCdpEvent(event) { this.notifications.push(["cdp.event", event]); return true; }
+  notifyDownloadEvent(event) { this.notifications.push(["downloads.event", event]); return true; }
   close() { this.state = "closed"; }
 }
 
@@ -81,6 +83,7 @@ test("source registration, snapshot and registry deltas stay ordered", async () 
     WebSocket: class {},
     ChannelClient: FakeChannel,
     registry,
+    publisherId: "desktop_a",
     logError: (message) => { throw new Error(message); },
   });
   const host = { id: 11, isDestroyed: () => false, send() {} };
@@ -101,7 +104,9 @@ test("source registration, snapshot and registry deltas stay ordered", async () 
   });
 
   assert.equal(calls.length, 2);
-  assert.equal(JSON.parse(calls[0].init.body).publisherRef, "desktop:11:instance-a");
+  const expectedDisplayName = Array.from(os.hostname().trim()).slice(0, 160).join("") || "TaskHandoff Desktop";
+  assert.equal(JSON.parse(calls[0].init.body).displayName, expectedDisplayName);
+  assert.equal(JSON.parse(calls[0].init.body).publisherRef, "desktop:desktop_a:11:instance-a");
   assert.equal(JSON.parse(calls[0].init.body).cdpIdentity.chromeVersion, "150.0.7871.47");
   const snapshot = JSON.parse(calls[1].init.body);
   assert.equal(snapshot.sourceRef, "bsr_1");
@@ -137,6 +142,72 @@ test("source registration, snapshot and registry deltas stay ordered", async () 
   assert.equal(createdDelta.upserts[0].tabRef, "browser_tab_2");
   assert.equal(FakeChannel.instances[0].notifications[0][0], "tabs.created");
   assert.equal(FakeChannel.instances[0].notifications[0][2], "bcr_created");
+});
+
+test("different desktop installations never share a publisher for the same sender id", async () => {
+  FakeChannel.instances.length = 0;
+  const publisherRefs = [];
+  const pageHostCapabilities = { backgroundCreation: false, surviveHostWindowClose: false, crossWindowAdopt: false };
+  const fetch = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (init?.method === "DELETE") return response(200, {});
+    if (path.endsWith("/browser-control/sources")) {
+      const body = JSON.parse(init.body);
+      publisherRefs.push(body.publisherRef);
+      const index = publisherRefs.length;
+      return response(201, {
+        source: {
+          sourceRef: `bsr_${index}`,
+          generation: 1,
+          panelId: "control_plane_1",
+          displayName: "Desktop",
+          pageHost: "renderer-webview",
+          pageHostCapabilities,
+          revision: 0,
+        },
+        connection: {
+          accessId: `bca_${index}`,
+          token: "ticket",
+          expiresAt: new Date(Date.now() + 30_000).toISOString(),
+          relayPath: "/browser-channel-relay",
+          sourceRef: `bsr_${index}`,
+          generation: 1,
+          registryEpoch: "bep_1",
+          registryRevision: 0,
+        },
+      });
+    }
+    if (path.endsWith("/snapshot")) {
+      return response(200, { registryEpoch: "bep_1", registryRevision: 1, sourceRevision: 1 });
+    }
+    if (path.endsWith("/deltas")) return response(200, { revision: 1 });
+    throw new Error(`unexpected URL ${url}`);
+  };
+
+  for (const publisherId of ["desktop_a", "desktop_b"]) {
+    const manager = new DesktopEmbeddedBrowserChannelManager({
+      fetch,
+      WebSocket: class {},
+      ChannelClient: FakeChannel,
+      registry: { list: () => [], close: async () => true },
+      publisherId,
+      logError: (message) => { throw new Error(message); },
+    });
+    await manager.ensureSource({
+      controlPlaneUrl: "http://control-plane.test",
+      instanceId: "instance-a",
+      senderId: 1,
+      host: { id: 1, isDestroyed: () => false, send() {} },
+      hostLabel: "Desktop",
+      pageHost: "renderer-webview",
+      pageHostCapabilities,
+    });
+  }
+
+  assert.deepEqual(publisherRefs, [
+    "desktop:desktop_a:1:instance-a",
+    "desktop:desktop_b:1:instance-a",
+  ]);
 });
 
 test("source registration deduplicates concurrent setup and reconnects a closed channel", async () => {
@@ -438,7 +509,7 @@ test("a second source takeover keeps the first source pages and leases without f
     const path = new URL(url).pathname;
     if (path.endsWith("/browser-control/sources")) {
       const body = JSON.parse(init.body);
-      const senderId = Number(body.publisherRef.split(":")[1]);
+      const senderId = Number(body.publisherRef.split(":")[2]);
       const sourceRef = senderId === 11 ? "bsr_a" : "bsr_b";
       return response(201, {
         source: {
@@ -607,6 +678,61 @@ test("device metric notifications are limited to valid overrides on the active l
     { code: "BROWSER_LEASE_STALE" },
   );
   assert.equal(sends.length, 1);
+});
+
+test("download events fan out only to the source that owns the guest", () => {
+  FakeChannel.instances.length = 0;
+  const manager = new DesktopEmbeddedBrowserChannelManager({
+    registry: {
+      getByGuestId: (webContentsId, senderId) => senderId === 11 && webContentsId === 81
+        ? { tabRef: "browser_tab_1", instanceId: "instance-a" }
+        : undefined,
+    },
+    logInfo: () => undefined,
+    logError: () => undefined,
+  });
+  const matchingChannel = new FakeChannel({});
+  matchingChannel.state = "ready";
+  const otherInstanceChannel = new FakeChannel({});
+  otherInstanceChannel.state = "ready";
+  manager.sessions.set("11\0instance-a", {
+    key: "11\0instance-a",
+    instanceId: "instance-a",
+    senderId: 11,
+    sourceRef: "bsr_a",
+    controlPlaneUrl: "http://control-plane.test",
+    channel: matchingChannel,
+    closed: false,
+  });
+  manager.sessions.set("12\0instance-b", {
+    key: "12\0instance-b",
+    instanceId: "instance-b",
+    senderId: 12,
+    sourceRef: "bsr_b",
+    controlPlaneUrl: "http://control-plane.test",
+    channel: otherInstanceChannel,
+    closed: false,
+  });
+
+  manager.handleDownloadEvent({
+    instanceId: "instance-a",
+    webContentsId: 81,
+    senderIds: [11, 12],
+    controlPlaneUrl: "http://control-plane.test",
+    method: "Browser.downloadWillBegin",
+    params: { guid: "download_1", url: "https://example.com/file.txt", suggestedFilename: "file.txt" },
+  });
+
+  assert.deepEqual(matchingChannel.notifications, [[
+    "downloads.event",
+    {
+      sourceRef: "bsr_a",
+      tabRef: "browser_tab_1",
+      method: "Browser.downloadWillBegin",
+      params: { guid: "download_1", url: "https://example.com/file.txt", suggestedFilename: "file.txt" },
+    },
+  ]]);
+  assert.deepEqual(otherInstanceChannel.notifications, []);
 });
 
 function response(status, body) {

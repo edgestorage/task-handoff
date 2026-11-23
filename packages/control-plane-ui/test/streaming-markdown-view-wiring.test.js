@@ -11,6 +11,7 @@ const message = fs.readFileSync(new URL("../src/components/ai-session/AiSessionS
 const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
 const animatedText = fs.readFileSync(new URL("../src/components/ai-session/AiSessionAnimatedTextNode.vue", import.meta.url), "utf8");
 const codeBlock = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCodeBlock.vue", import.meta.url), "utf8");
+const panelStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const markdownNode = fs.readFileSync(new URL("../src/components/ai-session/AiSessionMarkdownNode.vue", import.meta.url), "utf8");
 const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
 const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
@@ -142,6 +143,9 @@ test("streaming Markdown keeps the existing session typography, semantic colors,
   assert.match(message, /--hr-border: var\(--markdown-border-color, var\(--line, currentColor\)\)/);
   assert.match(message, /--link-color: var\(--markdown-link-color, var\(--brand-accent, currentColor\)\)/);
   assert.match(message, /--footnote-border: var\(--markdown-border-color, var\(--line, currentColor\)\)/);
+  assert.match(message, /--inline-code-bg: var\(--markdown-code-bg, var\(--surface/);
+  assert.match(message, /--inline-code-border: var\(--markdown-border-color, var\(--line-subtle/);
+  assert.match(message, /color: var\(--text, inherit\)/);
   assert.match(message, /setCustomComponents\(markdownScopeId/);
   assert.match(message, /text: AiSessionMarkdownNode/);
   assert.match(message, /code_block: AiSessionMarkdownNode/);
@@ -156,6 +160,10 @@ test("streaming Markdown keeps the existing session typography, semantic colors,
   assert.match(result, /sessions\.markdown\.copy/);
   assert.match(codeBlock, /markdown-code-toolbar/);
   assert.match(codeBlock, /markdown-code-copy/);
+  assert.match(codeBlock, /background: var\(--surface/);
+  assert.match(codeBlock, /color: var\(--text/);
+  assert.match(codeBlock, /background: var\(--surface-raised\)/);
+  assert.match(panelStyles, /\.session-ai-message code \{[\s\S]*?background: var\(--surface\);[\s\S]*?color: var\(--text\);/);
   assert.match(message, /\.hljs-keyword/);
   assert.match(message, /:deep\(pre code\)/);
   assert.match(message, /:deep\(\.table-node-wrapper\)/);

@@ -18,6 +18,7 @@
           :page-key="pageKey"
           :creation-ref="pageRecord(instanceId, pageKey)?.creationRef"
           :background-throttled="!isPageVisible(instanceId, pageKey)"
+          :capture-active="isCaptureActive(instanceId, pageKey)"
           :initial-url="pageInitialUrl(instanceId, pageKey)"
           :open-pages="openPagesFor(instanceId)"
           @update-tab="(patch) => $emit('updateBrowserTab', instanceId, pageKey, patch)"
@@ -34,12 +35,23 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch,
 import type { SessionTab } from "../useInstanceSessions";
 import EmbeddedBrowserTab from "./EmbeddedBrowserTab.vue";
 import type { BrowserPageSurface, SessionPaneId } from "./useActiveInstanceSessions";
-import { listDesktopBrowserTabs, onDesktopBrowserTabsChanged, type DesktopBrowserTab } from "../../../lib/desktopBridge";
+import {
+  ackDesktopBrowserCaptureSurface,
+  listDesktopBrowserTabs,
+  onDesktopBrowserCaptureSurface,
+  onDesktopBrowserCaptureSurfaceRelease,
+  onDesktopBrowserTabsChanged,
+  type DesktopBrowserCaptureSurface,
+  type DesktopBrowserTab,
+} from "../../../lib/desktopBridge";
 
 type SurfaceState = {
   leftSessionKey: string;
   rightSessionKey: string;
 };
+
+const BACKGROUND_BROWSER_WIDTH = 1280;
+const BACKGROUND_BROWSER_HEIGHT = 720;
 
 const props = defineProps<{
   activeInstanceId?: string;
@@ -58,6 +70,7 @@ const host = ref<HTMLElement>();
 const layoutRects = shallowRef(new Map<string, DOMRect>());
 const layoutVersion = ref(0);
 const desktopBrowserTabs = ref<Record<string, DesktopBrowserTab[]>>({});
+const captureSurfaces = ref<Record<string, DesktopBrowserCaptureSurface>>({});
 // Layers must never reorder: moving a <webview> in the DOM detaches and resets
 // its guest. This registry keeps first-seen order and only appends/removes.
 const stablePages = ref<Record<string, string[]>>({});
@@ -66,6 +79,9 @@ let resizeObserver: ResizeObserver | undefined;
 let mutationObserver: MutationObserver | undefined;
 let layoutFrame: number | undefined;
 let stopBrowserTabsChanged: (() => void) | undefined;
+let stopCaptureSurface: (() => void) | undefined;
+let stopCaptureSurfaceRelease: (() => void) | undefined;
+const captureSurfaceTimers = new Map<string, number>();
 let browserTabsRefreshSequence = 0;
 let disposed = false;
 
@@ -138,6 +154,28 @@ function itemStyle(instanceId: string, pageKey: string): CSSProperties {
   void layoutVersion.value;
   const pane = paneForPage(instanceId, pageKey);
   const rect = pane ? layoutRects.value.get(`${instanceId}:${pane}`) : undefined;
+  if (!rect) {
+    // A background webview must keep a real size and stay visible in the DOM.
+    // CDP clients read Page.getLayoutMetrics before they ask for a screenshot,
+    // so a 0x0 guest makes them compute a 12x1 capture clip. Hiding the surface
+    // with visibility: hidden also pauses requestAnimationFrame, which breaks
+    // Playwright locators and input on background tabs. Keep it off-screen so
+    // it cannot intercept pointer events, and only move it on-stage while a
+    // screenshot is being captured.
+    const capture = captureSurfaces.value[captureSurfaceKey(instanceId, pageKey)];
+    return {
+      left: capture ? "0px" : `-${BACKGROUND_BROWSER_WIDTH + 100}px`,
+      top: "0px",
+      width: `${capture?.width || BACKGROUND_BROWSER_WIDTH}px`,
+      height: `${capture?.height || BACKGROUND_BROWSER_HEIGHT}px`,
+      visibility: "visible",
+      // Chromium skips compositor frames entirely for opacity: 0, which makes
+      // capturePage return a tiny empty image. Keep the surface effectively
+      // invisible without allowing the optimizer to drop its frame.
+      opacity: capture ? 1 : undefined,
+      pointerEvents: "none",
+    };
+  }
   const visible = instanceId === props.activeInstanceId && Boolean(rect);
   return {
     left: `${rect?.x || 0}px`,
@@ -149,8 +187,64 @@ function itemStyle(instanceId: string, pageKey: string): CSSProperties {
   };
 }
 
+function captureSurfaceKey(instanceId: string, pageKey: string) {
+  return `${instanceId}\u0000${pageKey}`;
+}
+
+function clearCaptureSurface(requestId: string) {
+  const timer = captureSurfaceTimers.get(requestId);
+  if (timer !== undefined) window.clearTimeout(timer);
+  captureSurfaceTimers.delete(requestId);
+  const next: Record<string, DesktopBrowserCaptureSurface> = {};
+  for (const [key, surface] of Object.entries(captureSurfaces.value)) {
+    if (surface.requestId !== requestId) next[key] = surface;
+  }
+  captureSurfaces.value = next;
+}
+
+function handleCaptureSurface(input: DesktopBrowserCaptureSurface) {
+  const key = captureSurfaceKey(input.instanceId, input.pageKey);
+  captureSurfaces.value = { ...captureSurfaces.value, [key]: input };
+  const ack = () => ackDesktopBrowserCaptureSurface(input.requestId);
+  const ready = (attempt: number) => {
+    if (disposed || !captureSurfaces.value[key]) return;
+    const item = findLayerItem(input.instanceId, input.pageKey);
+    const rect = item?.getBoundingClientRect();
+    // The native guest needs a couple of compositor frames after its surface
+    // becomes visible. Give it a short settle window before the snapshot.
+    if (rect && rect.width > 0 && rect.height > 0) {
+      window.setTimeout(ack, 300);
+      return;
+    }
+    if (attempt >= 20) {
+      ack();
+      return;
+    }
+    window.setTimeout(() => ready(attempt + 1), 50);
+  };
+  void nextTick(() => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => ready(0)));
+    // Background windows do not fire rAF reliably; polling still converges once
+    // the guest receives its new native viewport.
+    window.setTimeout(() => ready(8), 400);
+  });
+  const timer = window.setTimeout(() => clearCaptureSurface(input.requestId), 9_000);
+  captureSurfaceTimers.set(input.requestId, timer);
+}
+
+function findLayerItem(instanceId: string, pageKey: string) {
+  // Story page keys are JSON arrays and contain quotes, so they cannot be
+  // interpolated into an attribute selector without escaping.
+  return [...document.querySelectorAll<HTMLElement>("[data-browser-page-key]")]
+    .find((element) => element.dataset.instanceId === instanceId && element.dataset.browserPageKey === pageKey);
+}
+
 function isPageVisible(instanceId: string, pageKey: string) {
   return instanceId === props.activeInstanceId && Boolean(paneForPage(instanceId, pageKey));
+}
+
+function isCaptureActive(instanceId: string, pageKey: string) {
+  return Boolean(captureSurfaces.value[captureSurfaceKey(instanceId, pageKey)]);
 }
 
 async function refreshDesktopBrowserTabs() {
@@ -229,6 +323,8 @@ onMounted(() => {
   mutationObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-pane", "data-instance-id"] });
   window.addEventListener("resize", scheduleLayout);
   stopBrowserTabsChanged = onDesktopBrowserTabsChanged(() => { void refreshDesktopBrowserTabs(); });
+  stopCaptureSurface = onDesktopBrowserCaptureSurface(handleCaptureSurface);
+  stopCaptureSurfaceRelease = onDesktopBrowserCaptureSurfaceRelease(({ requestId }) => clearCaptureSurface(requestId));
   void refreshDesktopBrowserTabs();
   void nextTick(scheduleLayout);
 });
@@ -253,6 +349,10 @@ onBeforeUnmount(() => {
   if (layoutFrame !== undefined) window.cancelAnimationFrame(layoutFrame);
   window.removeEventListener("resize", scheduleLayout);
   stopBrowserTabsChanged?.();
+  stopCaptureSurface?.();
+  stopCaptureSurfaceRelease?.();
+  for (const timer of captureSurfaceTimers.values()) window.clearTimeout(timer);
+  captureSurfaceTimers.clear();
   resizeObserver?.disconnect();
   mutationObserver?.disconnect();
 });

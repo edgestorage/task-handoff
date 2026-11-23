@@ -421,6 +421,18 @@ test("source reconnects advance generation, remove old pages, and fence old leas
   assert.equal(service.attachTab("session_one", "browser_tab_one").generation, replacement.generation);
 });
 
+test("the same publisher ref from different owners creates independent sources", () => {
+  const service = new BrowserControlService();
+  const first = registerSource(service, { publisherRef: "desktop:1:instance_one", panelId: "panel_a", ownerRef: "user_a" });
+  const second = registerSource(service, { publisherRef: "desktop:1:instance_one", panelId: "panel_b", ownerRef: "user_b" });
+
+  assert.notEqual(first.sourceRef, second.sourceRef);
+  assert.deepEqual(
+    service.creationContextSnapshot(first.sourceRef).panels.map((panel) => panel.sourceRef).sort(),
+    [first.sourceRef, second.sourceRef].sort(),
+  );
+});
+
 test("instance access revocation clears the default context and active creation", async () => {
   const service = new BrowserControlService();
   const first = registerSource(service, { pageHost: "main-page-pool", publisherRef: "pool-a", panelId: "panel_a", ownerRef: "user_a" });

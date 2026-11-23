@@ -29,7 +29,6 @@ import {
   EmbeddedBrowserSourceSchema,
   EmbeddedBrowserSourceSnapshotSchema,
   EmbeddedBrowserTargetGetBrowserContextsResultSchema,
-  EmbeddedBrowserTargetGetTargetInfoResultSchema,
   EmbeddedBrowserTargetGetTargetsResultSchema,
   embeddedBrowserTargetInfoFromPage,
   type EmbeddedBrowserAccessView,
@@ -51,7 +50,7 @@ import {
   type EmbeddedBrowserSourceDelta,
   type EmbeddedBrowserSourceSnapshot,
   type EmbeddedBrowserTargetGetBrowserContextsResult,
-  type EmbeddedBrowserTargetGetTargetInfoResult,
+  type EmbeddedBrowserTargetInfo,
   type EmbeddedBrowserTargetGetTargetsResult,
 } from "@task-handoff/protocol/embedded-browser-control";
 
@@ -486,10 +485,8 @@ export class BrowserControlService {
     });
   }
 
-  targetInfo(tabRef: string, attached = false): EmbeddedBrowserTargetGetTargetInfoResult {
-    return EmbeddedBrowserTargetGetTargetInfoResultSchema.parse({
-      targetInfo: embeddedBrowserTargetInfoFromPage(this.page(tabRef), attached),
-    });
+  targetInfo(tabRef: string, attached = false): { targetInfo: EmbeddedBrowserTargetInfo } {
+    return { targetInfo: embeddedBrowserTargetInfoFromPage(this.page(tabRef), attached) };
   }
 
   subscribe(listener: (event: BrowserControlEvent) => void) {
@@ -508,7 +505,8 @@ export class BrowserControlService {
   registerSource(registration: BrowserSourceRegistration): EmbeddedBrowserSource {
     validateRegistration(registration);
     const now = nowMs();
-    const existingRef = this.sourceByPublisher.get(registration.publisherRef);
+    const publisherKey = sourcePublisherKey(registration);
+    const existingRef = this.sourceByPublisher.get(publisherKey);
     let sourceRef: string;
     let reconnected = false;
     if (existingRef) {
@@ -538,7 +536,7 @@ export class BrowserControlService {
         pages: new Map(),
       };
       this.sources.set(sourceRef, source);
-      this.sourceByPublisher.set(registration.publisherRef, sourceRef);
+      this.sourceByPublisher.set(publisherKey, sourceRef);
     }
     if (reconnected) {
       // A transport reconnect starts a new generation. Retained page-pool pages
@@ -1532,4 +1530,8 @@ export class BrowserControlService {
     this.recordCreationEvent(creation.view);
     return true;
   }
+}
+
+function sourcePublisherKey(registration: BrowserSourceRegistration) {
+  return `${registration.panelId}\0${registration.ownerRef}\0${registration.publisherRef}`;
 }

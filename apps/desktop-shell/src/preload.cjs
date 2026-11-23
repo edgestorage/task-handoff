@@ -42,6 +42,17 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   detachBrowserTarget: (tabRef) => ipcRenderer.invoke("task-handoff:browser-target-detach", tabRef),
   sendBrowserCdpCommand: (input) => ipcRenderer.invoke("task-handoff:browser-cdp-send", input),
   setBrowserTabThrottled: (webContentsId, throttled) => ipcRenderer.invoke("task-handoff:browser-tab-throttled", webContentsId, throttled),
+  ackBrowserCaptureSurface: (requestId) => ipcRenderer.send("task-handoff:browser-capture-surface-ready", requestId),
+  onBrowserCaptureSurface: (listener) => {
+    const handler = (_event, input) => listener(input);
+    ipcRenderer.on("task-handoff:browser-capture-surface", handler);
+    return () => ipcRenderer.removeListener("task-handoff:browser-capture-surface", handler);
+  },
+  onBrowserCaptureSurfaceRelease: (listener) => {
+    const handler = (_event, input) => listener(input);
+    ipcRenderer.on("task-handoff:browser-capture-surface-release", handler);
+    return () => ipcRenderer.removeListener("task-handoff:browser-capture-surface-release", handler);
+  },
   onBrowserNewTab: (listener) => {
     const handler = (_event, input) => listener(input);
     ipcRenderer.on("task-handoff:browser-new-tab", handler);

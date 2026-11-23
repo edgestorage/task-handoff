@@ -3,7 +3,8 @@
   "limits": {
     "frameHeaderBytes": 9,
     "controlMaxMessageBytes": 262144,
-    "channelMaxBufferedBytes": 2097152,
+    "controlMessageMaxBytes": 16777216,
+    "channelMaxBufferedBytes": 16777216,
     "requestTimeoutMs": 10000,
     "snapshotMaxPagesPerChunk": 100,
     "maxPagesPerSource": 256,
@@ -39,11 +40,14 @@
       "DOM.getNodeForLocation": "read",
       "DOM.querySelector": "read",
       "DOM.querySelectorAll": "read",
+      "DOM.scrollIntoViewIfNeeded": "page-write",
       "DOM.getAttributes": "read",
       "DOM.getOuterHTML": "read",
       "DOMSnapshot.enable": "session",
       "DOMSnapshot.disable": "session",
       "DOMSnapshot.captureSnapshot": "read",
+      "Inspector.enable": "session",
+      "Inspector.disable": "session",
       "Input.dispatchMouseEvent": "page-write",
       "Input.dispatchKeyEvent": "page-write",
       "Input.dispatchTouchEvent": "page-write",
@@ -52,17 +56,41 @@
       "Log.disable": "session",
       "Network.enable": "session",
       "Network.disable": "session",
+      "Network.clearBrowserCache": "session",
+      "Network.emulateNetworkConditions": "session",
       "Network.getResponseBody": "read",
       "Network.getRequestPostData": "read",
+      "Network.setCacheDisabled": "session",
+      "Network.setExtraHTTPHeaders": "session",
+      "Network.getCookies": "read",
+      "Network.setCookie": "session",
+      "Network.clearBrowserCookies": "session",
+      "Fetch.enable": "session",
+      "Fetch.disable": "session",
+      "Fetch.continueRequest": "page-write",
+      "Fetch.continueResponse": "page-write",
+      "Fetch.continueWithAuth": "page-write",
+      "Fetch.failRequest": "page-write",
+      "Fetch.fulfillRequest": "page-write",
       "Page.enable": "session",
       "Page.disable": "session",
       "Page.getNavigationHistory": "read",
       "Page.getFrameTree": "read",
       "Page.getLayoutMetrics": "read",
+      "Page.bringToFront": "page-write",
+      "Page.handleJavaScriptDialog": "page-write",
       "Page.navigate": "page-write",
+      "Page.navigateToHistoryEntry": "page-write",
       "Page.reload": "page-write",
       "Page.stopLoading": "page-write",
       "Page.captureScreenshot": "read",
+      "Page.setInterceptFileChooserDialog": "page-write",
+      "Page.setLifecycleEventsEnabled": "session",
+      "Page.addScriptToEvaluateOnNewDocument": "page-write",
+      "Page.removeScriptToEvaluateOnNewDocument": "session",
+      "Page.createIsolatedWorld": "session",
+      "Runtime.addBinding": "session",
+      "Runtime.removeBinding": "session",
       "Runtime.enable": "session",
       "Runtime.disable": "session",
       "Runtime.evaluate": "page-write",
@@ -71,17 +99,27 @@
       "Runtime.releaseObject": "session",
       "Runtime.runIfWaitingForDebugger": "session",
       "Schema.getDomains": "read",
+      "Target.setAutoAttach": "session",
       "Emulation.*": "page-write"
     },
     "events": [
       "Console.messageAdded",
+      "Fetch.authRequired",
+      "Fetch.requestPaused",
+      "Inspector.detached",
+      "Inspector.targetCrashed",
       "Log.entryAdded",
       "Network.loadingFailed",
       "Network.loadingFinished",
       "Network.requestServedFromCache",
+      "Network.requestWillBeSentExtraInfo",
+      "Network.responseReceivedExtraInfo",
       "Network.requestWillBeSent",
       "Network.responseReceived",
       "Page.domContentEventFired",
+      "Page.fileChooserOpened",
+      "Page.frameAttached",
+      "Page.frameDetached",
       "Page.frameNavigated",
       "Page.frameStartedLoading",
       "Page.frameStoppedLoading",
@@ -89,7 +127,9 @@
       "Page.javascriptDialogOpening",
       "Page.lifecycleEvent",
       "Page.loadEventFired",
+      "Page.navigatedWithinDocument",
       "Runtime.consoleAPICalled",
+      "Runtime.bindingCalled",
       "Runtime.exceptionThrown",
       "Runtime.executionContextCreated",
       "Runtime.executionContextDestroyed",
@@ -100,15 +140,22 @@
       "protocolVersion": "1.3",
       "methods": [
         "Browser.getVersion",
+        "Browser.setDownloadBehavior",
+        "Browser.cancelDownload",
+        "Storage.getCookies",
+        "Storage.setCookies",
+        "Storage.clearCookies",
         "Target.getTargets",
         "Target.getTargetInfo",
         "Target.getBrowserContexts",
+        "Target.attachToBrowserTarget",
         "Target.attachToTarget",
         "Target.detachFromTarget",
         "Target.closeTarget",
         "Target.createTarget",
         "Target.setDiscoverTargets",
-        "Target.setAutoAttach"
+        "Target.setAutoAttach",
+        "Schema.getDomains"
       ],
       "events": [
         "Target.attachedToTarget",
@@ -147,7 +194,21 @@
             "domain": "Browser",
             "commands": [
               {
+                "name": "cancelDownload"
+              },
+              {
                 "name": "getVersion"
+              },
+              {
+                "name": "setDownloadBehavior"
+              }
+            ],
+            "events": [
+              {
+                "name": "downloadProgress"
+              },
+              {
+                "name": "downloadWillBegin"
               }
             ]
           },
@@ -199,6 +260,9 @@
               },
               {
                 "name": "resolveNode"
+              },
+              {
+                "name": "scrollIntoViewIfNeeded"
               }
             ]
           },
@@ -246,6 +310,40 @@
             ]
           },
           {
+            "domain": "Fetch",
+            "commands": [
+              {
+                "name": "continueRequest"
+              },
+              {
+                "name": "continueResponse"
+              },
+              {
+                "name": "continueWithAuth"
+              },
+              {
+                "name": "disable"
+              },
+              {
+                "name": "enable"
+              },
+              {
+                "name": "failRequest"
+              },
+              {
+                "name": "fulfillRequest"
+              }
+            ],
+            "events": [
+              {
+                "name": "authRequired"
+              },
+              {
+                "name": "requestPaused"
+              }
+            ]
+          },
+          {
             "domain": "Input",
             "commands": [
               {
@@ -259,6 +357,25 @@
               },
               {
                 "name": "insertText"
+              }
+            ]
+          },
+          {
+            "domain": "Inspector",
+            "commands": [
+              {
+                "name": "disable"
+              },
+              {
+                "name": "enable"
+              }
+            ],
+            "events": [
+              {
+                "name": "detached"
+              },
+              {
+                "name": "targetCrashed"
               }
             ]
           },
@@ -282,16 +399,37 @@
             "domain": "Network",
             "commands": [
               {
+                "name": "clearBrowserCache"
+              },
+              {
+                "name": "clearBrowserCookies"
+              },
+              {
                 "name": "disable"
               },
               {
+                "name": "emulateNetworkConditions"
+              },
+              {
                 "name": "enable"
+              },
+              {
+                "name": "getCookies"
               },
               {
                 "name": "getRequestPostData"
               },
               {
                 "name": "getResponseBody"
+              },
+              {
+                "name": "setCacheDisabled"
+              },
+              {
+                "name": "setCookie"
+              },
+              {
+                "name": "setExtraHTTPHeaders"
               }
             ],
             "events": [
@@ -308,7 +446,13 @@
                 "name": "requestWillBeSent"
               },
               {
+                "name": "requestWillBeSentExtraInfo"
+              },
+              {
                 "name": "responseReceived"
+              },
+              {
+                "name": "responseReceivedExtraInfo"
               }
             ]
           },
@@ -316,7 +460,16 @@
             "domain": "Page",
             "commands": [
               {
+                "name": "addScriptToEvaluateOnNewDocument"
+              },
+              {
+                "name": "bringToFront"
+              },
+              {
                 "name": "captureScreenshot"
+              },
+              {
+                "name": "createIsolatedWorld"
               },
               {
                 "name": "disable"
@@ -334,10 +487,25 @@
                 "name": "getNavigationHistory"
               },
               {
+                "name": "handleJavaScriptDialog"
+              },
+              {
                 "name": "navigate"
               },
               {
+                "name": "navigateToHistoryEntry"
+              },
+              {
                 "name": "reload"
+              },
+              {
+                "name": "removeScriptToEvaluateOnNewDocument"
+              },
+              {
+                "name": "setInterceptFileChooserDialog"
+              },
+              {
+                "name": "setLifecycleEventsEnabled"
               },
               {
                 "name": "stopLoading"
@@ -346,6 +514,15 @@
             "events": [
               {
                 "name": "domContentEventFired"
+              },
+              {
+                "name": "fileChooserOpened"
+              },
+              {
+                "name": "frameAttached"
+              },
+              {
+                "name": "frameDetached"
               },
               {
                 "name": "frameNavigated"
@@ -367,12 +544,18 @@
               },
               {
                 "name": "loadEventFired"
+              },
+              {
+                "name": "navigatedWithinDocument"
               }
             ]
           },
           {
             "domain": "Runtime",
             "commands": [
+              {
+                "name": "addBinding"
+              },
               {
                 "name": "callFunctionOn"
               },
@@ -392,10 +575,16 @@
                 "name": "releaseObject"
               },
               {
+                "name": "removeBinding"
+              },
+              {
                 "name": "runIfWaitingForDebugger"
               }
             ],
             "events": [
+              {
+                "name": "bindingCalled"
+              },
               {
                 "name": "consoleAPICalled"
               },
@@ -422,8 +611,25 @@
             ]
           },
           {
+            "domain": "Storage",
+            "commands": [
+              {
+                "name": "clearCookies"
+              },
+              {
+                "name": "getCookies"
+              },
+              {
+                "name": "setCookies"
+              }
+            ]
+          },
+          {
             "domain": "Target",
             "commands": [
+              {
+                "name": "attachToBrowserTarget"
+              },
               {
                 "name": "attachToTarget"
               },
@@ -737,6 +943,20 @@
         "attached": true,
         "browserContextId": "source_renderer"
       }
+    },
+    "targetGetBrowserTargetInfo": {
+      "targetInfo": {
+        "targetId": "browser-root",
+        "type": "browser",
+        "title": "",
+        "url": "",
+        "attached": true
+      }
+    },
+    "browserSetDownloadBehaviorParams": {
+      "behavior": "allowAndName",
+      "downloadPath": "/tmp/task-handoff-downloads",
+      "eventsEnabled": true
     },
     "targetGetBrowserContexts": {
       "browserContextIds": [

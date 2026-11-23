@@ -60,8 +60,8 @@ function contrast(foreground, background) {
 const surfaceTokens = ["surface", "surface-raised", "surface-inset", "surface-overlay"];
 
 const themeBlocks = [
-  ["light", /:root,\s*\[data-theme="light"\]\s*\{/],
-  ["dark", /\.dark,\s*\[data-theme="dark"\]\s*\{/],
+  ["light", /:root,\s*:root\[data-theme="light"\]\s*\{/],
+  ["dark", /:root\.dark,\s*:root\[data-theme="dark"\]\s*\{/],
 ];
 
 // Light surfaces show shadow contrast much more strongly, so the shared shadow color carries a per-theme alpha.
