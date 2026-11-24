@@ -2,6 +2,7 @@ import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
 import {
   modelSelectionFromOption,
   modelSelectionLabel,
+  resolveAiSessionCreationModelSelection,
   resolveModelSelection,
   sameModelSelection,
 } from '../src/ai-sessions/model-selection';
@@ -42,5 +43,19 @@ test('building a selection from an option carries the upstream identity', () => 
     modelEntityId: 'provider-one',
     modelName: 'smart',
     modelUpstreamName: 'provider-model-b',
+  });
+});
+
+test('creation preferences fall back to the instance default when the stored model is unavailable', () => {
+  expect(resolveAiSessionCreationModelSelection(modelGroups, {
+    modelSelection: { modelEntityId: 'provider-one', modelName: 'old-smart', modelUpstreamName: 'provider-model-b' },
+  })).toEqual({ modelEntityId: 'provider-one', modelName: 'smart', modelUpstreamName: 'provider-model-b' });
+  expect(resolveAiSessionCreationModelSelection(modelGroups, {
+    modelSelection: { modelEntityId: 'provider-one', modelName: 'gone', modelUpstreamName: 'provider-model-gone' },
+  })).toEqual({ modelEntityId: 'provider-one', modelName: 'fast', modelUpstreamName: 'provider-model-a' });
+  expect(resolveAiSessionCreationModelSelection(modelGroups, {})).toEqual({
+    modelEntityId: 'provider-one',
+    modelName: 'fast',
+    modelUpstreamName: 'provider-model-a',
   });
 });

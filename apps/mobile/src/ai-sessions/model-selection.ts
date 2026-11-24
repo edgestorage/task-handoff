@@ -1,5 +1,5 @@
 import { sameAiSessionModelSelection, type AiSessionModelSelection } from '@task-handoff/protocol/ai-sessions';
-import type { AiSessionModelGroup, AiSessionModelOption } from '@task-handoff/control-plane-client';
+import { defaultAiSessionModelSelection, type AiSessionCreationPreferences, type AiSessionModelGroup, type AiSessionModelOption } from '@task-handoff/control-plane-client';
 
 /**
  * `modelName` may be renamed by an operator at any time; the upstream name is the
@@ -46,4 +46,11 @@ export function resolveModelSelection(groups: readonly AiSessionModelGroup[], se
 /** Display label for a selection: the entry's current label, else the stored one. */
 export function modelSelectionLabel(groups: readonly AiSessionModelGroup[], selection?: AiSessionModelSelection) {
   return resolveModelSelection(groups, selection)?.modelName ?? selection?.modelName;
+}
+
+export function resolveAiSessionCreationModelSelection(
+  groups: readonly AiSessionModelGroup[],
+  preferences: AiSessionCreationPreferences,
+) {
+  return resolveModelSelection(groups, preferences.modelSelection) ?? defaultAiSessionModelSelection([...groups]);
 }

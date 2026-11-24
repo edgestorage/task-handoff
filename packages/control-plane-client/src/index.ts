@@ -21,6 +21,7 @@ export * from "./approval-center.ts";
 export * from "./ai-session-conversation-cache.ts";
 export * from "./ai-session-paste.ts";
 export * from "./ai-session-model-catalog.ts";
+export * from "./ai-session-creation-preferences.ts";
 export * from "./auth.ts";
 export * from "./users.ts";
 export * from "./client.ts";

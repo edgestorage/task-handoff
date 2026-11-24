@@ -13,6 +13,7 @@ import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/pro
 import { StoryDecisionChangedEventType, type StoryDecision } from '@task-handoff/protocol/stories';
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult, type MobileAiSessionGoalCommand } from './actions';
+import { rememberAiSessionCreationPreferences } from './creation-preferences';
 import { useToolActivityWindow } from './use-tool-activity-window';
 import { aiSessionDisplayTurns, sessionActivityText, SessionDetail, type SessionDetailMode } from './SessionDetail';
 import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
@@ -683,13 +684,19 @@ export function SessionWorkspace({
   const updateModelSelection = async (selection: NonNullable<typeof session.modelSelection>) => {
     if (!actions || !authoritativeActionsEnabled || modelSelectionState?.phase === 'busy') return;
     const result = await performAction(t('sessions.model'), () => actions.updateModelSelection(instanceId, session.id, Crypto.randomUUID(), selection));
-    if (result.disposition === 'accepted') void refresh?.().catch(() => undefined);
+    if (result.disposition === 'accepted') {
+      void rememberAiSessionCreationPreferences(controlPlaneId, session.agent, { modelSelection: selection });
+      void refresh?.().catch(() => undefined);
+    }
     if (result.disposition !== 'accepted') rerender((value) => value + 1);
   };
   const updateReasoningEffort = async (effort: AiSessionReasoningEffort) => {
     if (!actions || !authoritativeActionsEnabled || reasoningState?.phase === 'busy') return;
     const result = await performAction(t('sessions.reasoningEffort'), () => actions.updateReasoningEffort(instanceId, session.id, Crypto.randomUUID(), effort));
-    if (result.disposition === 'accepted') void refresh?.().catch(() => undefined);
+    if (result.disposition === 'accepted') {
+      void rememberAiSessionCreationPreferences(controlPlaneId, session.agent, { reasoningEffort: effort });
+      void refresh?.().catch(() => undefined);
+    }
     if (result.disposition !== 'accepted') rerender((value) => value + 1);
   };
   const reasoningState = state('reasoning-effort');

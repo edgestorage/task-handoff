@@ -5,6 +5,7 @@ import { mobileBrowserStartPages } from '../browser/start-page-runtime';
 import { MobileAiSessionDraftStore } from '../ai-sessions/actions';
 import { MobileAiSessionCreateRequestStore } from '../ai-sessions/session-lifecycle';
 import { MobileAiSessionPermissionStore } from '../ai-sessions/permission-store';
+import { clearAiSessionCreationPreferences } from '../ai-sessions/creation-preferences';
 import { mobileAiSessionStore } from '../ai-sessions/store';
 import { mobileDirectoryStore } from '../directories/store';
 import { mobileMetrics } from '../observability/mobile-metrics';
@@ -141,6 +142,7 @@ export async function deleteMobileControlPlaneProfile(profile: MobileControlPlan
   mobileDirectoryStore.clearProfile(controlPlaneId);
   clearScopeSelectionPreferences(controlPlaneId);
   clearAppLaunchPreferences(controlPlaneId);
+  await clearAiSessionCreationPreferences(controlPlaneId);
   mobileTriggerStore.clearProfile(controlPlaneId);
   await (await import('../browser/controller')).mobileBrowserController.clearProfile(controlPlaneId);
   await mobileBrowserStartPages.clearProfile(controlPlaneId);

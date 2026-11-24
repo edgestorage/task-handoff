@@ -1,18 +1,20 @@
 import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
-import { aiSessionMessageText, defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
+import { aiSessionMessageText, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
 import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionAttachmentOnlyMessages } from '@task-handoff/protocol/control-plane-directory';
 
 import { NewSessionForm, newSessionVisualBalanceInset } from '../../src/ai-sessions/NewSessionForm';
 import { NewWorktreeDialog } from '../../src/ai-sessions/NewWorktreeDialog';
 import { aiSessionFolderOptions, defaultAiSessionFolderId, initialAiSessionFolderId, initialInstanceId, instanceCreateGuidance, type AiSessionFolderOption } from '../../src/ai-sessions/new-session-types';
 import { createMobileAiSession, lifecycleGuidance } from '../../src/ai-sessions/session-lifecycle';
+import { aiSessionCreationPreferencesFor, getAiSessionCreationPreferences, rememberAiSessionCreationPreferences, subscribeAiSessionCreationPreferences } from '../../src/ai-sessions/creation-preferences';
+import { resolveAiSessionCreationModelSelection } from '../../src/ai-sessions/model-selection';
 import { mobilePastedImage, mobilePastedText, uploadMobileAttachment, usableUploadRefs, validateMobileLocalFile, type MobilePendingAttachment } from '../../src/ai-sessions/attachments';
 import { pickDocument, pickImage, type MobileLocalFile } from '../../src/platform/file-picker';
 import { createMobileControlPlaneClient } from '../../src/control-plane/client';
@@ -53,7 +55,7 @@ export default function NewAiSessionRoute() {
   const [savingPermission, setSavingPermission] = useState(false);
   const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
   const [modelSelectionDraft, setModelSelectionDraft] = useState<{ instanceId: string; agent: string; value: AiSessionModelSelection }>();
-  const [reasoningEffort, setReasoningEffort] = useState<AiSessionReasoningEffort>();
+  const [reasoningSelection, setReasoningSelection] = useState<{ instanceId: string; agent: string; value: AiSessionReasoningEffort }>();
   const [folderState, setFolderState] = useState<{ nodeId: string; folders: AiSessionFolderOption[] }>({ nodeId: '', folders: [] });
   const [workspaceState, setWorkspaceState] = useState<AiSessionWorkspaceSelectionState>({ mode: 'current-folder' });
   const [worktreeDialogOpen, setWorktreeDialogOpen] = useState(false);
@@ -63,6 +65,7 @@ export default function NewAiSessionRoute() {
   const attachmentsRef = useRef(attachments);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
   const pastedTextSequence = useRef(0);
+  const creationPreferences = useSyncExternalStore(subscribeAiSessionCreationPreferences, getAiSessionCreationPreferences, getAiSessionCreationPreferences);
   useEffect(() => () => {
     for (const attachment of attachmentsRef.current) {
       if (!attachment.local.temporary) continue;
@@ -101,12 +104,19 @@ export default function NewAiSessionRoute() {
     mode: 'create',
     capability: providerCapability?.modelSelection,
   }) : [];
+  const storedCreationPreferences = aiSessionCreationPreferencesFor(creationPreferences, controlPlaneId, agent);
   const modelSelection = modelSelectionDraft?.instanceId === selectedInstanceId && modelSelectionDraft.agent === agent
     ? modelSelectionDraft.value
-    : defaultAiSessionModelSelection(modelGroups);
+    : resolveAiSessionCreationModelSelection(modelGroups, storedCreationPreferences);
   const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(providerCapability);
+  const storedReasoningEffort = storedCreationPreferences.reasoningEffort && (agent === 'codex' || storedCreationPreferences.reasoningEffort !== 'ultra')
+    ? storedCreationPreferences.reasoningEffort
+    : undefined;
+  const selectedReasoningEffort = reasoningSelection?.instanceId === selectedInstanceId && reasoningSelection.agent === agent
+    ? reasoningSelection.value
+    : undefined;
   const effectiveReasoningEffort = reasoningCapability.selectAtCreate
-    ? reasoningEffort ?? (agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)
+    ? selectedReasoningEffort ?? storedReasoningEffort ?? (agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)
     : undefined;
 
   const guidance = instanceCreateGuidance(selectedInstance);
@@ -360,8 +370,14 @@ export default function NewAiSessionRoute() {
       modelSelection={modelSelection}
       reasoningEffort={effectiveReasoningEffort}
       reasoningEffortEnabled={reasoningCapability.selectAtCreate}
-      onModelSelectionChange={(value) => setModelSelectionDraft({ instanceId: selectedInstanceId, agent, value })}
-      onReasoningEffortChange={setReasoningEffort}
+      onModelSelectionChange={(value) => {
+        setModelSelectionDraft({ instanceId: selectedInstanceId, agent, value });
+        void rememberAiSessionCreationPreferences(controlPlaneId, agent, { modelSelection: value });
+      }}
+      onReasoningEffortChange={(value) => {
+        setReasoningSelection({ instanceId: selectedInstanceId, agent, value });
+        void rememberAiSessionCreationPreferences(controlPlaneId, agent, { reasoningEffort: value });
+      }}
     busy={busy || savingPermission || workspaceLoading}
     disabled={busy || savingPermission || workspaceLoading || Boolean(guidance) || !agent || !selectedFolder || (!message.trim() && !attachments.length) || (workspaceState.mode === 'worktree' && !workspaceSelection)}
     error={guidance}
@@ -370,10 +386,10 @@ export default function NewAiSessionRoute() {
       const instance = state.instances.find((candidate) => candidate.id === instanceId);
       if (scope.kind === 'all') mobileSessionCreationInstanceStore.write(controlPlaneId, 'ai', instanceId);
       setUseRequestedDefaults(false);
-      setReasoningEffort(undefined);
+      setReasoningSelection(undefined);
       setSelection({ instanceId, agent: instance?.availableAgents[0]?.id });
     }}
-    onAgentChange={(nextAgent) => { setReasoningEffort(undefined); setSelection({ instanceId: selectedInstanceId, agent: nextAgent, folderId }); }}
+    onAgentChange={(nextAgent) => { setReasoningSelection(undefined); setSelection({ instanceId: selectedInstanceId, agent: nextAgent, folderId }); }}
     onFolderChange={(nextFolderId) => setSelection({ instanceId: selectedInstanceId, agent, folderId: nextFolderId })}
     onWorkspaceModeChange={(mode) => {
       setWorkspaceState((current) => switchAiSessionWorkspaceMode(current, mode));

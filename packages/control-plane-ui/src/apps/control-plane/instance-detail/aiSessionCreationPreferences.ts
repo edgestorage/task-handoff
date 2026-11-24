@@ -1,16 +1,12 @@
 import {
-  AiSessionModelSelectionSchema,
-  AiSessionReasoningEffortSchema,
-  type AiSessionModelSelection,
-  type AiSessionReasoningEffort,
-} from "@task-handoff/protocol/ai-sessions";
+  mergeAiSessionCreationPreferences,
+  sanitizeAiSessionCreationPreferences,
+  type AiSessionCreationPreferences,
+} from "@task-handoff/control-plane-client";
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-export type AiSessionCreationPreferences = {
-  modelSelection?: AiSessionModelSelection;
-  reasoningEffort?: AiSessionReasoningEffort;
-};
+export type { AiSessionCreationPreferences } from "@task-handoff/control-plane-client";
 
 const STORAGE_PREFIX = "task-handoff.control-plane.ai-session-creation-preferences";
 const AGENT_STORAGE_KEY = `${STORAGE_PREFIX}.agent`;
@@ -64,23 +60,7 @@ export function loadAiSessionCreationPreferences(
   if (!storage || !agent) return {};
   try {
     const parsed: unknown = JSON.parse(storage.getItem(storageKey(agent)) || "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const record = parsed as Record<string, unknown>;
-    const storedModel = record.modelSelection && typeof record.modelSelection === "object" && !Array.isArray(record.modelSelection)
-      ? record.modelSelection as Record<string, unknown>
-      : {};
-    const modelSelection = AiSessionModelSelectionSchema.safeParse({
-      modelEntityId: storedModel.modelEntityId,
-      modelName: storedModel.modelName,
-      // Only carry the optional identity when it was actually stored; passing an
-      // explicit undefined would leave an empty own-key on the parsed object.
-      ...(typeof storedModel.modelUpstreamName === "string" ? { modelUpstreamName: storedModel.modelUpstreamName } : {}),
-    });
-    const reasoningEffort = AiSessionReasoningEffortSchema.safeParse(record.reasoningEffort);
-    return {
-      ...(modelSelection.success ? { modelSelection: modelSelection.data } : {}),
-      ...(reasoningEffort.success ? { reasoningEffort: reasoningEffort.data } : {}),
-    };
+    return sanitizeAiSessionCreationPreferences(parsed);
   } catch {
     return {};
   }
@@ -92,7 +72,7 @@ export function persistAiSessionCreationPreferences(
   storage = browserStorage(),
 ) {
   if (!storage || !agent) return;
-  const preferences = { ...loadAiSessionCreationPreferences(agent, storage), ...patch };
+  const preferences = mergeAiSessionCreationPreferences(loadAiSessionCreationPreferences(agent, storage), patch);
   try {
     storage.setItem(storageKey(agent), JSON.stringify(preferences));
   } catch {
