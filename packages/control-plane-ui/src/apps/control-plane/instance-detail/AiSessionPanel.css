@@ -2374,7 +2374,6 @@
   bottom: var(--session-ai-compose-bottom);
   left: calc(10px + var(--session-ai-detail-left-inset, 0px));
   z-index: 5;
-  min-height: 84px;
   max-height: min(320px, calc(var(--control-plane-viewport-height, 100vh) - 180px));
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
@@ -2430,7 +2429,7 @@
 }
 
 .session-ai-compose :deep(.ai-session-composer__input) {
-  min-height: 64px;
+  min-height: calc(var(--ai-composer-min-rows, 2) * 1.45em + 14px);
   padding: 10px 14px 4px;
 }
 

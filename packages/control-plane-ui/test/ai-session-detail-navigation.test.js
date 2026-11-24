@@ -166,6 +166,12 @@ test("compact turn counter opens the complete turn list and jumps to the selecte
   assert.match(board, /@load-turn-bodies="loadAllSelectedCardTurns"[\s\S]*?@select-prompt="setPromptIndex\(selectedCard, \$event\)"/);
 });
 
+test("running turn capsule floats above the composer stack without contributing to its height", () => {
+  assert.match(runningTurnCapsule, /\.ai-session-running-capsule \{[\s\S]*?position: absolute;[\s\S]*?bottom: calc\(100% \+ 16px\);[\s\S]*?width: max-content;[\s\S]*?margin: 0 auto;/);
+  assert.doesNotMatch(runningTurnCapsule, /margin: 0 auto 16px;/);
+  assert.match(floatingDock, /\.ai-board-floating-compose-stack \{[\s\S]*?position: relative;[\s\S]*?display: grid;/);
+});
+
 test("AI session prompt state exists before the timeline's immediate watcher", () => {
   const promptState = panel.indexOf("const promptIndexes = ref");
   const timelinePresentation = panel.indexOf("useAiSessionTimelinePresentation({");

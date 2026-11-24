@@ -370,7 +370,7 @@ onBeforeUnmount(() => {
 }
 
 .markdown-content :deep(a) {
-  color: var(--markdown-link-color, var(--brand-accent, currentColor));
+  color: var(--markdown-link-color, currentColor);
   text-decoration: underline;
   text-underline-offset: 0.15em;
 }

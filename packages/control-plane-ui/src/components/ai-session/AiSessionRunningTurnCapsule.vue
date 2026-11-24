@@ -52,9 +52,14 @@ const label = computed(() => props.session ? aiSessionActivityText(props.session
 
 <style scoped>
 .ai-session-running-capsule {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 16px);
+  left: 0;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
-  justify-self: center;
+  width: max-content;
   max-width: min(calc(100% - 40px), 360px);
   min-height: 32px;
   gap: 7px;
@@ -70,7 +75,7 @@ const label = computed(() => props.session ? aiSessionActivityText(props.session
   font-size: 12px;
   font-weight: 400;
   line-height: 1;
-  margin: 0 auto 16px;
+  margin: 0 auto;
   padding: 0 12px 0 9px;
 }
 

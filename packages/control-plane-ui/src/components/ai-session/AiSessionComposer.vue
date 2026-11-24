@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { formatBytes, formatNumber } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
@@ -19,6 +19,7 @@ import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiS
 import { commandTokenAt, matchingCommands, parseAiSessionCommand, replaceCommandToken, type AiSessionCommandCandidate } from "./commands";
 import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessionMentions";
 import { useAiSessionPermissionMode } from "../../apps/control-plane/useAiSessionPermissionMode";
+import { AI_SESSION_COMPOSER_MAX_ROWS, AI_SESSION_COMPOSER_MIN_ROWS, useAiSessionComposerMinRows } from "../../apps/control-plane/useAiSessionComposerMinRows";
 import { sameModelSelectionRef } from "./modelSelectionRef";
 import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
 import { classifyAiSessionPastedText, type AiSessionPastedTextPresentation } from "@task-handoff/control-plane-client";
@@ -105,6 +106,7 @@ const MAX_TOTAL_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]);
 const composerEl = ref<HTMLFormElement>();
 const inputEl = ref<unknown>();
+const { composerMinRows, setComposerMinRows } = useAiSessionComposerMinRows();
 const attachments = computed(() => props.attachments || []);
 const mentionBindings = computed(() => props.mentionBindings || []);
 const mentionTrigger = computed(() => props.mentionTrigger || "@");
@@ -255,6 +257,57 @@ function textareaElement() {
       : undefined;
 }
 
+let stopComposerHeightResize: (() => void) | undefined;
+
+function startComposerHeightResize(event: PointerEvent) {
+  if (event.button !== 0) return;
+  const element = textareaElement();
+  if (!element) return;
+  const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight);
+  if (!Number.isFinite(lineHeight) || lineHeight <= 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  stopComposerHeightResize?.();
+  const handle = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
+  try {
+    handle?.setPointerCapture?.(event.pointerId);
+  } catch {
+    // Window-level listeners keep resizing functional when pointer capture is unavailable.
+  }
+  const startY = event.clientY;
+  const startRows = composerMinRows.value;
+  document.body.classList.add("ai-session-composer-height-resizing");
+  const resize = (moveEvent: PointerEvent) => {
+    if (moveEvent.pointerId !== event.pointerId) return;
+    setComposerMinRows(startRows + (startY - moveEvent.clientY) / lineHeight);
+  };
+  const stop = () => {
+    document.body.classList.remove("ai-session-composer-height-resizing");
+    try {
+      if (handle?.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    } catch {
+      // The pointer may already have been released by the browser or WebView host.
+    }
+    window.removeEventListener("pointermove", resize, true);
+    window.removeEventListener("pointerup", stop, true);
+    window.removeEventListener("pointercancel", stop, true);
+    stopComposerHeightResize = undefined;
+  };
+  stopComposerHeightResize = stop;
+  window.addEventListener("pointermove", resize, true);
+  window.addEventListener("pointerup", stop, true);
+  window.addEventListener("pointercancel", stop, true);
+}
+
+function handleComposerHeightKeydown(event: KeyboardEvent) {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  event.preventDefault();
+  event.stopPropagation();
+  setComposerMinRows(composerMinRows.value + (event.key === "ArrowUp" ? 1 : -1));
+}
+
+onBeforeUnmount(() => stopComposerHeightResize?.());
+
 function focus() {
   void nextTick(() => textareaElement()?.focus());
 }
@@ -287,6 +340,10 @@ function composerMaxHeight(composer: HTMLFormElement) {
 watch(() => props.modelValue, () => {
   void nextTick(resizeInput);
 }, { immediate: true });
+
+watch(composerMinRows, () => {
+  void nextTick(resizeInput);
+});
 
 watch(attachments, (next, previous) => {
   for (const attachment of previous || []) {
@@ -752,7 +809,22 @@ watch(() => props.busy, (busy) => {
 </script>
 
 <template>
-  <form ref="composerEl" class="ai-session-composer" :aria-busy="busy" @drop="handleDrop" @dragover.prevent @submit.prevent="submit">
+  <form ref="composerEl" class="ai-session-composer" :style="{ '--ai-composer-min-rows': composerMinRows }" :aria-busy="busy" @drop="handleDrop" @dragover.prevent @submit.prevent="submit">
+    <div class="ai-session-composer__height-hover-zone">
+      <button
+        type="button"
+        class="ai-session-composer__height-handle"
+        role="separator"
+        aria-orientation="horizontal"
+        :aria-label="t('sessions.composer.resizeMinimumHeight', { count: composerMinRows })"
+        :title="t('sessions.composer.resizeMinimumHeight', { count: composerMinRows })"
+        :aria-valuemin="AI_SESSION_COMPOSER_MIN_ROWS"
+        :aria-valuemax="AI_SESSION_COMPOSER_MAX_ROWS"
+        :aria-valuenow="composerMinRows"
+        @pointerdown="startComposerHeightResize"
+        @keydown="handleComposerHeightKeydown"
+      />
+    </div>
     <div
       v-if="attachments.length"
       v-horizontal-overflow
@@ -829,7 +901,7 @@ watch(() => props.busy, (busy) => {
             class="ai-session-composer__input"
             :disabled="busy"
             :placeholder="placeholder || t('sessions.composer.followUp')"
-            rows="3"
+            rows="1"
             @keydown="handleInputKeydown"
             @input="handleComposerInput"
             @click="updateOverlayMenu()"
@@ -1084,6 +1156,7 @@ watch(() => props.busy, (busy) => {
 <style scoped>
 .ai-session-composer {
   container: ai-session-composer / inline-size;
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1259,7 +1332,7 @@ watch(() => props.busy, (busy) => {
 }
 
 .ai-session-composer__input {
-  min-height: 72px;
+  min-height: calc(var(--ai-composer-min-rows, 2) * 1.45em + 20px);
   max-height: none;
   flex: 0 0 auto;
   overflow: hidden;
@@ -1278,6 +1351,62 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__input-anchor {
   min-width: 0;
   flex: 0 0 auto;
+}
+
+.ai-session-composer__height-hover-zone {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 3;
+  width: min(320px, 60%);
+  height: 12px;
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity 120ms ease;
+}
+
+.ai-session-composer__height-handle {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 40px;
+  height: 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ai-composer-muted, currentColor);
+  cursor: ns-resize;
+  padding: 0;
+  touch-action: none;
+  transform: translateX(-50%);
+}
+
+.ai-session-composer__height-handle::before {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 22px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+  transform: translateX(-50%);
+}
+
+.ai-session-composer__height-hover-zone:is(:hover, :focus-within),
+:global(body.ai-session-composer-height-resizing) .ai-session-composer__height-hover-zone {
+  opacity: 1;
+  transition-delay: 50ms;
+}
+
+.ai-session-composer__height-handle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+:global(body.ai-session-composer-height-resizing) {
+  cursor: ns-resize;
+  user-select: none;
 }
 
 .ai-session-composer__input::-webkit-scrollbar {

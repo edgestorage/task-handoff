@@ -142,7 +142,8 @@ test("streaming Markdown keeps the existing session typography, semantic colors,
   assert.match(message, /--blockquote-fg: var\(--markdown-muted-color, var\(--text-muted, currentColor\)\)/);
   assert.match(message, /--blockquote-border: var\(--markdown-border-color, var\(--line-strong, currentColor\)\)/);
   assert.match(message, /--hr-border: var\(--markdown-border-color, var\(--line, currentColor\)\)/);
-  assert.match(message, /--link-color: var\(--markdown-link-color, var\(--brand-accent, currentColor\)\)/);
+  assert.match(message, /--link-color: var\(--markdown-link-color, currentColor\)/);
+  assert.match(message, /:deep\(\.link-node\),[\s\S]*?:deep\(\.link-loading\),[\s\S]*?:deep\(\.footnote-link\)\s*\{\s*text-decoration: underline;/);
   assert.match(message, /--footnote-border: var\(--markdown-border-color, var\(--line, currentColor\)\)/);
   assert.match(message, /--inline-code-bg: var\(--markdown-code-bg, var\(--surface/);
   assert.match(message, /--inline-code-border: var\(--markdown-border-color, var\(--line-subtle/);

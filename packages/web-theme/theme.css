@@ -2,6 +2,7 @@
   :root {
     --markdown-text-color: var(--text);
     --markdown-muted-color: var(--text-muted);
+    --markdown-link-color: #0969da;
   }
 
   :root,
@@ -267,6 +268,7 @@
   :root.dark,
   :root[data-theme="dark"] {
     color-scheme: dark;
+    --markdown-link-color: #79c0ff;
     --background: 195 45% 5%;
     --foreground: 190 28% 93%;
     --card: 198 35% 9%;

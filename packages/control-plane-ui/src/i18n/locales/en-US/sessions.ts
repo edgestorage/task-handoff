@@ -107,7 +107,7 @@ export const sessions = {
     runtimePathOutside: "Local Runtime path attachments must be inside the current AI session workspace. Move the file into the workspace and try again.",
     browserPathUnavailable: "This browser cannot access the local file path. Use the desktop app to attach the path directly, or select a file smaller than 500 KiB.",
     fileTooLarge: "The file is too large; files must be smaller than 500 KiB.", tooManyAttachments: "You can attach at most 6 files.", totalTooLarge: "Inline attachments in one message cannot exceed 40 MB.",
-    readFailed: "Failed to read attachment.", mentionUnavailable: "Mention catalog unavailable.", fileSearchUnavailable: "File search unavailable.", navigation: "AI session message navigation",
+    readFailed: "Failed to read attachment.", mentionUnavailable: "Mention catalog unavailable.", fileSearchUnavailable: "File search unavailable.", navigation: "AI session message navigation", resizeMinimumHeight: "Resize the composer minimum height ({count} line) | Resize the composer minimum height ({count} lines)",
   },
   activity: {
     waitingApproval: "Waiting for approval...", waitingApprovalSummary: "Waiting for approval · {summary}", responding: "Responding...", respondingTools: "Responding... · {count} tool completed | Responding... · {count} tools completed", editing: "Editing...", waiting: "Waiting...",

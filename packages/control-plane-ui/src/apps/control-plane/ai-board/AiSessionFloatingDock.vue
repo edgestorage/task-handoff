@@ -971,13 +971,13 @@ onBeforeUnmount(() => {
   --ai-composer-stop-text: var(--status-danger);
   --ai-composer-danger: var(--status-danger);
   --ai-composer-shadow: var(--ai-board-floating-shadow, 0 18px 48px rgb(0 0 0 / 34%));
-  min-height: 86px;
   max-height: min(280px, calc(100vh - 144px));
   -webkit-backdrop-filter: blur(16px) saturate(1.24);
   backdrop-filter: blur(16px) saturate(1.24);
 }
 
 .ai-board-floating-compose-stack {
+  position: relative;
   display: grid;
   min-width: 0;
 }
@@ -1042,7 +1042,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-board-floating-compose :deep(.ai-session-composer__input) {
-  min-height: 64px;
+  min-height: calc(var(--ai-composer-min-rows, 2) * 1.45em + 14px);
   padding: 10px 14px 4px;
 }
 

@@ -25,3 +25,9 @@ test("Markdown body text shares the application body text token", () => {
   assert.match(markdownContent, /color: var\(--markdown-text-color, var\(--text, currentColor\)\)/);
   assert.doesNotMatch(markdownContent, /--markdown-text-color, var\(--text-strong/);
 });
+
+test("Markdown links use the dedicated semantic link token", () => {
+  assert.match(themeStyles, /:root\s*\{[^}]*--markdown-link-color: #0969da;/s);
+  assert.match(themeStyles, /:root\.dark,\s*:root\[data-theme="dark"\]\s*\{[^}]*--markdown-link-color: #79c0ff;/s);
+  assert.match(markdownContent, /color: var\(--markdown-link-color, currentColor\)/);
+});

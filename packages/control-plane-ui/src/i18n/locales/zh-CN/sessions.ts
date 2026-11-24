@@ -110,7 +110,7 @@ export const sessions = {
     runtimePathOutside: "Local Runtime 路径附件必须位于当前 AI 会话工作区内；请将文件移入工作区后重试。",
     browserPathUnavailable: "当前浏览器无法取得本地文件路径；请使用桌面端直接传入路径，或选择小于 500 KiB 的文件。",
     fileTooLarge: "文件过大：文件必须小于 500 KiB。", tooManyAttachments: "最多只能添加 6 个附件。", totalTooLarge: "单条消息内联附件总大小不能超过 40 MB。",
-    readFailed: "无法读取附件。", mentionUnavailable: "提及目录不可用。", fileSearchUnavailable: "文件搜索不可用。", navigation: "AI 会话消息导航",
+    readFailed: "无法读取附件。", mentionUnavailable: "提及目录不可用。", fileSearchUnavailable: "文件搜索不可用。", navigation: "AI 会话消息导航", resizeMinimumHeight: "拖动调整输入框最小高度，当前 {count} 行",
   },
   activity: {
     waitingApproval: "正在等待审批...", waitingApprovalSummary: "正在等待审批 · {summary}", responding: "正在回复...", respondingTools: "正在回复... · 已完成 {count} 个工具调用", editing: "正在编辑...", waiting: "正在等待...",

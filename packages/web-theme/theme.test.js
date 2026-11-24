@@ -94,3 +94,26 @@ for (const [themeName, selector] of themeBlocks) {
     }
   });
 }
+
+test("Markdown links use a readable semantic color in both themes", () => {
+  const lightRoot = themeBlock(/:root\s*\{/);
+  const light = themeBlock(themeBlocks[0][1]);
+  const dark = themeBlock(themeBlocks[1][1]);
+  const linkColors = [
+    ["light", lightRoot.get("markdown-link-color"), light],
+    ["dark", dark.get("markdown-link-color"), dark],
+  ];
+
+  for (const [themeName, linkColor, declarations] of linkColors) {
+    assert.ok(linkColor, `${themeName} theme must declare --markdown-link-color`);
+    for (const token of surfaceTokens) {
+      const surface = declarations.get(token);
+      assert.ok(surface, `${themeName} theme must declare --${token}`);
+      const ratio = contrast(toRgb(linkColor, "--markdown-link-color"), toRgb(surface, `--${token}`));
+      assert.ok(
+        ratio >= 4.5,
+        `${themeName} theme --markdown-link-color (${linkColor}) on --${token} (${surface}) is ${ratio.toFixed(2)}:1, expected at least 4.5:1`,
+      );
+    }
+  }
+});

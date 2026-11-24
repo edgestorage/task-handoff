@@ -256,7 +256,7 @@ watch(
   --hr-border: var(--markdown-border-color, var(--line, currentColor));
   --inline-code-bg: var(--markdown-code-bg, var(--surface, rgb(127 127 127 / 14%)));
   --inline-code-border: var(--markdown-border-color, var(--line-subtle, transparent));
-  --link-color: var(--markdown-link-color, var(--brand-accent, currentColor));
+  --link-color: var(--markdown-link-color, currentColor);
   --list-counter-marker: var(--markdown-text-color, var(--text, currentColor));
   --list-marker: var(--markdown-text-color, var(--text, currentColor));
   --table-border: var(--markdown-table-border, var(--line, currentColor));
@@ -327,7 +327,14 @@ watch(
 }
 
 .ai-session-streaming-markdown :deep(.checkbox-checked) {
-  color: var(--markdown-link-color, var(--brand-accent, currentColor));
+  color: var(--brand-accent-muted, currentColor);
+}
+
+.ai-session-streaming-markdown :deep(.link-node),
+.ai-session-streaming-markdown :deep(.link-loading),
+.ai-session-streaming-markdown :deep(.footnote-link) {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
 }
 
 .ai-session-streaming-markdown :deep(pre) {
