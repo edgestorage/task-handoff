@@ -1,7 +1,7 @@
 import { ControlPlaneAiSessionsSchema, normalizeManualStoryOrder, reorderStoryKeys, type ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
 import type { Story } from '@task-handoff/protocol/stories';
 
-import { groupStoryTreeSessions, mergeStoryTreeSnapshot, replaceVisibleStoryOrder, sortStoryTree, storyDragPreview, storyDragRowHeight, storyDragShifts, STORY_TREE_ROW_GAP, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
+import { groupStoryTreeSessions, mergeStoryTreeSnapshot, replaceVisibleStoryOrder, sortStoryTree, storyDragPreview, storyDragRowHeight, storyDragShifts, storyTreeSessionForest, STORY_TREE_ROW_GAP, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
 
 const story = (id: string, ownerNodeId: string, title: string): Story => ({
   id,
@@ -136,8 +136,9 @@ describe('mobile Story tree model', () => {
       ],
     });
 
-    expect(groupStoryTreeSessions(stories, instances, snapshot).get('node-a:shared')?.map((entry) => entry.session.id)).toEqual(['session-a']);
-    expect(groupStoryTreeSessions(stories, instances, snapshot).get('node-b:shared')?.map((entry) => entry.session.id)).toEqual(['session-b']);
+    const forest = storyTreeSessionForest(snapshot);
+    expect(groupStoryTreeSessions(stories, instances, forest).get('node-a:shared')?.map((entry) => entry.session.id)).toEqual(['session-a']);
+    expect(groupStoryTreeSessions(stories, instances, forest).get('node-b:shared')?.map((entry) => entry.session.id)).toEqual(['session-b']);
   });
 
   test('links descendants from the Story root and counts one expandable tree', () => {
@@ -153,10 +154,11 @@ describe('mobile Story tree model', () => {
       ] } }],
     });
 
-    expect(groupStoryTreeSessions(stories, instances, snapshot).get('node-a:story-1')?.map((entry) => [entry.session.id, entry.depth, entry.hasChildren])).toEqual([
+    const forest = storyTreeSessionForest(snapshot);
+    expect(groupStoryTreeSessions(stories, instances, forest).get('node-a:story-1')?.map((entry) => [entry.session.id, entry.depth, entry.hasChildren])).toEqual([
       ['root', 0, true],
     ]);
-    expect(groupStoryTreeSessions(stories, instances, snapshot, new Set(['root', 'child'])).get('node-a:story-1')?.map((entry) => [entry.session.id, entry.depth])).toEqual([
+    expect(groupStoryTreeSessions(stories, instances, forest, new Set(['root', 'child'])).get('node-a:story-1')?.map((entry) => [entry.session.id, entry.depth])).toEqual([
       ['root', 0], ['child', 1], ['grandchild', 2],
     ]);
     expect(unassignedStoryRootInstanceIds(snapshot)).toEqual(new Set());

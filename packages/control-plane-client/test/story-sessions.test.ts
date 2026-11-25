@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AiSessionSummary } from "@task-handoff/protocol/ai-sessions";
 import { deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
-import { latestStorySessionForCreation, storySessionRootsInForest } from "../src/story-sessions.ts";
+import { latestStorySessionForCreation, storySessionAttentionByKey, storySessionRootsInForest } from "../src/story-sessions.ts";
 
 const startedAt = "2026-09-04T00:00:00.000Z";
 
@@ -64,4 +64,27 @@ test("derived sessions inherit through their root, not their own activity", () =
 test("a Story without a usable session yields no defaults", () => {
   assert.equal(latestStorySessionForCreation(forest(session({ id: "unassigned" })), "story-1", ["instance-1"]), undefined);
   assert.equal(latestStorySessionForCreation(forest(session({ id: "elsewhere", storyId: "story-1" })), "story-1", []), undefined);
+});
+
+test("Story attention includes hidden descendants and chooses the highest status for each owner node", () => {
+  const root = session({ id: "root", storyId: "shared", status: "running", unread: true });
+  const failed = session({ id: "failed-root", storyId: "shared", status: "failed" });
+  const child = session({
+    id: "child",
+    lineage: { kind: "subagent", parentProviderSessionId: failed.providerSessionId },
+    status: "waiting",
+    phase: "approval",
+  });
+  const otherNode = session({ id: "other-node", storyId: "shared", instanceId: "instance-2", unread: true });
+  const plainWaiting = session({ id: "plain-waiting", storyId: "plain-waiting", status: "waiting" });
+  const unassigned = session({ id: "unassigned", status: "failed" });
+  const nodeIds = new Map([["instance-1", "node-a"], ["instance-2", "node-b"]]);
+  const nodeId = (instanceId: string) => nodeIds.get(instanceId);
+
+  assert.deepEqual(storySessionAttentionByKey(forest(root, failed, child, otherNode, plainWaiting, unassigned), nodeId), new Map([
+    ["node-a:shared", "approval"], ["node-b:shared", "unread"],
+  ]));
+  assert.equal(storySessionAttentionByKey(forest(root, failed), nodeId).get("node-a:shared"), "failed");
+  assert.equal(storySessionAttentionByKey(forest(root), nodeId).get("node-a:shared"), "running");
+  assert.equal(storySessionAttentionByKey(forest(plainWaiting), nodeId).size, 0);
 });

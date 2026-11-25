@@ -50,7 +50,10 @@
                 <ContextMenu>
                   <ContextMenuTrigger as-child :disabled="!storyIsOnline(story)">
                     <button type="button" class="story-tree-item story-tree-story" :class="{ active: isStorySelected(story) }" :aria-keyshortcuts="storySortMode === 'manual' ? 'Alt+ArrowUp Alt+ArrowDown' : undefined" :disabled="!storyIsOnline(story)" @click="selectStory(story)" @keydown="handleStorySortKeydown($event, story)">
-                      <BookOpen :size="15" />
+                      <span class="story-tree-icon" :data-attention="storySessionAttention.get(storyKey(story))" :title="storyAttentionLabel(story)">
+                        <BookOpen :size="15" aria-hidden="true" />
+                        <span v-if="storySessionAttention.has(storyKey(story))" class="sr-only">{{ storyAttentionLabel(story) }}</span>
+                      </span>
                       <span class="story-tree-item-copy"><strong>{{ story.title }}</strong></span>
                       <small v-if="showStoryNodeNames" class="story-tree-item-hint story-tree-node-name">{{ storyOwnerNodeName(story.ownerNodeId) }}</small>
                     </button>
@@ -116,8 +119,10 @@
                     :can-fork="false"
                     :can-rename="entry.session.actions?.rename === true"
                     :is-forking="false"
+                    :is-marking-unread="markingUnreadSessionId === entry.session.id"
                     :is-opening-terminal="launchingApp"
                     :is-stopping-app-session="closingSessionKey === entry.session.id"
+                    :is-unread="entry.session.unread"
                     :session-id="entry.session.id"
                     :session-name="entry.session.title || entry.session.userPrompt || entry.session.id"
                     :session-path="entry.session.cwd"
@@ -127,6 +132,7 @@
                     :short-hash="shortHash"
                     :trigger-templates="triggerTemplates"
                     @close-session="closeSession(entry)"
+                    @mark-unread="markSessionUnread(entry)"
                     @open-app="openStoryAiSessionApp(entry.instance, entry.session)"
                     @open-terminal="openStorySessionTerminal(entry)"
                     @rename-session="renameSessionTarget = entry"
@@ -553,7 +559,7 @@ import StoryActionEditorContent from "./StoryActionEditorContent.vue";
 import StoryActionAutomations from "./StoryActionAutomations.vue";
 import StoryDecisionPanel from "./StoryDecisionPanel.vue";
 import { storyAutomationDayOfMonthLabel } from "./storyAutomationPresentation";
-import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings, storyDecisionsQueryOptions, useAgentRunsQuery } from "../../../api/queries";
+import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings, markAiSessionUnread, storyDecisionsQueryOptions, useAgentRunsQuery } from "../../../api/queries";
 import { useStoryCatalog } from "./useStoryCatalog";
 import { sharedControlPlaneClient } from "../../../api/sharedClient.ts";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
@@ -583,7 +589,7 @@ import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocument
 import { normalizeManualStoryOrder, reorderStoryKeys, reuseEqualStoryActivityTimes, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 import { isStoryOnline, isStorySessionOnline } from "./storyAvailability";
 import { useAiSessionTriggers } from "../useAiSessionTriggers";
-import { allNodesVisible, controlPlaneAgentCapabilities, latestStorySessionForCreation, nodeIsVisible, storySessionRootsInForest, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
+import { allNodesVisible, controlPlaneAgentCapabilities, latestStorySessionForCreation, nodeIsVisible, storySessionAttentionByKey, storySessionRootsInForest, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
 import type { AgentDefinition } from "@task-handoff/protocol/agent-definitions";
 import { defaultAgentOrchestrationId, isDefaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 import type { StoryAgentEntrySet } from "@task-handoff/protocol/story-agent-authorization";
@@ -705,6 +711,10 @@ const storySessionRecords = computed<StorySessionRecord[]>(() => props.instances
   (instance.aiSessions.sessions || []).map((session) => ({ ...session, instanceId: instance.id }))
 )));
 const storySessionForest = computed(() => deriveAiSessionForest(storySessionRecords.value, { orderBy: "last-user-message" }));
+const storySessionAttention = computed(() => {
+  const nodeIds = new Map(props.instances.map((instance) => [instance.id, instance.node?.id]));
+  return storySessionAttentionByKey(storySessionForest.value, (instanceId) => nodeIds.get(instanceId));
+});
 const storyLastUserMessageTimes = computed<ReadonlyMap<string, number>>((previous) => {
   const times = new Map<string, number>();
   const availableStoryKeys = new Set(allStories.value.map(storySortKey));
@@ -1173,6 +1183,7 @@ const storyHistoryPanelSession = computed<SessionTab>(() => ({
 const storyHistoryPanelSelectedSession = () => undefined as AiSessionSummary | undefined;
 const queryClient = useQueryClient();
 const closingSessionKey = ref("");
+const markingUnreadSessionId = ref("");
 const renameSessionTarget = ref<SessionEntry>();
 const closingAllStoryKey = ref("");
 function storyTargetFor(entry: SessionEntry): AiSessionStoryTarget | undefined {
@@ -1222,6 +1233,18 @@ async function closeSession(entry: SessionEntry) {
   } finally {
     loadingToast.dismiss();
     closingSessionKey.value = "";
+  }
+}
+async function markSessionUnread(entry: SessionEntry) {
+  if (markingUnreadSessionId.value) return;
+  markingUnreadSessionId.value = entry.session.id;
+  try {
+    await markAiSessionUnread(entry.instance.id, entry.session.id);
+    showControlPlaneToast(t("sessions.actions.markedUnread"), "success");
+  } catch (cause) {
+    showControlPlaneToast(translateApiError(cause, t, t("sessions.actions.markUnreadFailed")), "error");
+  } finally {
+    markingUnreadSessionId.value = "";
   }
 }
 function confirmCloseAllStorySessions(story: Story) {
@@ -1311,6 +1334,16 @@ const selectedStorySession = (_instance: InstanceBoardItem, sessions?: AiSession
 const availableSessions = computed(() => { const story = selectedResource.value?.story; return story ? unassignedSessionsFor(story) : []; });
 const sessionCount = (story: Story) => storySessionRootsFor(story).length;
 const storyKey = (story: Story) => `${story.ownerNodeId}:${story.id}`;
+const storyAttentionLabels = {
+  approval: "sessions.status.waitingApproval",
+  failed: "sessions.status.failed",
+  running: "sessions.status.running",
+  unread: "sessions.actions.unread",
+} as const;
+function storyAttentionLabel(story: Story) {
+  const attention = storySessionAttention.value.get(storyKey(story));
+  return attention ? t(storyAttentionLabels[attention]) : undefined;
+}
 const isSelectedStory = (story: Story) => selectedResource.value?.story.id === story.id && selectedResource.value?.story.ownerNodeId === story.ownerNodeId;
 const isStoryOpen = (story: Story) => expandedStoryKeys.value.has(storyKey(story));
 const isStorySelected = (story: Story) => (selectedResource.value?.kind === "story" || selectedResource.value?.kind === "new-session") && isSelectedStory(story);
@@ -2102,6 +2135,11 @@ onBeforeUnmount(() => {
 .story-tree-story-row .story-tree-story { background:var(--story-tree-row-bg); }
 .story-tree-item { position:relative; display:flex; align-items:center; width:100%; min-width:0; gap:8px; border:0; border-radius:6px; background:transparent; color:inherit; cursor:pointer; padding:8px; text-align:left; }
 .story-tree-story { padding-right:36px; padding-left:32px; padding-block:10px; }
+.story-tree-icon { position:relative; display:grid; width:15px; height:15px; flex:0 0 15px; place-items:center; }
+.story-tree-icon[data-attention]::after { position:absolute; top:-2px; right:-3px; width:8px; height:8px; border:1px solid var(--story-tree-row-bg); border-radius:50%; background:var(--story-attention-color,var(--status-info)); content:""; }
+.story-tree-icon[data-attention="running"]::after { border:1.5px solid var(--status-info); background:var(--story-tree-row-bg); box-shadow:0 0 0 1px var(--story-tree-row-bg); }
+.story-tree-icon[data-attention="failed"] { --story-attention-color:var(--status-danger); }
+.story-tree-icon[data-attention="approval"] { --story-attention-color:var(--status-warning); }
 .story-tree-archived { --story-tree-archived-foreground:color-mix(in srgb,var(--text-muted) 72%,transparent); }
 .story-tree-archived .story-tree-item,.story-tree-archived .story-tree-disclosure-button,.story-tree-archived .story-tree-empty { color:var(--story-tree-archived-foreground); }
 .story-tree-archived .story-tree-story { padding-right:68px; }
@@ -2176,7 +2214,7 @@ onBeforeUnmount(() => {
 .story-tree-story-row:hover .story-tree-node-name,.story-tree-story-row:focus-within .story-tree-node-name { opacity:0; }
 .story-tree-archived .story-tree-node-name { right:68px; color:var(--story-tree-archived-foreground); }
 .story-tree-item-unread > .story-tree-item-hint { right:24px; }
-.story-session-unread { width:7px; height:7px; flex:0 0 auto; border-radius:999px; background:var(--status-info); box-shadow:0 0 0 3px color-mix(in srgb,var(--status-info) 18%,transparent); }
+.story-session-unread { width:7px; height:7px; flex:0 0 auto; border-radius:999px; background:var(--status-info); }
 .story-tree-add { display:grid; grid:1fr/1fr; width:18px; height:18px; place-items:center; border:0; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
 .story-tree-story-add { position:absolute; z-index:2; isolation:isolate; top:50%; right:6px; width:24px; height:24px; background:var(--story-tree-row-bg); transform:translateY(-50%); opacity:0; pointer-events:none; transition:opacity 120ms ease; }
 .story-tree-story-add::before { position:absolute; z-index:-1; inset:0 100% 0 -18px; background:linear-gradient(90deg,transparent,var(--story-tree-row-bg)); pointer-events:none; content:""; }
@@ -2237,7 +2275,7 @@ onBeforeUnmount(() => {
 .story-resource-copy { display:grid; gap:3px; min-width:0; }
 .story-resource-copy strong { color:var(--text-strong); font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .story-resource-copy small { color:var(--text-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.story-resource-unread { width:7px; height:7px; border-radius:999px; background:var(--status-info); box-shadow:0 0 0 3px color-mix(in srgb,var(--status-info) 18%,transparent); }
+.story-resource-unread { width:7px; height:7px; border-radius:999px; background:var(--status-info); }
 .story-action-item { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; background:transparent; }
 .story-action-item + .story-action-item { border-top:1px solid var(--line); }
 .story-action-item:hover { background:var(--surface-active); }

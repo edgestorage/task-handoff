@@ -561,15 +561,49 @@ async fn observe_read(root: &std::path::Path) -> Value {
         None,
     )
     .await;
+    let (unread_first_status, unread_first_body) = request_json(
+        &app,
+        Method::POST,
+        &format!("/api/ai-sessions/{}/unread", session.id),
+        None,
+    )
+    .await;
+    let after_unread_first = state.ai_sessions.get(&session.id).unwrap();
+    let (unread_second_status, unread_second_body) = request_json(
+        &app,
+        Method::POST,
+        &format!("/api/ai-sessions/{}/unread", session.id),
+        None,
+    )
+    .await;
+    let after_unread_second = state.ai_sessions.get(&session.id).unwrap();
+    let (missing_unread_status, missing_unread_body) = request_json(
+        &app,
+        Method::POST,
+        "/api/ai-sessions/ais_missing/unread",
+        None,
+    )
+    .await;
     json!({
         "stateBefore": state_before,
         "first": response_body(first_status, first_body),
         "second": response_body(second_status, second_body),
         "missing": response_body(missing_status, missing_body),
-        "unread": [before.unread, after_first.unread, after_second.unread],
+        "unreadFirst": response_body(unread_first_status, unread_first_body),
+        "unreadSecond": response_body(unread_second_status, unread_second_body),
+        "missingUnread": response_body(missing_unread_status, missing_unread_body),
+        "unread": [
+            before.unread,
+            after_first.unread,
+            after_second.unread,
+            after_unread_first.unread,
+            after_unread_second.unread,
+        ],
         "updatedAtPreserved": [
             after_first.updated_at == before.updated_at,
             after_second.updated_at == after_first.updated_at,
+            after_unread_first.updated_at == after_second.updated_at,
+            after_unread_second.updated_at == after_unread_first.updated_at,
         ],
         "state": state_response(&app).await,
     })

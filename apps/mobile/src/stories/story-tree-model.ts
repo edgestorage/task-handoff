@@ -104,12 +104,11 @@ export function sortStoryTree(stories: readonly Story[], locale: string, mode: S
 export function groupStoryTreeSessions(
   stories: readonly Story[],
   instances: readonly ControlPlaneInstanceResourceEntry[],
-  snapshot: ControlPlaneAiSessions | undefined,
+  forest: ReturnType<typeof storyTreeSessionForest>,
   expandedSessionIds: ReadonlySet<string> = new Set(),
 ) {
   const availableStoryKeys = new Set(stories.map(storyTreeKey));
   const instanceDirectory = new Map(instances.map((instance) => [instance.id, instance]));
-  const forest = storyTreeSessionForest(snapshot);
   const grouped = new Map<string, StoryTreeSession[]>();
 
   for (const root of forest.roots) {

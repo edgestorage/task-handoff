@@ -895,6 +895,11 @@ export function registerSessionRoutes({
     return { data: await service.readAiSession(params.id, params.sessionId) };
   });
 
+  app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/unread", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    return { data: await service.unreadAiSession(params.id, params.sessionId) };
+  });
+
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/transcript", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     const query = AiSessionTranscriptQuerySchema.parse(request.query || {});

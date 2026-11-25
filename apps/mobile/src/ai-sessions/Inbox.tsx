@@ -17,9 +17,12 @@ import { Icon } from '../components/Icon';
 import { EmptyState } from '../components/EmptyState';
 import { InitialSyncLoading, type InitialSyncConnection } from '../components/InitialSyncLoading';
 import { SwipeActionList } from '../components/SwipeActionList';
-import { SwipeToClose } from '../components/SwipeToClose';
+import type { SwipeAction } from '../components/SwipeActionList.types';
+import { SwipeActions } from '../components/SwipeActions';
 import { usePullToRefresh } from '../components/use-pull-to-refresh';
+import { useMobileToast } from '../components/MobileToast';
 import { markdownPlainText } from '../components/SafeMarkdown';
+import { AiSessionActionsMenu } from './AiSessionActionsMenu';
 import { sessionActivityText } from './SessionDetail';
 import { ToolActivityText } from './ToolActivityText';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
@@ -74,9 +77,11 @@ export function AiSessionInbox({
 }) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
+  const toast = useMobileToast();
   const scope = initialScope ?? ALL_SCOPE;
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>('all');
   const [closingKey, setClosingKey] = useState('');
+  const [markingUnreadKey, setMarkingUnreadKey] = useState('');
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set());
   const [folders, setFolders] = useState<readonly ControlPlaneNodeLocalFolder[]>([]);
   const preferences = useSyncExternalStore(subscribeAiSessionInboxViewPreferences, getAiSessionInboxViewPreferences, getAiSessionInboxViewPreferences);
@@ -169,7 +174,7 @@ export function AiSessionInbox({
           />}
           onRefresh={pullToRefresh.onRefresh}
           refreshing={pullToRefresh.refreshing}
-          swipeAction={(item) => item.type === 'group' ? null : sessionSwipeAction(item)}
+          swipeActions={(item) => item.type === 'group' || listLayout ? null : sessionSwipeActions(item)}
           renderItem={({ item }) => item.type === 'group'
             ? <AiSessionGroup group={item} onToggle={() => toggleGroup(item.key)} renderEntry={renderSwipeableSession} />
             : renderSessionEntry(item)}
@@ -177,13 +182,41 @@ export function AiSessionInbox({
     </Profiler>
   );
 
-  function sessionSwipeAction(item: AiSessionHierarchyInboxEntry) {
+  function sessionSwipeActions(item: AiSessionHierarchyInboxEntry): SwipeAction[] {
     const key = `${item.instanceId}:${item.session.id}`;
-    return {
-      disabled: !actions || state.sync.phase !== 'ready' || Boolean(closingKey),
-      label: closingKey === key ? t('sessions.closing') : t('sessions.close'),
-      onPress: () => requestCloseAiSession(item, key),
-    };
+    const disabled = !actions || state.sync.phase !== 'ready' || Boolean(closingKey) || Boolean(markingUnreadKey);
+    return [
+      ...(!item.session.unread ? [{
+        disabled,
+        icon: 'mail-unread-outline' as const,
+        label: t('sessions.markUnread'),
+        onPress: () => requestMarkUnread(item, key),
+        tone: 'primary' as const,
+      }] : []),
+      {
+        disabled: !actions || state.sync.phase !== 'ready' || Boolean(closingKey),
+        icon: 'close' as const,
+        label: closingKey === key ? t('sessions.closing') : t('sessions.close'),
+        onPress: () => requestCloseAiSession(item, key),
+        tone: 'destructive',
+      },
+    ];
+  }
+
+  function requestMarkUnread(item: AiSessionHierarchyInboxEntry, key: string) {
+    if (!actions || markingUnreadKey) return;
+    setMarkingUnreadKey(key);
+    void actions.markUnread(item.instanceId, item.session.id).then((result) => {
+      if (result.disposition === 'accepted') {
+        toast.show({ title: t('sessions.markedUnread'), tone: 'success' });
+        return;
+      }
+      toast.show({
+        detail: result.disposition === 'duplicate-blocked' ? undefined : result.error,
+        title: t('sessions.markUnreadFailed'),
+        tone: 'error',
+      });
+    }).finally(() => setMarkingUnreadKey((current) => current === key ? '' : current));
   }
 
   function sessionContainerStyle(item: AiSessionHierarchyInboxEntry, grouped: boolean) {
@@ -194,17 +227,28 @@ export function AiSessionInbox({
   }
 
   function renderSwipeableSession(item: AiSessionHierarchyInboxEntry) {
-    const action = sessionSwipeAction(item);
-    return <SwipeToClose
+    if (listLayout) return renderSessionEntry(item);
+    const key = `${item.instanceId}:${item.session.id}`;
+    return <SwipeActions
+      actions={sessionSwipeActions(item)}
       containerStyle={sessionContainerStyle(item, true)}
-      disabled={action.disabled}
-      key={`${item.instanceId}:${item.session.id}`}
-      label={action.label}
-      onClose={action.onPress}
-    >{renderSessionEntry(item)}</SwipeToClose>;
+      key={key}
+    >{renderSessionEntry(item)}</SwipeActions>;
   }
 
   function renderSessionEntry(item: AiSessionHierarchyInboxEntry) {
+    const key = `${item.instanceId}:${item.session.id}`;
+    return <AiSessionActionsMenu
+      actions={actions}
+      disabled={state.sync.phase !== 'ready' || Boolean(markingUnreadKey)}
+      instanceId={item.instanceId}
+      key={key}
+      onOpen={onOpen ? () => onOpen({ instanceId: item.instanceId, sessionId: item.session.id }) : undefined}
+      session={item.session}
+    >{renderSessionBody(item)}</AiSessionActionsMenu>;
+  }
+
+  function renderSessionBody(item: AiSessionHierarchyInboxEntry) {
     const error = item.session.status === 'failed' ? item.session.error : undefined;
     const content = inboxCardContent(item.session, messagesBySession.get(sessionMessageGroupKey(item.instanceId, item.session.id)), t);
     const approvalPending = isAiSessionApprovalPending(item.session);

@@ -186,7 +186,7 @@ test('offline and provider errors include a desktop remediation path', () => {
   expect(lifecycleGuidance({ code: 'PROVIDER_UNAVAILABLE', message: 'Missing key' }).message).toMatch(/desktop app/);
 });
 
-test('directory controller treats resource metrics and unchanged proxy state as telemetry, not directory changes', async () => {
+test.each(['node.proxy-state.updated', 'node.connection.updated'])('directory controller applies %s in place without reloading the directory', async (eventType) => {
   const store = new MobileDirectoryStore();
   const node = ControlPlaneNodeDirectoryEntrySchema.parse({
     id: 'node-1', name: 'Node', status: 'online', health: 'ok', connectionMode: 'control-plane-proxy',
@@ -206,13 +206,13 @@ test('directory controller treats resource metrics and unchanged proxy state as 
     type: 'instance.metrics.snapshot', topic: 'instances', scope: { instanceId: instance.id },
     payload: { instanceId: instance.id, runtimeKind: 'docker', state: 'available', sampledAt: '2026-08-05T00:00:01.000Z' },
   })).toBe(true);
-  expect(controller.applyEvent({ type: 'node.proxy-state.updated', topic: 'node.state', scope: { nodeId: node.id }, payload: proxyState })).toBe(true);
+  expect(controller.applyEvent({ type: eventType, topic: 'node.state', scope: { nodeId: node.id }, payload: proxyState })).toBe(true);
   await new Promise((resolve) => setTimeout(resolve, 150));
   expect(instanceBoard).toHaveBeenCalledTimes(1);
   expect(nodes).toHaveBeenCalledTimes(1);
 
   expect(controller.applyEvent({
-    type: 'node.proxy-state.updated', topic: 'node.state', scope: { nodeId: node.id },
+    type: eventType, topic: 'node.state', scope: { nodeId: node.id },
     payload: { ...proxyState, health: 'degraded', connectionEnabled: false },
   })).toBe(true);
   await new Promise((resolve) => setTimeout(resolve, 150));

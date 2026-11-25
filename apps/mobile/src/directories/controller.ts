@@ -1,7 +1,6 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { ControlPlaneInstanceLifecycleDirectoryEventSchema, ControlPlaneInstanceLifecycleHeartbeatDirectoryEventSchema, ControlPlaneNodeConnectionPhaseSchema, ControlPlaneNodeFleetUpdatedEventSchema } from '@task-handoff/protocol/control-plane-directory';
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
-import { NodeStateProjectionEventSchema } from '@task-handoff/protocol/control-plane';
 import { safeParseResponse } from '@task-handoff/protocol/response-validation';
 import { z } from 'zod';
 
@@ -10,6 +9,7 @@ import { MobileControlPlaneTransportError } from '../control-plane/transport';
 import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport } from '../control-plane/transport';
 import { MobileReconnectBackoff } from '../platform/reconnect';
 import { connectionSyncPhase } from '../control-plane/sync-state';
+import { readNodeStateProjection } from '../control-plane/node-state-event';
 
 const NodeConnectionObservationSchema = z.object({
   nodeId: z.string().trim().min(1).max(160),
@@ -23,7 +23,6 @@ const NodeConnectionObservationSchema = z.object({
 const INSTANCE_LIFECYCLE_SNAPSHOT_EVENT = 'instance.lifecycle.snapshot';
 const INSTANCE_LIFECYCLE_HEARTBEAT_EVENT = 'instance.lifecycle.heartbeat';
 const INSTANCE_RESOURCE_METRICS_EVENT = 'instance.metrics.snapshot';
-const NODE_PROXY_STATE_EVENT = 'node.proxy-state.updated';
 // Lifecycle command receipts. The node agent already publishes the resulting
 // state as an `instance.lifecycle.snapshot`, so reading the receipt as an
 // `instances` change re-fetched the whole board after every start/stop/restart.
@@ -204,6 +203,15 @@ export class MobileDirectoryController {
   }
 
   applyEvent(event: MobileControlPlaneEvent) {
+    const projection = readNodeStateProjection(event);
+    if (projection) {
+      if (!this.store.hasNode(this.controlPlaneId, projection.nodeId)) {
+        this.scheduleRefresh(['nodes']);
+        return false;
+      }
+      this.store.applyNodeStateProjection(this.controlPlaneId, projection);
+      return true;
+    }
     if (event.type === 'node.connection.updated') {
       const parsed = safeParseResponse(NodeConnectionObservationSchema, event.payload);
       if (!parsed.success || event.scope?.nodeId !== parsed.data.nodeId) return false;
@@ -256,22 +264,6 @@ export class MobileDirectoryController {
       // Compatibility for v0.0.23: an omitted hint came from a producer that
       // could not prove the resource projection stayed unchanged.
       if (contentChanged !== false && fleetState.resource === 'instances') this.scheduleRefresh(['instances']);
-      return true;
-    }
-    if (event.type === NODE_PROXY_STATE_EVENT) {
-      const parsed = safeParseResponse(NodeStateProjectionEventSchema, event.payload);
-      if (!parsed.success || event.scope?.nodeId !== parsed.data.nodeId) return false;
-      // The Control Plane republishes this whole projection whenever the target
-      // node's state changes, and the projection carries every directory field
-      // it can change. Applying it in place is what the Control Plane web
-      // console does; re-fetching the node board instead turned the proxy state
-      // stream into a continuous full-directory poll. Only a node the directory
-      // has never seen needs the authoritative board.
-      if (!this.store.hasNode(this.controlPlaneId, parsed.data.nodeId)) {
-        this.scheduleRefresh(['nodes']);
-        return false;
-      }
-      this.store.applyNodeStateProjection(this.controlPlaneId, parsed.data);
       return true;
     }
     if (event.type.startsWith('instance.ai-session.') || event.type.startsWith('instance.app-session.')) return true;

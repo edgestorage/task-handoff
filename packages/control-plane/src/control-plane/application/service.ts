@@ -312,8 +312,12 @@ export class ControlPlaneService {
       controlPlaneProxyPrivateStorePaths(paths.dataDir),
       (message, details) => this.logWarn(details, message),
     );
+    const directNodeAgentTransport = createDirectNodeAgentTransport(this.fetchImpl);
     this.nodeAgentTransportResolver = new NodeAgentTransportResolver({
-      direct: createDirectNodeAgentTransport(this.fetchImpl),
+      direct: {
+        ...directNodeAgentTransport,
+        request: (node, route, init) => this.observeDirectNodeAgentRequest(directNodeAgentTransport.request, node, route, init),
+      },
       tunnel: options.nodeAgentTransport,
       proxy: new ControlPlaneProxyNodeAgentTransport({
         credentialForNode: (node) => this.proxyPrivateStore.nodeCredential(node.id),
@@ -332,7 +336,7 @@ export class ControlPlaneService {
       error: (data, message) => { if (this.diagnosticLogsEnabled()) options.logger?.error?.(data, message); },
     } : undefined;
     const nodeAgentClient = new ControlPlaneNodeAgentClient({
-      request: (node, route, init) => this.nodeAgentFetch(node, route, init),
+      request: (node, route, init) => this.resolveNodeAgentTransport(node).request(node, route, init),
       logger: this.logger,
     });
     this.nodeAgentGateway = new ControlPlaneNodeAgentGateway(nodeAgentClient, {
@@ -2165,6 +2169,10 @@ export class ControlPlaneService {
     return this.aiSessionActionService.read(instanceId, aiSessionId);
   }
 
+  unreadAiSession(instanceId: string, aiSessionId: string) {
+    return this.aiSessionActionService.unread(instanceId, aiSessionId);
+  }
+
   openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
     return this.aiSessionActionService.openApp(instanceId, aiSessionId, clientRequestId);
   }
@@ -2545,15 +2553,13 @@ export class ControlPlaneService {
     await this.controlledInstanceGateway.reportHeartbeat(instance, input);
   }
 
-  private async nodeAgentFetch(node: Node, route: string, init: RequestInit = {}) {
-    const observesDirectControl = node.connectionMode !== "reverse-wss"
-      && node.connectionMode !== "control-plane-proxy";
+  private async observeDirectNodeAgentRequest(request: NodeAgentTransport["request"], node: Node, route: string, init: RequestInit = {}) {
     try {
-      const response = await this.nodeAgentTransportResolver.resolve(node).request(node, route, init);
-      if (observesDirectControl) this.nodeConnectionRuntime?.observedReachable(node);
+      const response = await request(node, route, init);
+      if (!init.signal?.aborted) this.nodeConnectionRuntime?.observedReachable(node);
       return response;
     } catch (error) {
-      if (observesDirectControl && !init.signal?.aborted && !isAbortError(error)) {
+      if (!init.signal?.aborted && !isAbortError(error)) {
         this.nodeConnectionRuntime?.observedFailure(node, errorMessage(error));
       }
       throw error;

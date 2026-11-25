@@ -4,6 +4,7 @@ import { StoryDecisionChangedEventType } from '@task-handoff/protocol/stories';
 import type { MobileControlPlaneConnectionCoordinator, MobileControlPlaneDomain } from '../control-plane/use-mobile-control-plane-runtime';
 import { traceDiagnosticTask } from '../observability/diagnostic-timing';
 import { diagnosticLog } from '../observability/diagnostic-logs';
+import { StoryNodeRecovery } from './story-node-recovery';
 import { mergeStoryTreeSnapshot, storyTreeKey } from './story-tree-model';
 
 type StoryList = Awaited<ReturnType<ControlPlaneClient['stories']['list']>>;
@@ -28,6 +29,7 @@ export class MobileStoryListController {
   private timer?: ReturnType<typeof setTimeout>;
   private queued = false;
   private lastError?: unknown;
+  private readonly nodeRecovery = new StoryNodeRecovery();
 
   constructor(private readonly client: ControlPlaneClient) {}
   snapshot = () => this.state;
@@ -43,13 +45,13 @@ export class MobileStoryListController {
   acquire(coordinator?: Pick<MobileControlPlaneConnectionCoordinator, 'register'>) {
     if (++this.consumers === 1) {
       const domain = this.domain ??= {
-        key: 'stories-list', topics: ['stories'], snapshotTopics: ['stories'], background: true,
+        key: 'stories-list', topics: ['stories', 'node.state'], snapshotTopics: ['stories'], background: true,
         start: async (signal: AbortSignal) => { await this.start(signal).catch(() => undefined); },
         stop: () => this.stop(), offline: () => this.stop(),
         onConnectionError: () => this.stop(),
         onEvent: (event: Parameters<MobileControlPlaneDomain['onEvent']>[0]) => {
           // Decisions have their own authority and do not change the Story list.
-          if (event.topic === 'stories' && event.type !== StoryDecisionChangedEventType) this.scheduleRefresh();
+          if ((event.topic === 'stories' && event.type !== StoryDecisionChangedEventType) || this.nodeRecovery.apply(event)) this.scheduleRefresh();
         },
       };
       this.unregister = coordinator ? coordinator.register(domain) : () => domain.stop();
@@ -79,6 +81,7 @@ export class MobileStoryListController {
 
   stop() {
     this.generation++;
+    this.nodeRecovery.reset();
     this.abort?.abort();
     this.abort = undefined;
     this.inFlight = undefined;

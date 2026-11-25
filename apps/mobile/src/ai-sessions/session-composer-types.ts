@@ -12,6 +12,7 @@ export type SessionComposerProps = {
   cancelEditLabel?: string;
   editable: boolean;
   editingLabel?: string;
+  expandedHeight: SharedValue<number>;
   expansion: SharedValue<number>;
   fileDisabled: boolean;
   focused: boolean;
@@ -35,6 +36,7 @@ export type SessionComposerProps = {
   onPasteImages(uris: string[]): void;
   onPasteText(text: string): void;
   onCancelEdit?(): void;
+  onExpandedHeightChange(height: number): void;
   onFocusChange(focused: boolean): void;
   onPermissionModeChange(mode: AiSessionPermissionMode): void;
   onModelSelectionChange?(selection: AiSessionModelSelection): void;

@@ -129,7 +129,7 @@ describe('<StoryInbox />', () => {
     const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
     await waitFor(() => expect(screen.getByText('Alpha')).toBeTruthy());
 
-    expect(register).toHaveBeenCalledWith(expect.objectContaining({ topics: ['stories'] }));
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({ topics: ['stories', 'node.state'], snapshotTopics: ['stories'] }));
     storyDomain!.onEvent({
       type: 'story.changed',
       topic: 'stories',
@@ -443,11 +443,15 @@ describe('<StoryInbox />', () => {
     const onOpen = jest.fn();
     const onOpenDocument = jest.fn();
     const onOpenSession = jest.fn();
-    const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={onOpen} onOpenDocument={onOpenDocument} onOpenSession={onOpenSession} />);
+    const inbox = <StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={onOpen} onOpenDocument={onOpenDocument} onOpenSession={onOpenSession} />;
+    const screen = await render(inbox);
 
     await waitFor(() => expect(screen.getByText('Alpha')).toBeTruthy());
     expect(screen.queryByText('Plan')).toBeNull();
     expect(screen.queryByText('Build it')).toBeNull();
+    expect(StyleSheet.flatten(screen.getByTestId('story-attention-node-a:story-1').props.style).backgroundColor).toBe(mobileLightColors.surface);
+    expect(StyleSheet.flatten(screen.getByTestId('story-attention-ring-node-a:story-1').props.style).borderColor).toBe(mobileLightColors.primary);
+    expect(screen.getByRole('button', { name: 'Alpha, Running' })).toBeTruthy();
 
     await fireEvent.press(screen.getByLabelText('Expand Alpha'));
     await waitFor(() => expect(screen.getByText('Plan')).toBeTruthy());
@@ -464,9 +468,16 @@ describe('<StoryInbox />', () => {
     expect(onOpenSession).toHaveBeenCalledWith(story, 'instance-a', 'session-a');
     expect(onOpen).toHaveBeenCalledWith(story);
 
-    await fireEvent.press(screen.getByLabelText('Collapse Alpha'));
-    await waitFor(() => expect(screen.queryByText('Plan')).toBeNull());
     await screen.unmount();
+
+    const reopened = await render(inbox);
+    try {
+      await waitFor(() => expect(reopened.getByText('Plan')).toBeTruthy());
+      await fireEvent.press(reopened.getByLabelText('Collapse Alpha'));
+      await waitFor(() => expect(reopened.queryByText('Plan')).toBeNull());
+    } finally {
+      await reopened.unmount();
+    }
   });
 
   test('starts a Story session with the latest linked session instance and folder', async () => {

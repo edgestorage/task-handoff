@@ -444,14 +444,27 @@ async function observeRead(scenario) {
     const second = responseBody(await runtime.app.inject({ method: "POST", url: `/api/ai-sessions/${session.id}/read` }));
     const afterSecond = runtime.registry.get(session.id);
     const missing = responseBody(await runtime.app.inject({ method: "POST", url: "/api/ai-sessions/ais_missing/read" }));
+    const unreadFirst = responseBody(await runtime.app.inject({ method: "POST", url: `/api/ai-sessions/${session.id}/unread` }));
+    const afterUnreadFirst = runtime.registry.get(session.id);
+    const unreadSecond = responseBody(await runtime.app.inject({ method: "POST", url: `/api/ai-sessions/${session.id}/unread` }));
+    const afterUnreadSecond = runtime.registry.get(session.id);
+    const missingUnread = responseBody(await runtime.app.inject({ method: "POST", url: "/api/ai-sessions/ais_missing/unread" }));
     return {
       root: runtime.root,
       stateBefore,
       first,
       second,
       missing,
-      unread: [before.unread, afterFirst.unread, afterSecond.unread],
-      updatedAtPreserved: [afterFirst.updatedAt === before.updatedAt, afterSecond.updatedAt === afterFirst.updatedAt],
+      unreadFirst,
+      unreadSecond,
+      missingUnread,
+      unread: [before.unread, afterFirst.unread, afterSecond.unread, afterUnreadFirst.unread, afterUnreadSecond.unread],
+      updatedAtPreserved: [
+        afterFirst.updatedAt === before.updatedAt,
+        afterSecond.updatedAt === afterFirst.updatedAt,
+        afterUnreadFirst.updatedAt === afterSecond.updatedAt,
+        afterUnreadSecond.updatedAt === afterUnreadFirst.updatedAt,
+      ],
       state: stateResponse(await runtime.app.inject({ method: "GET", url: "/api/ai-sessions/state" })),
     };
   } finally {

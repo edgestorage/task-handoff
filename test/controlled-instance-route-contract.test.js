@@ -14,7 +14,7 @@ const matrixPath = path.join(root, "controlled-instance-rs", "docs", "http-route
 const BASELINE_HEADING = "## `v0.0.47` compatibility baseline";
 const TARGET_HEADING = "## Target-current Node extensions after `v0.0.47`";
 const BASELINE_ROUTE_COUNT = 202;
-const TARGET_ROUTE_COUNT = 245;
+const TARGET_ROUTE_COUNT = 246;
 const POST_BASELINE_ROUTES = new Set([
   "DELETE /api/browser-control/access",
   "DELETE /api/browser-control/creation-context",
@@ -29,6 +29,7 @@ const POST_BASELINE_ROUTES = new Set([
   "GET /api/ai-sessions/{}/repository/files/content",
   "GET /api/apps/sessions/{}/repository/files/content",
   "GET /api/ai-sessions/{}/turns/{}/tool-activity",
+  "POST /api/ai-sessions/{}/unread",
   "GET /devtools/browser/{}",
   "GET /devtools/page/{}",
   "GET /json/close/{}",

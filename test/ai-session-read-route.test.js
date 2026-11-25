@@ -116,6 +116,38 @@ test("the controlled-instance read route reports an unknown session as not found
   }
 });
 
+test("the controlled-instance unread route restores unread without advancing updatedAt", async () => {
+  const { aiSessions, app, restore } = await createRuntime();
+  try {
+    const session = aiSessions.start({ agent: "codex", status: "running" }, { timestamp: "2026-07-25T00:00:00.000Z" });
+    aiSessions.complete(session.id, "done");
+    const read = aiSessions.markRead(session.id);
+    assert.equal(read.unread, false);
+
+    const response = await app.inject({ method: "POST", url: `/api/ai-sessions/${session.id}/unread` });
+    assert.equal(response.statusCode, 200, JSON.stringify(response.json()));
+    const result = AiSessionReadResultSchema.parse(response.json().data);
+    assert.deepEqual(result, { sessionId: session.id, unread: true });
+    assert.equal(aiSessions.get(session.id).unread, true);
+    assert.equal(aiSessions.get(session.id).updatedAt, read.updatedAt);
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
+test("the controlled-instance unread route reports an unknown session as not found", async () => {
+  const { app, restore } = await createRuntime();
+  try {
+    const response = await app.inject({ method: "POST", url: "/api/ai-sessions/ais_missing/unread" });
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.json().error.code, "AI_SESSION_NOT_FOUND");
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
 test("the controlled-instance write route returns a structured storage status instead of fake success", async () => {
   const { aiSessions, app, restore } = await createRuntime();
   try {

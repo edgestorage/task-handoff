@@ -243,6 +243,9 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     markRead(instanceId: string, sessionId: string) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/read`, AiSessionReadResultSchema, jsonRequest("POST", {}));
     },
+    markUnread(instanceId: string, sessionId: string) {
+      return requestData(`${sessionRoute(instanceId, sessionId)}/unread`, AiSessionReadResultSchema, jsonRequest("POST", {}));
+    },
     sendMessage(instanceId: string, sessionId: string, input: {
       message: string;
       mode?: AiSessionSendMode;

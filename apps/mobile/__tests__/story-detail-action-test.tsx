@@ -6,12 +6,16 @@ import { router } from 'expo-router';
 
 import { layoutFromEvent, StoryDetail } from '../src/stories/StoryDetail';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
+import type { MobileControlPlaneDomain } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../src/directories/use-directories';
 import { useActiveAiSessions, useActiveAiSessionsSnapshot } from '../src/ai-sessions/use-active-sessions';
 
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'action-request-1' }));
 jest.mock('@expo/ui/community/menu', () => ({
   MenuView: ({ actions, children, onPressAction }: { actions: unknown[]; children: unknown; onPressAction: (event: unknown) => void }) => require('react').createElement(require('react-native').View, { actions, onPressAction, testID: 'story-detail-menu' }, children),
+}));
+jest.mock('@react-native-menu/menu', () => ({
+  MenuView: ({ actions, children, onPressAction }: { actions: unknown[]; children: unknown; onPressAction: (event: unknown) => void }) => require('react').createElement(require('react-native').View, { actions, onPressAction, testID: 'story-detail-session-menu' }, children),
 }));
 jest.mock('expo-router', () => ({
   router: { back: jest.fn(), push: jest.fn() },
@@ -70,6 +74,41 @@ test('ignores null native layout events from iOS transitions', () => {
 beforeEach(() => {
   jest.clearAllMocks();
   mockActiveSessions.mockReturnValue({ actions: { close: jest.fn() }, refresh: jest.fn().mockResolvedValue(undefined) } as unknown as ReturnType<typeof useActiveAiSessions>);
+});
+
+test('a failed Story detail recovers on its owner node event without reopening the screen', async () => {
+  let domain!: MobileControlPlaneDomain;
+  const get = jest.fn().mockRejectedValueOnce(new Error('Node unavailable')).mockResolvedValue(story);
+  mockRuntime.mockReturnValue({
+    api: { stories: { get, listAutomations: jest.fn().mockResolvedValue({ automations: [] }) } },
+    coordinator: { register: (value: MobileControlPlaneDomain) => { domain = value; return value.stop; } },
+  } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+  mockDirectories.mockReturnValue({ state: { instances: [], nodes: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+  mockSessions.mockReturnValue({ instances: [] } as unknown as ReturnType<typeof useActiveAiSessionsSnapshot>);
+
+  const screen = await render(<StoryDetail nodeId={story.ownerNodeId} onOpenSession={jest.fn()} storyId={story.id} />);
+  await act(async () => { await domain.start(new AbortController().signal); });
+  expect(screen.getByText('Node unavailable')).toBeTruthy();
+
+  const event = (nodeId: string) => ({ type: 'node.proxy-state.updated', topic: 'node.state', scope: { nodeId },
+    payload: { nodeId, status: 'online', health: 'ok', lastSeenAt: null, connectionPhase: 'healthy', connectionDiagnostics: null, proxyState: null } });
+  jest.useFakeTimers();
+  try {
+    await act(async () => {
+      domain.onEvent(event('node-other'));
+      await jest.advanceTimersByTimeAsync(100);
+    });
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      domain.onEvent(event(story.ownerNodeId));
+      await jest.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.getByText('Deploy staging')).toBeTruthy();
+    expect(screen.queryByText('Node unavailable')).toBeNull();
+    expect(domain.topics).toContain('node.state');
+    expect(get.mock.calls).toEqual([[story.id, story.ownerNodeId], [story.id, story.ownerNodeId]]);
+  } finally { jest.useRealTimers(); }
 });
 
 test('a preset action confirms before using the authoritative Story Action runner', async () => {

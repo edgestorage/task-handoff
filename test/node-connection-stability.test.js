@@ -1409,6 +1409,7 @@ test("direct event connection terminates a half-open socket and publishes reconn
     auth: { mode: "local-static-key", secret: "secret" },
   };
   const transport = {
+    async request() { return Response.json({ data: { ok: true } }); },
     proxyWebSocket(_node, socket, route) {
       assert.equal(route, "/events?aiSessionTransient=1");
       queueMicrotask(() => socket.send(JSON.stringify({ type: "node-agent.events.connected" })));

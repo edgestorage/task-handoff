@@ -1,4 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
+import type { ValueStore } from './secure-storage';
+
+const securePreferenceStorage = { get: SecureStore.getItemAsync, set: SecureStore.setItemAsync };
 
 export type PersistedPreferenceStore<T> = {
   get(): T;
@@ -9,8 +12,7 @@ export type PersistedPreferenceStore<T> = {
 };
 
 /**
- * Module-level preference store that survives an app restart, mirroring the
- * `expo-secure-store` persistence used by the theme and task-status settings.
+ * Module-level preference store that survives an app restart.
  * The in-memory value stays synchronous so `useSyncExternalStore` consumers
  * react immediately; storage is read once on the first subscription and
  * written in the background on every change.
@@ -20,8 +22,9 @@ export function createPersistedPreferenceStore<T>(options: {
   version: number;
   defaults: T;
   parse(raw: string | null | undefined): T | undefined;
+  storage?: Pick<ValueStore, 'get' | 'set'>;
 }): PersistedPreferenceStore<T> {
-  const { defaults, parse, storageKey, version } = options;
+  const { defaults, parse, storageKey, version, storage = securePreferenceStorage } = options;
   const listeners = new Set<() => void>();
   let preferences = defaults;
   let hydration: Promise<void> | undefined;
@@ -35,7 +38,7 @@ export function createPersistedPreferenceStore<T>(options: {
   const beginHydration = () => {
     hydration ??= (async () => {
       try {
-        const stored = parse(await SecureStore.getItemAsync(storageKey));
+        const stored = parse(await storage.get(storageKey));
         // A user change that landed while storage was being read wins over the persisted snapshot.
         if (mutated || !stored) return;
         preferences = stored;
@@ -60,7 +63,7 @@ export function createPersistedPreferenceStore<T>(options: {
       preferences = { ...preferences, ...patch };
       notify();
       const raw = JSON.stringify({ version, ...preferences });
-      writeChain = writeChain.then(() => SecureStore.setItemAsync(storageKey, raw)).catch(() => undefined);
+      writeChain = writeChain.then(() => storage.set(storageKey, raw)).catch(() => undefined);
     },
   };
 }

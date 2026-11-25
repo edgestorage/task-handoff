@@ -46,7 +46,7 @@ export function StoryDocumentPreview({ storyId, nodeId, storyPath, title }: { st
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }, [nodeId, runtime.api, storyId, storyPath]);
-  useStoryEvents(refresh, storyId);
+  useStoryEvents(refresh, { storyId, nodeId });
   const extension = storyPath?.split('.').pop()?.toLocaleLowerCase() || '';
   const content = useMemo(() => {
     if (!preview) return '';

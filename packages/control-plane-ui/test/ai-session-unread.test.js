@@ -32,3 +32,37 @@ test("AI session unread travels with the instance session stream and is cleared 
   assert.doesNotMatch(card, /ai-board-card-tools/);
   assert.doesNotMatch(panel, /session-ai-card-tools/);
 });
+
+test("an AI session can be marked unread again without being cleared by its open detail view", () => {
+  const menu = read("components/ai-session/AiSessionCardContextMenu.vue");
+  const queries = read("api/queries.ts");
+  const board = read("apps/control-plane/ai-board/AiSessionBoardView.vue");
+  const card = read("apps/control-plane/ai-board/AiSessionCard.vue");
+  const panel = read("apps/control-plane/instance-detail/AiSessionPanel.vue");
+  const story = read("apps/control-plane/story/StoryView.vue");
+  const sharedSessions = fs.readFileSync(new URL("../../control-plane-client/src/ai-sessions.ts", import.meta.url), "utf8");
+  const en = read("i18n/locales/en-US/sessions.ts");
+  const zh = read("i18n/locales/zh-CN/sessions.ts");
+
+  assert.match(sharedSessions, /markUnread\(instanceId: string, sessionId: string\)[\s\S]*\/unread/);
+  assert.match(queries, /sharedAiSessionsApi\.markUnread\(instanceId, sessionId\)/);
+  assert.match(menu, /v-if="canMarkUnread && !isUnread"[\s\S]*@select="\$emit\('markUnread'\)"/);
+  assert.match(menu, /sessions\.actions\.markUnread/);
+  const storyMenuIndex = menu.indexOf('@update:open="onStoryMenuOpen"');
+  const markUnreadIndex = menu.indexOf('v-if="canMarkUnread && !isUnread"');
+  const openAppIndex = menu.indexOf('v-if="canOpenApp"');
+  assert.ok(storyMenuIndex < markUnreadIndex && markUnreadIndex < openAppIndex);
+  assert.match(story, /:is-unread="entry\.session\.unread"[\s\S]*@mark-unread="markSessionUnread\(entry\)"/);
+  assert.match(card, /:is-unread="card\.session\.unread"[\s\S]*@mark-unread="\$emit\('markUnread', card\)"/);
+  assert.match(panel, /:is-unread="session\.unread"[\s\S]*@mark-unread="markSessionUnread\(session\)"/);
+  assert.match(board, /@mark-unread="markCardUnread"/);
+  assert.match(board, /await markAiSessionUnread\(card\.instance\.id, card\.session\.id\)/);
+  assert.match(panel, /await markAiSessionUnread\(props\.instance\.id, session\.id\)/);
+  assert.match(board, /updatedAt: selectedCard\.value\?\.session\.updatedAt[\s\S]*newActivity = previous\?\.unread === false && current\.updatedAt !== previous\.updatedAt/);
+  assert.match(panel, /updatedAt: selectedSession\.value\?\.updatedAt[\s\S]*newActivity = previous\?\.unread === false && current\.updatedAt !== previous\.updatedAt/);
+  for (const locale of [en, zh]) {
+    assert.match(locale, /markUnread:/);
+    assert.match(locale, /markedUnread:/);
+    assert.match(locale, /markUnreadFailed:/);
+  }
+});

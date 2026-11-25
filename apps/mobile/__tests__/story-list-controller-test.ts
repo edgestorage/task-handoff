@@ -75,6 +75,39 @@ test('reconnect loads a fresh snapshot and ignores late results from the previou
   release();
 });
 
+test('an owner node recovery refreshes a partial snapshot without reconnecting the Control Plane', async () => {
+  jest.useFakeTimers();
+  const h = harness(jest.fn().mockResolvedValueOnce({ stories: [], unavailableNodeIds: [story.ownerNodeId] }).mockResolvedValue(snapshot));
+  const release = h.controller.acquire(h.coordinator);
+  const event = (status: 'online' | 'offline', type = 'node.connection.updated') => ({
+    type, topic: 'node.state', scope: { nodeId: story.ownerNodeId },
+    payload: { nodeId: story.ownerNodeId, connectionEnabled: true, status, health: 'ok', lastSeenAt: null,
+      connectionPhase: status === 'online' ? 'healthy' : 'offline', connectionDiagnostics: null, proxyState: null },
+  });
+  try {
+    await h.domain().start(new AbortController().signal);
+    expect(h.controller.snapshot().unavailableNodeIds).toEqual([story.ownerNodeId]);
+    h.domain().onEvent(event('offline'));
+    await jest.advanceTimersByTimeAsync(100);
+    expect(h.list).toHaveBeenCalledTimes(1);
+
+    h.domain().onEvent(event('online'));
+    await jest.advanceTimersByTimeAsync(100);
+    expect(h.list).toHaveBeenCalledTimes(2);
+    expect(h.domain().topics).toContain('node.state');
+    expect(h.controller.snapshot().unavailableNodeIds).toEqual([]);
+    expect(h.controller.snapshot().stories).toEqual([story]);
+
+    h.domain().onEvent(event('online', 'node.proxy-state.updated'));
+    await jest.advanceTimersByTimeAsync(100);
+    expect(h.list).toHaveBeenCalledTimes(2);
+  } finally {
+    h.domain().stop();
+    release();
+    jest.useRealTimers();
+  }
+});
+
 test('events arriving during a request queue one follow-up snapshot; decision events do not reload the list', async () => {
   jest.useFakeTimers();
   const initial = deferred<typeof snapshot>();

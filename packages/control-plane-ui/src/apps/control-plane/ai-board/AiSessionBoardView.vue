@@ -83,6 +83,7 @@
                 :folder-name="aiBoardCardPath(card).folderName"
                 :instance-display-name="instanceDisplayName"
                 :is-trigger-bound="isTriggerBound"
+                :marking-unread-session-key="markingUnreadSessionKey"
                 :prompt-count="promptCount(card.session)"
                 :prompt-index="promptIndexFor(card)"
                 :selected="selectedCardKey === card.key"
@@ -94,6 +95,7 @@
                 :trigger-busy-key="triggerBusyKey"
                 :trigger-templates="triggerTemplates"
                 @next-prompt="nextPrompt"
+                @mark-unread="markCardUnread"
                 @open-ai-session-app="openCardApp"
                 @previous-prompt="previousPrompt"
                 @resolve-approval="(instance, session, decision) => emit('resolveApproval', instance, session, decision)"
@@ -142,6 +144,7 @@
               :folder-name="aiBoardCardPath(card).folderName"
               :instance-display-name="instanceDisplayName"
               :is-trigger-bound="isTriggerBound"
+              :marking-unread-session-key="markingUnreadSessionKey"
               :prompt-count="promptCount(card.session)"
               :prompt-index="promptIndexFor(card)"
               :selected="selectedCardKey === card.key"
@@ -155,6 +158,7 @@
               :trigger-busy-key="triggerBusyKey"
               :trigger-templates="triggerTemplates"
               @next-prompt="nextPrompt"
+              @mark-unread="markCardUnread"
               @open-ai-session-app="openCardApp"
               @previous-prompt="previousPrompt"
               @resolve-approval="(instance, session, decision) => emit('resolveApproval', instance, session, decision)"
@@ -276,7 +280,7 @@ import { waitForAiSessionProjection } from "../ai-session-projection";
 import { useEventListener } from "@vueuse/core";
 import { ArrowUpDown, Bot, Boxes, Columns3, Folder, LayoutGrid, Search, Server, SlidersHorizontal, Ungroup } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, updateAiSessionModelSelection, updateAiSessionReasoningEffort, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useModelsQuery } from "../../../api/queries";
+import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiSession, markAiSessionRead, markAiSessionUnread, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, updateAiSessionModelSelection, updateAiSessionReasoningEffort, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useModelsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
@@ -396,6 +400,7 @@ const aiSessionActionBusy = ref(false);
 const modelSelectionPendingSessionId = ref("");
 const reasoningEffortPending = ref<{ sessionId: string; target: AiSessionReasoningEffort }>();
 const stoppingAppSessionKey = ref("");
+const markingUnreadSessionKey = ref("");
 const forkingSessionKey = ref("");
 const renameSessionTarget = ref<AiBoardCard>();
 const forkRequestIds = new Map<string, string>();
@@ -1264,6 +1269,19 @@ async function stopCardAppSession(card: AiBoardCard) {
   }
 }
 
+async function markCardUnread(card: AiBoardCard) {
+  if (markingUnreadSessionKey.value) return;
+  markingUnreadSessionKey.value = card.key;
+  try {
+    await markAiSessionUnread(card.instance.id, card.session.id);
+    showControlPlaneToast(t("sessions.actions.markedUnread"), "success");
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.actions.markUnreadFailed")), "error");
+  } finally {
+    markingUnreadSessionKey.value = "";
+  }
+}
+
 async function forkCardSession(card: AiBoardCard, mode: "current" | "managed-worktree" = "current", throughTurnId?: string) {
   if (!throughTurnId && (card.session.status === "running" || card.session.status === "waiting")) {
     pendingBusyFork.value = { card, mode, throughTurnId };
@@ -1389,10 +1407,13 @@ watch(() => selectedCard.value?.session.goal, (goal) => {
 watch(() => ({
   key: selectedCard.value?.key,
   unread: selectedCard.value?.session.unread,
+  updatedAt: selectedCard.value?.session.updatedAt,
 }), (current, previous) => {
   const card = selectedCard.value;
   if (!card || detailCollapsed.value || !current.unread) return;
-  if (current.key !== previous?.key || !previous?.unread) {
+  const opened = current.key !== previous?.key;
+  const newActivity = previous?.unread === false && current.updatedAt !== previous.updatedAt;
+  if (opened || newActivity) {
     void markAiSessionRead(card.instance.id, card.session.id).catch(() => undefined);
   }
 });

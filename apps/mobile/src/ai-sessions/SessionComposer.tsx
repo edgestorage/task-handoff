@@ -24,8 +24,12 @@ import {
   SESSION_COMPOSER_COLLAPSED_HEIGHT,
   SESSION_COMPOSER_COLLAPSED_INPUT_LEFT,
   SESSION_COMPOSER_COLLAPSED_INPUT_LEFT_WITHOUT_PERMISSION,
-  SESSION_COMPOSER_EXPANDED_HEIGHT,
+  SESSION_COMPOSER_EXPANDED_INPUT_BOTTOM,
+  SESSION_COMPOSER_EXPANDED_INPUT_PADDING_BOTTOM,
+  SESSION_COMPOSER_EXPANDED_INPUT_PADDING_TOP,
   SESSION_COMPOSER_EXPANDED_RADIUS,
+  SESSION_COMPOSER_INPUT_FONT_SIZE,
+  SESSION_COMPOSER_INPUT_LINE_HEIGHT,
   SESSION_COMPOSER_MODEL_MAX_WIDTH,
   SESSION_COMPOSER_PERMISSION_CHEVRON_RIGHT,
   SESSION_COMPOSER_PERMISSION_CHEVRON_SIZE,
@@ -40,6 +44,7 @@ import {
   SESSION_COMPOSER_TOOLBAR_HEIGHT,
   SESSION_COMPOSER_TOOL_SIZE,
   sessionComposerCollapsedInputRight,
+  sessionComposerExpandedHeightForContentSize,
   sessionComposerPermissionIconSize,
 } from './composer-metrics';
 import { AttachmentMenu, ModelSettingsMenu, PermissionMenu, type PermissionOption } from './SessionComposerMenus';
@@ -77,7 +82,7 @@ export function SessionComposer(props: SessionComposerProps) {
   }, [props.focusRequestKey]);
   const animatedContainerStyle = useAnimatedStyle(() => ({
     borderRadius: interpolate(expansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_RADIUS, SESSION_COMPOSER_EXPANDED_RADIUS]),
-    height: interpolate(expansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT]),
+    height: interpolate(expansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, props.expandedHeight.value]),
   }));
   const measuredPermissionWidth = permissionLabelMeasurement?.label === currentPermissionLabel
     ? Math.ceil(permissionLabelMeasurement.width) + SESSION_COMPOSER_PERMISSION_WIDTH_OVERHEAD
@@ -92,12 +97,12 @@ export function SessionComposer(props: SessionComposerProps) {
   const collapsedInputLeft = permissionOptions.length ? SESSION_COMPOSER_COLLAPSED_INPUT_LEFT : SESSION_COMPOSER_COLLAPSED_INPUT_LEFT_WITHOUT_PERMISSION;
   const collapsedInputRight = sessionComposerCollapsedInputRight(modelControlsVisible);
   const animatedInputStyle = useAnimatedStyle(() => ({
-    bottom: interpolate(expansion.value, [0, 1], [0, 50]),
+    bottom: interpolate(expansion.value, [0, 1], [0, SESSION_COMPOSER_EXPANDED_INPUT_BOTTOM]),
     left: interpolate(expansion.value, [0, 1], [collapsedInputLeft, 0]),
-    paddingBottom: interpolate(expansion.value, [0, 1], [15, 8]),
+    paddingBottom: interpolate(expansion.value, [0, 1], [15, SESSION_COMPOSER_EXPANDED_INPUT_PADDING_BOTTOM]),
     paddingLeft: interpolate(expansion.value, [0, 1], [4, 14]),
     paddingRight: interpolate(expansion.value, [0, 1], [4, 14]),
-    paddingTop: interpolate(expansion.value, [0, 1], [15, 14]),
+    paddingTop: interpolate(expansion.value, [0, 1], [15, SESSION_COMPOSER_EXPANDED_INPUT_PADDING_TOP]),
     right: interpolate(expansion.value, [0, 1], [collapsedInputRight, 0]),
   }));
   // Android's expo-paste-input wrapper stretches children to its own bounds, so collapsed input
@@ -159,6 +164,9 @@ export function SessionComposer(props: SessionComposerProps) {
             multiline
             onBlur={() => props.onFocusChange(false)}
             onChangeText={props.onValueChange}
+            onContentSizeChange={(event) => {
+              props.onExpandedHeightChange(sessionComposerExpandedHeightForContentSize(event.nativeEvent.contentSize.height));
+            }}
             onFocus={() => props.onFocusChange(true)}
             placeholder={t('composer.placeholder')}
             placeholderTextColor={colors.textPlaceholder}
@@ -291,7 +299,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 16,
   },
-  input: { fontSize: 16, lineHeight: 23 },
+  input: { fontSize: SESSION_COMPOSER_INPUT_FONT_SIZE, lineHeight: SESSION_COMPOSER_INPUT_LINE_HEIGHT },
   inputFrame: { position: 'absolute', top: 0 },
   toolbar: { alignItems: 'center', bottom: 0, flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', left: 0, paddingHorizontal: 8, position: 'absolute', right: 0 },
   leadingTools: { alignItems: 'center', flexDirection: 'row' },

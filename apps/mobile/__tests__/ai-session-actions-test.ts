@@ -11,6 +11,7 @@ function client(overrides: Partial<ControlPlaneClient['aiSessions']> = {}) {
     list: jest.fn().mockResolvedValue(snapshot),
     sendMessage: jest.fn().mockResolvedValue({}), approval: jest.fn().mockResolvedValue({}), interrupt: jest.fn().mockResolvedValue({}),
     close: jest.fn().mockResolvedValue({}),
+    markUnread: jest.fn().mockResolvedValue({ sessionId: 'session', unread: true }),
     executeCommand: jest.fn().mockResolvedValue({ command: 'goal' }),
     rename: jest.fn().mockResolvedValue({ disposition: 'renamed', aiSessionId: 'session', title: 'Renamed' }),
     updateModelSelection: jest.fn().mockResolvedValue({}),
@@ -61,6 +62,15 @@ test('renames through the shared client without mutating the authoritative store
   expect(api.aiSessions.rename).toHaveBeenCalledWith('instance', 'session', input);
   expect(api.aiSessions.list).not.toHaveBeenCalled();
   expect(store.session('cp', 'instance', 'session')).toBeUndefined();
+});
+
+test('marks a session unread through the shared client', async () => {
+  const api = client();
+  const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
+
+  expect((await coordinator.markUnread('instance', 'session')).disposition).toBe('accepted');
+  expect(api.aiSessions.markUnread).toHaveBeenCalledWith('instance', 'session');
+  expect(api.aiSessions.list).not.toHaveBeenCalled();
 });
 
 test('bulk close limits concurrency and reports individual failures', async () => {

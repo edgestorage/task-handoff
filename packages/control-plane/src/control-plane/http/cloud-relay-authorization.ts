@@ -190,7 +190,7 @@ function apiRouteAuthorization(method: string, path: string): { action: ControlP
       if (path.endsWith("/resume") || path.endsWith("/fork") || path.endsWith("/commands") || path.includes("/messages") || path.includes("/queue/")) {
         return { action: "send-message", resource: { type: "ai-session" } };
       }
-      if (path.endsWith("/read") || path.endsWith("/mentions/files")) {
+      if (path.endsWith("/read") || path.endsWith("/unread") || path.endsWith("/mentions/files")) {
         return { action: "read", resource: { type: "ai-session" } };
       }
       if (path.endsWith("/open-app") || path.endsWith("/close")) return { action: "update", resource: { type: "ai-session" } };

@@ -91,6 +91,8 @@ test("relayed cloud accounts reach credential-free bootstrap and mapped routes o
   for (const path of [
     "/api/controlled-instances/instance_a/ai-sessions/session_a/timeline/sync",
     "/api/controlled-instances/instance_a/ai-sessions/session_a/turns/turn_a/timeline/sync",
+    "/api/controlled-instances/instance_a/ai-sessions/session_a/read",
+    "/api/controlled-instances/instance_a/ai-sessions/session_a/unread",
   ]) {
     assert.equal(cloudRelayRouteReachable("POST", path), true, `${path} must stay reachable`);
     const authorization = routeAuthorization("POST", path);

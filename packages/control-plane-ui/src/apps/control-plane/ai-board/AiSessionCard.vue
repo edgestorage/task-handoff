@@ -118,7 +118,9 @@
       :can-fork="card.session.actions?.fork === true"
       :can-rename="card.session.actions?.rename === true"
       :is-forking="isForking"
+      :is-marking-unread="isMarkingUnread"
       :is-stopping-app-session="isStoppingAppSession"
+      :is-unread="card.session.unread"
       :session-id="card.session.id"
       :session-name="card.session.title || displayAiSessionTitle(card.session, undefined, t) || card.session.id"
       :session-path="card.session.cwd"
@@ -128,6 +130,7 @@
       :story-target="storyTarget"
       :trigger-templates="triggerTemplates"
       @close-session="$emit('stopAppSession', card)"
+      @mark-unread="$emit('markUnread', card)"
       @open-app="$emit('openAiSessionApp', card.instance, card.session)"
       @rename-session="$emit('renameSession', card)"
       @fork-session="$emit('forkSession', card, $event)"
@@ -171,6 +174,7 @@ const props = withDefaults(defineProps<{
   folderName?: string;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   isTriggerBound: (card: AiBoardCard, configHash: string) => boolean;
+  markingUnreadSessionKey?: string;
   promptCount: number;
   promptIndex: number;
   selected?: boolean;
@@ -191,6 +195,7 @@ const approvalDecisions = computed(() => aiSessionApprovalDecisions(props.card.s
 
 const emit = defineEmits<{
   nextPrompt: [card: AiBoardCard];
+  markUnread: [card: AiBoardCard];
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
   previousPrompt: [card: AiBoardCard];
   resolveApproval: [instance: InstanceWithAiSessions, session: AiSessionSummary, decision: "allow" | "deny" | "skip"];
@@ -209,6 +214,7 @@ function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
 }
 
 const isStoppingAppSession = computed(() => props.stoppingAppSessionKey === props.card.key);
+const isMarkingUnread = computed(() => props.markingUnreadSessionKey === props.card.key);
 const isForking = computed(() => props.forkingSessionKey === props.card.key);
 const storyTarget = computed(() => aiSessionStoryTarget(props.card.instance, props.card.session));
 const agentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {

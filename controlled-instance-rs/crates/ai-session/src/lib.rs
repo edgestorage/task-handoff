@@ -735,6 +735,19 @@ impl AiSessionRuntime {
         self.save_locked(&mut session)
     }
 
+    pub fn mark_unread(&self, id: &str) -> Result<AiSession, AiSessionStoreError> {
+        let _guard = self
+            .mutation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut session = self.get(id).ok_or(AiSessionStoreError::NotFound)?;
+        if session.unread {
+            return Ok(session);
+        }
+        session.unread = true;
+        self.save_locked(&mut session)
+    }
+
     pub fn update<F>(&self, id: &str, mutate: F) -> Result<AiSession, AiSessionStoreError>
     where
         F: FnOnce(&mut AiSession) -> Result<bool, AiSessionStoreError>,
@@ -1718,6 +1731,35 @@ mod tests {
         assert!(matches!(
             runtime.rename("ses_0000000000004", "Blocked", Some("stale")),
             Err(AiSessionStoreError::TitleConflict)
+        ));
+    }
+
+    #[test]
+    fn read_and_unread_preserve_updated_at_and_are_idempotent() {
+        let runtime = AiSessionRuntime::default();
+        let mut initial = session("ses_0000000000005", None, "idle");
+        initial.unread = true;
+        runtime.save(initial).expect("save");
+        let before = runtime.get("ses_0000000000005").expect("session");
+
+        let read = runtime.mark_read("ses_0000000000005").expect("read");
+        assert!(!read.unread);
+        assert_eq!(read.updated_at, before.updated_at);
+        let read_again = runtime.mark_read("ses_0000000000005").expect("read again");
+        assert!(!read_again.unread);
+        assert_eq!(read_again.updated_at, before.updated_at);
+
+        let unread = runtime.mark_unread("ses_0000000000005").expect("unread");
+        assert!(unread.unread);
+        assert_eq!(unread.updated_at, before.updated_at);
+        let unread_again = runtime
+            .mark_unread("ses_0000000000005")
+            .expect("unread again");
+        assert!(unread_again.unread);
+        assert_eq!(unread_again.updated_at, before.updated_at);
+        assert!(matches!(
+            runtime.mark_unread("ses_missing"),
+            Err(AiSessionStoreError::NotFound)
         ));
     }
 }

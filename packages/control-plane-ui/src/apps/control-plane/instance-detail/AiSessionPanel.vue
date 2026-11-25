@@ -316,8 +316,10 @@
                     :can-fork="session.actions?.fork === true"
                     :can-rename="session.actions?.rename === true"
                     :is-forking="forkingAiSessionId === session.id"
+                    :is-marking-unread="markingUnreadSessionId === session.id"
                     :is-opening-terminal="launchingApp"
                     :is-stopping-app-session="stoppingAppSessionId === session.id"
+                    :is-unread="session.unread"
                     :session-id="session.id"
                     :session-name="session.title || displayAiSessionTitle(session, undefined, t) || session.id"
                     :session-path="session.cwd"
@@ -327,6 +329,7 @@
                     :story-target="storyTargetFor(session)"
                     :trigger-templates="triggerTemplates"
                     @close-session="closeSession(session)"
+                    @mark-unread="markSessionUnread(session)"
                     @open-app="openSessionApp(session)"
                     @open-terminal="openSessionTerminal(session)"
                     @rename-session="renameSessionTarget = session"
@@ -944,6 +947,15 @@
                   <span>{{ t("sessions.actions.rename") }}</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
+                  v-if="!selectedSession.unread"
+                  class="session-ai-detail-actions-menu-item"
+                  :disabled="markingUnreadSessionId === selectedSession.id"
+                  @select="markSessionUnread(selectedSession)"
+                >
+                  <Mail :size="14" />
+                  <span>{{ t("sessions.actions.markUnread") }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
                   v-if="selectedForkTurn"
                   class="session-ai-detail-actions-menu-item"
                   :disabled="forkingAiSessionId === selectedSession.id"
@@ -1419,7 +1431,7 @@ import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
 import { waitForAiSessionProjection } from "../ai-session-projection";
-import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MessageSquarePlus, Monitor, MoreHorizontal, PanelLeftOpen, Pencil, Plus, SearchX, Server, SlidersHorizontal, Sparkles, Split, Square, SquareTerminal, X } from "@lucide/vue";
+import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, Mail, MessageSquare, MessageSquarePlus, Monitor, MoreHorizontal, PanelLeftOpen, Pencil, Plus, SearchX, Server, SlidersHorizontal, Sparkles, Split, Square, SquareTerminal, X } from "@lucide/vue";
 import { instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ApiError } from "../../../api/client";
@@ -1433,7 +1445,7 @@ import AiSessionStickyContext from "../../../components/ai-session/AiSessionStic
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { bindAiSessionTrigger, checkoutAiSessionWorkspaceBranch, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, listNodeLocalFolders, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, checkoutAiSessionWorkspaceBranch, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, listNodeLocalFolders, markAiSessionRead, markAiSessionUnread, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
 import { createRepositoryWorkspaceWorktree, getRepositoryContext } from "../../../api/repository";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
@@ -2040,10 +2052,13 @@ async function setTimelineViewMode(value: unknown) {
 watch(() => ({
   id: selectedSession.value?.id,
   unread: selectedSession.value?.unread,
-}), (current) => {
-  if (current.id && current.unread) {
-    void markAiSessionRead(props.instance.id, current.id).catch(() => undefined);
-  }
+  updatedAt: selectedSession.value?.updatedAt,
+}), (current, previous) => {
+  if (!current.id || !current.unread) return;
+  const opened = current.id !== previous?.id;
+  const newActivity = previous?.unread === false && current.updatedAt !== previous.updatedAt;
+  if (!opened && !newActivity) return;
+  void markAiSessionRead(props.instance.id, current.id).catch(() => undefined);
 }, { immediate: true });
 const repositoryAiAgent = computed<"codex" | "claude" | "opencode" | undefined>(() => {
   const agent = selectedSession.value?.agent;
@@ -2568,6 +2583,7 @@ let compactTurnWheelResetTimer: ReturnType<typeof setTimeout> | undefined;
 let sidebarResizeCleanup: (() => void) | undefined;
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionId = ref("");
+const markingUnreadSessionId = ref("");
 const renameSessionTarget = ref<AiSessionSummary>();
 const openingAiSessionId = ref("");
 const forkingAiSessionId = ref("");
@@ -4360,6 +4376,19 @@ async function closeSession(session: AiSessionSummary) {
   } finally {
     loadingToast.dismiss();
     stoppingAppSessionId.value = "";
+  }
+}
+
+async function markSessionUnread(session: AiSessionSummary) {
+  if (markingUnreadSessionId.value) return;
+  markingUnreadSessionId.value = session.id;
+  try {
+    await markAiSessionUnread(props.instance.id, session.id);
+    showControlPlaneToast(t("sessions.actions.markedUnread"), "success");
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.actions.markUnreadFailed")), "error");
+  } finally {
+    markingUnreadSessionId.value = "";
   }
 }
 

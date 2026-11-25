@@ -2573,6 +2573,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
+  app.post<{ Params: { id: string } }>("/api/ai-sessions/:id/unread", async (request, reply) => {
+    try {
+      const session = aiSessions.markUnread(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      publishAiSessionSnapshot("control-action");
+      return { data: AiSessionReadResultSchema.parse({ sessionId: session.id, unread: session.unread }) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
   app.put<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/story", async (request, reply) => {
     try {
       const body = AiSessionStoryInputSchema.parse(request.body || {});

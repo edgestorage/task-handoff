@@ -11,13 +11,13 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
-import { MenuView, type MenuAction } from './StoryMenuView';
-import * as Crypto from 'expo-crypto';
+import { MenuView, type MenuAction } from '../components/InlineMenuView';
 import { BookOpen, MessageSquare } from 'lucide-react-native';
-import { aiSessionStatusGroup, nodeIsVisible, normalizeManualStoryOrder, reorderStoryKeys } from '@task-handoff/control-plane-client';
+import { aiSessionStatusGroup, nodeIsVisible, normalizeManualStoryOrder, reorderStoryKeys, storySessionAttentionByKey } from '@task-handoff/control-plane-client';
 import type { Story, StoryDocument } from '@task-handoff/protocol/stories';
 
 import { mobileAiSessionStatusLabel } from '../ai-sessions/SessionDetail';
+import { AiSessionActionsMenu } from '../ai-sessions/AiSessionActionsMenu';
 import { SessionStatusIndicator } from '../ai-sessions/SessionStatusIndicator';
 import { storyAiSessionCreationDefaults } from '../ai-sessions/new-session-types';
 import { useActiveAiSessionsRuntime, useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
@@ -35,6 +35,7 @@ import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-contro
 import { useActiveDirectories } from '../directories/use-directories';
 import { nodeDisplayName } from '../directories/presentation';
 import { useI18n } from '../i18n';
+import { getExpandedStoryKeys, subscribeExpandedStoryKeys, toggleExpandedStoryKey } from './story-expansion-preferences';
 import {
   groupStoryTreeSessions,
   replaceVisibleStoryOrder,
@@ -43,6 +44,7 @@ import {
   storyDragShifts,
   storyDragPreview,
   storyTreeKey,
+  storyTreeSessionForest,
   visibleStoryTreeDocuments,
   STORY_TREE_DOCUMENT_LIMIT,
   STORY_TREE_ROW_GAP,
@@ -64,6 +66,13 @@ type StoryInboxProps = {
   selected?: { nodeId: string; storyId: string; instanceId?: string; sessionId?: string };
 };
 
+const storyAttentionLabels = {
+  approval: 'sessions.statusWaitingApproval',
+  failed: 'sessions.statusFailed',
+  running: 'sessions.statusRunning',
+  unread: 'sessions.unread',
+} as const;
+
 export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit, onNewSession, onOpen, onOpenDocument, onOpenSession, selected }: StoryInboxProps) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
@@ -76,7 +85,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const preferences = useSyncExternalStore(subscribeStoryViewPreferences, getStoryViewPreferences, getStoryViewPreferences);
   const { controller: storyList, state: storyState } = useActiveStories();
   const { stories, unavailableNodeIds, phase, error } = storyState;
-  const [expandedStoryKeys, setExpandedStoryKeys] = useState<Set<string>>(() => new Set());
+  const savedExpandedStoryKeys = useSyncExternalStore(subscribeExpandedStoryKeys, getExpandedStoryKeys, getExpandedStoryKeys);
+  const expandedStoryKeys = useMemo(() => new Set(savedExpandedStoryKeys), [savedExpandedStoryKeys]);
   const [expandedDocumentKeys, setExpandedDocumentKeys] = useState<Set<string>>(() => new Set());
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set());
   const [manualOrderPreview, setManualOrderPreview] = useState<string[]>();
@@ -107,9 +117,14 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   }, [nodesById, t]);
   const visibleStories = useMemo(() => stories.filter((story) => nodeIsVisible(nodeFilter, story.ownerNodeId)), [nodeFilter, stories]);
   const visibleUnavailableNodeIds = useMemo(() => unavailableNodeIds.filter((nodeId) => nodeIsVisible(nodeFilter, nodeId)), [nodeFilter, unavailableNodeIds]);
+  const sessionForest = useMemo(() => storyTreeSessionForest(sessions), [sessions]);
+  const sessionAttention = useMemo(() => {
+    const nodeIds = new Map(directory.instances.map((instance) => [instance.id, instance.nodeId]));
+    return storySessionAttentionByKey(sessionForest, (instanceId) => nodeIds.get(instanceId));
+  }, [directory.instances, sessionForest]);
   const sessionsByStory = useMemo(
-    () => groupStoryTreeSessions(stories, directory.instances, sessions, expandedSessionIds),
-    [directory.instances, expandedSessionIds, sessions, stories],
+    () => groupStoryTreeSessions(stories, directory.instances, sessionForest, expandedSessionIds),
+    [directory.instances, expandedSessionIds, sessionForest, stories],
   );
   const nodesWithUnassignedSessions = useMemo(() => {
     const unassignedInstanceIds = unassignedStoryRootInstanceIds(sessions);
@@ -121,7 +136,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   }, [directory.instances, sessions]);
   const displayedManualKeys = reorderedStoryKeys ?? preferences.manualKeys;
   const sortedStories = useMemo(() => sortStoryTree(visibleStories, locale, preferences.sortMode, sessionsByStory, displayedManualKeys), [displayedManualKeys, locale, preferences.sortMode, sessionsByStory, visibleStories]);
-  const storyListExtraData = useMemo(() => ({ draggingStoryKey, reorderedStoryKeys, settlingStoryKey, storyDragShiftsByKey }), [draggingStoryKey, reorderedStoryKeys, settlingStoryKey, storyDragShiftsByKey]);
+  const storyListExtraData = useMemo(() => ({ draggingStoryKey, expandedStoryKeys, reorderedStoryKeys, settlingStoryKey, storyDragShiftsByKey }), [draggingStoryKey, expandedStoryKeys, reorderedStoryKeys, settlingStoryKey, storyDragShiftsByKey]);
   useEffect(() => {
     if (!settlingStoryKey) return;
     const timer = setTimeout(() => {
@@ -171,11 +186,6 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
       setRenamingDocument(undefined);
     } catch (cause) { Alert.alert(t('stories.saveError'), cause instanceof Error ? cause.message : String(cause)); }
   }, [renamingDocument, replaceStory, runtime.api, t]);
-  const closeSession = useCallback((entry: { instanceId: string; session: { id: string; title?: string; userPrompt?: string } }) => Alert.alert(
-    t('sessions.closeConfirmTitle', { name: entry.session.title || entry.session.userPrompt || entry.session.id }),
-    t('sessions.closeConfirmDescription'),
-    [{ text: t('common.cancel'), style: 'cancel' }, { text: t('sessions.closeSession'), style: 'destructive', onPress: () => { void aiSessionRuntime.actions?.close(entry.instanceId, entry.session.id, Crypto.randomUUID()).catch((cause) => Alert.alert(t('sessions.closeFailed'), cause instanceof Error ? cause.message : String(cause))); } }],
-  ), [aiSessionRuntime.actions, t]);
   const moveStory = (key: string, offset: -1 | 1) => {
     const index = sortedStories.findIndex((story) => storyTreeKey(story) === key);
     const target = sortedStories[index + offset];
@@ -307,6 +317,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
         const storyUnavailable = unavailable || nodesById.get(story.ownerNodeId)?.status !== 'online';
         const storyMuted = storyUnavailable || Boolean(story.archivedAt);
         const storySessions = sessionsByStory.get(key) ?? [];
+        const attention = sessionAttention.get(key);
+        const attentionColor = attention === 'approval' ? colors.sessionWaiting : attention === 'failed' ? colors.error : colors.primary;
         const documents = visibleStoryTreeDocuments(story.documents, expandedDocumentKeys.has(key));
         const newSessionDefaults = storyAiSessionCreationDefaults(directory.instances, sessions, story.id, story.ownerNodeId);
         const isSelected = Boolean(
@@ -343,11 +355,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             accessibilityLabel={t(expanded ? 'stories.collapse' : 'stories.expand', { name: story.title })}
             color={colors.textMuted}
             expanded={expanded}
-            onPress={() => setExpandedStoryKeys((current) => {
-              const next = new Set(current);
-              if (next.has(key)) next.delete(key); else next.add(key);
-              return next;
-            })}
+            onPress={() => { void toggleExpandedStoryKey(key); }}
           />
           <MenuView
             actions={[
@@ -374,8 +382,13 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             style={styles.storyMenu}
             title={story.title}
           >
-          <Pressable accessibilityRole="button" accessibilityState={{ disabled: storyUnavailable, selected: isSelected }} disabled={storyUnavailable} onPress={() => onOpen(story)} onPressIn={() => setPressedStoryKey(key)} onPressOut={() => setPressedStoryKey((current) => current === key ? undefined : current)} style={styles.storyLink}>
-            <View style={styles.storyIcon} testID={`story-icon-${key}`}><BookOpen color={storyIconColor} size={18} /></View>
+          <Pressable accessibilityLabel={attention ? `${story.title}, ${t(storyAttentionLabels[attention])}` : undefined} accessibilityRole="button" accessibilityState={{ disabled: storyUnavailable, selected: isSelected }} disabled={storyUnavailable} onPress={() => onOpen(story)} onPressIn={() => setPressedStoryKey(key)} onPressOut={() => setPressedStoryKey((current) => current === key ? undefined : current)} style={styles.storyLink}>
+            <View style={styles.storyIcon} testID={`story-icon-${key}`}>
+              <BookOpen color={storyIconColor} size={18} />
+              {attention ? <View style={[styles.storyAttentionBadge, { backgroundColor: attention === 'running' ? colors.surface : attentionColor, borderColor: colors.surface }]} testID={`story-attention-${key}`}>
+                {attention === 'running' ? <View style={[styles.storyAttentionRing, { borderColor: attentionColor }]} testID={`story-attention-ring-${key}`} /> : null}
+              </View> : null}
+            </View>
             <View style={styles.rowCopy}>
               <View style={styles.titleRow}>
                 <Text numberOfLines={1} style={[styles.title, { color: storyMuted ? colors.textMuted : colors.text }]}>{story.title}</Text>
@@ -425,34 +438,36 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
               && selected.instanceId === entry.instanceId
               && selected.sessionId === entry.session.id,
             );
-            return <MenuView actions={[
-              { id: 'open', image: 'bubble.left', title: t('common.open') },
-              { id: 'close', image: 'xmark.circle', title: t('sessions.closeSession'), attributes: { destructive: true, disabled: !aiSessionRuntime.actions } },
-            ] as MenuAction[]} key={`${entry.instanceId}:${entry.session.id}`} onPressAction={({ nativeEvent }) => {
-              if (nativeEvent.event === 'open') onOpenSession(story, entry.instanceId, entry.session.id);
-              else if (nativeEvent.event === 'close') closeSession(entry);
-            }} shouldOpenOnLongPress style={styles.childMenu} title={entry.session.title || entry.session.userPrompt || entry.session.id}>
-            <Pressable accessibilityRole="button" accessibilityState={{ selected: isSessionSelected }} onPress={() => onOpenSession(story, entry.instanceId, entry.session.id)} style={({ pressed }) => [styles.childRow, entry.depth ? { paddingLeft: STORY_CHILD_ROW_INSET - STORY_CHILD_SPACING + entry.depth * 14 } : null, (isSessionSelected || pressed) && { backgroundColor: colors.workbenchSelectionBackground }]} testID={`story-session-${key}:${entry.instanceId}:${entry.session.id}`}>
-              {entry.hasChildren ? <Pressable
-                accessibilityLabel={t(expandedSessionIds.has(entry.session.id) ? 'sessions.collapseSubSessions' : 'sessions.expandSubSessions')}
-                accessibilityRole="button"
-                accessibilityState={{ expanded: expandedSessionIds.has(entry.session.id) }}
-                hitSlop={8}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  setExpandedSessionIds((current) => {
-                    const next = new Set(current);
-                    if (next.has(entry.session.id)) next.delete(entry.session.id); else next.add(entry.session.id);
-                    return next;
-                  });
-                }}
-                style={styles.nodeIcon}
-                testID="story-session-disclosure"
-              ><Icon color={colors.textMuted} name={expandedSessionIds.has(entry.session.id) ? 'chevron-down' : 'chevron-forward'} size={18} /></Pressable> : entry.session.status === 'running'
-                ? <View style={styles.nodeIcon}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={18} /></View>
-                : <View style={styles.sessionIcon}><MessageSquare color={colors.textMuted} size={18} />{entry.session.status !== 'idle' ? <View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={16} /></View> : null}</View>}
-              <View style={styles.rowCopy}><View style={styles.sessionTitleRow}><Text numberOfLines={1} style={[styles.childTitle, { color: colors.text }]}>{entry.session.title || entry.session.userPrompt || entry.session.id}</Text>{entry.session.unread ? <View accessibilityLabel={t('sessions.unread')} style={[styles.unread, { backgroundColor: colors.primary }]} /> : null}</View>{preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{entry.instanceName} · {mobileAiSessionStatusLabel(entry.session, t)}</Text> : null}</View>
-            </Pressable></MenuView>;
+            return <AiSessionActionsMenu
+              actions={aiSessionRuntime.actions}
+              instanceId={entry.instanceId}
+              key={`${entry.instanceId}:${entry.session.id}`}
+              onOpen={() => onOpenSession(story, entry.instanceId, entry.session.id)}
+              session={entry.session}
+              style={styles.childMenu}
+            >
+              <Pressable accessibilityRole="button" accessibilityState={{ selected: isSessionSelected }} onPress={() => onOpenSession(story, entry.instanceId, entry.session.id)} style={({ pressed }) => [styles.childRow, entry.depth ? { paddingLeft: STORY_CHILD_ROW_INSET - STORY_CHILD_SPACING + entry.depth * 14 } : null, (isSessionSelected || pressed) && { backgroundColor: colors.workbenchSelectionBackground }]} testID={`story-session-${key}:${entry.instanceId}:${entry.session.id}`}>
+                {entry.hasChildren ? <Pressable
+                  accessibilityLabel={t(expandedSessionIds.has(entry.session.id) ? 'sessions.collapseSubSessions' : 'sessions.expandSubSessions')}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: expandedSessionIds.has(entry.session.id) }}
+                  hitSlop={8}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    setExpandedSessionIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(entry.session.id)) next.delete(entry.session.id); else next.add(entry.session.id);
+                      return next;
+                    });
+                  }}
+                  style={styles.nodeIcon}
+                  testID="story-session-disclosure"
+                ><Icon color={colors.textMuted} name={expandedSessionIds.has(entry.session.id) ? 'chevron-down' : 'chevron-forward'} size={18} /></Pressable> : entry.session.status === 'running'
+                  ? <View style={styles.nodeIcon}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={18} /></View>
+                  : <View style={styles.sessionIcon}><MessageSquare color={colors.textMuted} size={18} />{entry.session.status !== 'idle' ? <View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={16} /></View> : null}</View>}
+                <View style={styles.rowCopy}><View style={styles.sessionTitleRow}><Text numberOfLines={1} style={[styles.childTitle, { color: colors.text }]}>{entry.session.title || entry.session.userPrompt || entry.session.id}</Text>{entry.session.unread ? <View accessibilityLabel={t('sessions.unread')} style={[styles.unread, { backgroundColor: colors.primary }]} /> : null}</View>{preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{entry.instanceName} · {mobileAiSessionStatusLabel(entry.session, t)}</Text> : null}</View>
+              </Pressable>
+            </AiSessionActionsMenu>;
           })}
           {!storySessions.length ? <Text style={[styles.emptyChild, { color: colors.textMuted }]}>{t('stories.noSessions')}</Text> : null}
         </StoryChildren>
@@ -488,7 +503,9 @@ const styles = StyleSheet.create({
   storyMenu: { alignSelf: 'stretch', flex: 1, justifyContent: 'center' },
   disclosure: { alignItems: 'center', alignSelf: 'stretch', justifyContent: 'center', width: 34 },
   storyLink: { alignItems: 'center', borderRadius: 10, flex: 1, flexDirection: 'row', gap: 6, minHeight: 46, paddingRight: 5, paddingVertical: 5 },
-  storyIcon: { alignItems: 'center', height: 22, justifyContent: 'center', width: 24 },
+  storyIcon: { alignItems: 'center', height: 22, justifyContent: 'center', position: 'relative', width: 24 },
+  storyAttentionBadge: { borderRadius: 5, borderWidth: 1, height: 9, position: 'absolute', right: 0, top: 0, width: 9 },
+  storyAttentionRing: { borderRadius: 4, borderWidth: 1.5, flex: 1 },
   children: { gap: STORY_CHILD_SPACING, marginBottom: STORY_CHILD_SPACING, overflow: 'hidden', paddingHorizontal: STORY_CHILD_SPACING, paddingTop: STORY_CHILD_SPACING },
   childRow: { alignItems: 'center', borderRadius: STORY_CHILD_RADIUS, flexDirection: 'row', gap: 6, minHeight: 38, paddingLeft: STORY_CHILD_ROW_INSET - STORY_CHILD_SPACING, paddingRight: 4, paddingVertical: 4, width: '100%' },
   childMenu: { alignSelf: 'stretch' },

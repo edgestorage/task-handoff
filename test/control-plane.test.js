@@ -3971,10 +3971,10 @@ test("control plane coalesces liveness fan-out inside the heartbeat window", asy
 
 test("control plane subscribes to direct node agent websocket events", async (t) => {
   let instanceEventSocket;
-  const instanceReadRequests = [];
+  const instanceReadStateRequests = [];
   const instanceServer = http.createServer((request, response) => {
     if (request.method === "POST" && request.url === "/api/ai-sessions/ai_1/read") {
-      instanceReadRequests.push(request.url);
+      instanceReadStateRequests.push(request.url);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ data: { sessionId: "ai_1", unread: false } }));
       const readAt = new Date().toISOString();
@@ -4001,6 +4001,40 @@ test("control plane subscribes to direct node agent websocket events", async (t)
             unread: false,
             startedAt: readAt,
             updatedAt: readAt,
+          }],
+          removed: [],
+        },
+      }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/ai-sessions/ai_1/unread") {
+      instanceReadStateRequests.push(request.url);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: { sessionId: "ai_1", unread: true } }));
+      const unreadAt = new Date().toISOString();
+      instanceEventSocket?.send(JSON.stringify({
+        type: AiSessionEventType.Patch,
+        topic: AiSessionEventTopic,
+        payload: {
+          meta: {
+            instanceId: "inst_direct_events",
+            streamId: "ai_direct_stream",
+            revision: 7,
+            previousRevision: 6,
+            traceId: "ai_direct_unread",
+            generatedAt: unreadAt,
+            reason: "control-action",
+          },
+          upserted: [{
+            id: "ai_1",
+            agent: "codex",
+            appId: "codex",
+            appSessionId: "app_1",
+            status: "failed",
+            phase: "unknown",
+            unread: true,
+            startedAt: unreadAt,
+            updatedAt: unreadAt,
           }],
           removed: [],
         },
@@ -4333,11 +4367,18 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   const read = await json(controlPlane, "POST", "/api/controlled-instances/inst_direct_events/ai-sessions/ai_1/read");
   assert.equal(read.statusCode, 200);
   assert.equal(read.body.data.unread, false);
-  assert.deepEqual(instanceReadRequests, ["/api/ai-sessions/ai_1/read"]);
   await waitForCondition(async () => {
     const { response, session } = await projectSession();
     return session && !session.unread ? response : undefined;
   }, "AI session read clears the aggregated unread projection");
+  const unread = await json(controlPlane, "POST", "/api/controlled-instances/inst_direct_events/ai-sessions/ai_1/unread");
+  assert.equal(unread.statusCode, 200);
+  assert.equal(unread.body.data.unread, true);
+  assert.deepEqual(instanceReadStateRequests, ["/api/ai-sessions/ai_1/read", "/api/ai-sessions/ai_1/unread"]);
+  await waitForCondition(async () => {
+    const { response, session } = await projectSession();
+    return session?.unread ? response : undefined;
+  }, "AI session unread restores the aggregated projection");
 
   const delta = await waitForCondition(async () => {
     const response = await json(controlPlane, "GET", "/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=0");
@@ -4346,13 +4387,15 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   assert.equal(delta.statusCode, 200);
   assert.equal(delta.body.data.instanceId, "inst_direct_events");
   assert.equal(delta.body.data.syncRequired, false);
-  assert.equal(delta.body.data.events.length, 6);
+  assert.equal(delta.body.data.events.length, 7);
   assert.equal(delta.body.data.events[0].type, AiSessionEventType.Snapshot);
   assert.equal(delta.body.data.events[0].payload.snapshot.sessions[0].id, "ai_1");
   assert.equal(delta.body.data.events[5].type, AiSessionEventType.Patch);
   assert.equal(delta.body.data.events[5].payload.upserted[0].unread, false);
+  assert.equal(delta.body.data.events[6].type, AiSessionEventType.Patch);
+  assert.equal(delta.body.data.events[6].payload.upserted[0].unread, true);
 
-  const currentDelta = await json(controlPlane, "GET", "/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=6");
+  const currentDelta = await json(controlPlane, "GET", "/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=7");
   assert.equal(currentDelta.statusCode, 200);
   assert.equal(currentDelta.body.data.syncRequired, false);
   assert.deepEqual(currentDelta.body.data.events, []);

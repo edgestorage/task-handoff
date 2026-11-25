@@ -1,4 +1,35 @@
 import type { AiSessionForest, AiSessionHierarchyRecord, AiSessionTreeNode } from "@task-handoff/protocol/ai-session-hierarchy";
+import type { AiSessionSummary } from "@task-handoff/protocol/ai-sessions";
+import { isAiSessionApprovalPending } from "./ai-session-state.ts";
+
+export type StorySessionAttention = "unread" | "running" | "failed" | "approval";
+
+const attentionPriority = { unread: 1, running: 2, failed: 3, approval: 4 } satisfies Record<StorySessionAttention, number>;
+
+export function storySessionAttentionByKey<T extends AiSessionSummary & AiSessionHierarchyRecord & { instanceId: string }>(
+  forest: AiSessionForest<T>,
+  nodeIdForInstance: (instanceId: string) => string | undefined,
+): ReadonlyMap<string, StorySessionAttention> {
+  const attentionByKey = new Map<string, StorySessionAttention>();
+  for (const root of forest.roots) {
+    const { storyId, instanceId } = root.session;
+    const nodeId = nodeIdForInstance(instanceId);
+    if (!nodeId || !storyId) continue;
+    const key = `${nodeId}:${storyId}`;
+    let highest = attentionByKey.get(key);
+    const pending = [root];
+    while (pending.length && highest !== "approval") {
+      const { session, children } = pending.pop()!;
+      const attention = isAiSessionApprovalPending(session) ? "approval"
+        : session.status === "failed" || session.status === "running" ? session.status
+        : session.unread ? "unread" : undefined;
+      if (attention && (!highest || attentionPriority[attention] > attentionPriority[highest])) highest = attention;
+      for (const child of children) pending.push(child);
+    }
+    if (highest) attentionByKey.set(key, highest);
+  }
+  return attentionByKey;
+}
 
 /**
  * New-session defaults for a Story are one derivation shared by every client:

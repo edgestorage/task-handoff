@@ -29,8 +29,8 @@ import { SessionGoalBar } from './SessionGoalBar';
 import {
   SESSION_COMPOSER_COLLAPSED_HEIGHT,
   SESSION_COMPOSER_COLLAPSE_DURATION_MS,
-  SESSION_COMPOSER_EXPANDED_HEIGHT,
   SESSION_COMPOSER_EXPAND_DURATION_MS,
+  SESSION_COMPOSER_FOCUSED_MIN_HEIGHT,
 } from './composer-metrics';
 import { useI18n, type Translate } from '../i18n';
 import type { MobileAiSessionPermissionStore } from './permission-store';
@@ -153,6 +153,7 @@ export function SessionWorkspace({
   const [composerFocused, setComposerFocused] = useState(false);
   const [keyboardViewportRevision, setKeyboardViewportRevision] = useState(0);
   const composerExpansion = useSharedValue(0);
+  const composerExpandedHeight = useSharedValue(SESSION_COMPOSER_FOCUSED_MIN_HEIGHT);
   useEffect(() => {
     composerExpansion.value = withTiming(composerFocused ? 1 : 0, {
       duration: composerFocused ? SESSION_COMPOSER_EXPAND_DURATION_MS : SESSION_COMPOSER_COLLAPSE_DURATION_MS,
@@ -160,6 +161,9 @@ export function SessionWorkspace({
       reduceMotion: ReduceMotion.System,
     });
   }, [composerExpansion, composerFocused]);
+  const updateComposerExpandedHeight = useCallback((height: number) => {
+    composerExpandedHeight.value = height;
+  }, [composerExpandedHeight]);
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(
     () => SESSION_COMPOSER_COLLAPSED_HEIGHT + 16 + composerBottomInset,
   );
@@ -533,7 +537,7 @@ export function SessionWorkspace({
     queueDrag.current = undefined;
   }, [queueDragOffsetY, session?.queue.revision, sessionId]);
   // 决策的权威归属是 sessionId：只拉取当前会话自己的待决策。列表在打开会话/切换故事
-  // 时拉取，之后只在故事决策事件到达时刷新，不再跟着会话快照的每次更新重拉。
+  // 时拉取，之后在故事决策改变或所属节点恢复时刷新，不随会话快照重拉。
   const decisionsSessionId = session?.id;
   const decisionsStoryId = session?.storyId;
   const refreshStoryDecisions = useCallback(async (signal: AbortSignal) => {
@@ -549,16 +553,16 @@ export function SessionWorkspace({
       throw error;
     }
   }, [client, decisionsStoryId, nodeId]);
-  useStoryEvents(refreshStoryDecisions, decisionsStoryId, (event) => event.type === StoryDecisionChangedEventType);
+  useStoryEvents(refreshStoryDecisions, { storyId: decisionsStoryId, nodeId, acceptsEvent: (event) => event.type === StoryDecisionChangedEventType });
   const storyDecisions = useMemo(
     () => (decisionsSessionId ? pendingStoryDecisionsForSession(storyDecisionList, decisionsSessionId) : []),
     [decisionsSessionId, storyDecisionList],
   );
   const composerFadeBackdropStyle = useAnimatedStyle(() => ({
-    bottom: interpolate(composerExpansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT]) + composerBottomInset,
+    bottom: interpolate(composerExpansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, composerExpandedHeight.value]) + composerBottomInset,
   }));
   const composerBackdropStyle = useAnimatedStyle(() => ({
-    height: interpolate(composerExpansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT]),
+    height: interpolate(composerExpansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, composerExpandedHeight.value]),
   }));
   const queueDragStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: queueDragOffsetY.value }],
@@ -1257,6 +1261,7 @@ export function SessionWorkspace({
           cancelEditLabel={activeGoalEdit ? t('composer.cancelGoalEdit') : undefined}
           editable={authoritativeActionsEnabled}
           editingLabel={activeQueueEdit ? t('workspace.editMessage') : activeGoalEdit ? t('workspace.editGoal') : undefined}
+          expandedHeight={composerExpandedHeight}
           expansion={composerExpansion}
           fileDisabled={!authoritativeActionsEnabled || !client}
           focused={composerFocused}
@@ -1272,6 +1277,7 @@ export function SessionWorkspace({
             if (activeQueueEdit) restoreDraftAfterQueueEdit(activeQueueEdit);
             else if (activeGoalEdit) restoreDraftAfterGoalEdit(activeGoalEdit);
           }}
+          onExpandedHeightChange={updateComposerExpandedHeight}
           onFocusChange={setComposerFocus}
           onPermissionModeChange={updatePermissionMode}
           onValueChange={updateDraft}

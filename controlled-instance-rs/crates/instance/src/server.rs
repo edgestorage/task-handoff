@@ -490,6 +490,7 @@ pub fn router(state: AppState) -> Router {
             delete(remove_ai_session_queue_item).patch(edit_ai_session_queue_item),
         )
         .route("/api/ai-sessions/{id}/read", post(read_ai_session))
+        .route("/api/ai-sessions/{id}/unread", post(unread_ai_session))
         .route("/api/ai-sessions/{id}/title", put(rename_ai_session))
         .route(
             "/api/ai-sessions/{id}",
@@ -8573,6 +8574,32 @@ async fn read_ai_session(State(state): State<AppState>, Path(id): Path<String>) 
     match state.ai_sessions.mark_read(&id) {
         Ok(session) => {
             if was_unread {
+                state.publish_ai_session_snapshot("control-action");
+            }
+            Json(ApiEnvelope {
+                data: json!({ "sessionId": session.id, "unread": session.unread }),
+            })
+            .into_response()
+        }
+        Err(controlled_instance_ai_session::AiSessionStoreError::NotFound) => {
+            ai_session_was_not_found()
+        }
+        Err(error) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "AI_SESSION_PERSISTENCE_FAILED",
+            &error.to_string(),
+        ),
+    }
+}
+
+async fn unread_ai_session(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let was_read = state
+        .ai_sessions
+        .get(&id)
+        .is_some_and(|session| !session.unread);
+    match state.ai_sessions.mark_unread(&id) {
+        Ok(session) => {
+            if was_read {
                 state.publish_ai_session_snapshot("control-action");
             }
             Json(ApiEnvelope {
@@ -19802,6 +19829,7 @@ mod tests {
                 false,
             ),
             (Method::POST, "/api/ai-sessions/missing/read", None, true),
+            (Method::POST, "/api/ai-sessions/missing/unread", None, true),
             (
                 Method::GET,
                 "/api/ai-sessions/missing/story-content",

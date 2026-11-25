@@ -1693,7 +1693,6 @@ async function confirmAppOperation() {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 2px;
 }
 
 .instance-app-heading-actions {

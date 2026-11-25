@@ -315,6 +315,23 @@ test("shared AI Session client sends the optional idempotency key on message sen
   assert.equal(JSON.parse(requests[0].init.body).clientRequestId, "send-request-1");
 });
 
+test("shared AI Session client routes the unread action through the authoritative result schema", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: { sessionId: "session-1", unread: true } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+
+  const result = await api.aiSessions.markUnread("instance-1", "session-1");
+
+  assert.deepEqual(result, { sessionId: "session-1", unread: true });
+  assert.equal(requests[0].path, "/api/controlled-instances/instance-1/ai-sessions/session-1/unread");
+  assert.equal(requests[0].init.method, "POST");
+});
+
 test("shared AI Session client reads the bounded tool activity route", async () => {
   const requests = [];
   const transport = {

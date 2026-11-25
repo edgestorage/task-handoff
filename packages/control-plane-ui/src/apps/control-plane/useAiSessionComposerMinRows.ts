@@ -2,7 +2,7 @@ import { shallowRef } from "vue";
 
 export const AI_SESSION_COMPOSER_MIN_ROWS = 1;
 export const AI_SESSION_COMPOSER_DEFAULT_ROWS = 2;
-export const AI_SESSION_COMPOSER_MAX_ROWS = 3;
+export const AI_SESSION_COMPOSER_MAX_ROWS = 4;
 export const AI_SESSION_COMPOSER_MIN_ROWS_STORAGE_KEY = "task-handoff.control-plane.ai-session-composer-min-rows";
 
 const composerMinRows = shallowRef(AI_SESSION_COMPOSER_DEFAULT_ROWS);

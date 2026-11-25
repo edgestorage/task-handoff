@@ -10,13 +10,13 @@ import {
 
 import type { MobileControlPlaneEvent } from '../control-plane/transport';
 import { useOptionalMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
+import { StoryNodeRecovery } from './story-node-recovery';
 
 const STORY_REFRESH_DEBOUNCE_MS = 100;
 
 export function useStoryEvents(
   refresh: (signal: AbortSignal) => Promise<unknown>,
-  storyId?: string,
-  acceptsEvent?: (event: MobileControlPlaneEvent) => boolean,
+  { storyId, nodeId, acceptsEvent }: { storyId?: string; nodeId?: string; acceptsEvent?: (event: MobileControlPlaneEvent) => boolean },
 ) {
   const runtime = useOptionalMobileControlPlaneRuntime();
   const domainId = useId();
@@ -31,6 +31,7 @@ export function useStoryEvents(
 
   useEffect(() => {
     let stopped = false;
+    const nodeRecovery = new StoryNodeRecovery();
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     let refreshInFlight: Promise<void> | undefined;
     let refreshAbortController: AbortController | undefined;
@@ -63,6 +64,7 @@ export function useStoryEvents(
     };
     const stop = () => {
       stopped = true;
+      nodeRecovery.reset();
       refreshAbortController?.abort();
       refreshAbortController = undefined;
       refreshInFlight = undefined;
@@ -72,6 +74,7 @@ export function useStoryEvents(
     };
     const accepts = (event: MobileControlPlaneEvent) => {
       if (event.topic !== 'stories') return false;
+      if (nodeId && event.scope?.nodeId && event.scope.nodeId !== nodeId) return false;
       if (acceptsRef.current && !acceptsRef.current(event)) return false;
       const eventStoryId = storyEventStoryId(event);
       return !storyId || !eventStoryId || eventStoryId === storyId;
@@ -83,7 +86,7 @@ export function useStoryEvents(
     }
     return runtime.coordinator.register({
       key: `stories:${domainId}`,
-      topics: ['stories'],
+      topics: storyId && nodeId ? ['stories', 'node.state'] : ['stories'],
       start: () => {
         stopped = false;
         return runRefresh();
@@ -91,11 +94,11 @@ export function useStoryEvents(
       stop,
       offline: stop,
       onEvent: (event) => {
-        if (accepts(event)) scheduleRefresh();
+        if (accepts(event) || (storyId && nodeId && nodeRecovery.apply(event, nodeId))) scheduleRefresh();
       },
       onConnectionError: () => undefined,
     });
-  }, [domainId, runtime?.coordinator, storyId]);
+  }, [domainId, nodeId, runtime?.coordinator, storyId]);
 }
 
 function storyEventStoryId(event: MobileControlPlaneEvent) {

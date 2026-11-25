@@ -36,13 +36,14 @@ test("the composer textarea starts at one row and defaults to a two-row minimum"
   assert.match(floatingDock, /\.ai-board-floating-compose :deep\(\.ai-session-composer__input\) \{\s*min-height: calc\(var\(--ai-composer-min-rows, 2\) \* 1\.45em \+ 14px\);/);
 });
 
-test("the composer height handle snaps the persisted minimum to one through three rows", () => {
+test("the composer height handle snaps the persisted minimum to one through four rows", () => {
   assert.equal(AI_SESSION_COMPOSER_MIN_ROWS, 1);
   assert.equal(AI_SESSION_COMPOSER_DEFAULT_ROWS, 2);
-  assert.equal(AI_SESSION_COMPOSER_MAX_ROWS, 3);
+  assert.equal(AI_SESSION_COMPOSER_MAX_ROWS, 4);
   assert.equal(sanitizeAiSessionComposerMinRows(-10), 1);
   assert.equal(sanitizeAiSessionComposerMinRows("1.6"), 2);
-  assert.equal(sanitizeAiSessionComposerMinRows(9), 3);
+  assert.equal(sanitizeAiSessionComposerMinRows(4), 4);
+  assert.equal(sanitizeAiSessionComposerMinRows(9), 4);
   assert.equal(sanitizeAiSessionComposerMinRows(null), 2);
   assert.equal(sanitizeAiSessionComposerMinRows("invalid"), 2);
   assert.match(composer, /:style="\{ '--ai-composer-min-rows': composerMinRows \}"/);

@@ -734,6 +734,10 @@ export function markAiSessionRead(instanceId: string, sessionId: string) {
   return sharedAiSessionsApi.markRead(instanceId, sessionId);
 }
 
+export function markAiSessionUnread(instanceId: string, sessionId: string) {
+  return sharedAiSessionsApi.markUnread(instanceId, sessionId);
+}
+
 export function getAiSessionHistory(instanceId: string) {
   return sharedAiSessionsApi.history(instanceId);
 }

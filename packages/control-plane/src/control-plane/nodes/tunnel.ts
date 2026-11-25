@@ -1092,6 +1092,7 @@ export class ControlPlaneNodeEventSubscriber {
 
   private connect(node: Node, connectionKey: string) {
     const socket = new TransportNodeEventSocket();
+    const healthCheck = new AbortController();
     const observesDirectConnection = node.connectionMode !== "control-plane-proxy";
     const runtimeGeneration = observesDirectConnection ? this.connectionRuntime?.begin(node.id, "direct-http", "connecting") : undefined;
     if (runtimeGeneration !== undefined) this.runtimeGenerations.set(node.id, runtimeGeneration);
@@ -1133,7 +1134,12 @@ export class ControlPlaneNodeEventSubscriber {
         supervisor.activity();
         if (supervisor.phase !== "healthy") {
           supervisor.healthy();
-          if (runtimeGeneration !== undefined) this.connectionRuntime?.connected(node.id, runtimeGeneration);
+          if (runtimeGeneration !== undefined) {
+            this.connectionRuntime?.connected(node.id, runtimeGeneration);
+            if (this.connectionRuntime?.observation(node.id)?.controlReachability !== "reachable") {
+              void this.service.resolveNodeAgentTransport(node).request(node, "/health", { signal: healthCheck.signal }).catch(() => undefined);
+            }
+          }
         }
         const record = message as Record<string, unknown>;
         const forwardedEvent = objectRecord(record.event);
@@ -1161,6 +1167,7 @@ export class ControlPlaneNodeEventSubscriber {
       if (runtimeGeneration !== undefined) this.connectionRuntime?.pong(node.id, runtimeGeneration, supervisor.diagnostics());
     });
     socket.on("close", (code, reason) => {
+      healthCheck.abort();
       if (this.sockets.get(node.id) === socket) {
         supervisor.close();
         this.sockets.delete(node.id);

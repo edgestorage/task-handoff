@@ -8,6 +8,7 @@ import { aiSessionStatusGroup } from '@task-handoff/control-plane-client';
 import { nodeAgentCapabilitiesFromPublicNode, nodeStoryAgentToolCapabilities } from '@task-handoff/protocol/node-agent-capabilities';
 
 import { SessionStatusIndicator } from '../ai-sessions/SessionStatusIndicator';
+import { AiSessionActionsMenu } from '../ai-sessions/AiSessionActionsMenu';
 import { mobileAiSessionStatusLabel } from '../ai-sessions/SessionDetail';
 import { storyAiSessionCreationDefaults } from '../ai-sessions/new-session-types';
 import { useActiveAiSessions, useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
@@ -24,7 +25,7 @@ import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n, type Translate } from '../i18n';
 import { PaneHeaderRestore } from '../master-detail/use-pane-header-restore';
 import { useStoryEvents } from './use-story-events';
-import { groupStoryTreeSessions, storyTreeKey, unassignedStoryRootInstanceIds } from './story-tree-model';
+import { groupStoryTreeSessions, storyTreeKey, storyTreeSessionForest, unassignedStoryRootInstanceIds } from './story-tree-model';
 import { StoryDecisionAnswer } from './StoryDecisionAnswer';
 import { isStoryDecisionResumePending, splitStoryDecisions, storyDecisionInstanceId, storyDecisionMeta, type StoryDecisionAnswerInput } from './story-decision';
 
@@ -121,14 +122,14 @@ export function StoryDetail({ storyId, nodeId, embeddedHeader = false, onDeleted
       if (!signal?.aborted) setLoading(false);
     }
   }, [loadDecisions, nodeId, runtime.api, storyId]);
-  useStoryEvents(refresh, storyId);
+  useStoryEvents(refresh, { storyId, nodeId });
 
   const nodeNames = useMemo(() => new Map(directory.nodes.map((node) => [node.id, node.name])), [directory.nodes]);
   const instanceNames = useMemo(() => new Map(directory.instances.map((item) => [item.id, item.name])), [directory.instances]);
   const storyNodeId = story?.ownerNodeId || nodeId || '';
   const storyInstanceIds = useMemo(() => new Set(directory.instances.filter((instance) => instance.nodeId === storyNodeId).map((instance) => instance.id)), [directory.instances, storyNodeId]);
   const linkedSessions = useMemo(() => story
-    ? groupStoryTreeSessions([story], directory.instances, sessions, expandedSessionIds).get(storyTreeKey(story)) ?? []
+    ? groupStoryTreeSessions([story], directory.instances, storyTreeSessionForest(sessions), expandedSessionIds).get(storyTreeKey(story)) ?? []
     : [], [directory.instances, expandedSessionIds, sessions, story]);
   const linkedSessionRootCount = useMemo(() => linkedSessions.filter((entry) => entry.depth === 0).length, [linkedSessions]);
   const allLinkedSessions = useMemo(() => story ? (sessions?.instances ?? []).flatMap((entry) => (
@@ -387,7 +388,26 @@ export function StoryDetail({ storyId, nodeId, embeddedHeader = false, onDeleted
     <View onLayout={(event) => { const layout = layoutFromEvent(event); if (layout) setSectionNavHeight(layout.height); }} style={[styles.sectionNav, { backgroundColor: colors.background, borderBottomColor: colors.border }]}><ScrollView contentContainerStyle={styles.sectionNavContent} horizontal showsHorizontalScrollIndicator={false}>{storySections.filter((section) => section !== 'decisions' || decisionSupported).map((section) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: activeSection === section }} key={section} onPress={() => scrollToSection(section)} style={({ pressed }) => [styles.sectionTab, activeSection === section && { borderBottomColor: colors.primary }, pressed && styles.pressed]}><Text style={[styles.sectionTabText, { color: activeSection === section ? colors.primary : colors.textMuted }]}>{t(`stories.${section}Tab` as Parameters<Translate>[0])}</Text></Pressable>)}</ScrollView></View>
     <Section onLayout={(event) => recordSectionOffset('actions', event)} title={t('stories.actions')}>{story.actions.length ? story.actions.map((action) => <View key={action.id} style={[styles.action, { backgroundColor: colors.surface, borderColor: colors.border }]}><Pressable accessibilityLabel={action.title} accessibilityRole="button" accessibilityState={{ busy: runningActionId === action.id, disabled: archived || Boolean(runningActionId) }} disabled={archived || Boolean(runningActionId)} onPress={() => confirmAction(action)} style={[styles.actionMain, archived && styles.disabled]}>{runningActionId === action.id ? <ActivityIndicator color={colors.primary} size="small" /> : <Icon color={colors.primary} name="play" size={18} />}<Text style={[styles.itemTitle, { color: colors.text }]}>{action.title}</Text></Pressable><View style={[styles.countBadge, { backgroundColor: colors.surface }]}><Icon color={colors.textMuted} name="time-outline" size={13} /><Text style={[styles.countText, { color: colors.textMuted }]}>{automationCount(action.id)}</Text></View></View>) : <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noActions')}</Text>}</Section>
     <Section onLayout={(event) => recordSectionOffset('documents', event)} title={`${story.documents.length} ${t('stories.documents')}`}>{story.documents.length ? story.documents.map((document) => <Pressable accessibilityRole="button" key={document.storyPath} onPress={() => router.push({ pathname: `/stories/${story.id}/documents/preview` as never, params: { storyId: story.id, nodeId: story.ownerNodeId, storyPath: document.storyPath, title: document.title } })} style={[styles.item, { backgroundColor: colors.surface, borderColor: colors.border }]}><Icon color={colors.primary} name="document-text-outline" size={19} /><View style={styles.itemCopy}><Text style={[styles.itemTitle, { color: colors.text }]}>{document.title}</Text><Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{document.storyPath}</Text></View><Icon color={colors.textMuted} name="chevron-forward" size={17} /></Pressable>) : <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noDocuments')}</Text>}</Section>
-    <Section onLayout={(event) => recordSectionOffset('sessions', event)} title={`${linkedSessionRootCount} ${t('stories.sessions')}`}>{linkedSessions.length ? linkedSessions.map((entry) => { const session = entry.session; const statusGroup = aiSessionStatusGroup(session); const statusLabel = mobileAiSessionStatusLabel(session, t); const expanded = expandedSessionIds.has(session.id); return <Pressable key={`${entry.instanceId}:${session.id}`} accessibilityRole="button" onPress={() => onOpenSession(entry.instanceId, session.id)} style={[styles.item, entry.depth ? { marginLeft: entry.depth * 14 } : null, { backgroundColor: colors.surface, borderColor: colors.border }]}>{entry.hasChildren ? <Pressable accessibilityLabel={t(expanded ? 'sessions.collapseSubSessions' : 'sessions.expandSubSessions')} accessibilityRole="button" accessibilityState={{ expanded }} hitSlop={8} onPress={(event) => { event.stopPropagation(); setExpandedSessionIds((current) => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; }); }} style={styles.sessionLeading} testID="story-detail-session-disclosure"><Icon color={colors.textMuted} name={expanded ? 'chevron-down' : 'chevron-forward'} size={19} /></Pressable> : session.status === 'running' ? <View style={styles.sessionLeading}><SessionStatusIndicator group={statusGroup} label={statusLabel} size={20} /></View> : <View style={[styles.sessionIcon, styles.sessionLeading]}><Icon color={colors.textMuted} name="chatbubble-outline" size={18} /><View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={statusLabel} /></View></View>}<View style={styles.itemCopy}><Text ellipsizeMode="tail" numberOfLines={2} style={[styles.itemTitle, { color: colors.text }]}>{session.title || session.userPrompt || session.summary || session.lastMessage || t('sessions.untitled')}</Text><Text style={[styles.meta, { color: colors.textMuted }]}>{instanceNames.get(entry.instanceId) || entry.instanceId}</Text></View><Icon color={colors.textMuted} name="chevron-forward" size={17} /></Pressable>; }) : <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noSessions')}</Text>}</Section>
+    <Section onLayout={(event) => recordSectionOffset('sessions', event)} title={`${linkedSessionRootCount} ${t('stories.sessions')}`}>
+      {linkedSessions.length ? linkedSessions.map((entry) => {
+        const session = entry.session;
+        const statusGroup = aiSessionStatusGroup(session);
+        const statusLabel = mobileAiSessionStatusLabel(session, t);
+        const expanded = expandedSessionIds.has(session.id);
+        return <AiSessionActionsMenu
+          actions={aiSessionActions}
+          instanceId={entry.instanceId}
+          key={`${entry.instanceId}:${session.id}`}
+          onOpen={() => onOpenSession(entry.instanceId, session.id)}
+          session={session}
+        >
+          <Pressable accessibilityRole="button" onPress={() => onOpenSession(entry.instanceId, session.id)} style={[styles.item, entry.depth ? { marginLeft: entry.depth * 14 } : null, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            {entry.hasChildren ? <Pressable accessibilityLabel={t(expanded ? 'sessions.collapseSubSessions' : 'sessions.expandSubSessions')} accessibilityRole="button" accessibilityState={{ expanded }} hitSlop={8} onPress={(event) => { event.stopPropagation(); setExpandedSessionIds((current) => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; }); }} style={styles.sessionLeading} testID="story-detail-session-disclosure"><Icon color={colors.textMuted} name={expanded ? 'chevron-down' : 'chevron-forward'} size={19} /></Pressable> : session.status === 'running' ? <View style={styles.sessionLeading}><SessionStatusIndicator group={statusGroup} label={statusLabel} size={20} /></View> : <View style={[styles.sessionIcon, styles.sessionLeading]}><Icon color={colors.textMuted} name="chatbubble-outline" size={18} /><View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={statusLabel} /></View></View>}
+            <View style={styles.itemCopy}><Text ellipsizeMode="tail" numberOfLines={2} style={[styles.itemTitle, { color: colors.text }]}>{session.title || session.userPrompt || session.summary || session.lastMessage || t('sessions.untitled')}</Text><Text style={[styles.meta, { color: colors.textMuted }]}>{instanceNames.get(entry.instanceId) || entry.instanceId}</Text></View><Icon color={colors.textMuted} name="chevron-forward" size={17} />
+          </Pressable>
+        </AiSessionActionsMenu>;
+      }) : <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noSessions')}</Text>}
+    </Section>
     <Section onLayout={(event) => recordSectionOffset('automations', event)} headerAction={<Pressable accessibilityLabel={t('stories.addAutomation')} disabled={Boolean(story.archivedAt)} onPress={() => router.push({ pathname: `/stories/${story.id}/automations/new` as never, params: { storyId: story.id, nodeId: story.ownerNodeId } })}><Icon color={colors.primary} name="add-circle-outline" size={24} /></Pressable>} title={`${automations.length} ${t('stories.automations')}`}>
       {automationError ? <Text style={[styles.muted, { color: colors.error }]}>{automationError}</Text> : null}
       {!automations.length ? <Text style={[styles.muted, { color: colors.textMuted }]}>{t('stories.noAutomations')}</Text> : automations.map((entry) => {

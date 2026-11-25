@@ -495,12 +495,43 @@
             }
           }
         },
+        "unreadFirst": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "unread": true
+            }
+          }
+        },
+        "unreadSecond": {
+          "status": 200,
+          "body": {
+            "data": {
+              "sessionId": "<session-1>",
+              "unread": true
+            }
+          }
+        },
+        "missingUnread": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": "AI_SESSION_NOT_FOUND",
+              "message": "AI Session was not found."
+            }
+          }
+        },
         "unread": [
           true,
           false,
-          false
+          false,
+          true,
+          true
         ],
         "updatedAtPreserved": [
+          true,
+          true,
           true,
           true
         ],
@@ -509,7 +540,7 @@
           "body": {
             "data": {
               "streamId": "<stream-1>",
-              "revision": 2,
+              "revision": 3,
               "lastEventAt": "<time>",
               "snapshot": {
                 "runningCount": 0,
@@ -524,7 +555,7 @@
                     "cwd": "<root>",
                     "status": "idle",
                     "phase": "responding",
-                    "unread": false,
+                    "unread": true,
                     "queue": {
                       "revision": 0,
                       "pendingCount": 0,

@@ -60,6 +60,10 @@
         </template>
       </ContextMenuSubContent>
     </ContextMenuSub>
+    <ContextMenuItem v-if="canMarkUnread && !isUnread" class="ai-session-context-menu-item" :disabled="isMarkingUnread" @select="$emit('markUnread')">
+      <Mail :size="14" />
+      <span>{{ t("sessions.actions.markUnread") }}</span>
+    </ContextMenuItem>
     <ContextMenuItem v-if="canOpenApp" class="ai-session-context-menu-item" @select="$emit('openApp')">
       <ExternalLink :size="14" />
       <span>{{ t("sessions.actions.openApp") }}</span>
@@ -111,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { BookOpen, Check, Copy, ExternalLink, Folder, Hash, Pencil, Split, Square, SquareTerminal, Type, Zap } from "@lucide/vue";
+import { BookOpen, Check, Copy, ExternalLink, Folder, Hash, Mail, Pencil, Split, Square, SquareTerminal, Type, Zap } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ControlPlaneTrigger } from "../../api/types";
@@ -136,10 +140,13 @@ const props = withDefaults(defineProps<{
   canOpenApp: boolean;
   canOpenTerminal?: boolean;
   canFork?: boolean;
+  canMarkUnread?: boolean;
   canRename?: boolean;
   isForking?: boolean;
+  isMarkingUnread?: boolean;
   isOpeningTerminal?: boolean;
   isStoppingAppSession?: boolean;
+  isUnread?: boolean;
   sessionId: string;
   sessionName?: string;
   sessionPath?: string;
@@ -152,11 +159,13 @@ const props = withDefaults(defineProps<{
   triggerTemplates: ControlPlaneTrigger[];
 }>(), {
   canCloseSession: true,
+  canMarkUnread: true,
   showTriggerActions: true,
 });
 
 const emit = defineEmits<{
   closeSession: [];
+  markUnread: [];
   openApp: [];
   openTerminal: [];
   renameSession: [];

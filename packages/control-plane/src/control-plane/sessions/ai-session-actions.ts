@@ -526,6 +526,10 @@ export class AiSessionActionService {
     return parseResponse(AiSessionReadResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "read"), {}));
   }
 
+  async unread(instanceId: string, aiSessionId: string): Promise<AiSessionReadResult> {
+    return parseResponse(AiSessionReadResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "unread"), {}));
+  }
+
   async close(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionCloseResult> {
     const result = parseResponse(AiSessionCloseResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "close"), { clientRequestId }, clientRequestId));
     return result;

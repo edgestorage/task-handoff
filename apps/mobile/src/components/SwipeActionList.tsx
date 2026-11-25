@@ -4,7 +4,7 @@ import {
   adaptiveContentContainerStyle,
   useAdaptiveContentLayout,
 } from './adaptive-layout';
-import { SwipeToClose } from './SwipeToClose';
+import { SwipeActions } from './SwipeActions';
 import type { SwipeActionListProps } from './SwipeActionList.types';
 
 export function SwipeActionList<Item>({
@@ -19,6 +19,7 @@ export function SwipeActionList<Item>({
   renderItem,
   style,
   swipeAction,
+  swipeActions,
 }: SwipeActionListProps<Item>) {
   const adaptive = useAdaptiveContentLayout();
   return <FlatList
@@ -32,11 +33,12 @@ export function SwipeActionList<Item>({
     refreshing={refreshing}
     scrollIndicatorInsets={adaptive.scrollIndicatorInsets}
     renderItem={(info) => {
-      const action = swipeAction(info.item);
       const content = renderItem(info);
       const containerStyle = typeof itemContainerStyle === 'function' ? itemContainerStyle(info.item, info.index) : itemContainerStyle;
-      if (!action) return <View style={containerStyle}>{content}</View>;
-      return <SwipeToClose containerStyle={containerStyle} disabled={action.disabled} label={action.label} onClose={action.onPress}>{content}</SwipeToClose>;
+      const singleAction = swipeAction?.(info.item);
+      const actions = swipeActions ? swipeActions(info.item) : singleAction ? [singleAction] : [];
+      if (!actions?.length) return <View style={containerStyle}>{content}</View>;
+      return <SwipeActions actions={actions} containerStyle={containerStyle}>{content}</SwipeActions>;
     }}
     style={style}
     testID="swipe-action-list"

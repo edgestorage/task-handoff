@@ -718,6 +718,10 @@ export class AiSessionRegistry {
     return this.update(id, { unread: false }, { preserveUpdatedAt: true });
   }
 
+  markUnread(id: string) {
+    return this.update(id, { unread: true }, { preserveUpdatedAt: true });
+  }
+
   restoreAuthority(session: AiSessionStatus) {
     return this.put(session);
   }

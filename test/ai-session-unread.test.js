@@ -62,6 +62,23 @@ test("AI session markRead clears unread without advancing updatedAt and is idemp
   assert.equal(registry.markRead("missing"), undefined);
 });
 
+test("AI session markUnread restores unread without advancing updatedAt and is idempotent", () => {
+  const { registry } = runtime();
+  const session = registry.start({ agent: "codex", status: "running" }, { timestamp: "2026-07-25T00:00:00.000Z" });
+  registry.complete(session.id, "done");
+  const settled = registry.markRead(session.id);
+  assert.equal(settled.unread, false);
+
+  const unread = registry.markUnread(session.id);
+  assert.equal(unread.unread, true);
+  assert.equal(unread.updatedAt, settled.updatedAt);
+
+  const again = registry.markUnread(session.id);
+  assert.equal(again.unread, true);
+  assert.equal(again.updatedAt, settled.updatedAt);
+  assert.equal(registry.markUnread("missing"), undefined);
+});
+
 test("AI session unread persists across registry restarts and legacy records decode as read", () => {
   const { root, registry } = runtime();
   const session = registry.start({ agent: "codex", status: "running" });
