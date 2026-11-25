@@ -63,6 +63,7 @@ export const sessions = {
   },
   rename: { title: "重命名 AI 会话", description: "留空时显示最近一轮提示词。", label: "会话标题", failed: "无法重命名 AI 会话。" },
   detail: {
+    conversationWidth: { label: "对话宽度", full: "全宽", bounded: "最大宽度" },
     selected: "已选 AI 会话", sessionDetails: "会话详情", workspace: "工作区", session: "会话", appBinding: "应用绑定", forkedFrom: "分支来源", unknown: "未知",
     notBound: "未绑定", collapse: "收起详情", expand: "展开", collapsePrompt: "收起",
     noSelected: "未选择 AI 会话", loading: "正在加载会话详情…", loadFailed: "无法加载会话详情。", retry: "重试", retryWarning: "连接暂时异常", sessionError: "会话错误", noErrorDetail: "会话失败，未提供诊断详情。",

@@ -205,7 +205,7 @@ test("detail content reserves the visible bottom gap outside the floating compos
   assert.match(panelCss, /\.session-ai-panel \{[\s\S]*--session-ai-scrollbar-outset: 9px;[\s\S]*padding: 12px calc\(12px - var\(--session-ai-scrollbar-outset\)\) 12px 12px;/);
   assert.match(panelCss, /\.session-ai-detail \{[\s\S]*--session-ai-compose-bottom: 10px;[\s\S]*--session-ai-content-bottom-gap: 36px;/);
   assert.match(panelCss, /\.session-ai-detail \{[\s\S]*--session-ai-detail-left-inset: 8px;[\s\S]*--session-ai-detail-right-inset: calc\(6px \+ var\(--session-ai-scrollbar-outset, 0px\)\);/);
-  assert.match(panelCss, /\.session-ai-detail-content \{[\s\S]*padding: 0 var\(--session-ai-detail-right-inset\) calc\([\s\S]*var\(--session-ai-compose-offset, 84px\)[\s\S]*\+ var\(--session-ai-compose-bottom\)[\s\S]*\+ var\(--session-ai-content-bottom-gap\)[\s\S]*\) 10px;/);
+  assert.match(panelCss, /\.session-ai-detail-content \{[\s\S]*padding: 0 var\(--session-ai-detail-right-inset\) calc\([\s\S]*var\(--session-ai-compose-offset, 84px\)[\s\S]*\+ var\(--session-ai-compose-bottom\)[\s\S]*\+ var\(--session-ai-content-bottom-gap\)[\s\S]*\) var\(--session-ai-detail-content-left-inset\);/);
   assert.match(panelCss, /\.session-ai-compose \{[\s\S]*bottom: var\(--session-ai-compose-bottom\);/);
   assert.match(panelCss, /\.session-ai-follow-latest \{[\s\S]*bottom: calc\([\s\S]*var\(--session-ai-compose-offset, 84px\)[\s\S]*\+ var\(--session-ai-compose-bottom\)[\s\S]*\+ var\(--session-ai-content-bottom-gap\)[\s\S]*\);/);
 });

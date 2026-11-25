@@ -1845,6 +1845,7 @@
 .session-ai-detail {
   --session-ai-detail-left-inset: 8px;
   --session-ai-detail-right-inset: calc(6px + var(--session-ai-scrollbar-outset, 0px));
+  --session-ai-detail-content-left-inset: 10px;
   --session-ai-compose-bottom: 10px;
   --session-ai-content-bottom-gap: 36px;
   --session-ai-sticky-prompt-height: 24px;
@@ -1881,7 +1882,21 @@
     var(--session-ai-compose-offset, 84px)
     + var(--session-ai-compose-bottom)
     + var(--session-ai-content-bottom-gap)
-  ) 10px;
+  ) var(--session-ai-detail-content-left-inset);
+}
+
+.session-ai-detail[data-conversation-width="bounded"] {
+  --session-ai-conversation-max-width: 960px;
+}
+
+.session-ai-detail[data-conversation-width="bounded"] .session-ai-detail-content {
+  margin-inline: auto;
+  max-width: calc(var(--session-ai-conversation-max-width) + var(--session-ai-detail-content-left-inset) + var(--session-ai-detail-right-inset));
+}
+
+.session-ai-detail[data-conversation-width="bounded"] > :is(.session-ai-timeline-sticky-prompt, .session-ai-compose-stack, .session-ai-compose-gradient) {
+  margin-inline: auto;
+  max-width: var(--session-ai-conversation-max-width);
 }
 
 .session-ai-detail-content > * + * {
@@ -1996,7 +2011,7 @@
   position: absolute;
   top: 0;
   right: var(--session-ai-detail-right-inset);
-  left: calc(var(--session-ai-detail-left-inset) + 10px);
+  left: calc(var(--session-ai-detail-left-inset) + var(--session-ai-detail-content-left-inset));
   z-index: 5;
   box-sizing: border-box;
   height: calc(
@@ -2315,7 +2330,7 @@
   position: absolute;
   right: var(--session-ai-detail-right-inset);
   bottom: var(--session-ai-compose-bottom);
-  left: calc(10px + var(--session-ai-detail-left-inset, 0px));
+  left: calc(var(--session-ai-detail-left-inset) + var(--session-ai-detail-content-left-inset));
   z-index: 5;
   display: grid;
   min-width: 0;
@@ -2389,7 +2404,7 @@
   position: absolute;
   right: var(--session-ai-detail-right-inset);
   bottom: -22px;
-  left: calc(10px + var(--session-ai-detail-left-inset, 0px));
+  left: calc(var(--session-ai-detail-left-inset) + var(--session-ai-detail-content-left-inset));
   z-index: 4;
   height: calc(var(--session-ai-compose-offset, 84px) + 48px);
   pointer-events: none;

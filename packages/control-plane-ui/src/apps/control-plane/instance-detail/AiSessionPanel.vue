@@ -817,6 +817,7 @@
         ref="detailEl"
         class="session-ai-detail"
         :class="{ 'is-scrolled': detailScrolled }"
+        :data-conversation-width="conversationWidth"
         @wheel.capture="handleCompactTurnWheel"
       >
         <ScrollArea class="session-ai-detail-scroll">
@@ -887,6 +888,12 @@
                   </ToggleGroup>
                   <DropdownMenuSeparator />
                 </template>
+                <DropdownMenuLabel>{{ t("sessions.detail.conversationWidth.label") }}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup :model-value="conversationWidth" :aria-label="t('sessions.detail.conversationWidth.label')" @update:model-value="setConversationWidth">
+                  <DropdownMenuRadioItem class="font-medium" value="full">{{ t("sessions.detail.conversationWidth.full") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="font-medium" value="bounded">{{ t("sessions.detail.conversationWidth.bounded") }}</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
                 <RepositoryEnvironment
                   v-if="detailHeadActionsInMenu"
                   :ai-agent="repositoryAiAgent"
@@ -1483,6 +1490,7 @@ import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSession
 import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessionCardAutoScroll";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import { useAiSessionTimelinePresentation } from "../useAiSessionTimelinePresentation";
+import { useAiSessionConversationWidth } from "../useAiSessionConversationWidth";
 import { useAiSessionTimelineViewMode } from "../useAiSessionTimelineViewMode";
 import { useAiSessionQueuePlacement } from "../useAiSessionQueuePlacement";
 import { useAiSessionConversationProjection } from "../useAiSessionConversationProjection";
@@ -1896,6 +1904,7 @@ const selectedNextInputSuggestion = computed(() => {
   return selectNextInputSuggestion(session, latestTurnId);
 });
 const { setViewMode: persistTimelineViewMode, viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
+const { conversationWidth, setConversationWidth } = useAiSessionConversationWidth();
 const {
   conversationToolActivityWindows,
   conversationTurnTimelines,
@@ -4682,6 +4691,17 @@ function handleDetailScroll() {
     detailScrolled.value = false;
   }
 }
+
+watch(conversationWidth, async () => {
+  const viewport = detailScrollViewport;
+  if (!viewport || !detailEl.value?.dataset.conversationWidth) return;
+  beginDetailLayoutAnchor();
+  await nextTick();
+  if (detailScrollViewport !== viewport) return;
+  commitDetailLayoutAnchor();
+  updateDetailStickyThreshold();
+  handleDetailScroll();
+});
 
 watch([selectedSession, messageAttachments, messageDraft, historyMessageAttachments, historyMessageDraft, historyDetail], () => {
   void nextTick(observeComposerOffset);

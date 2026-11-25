@@ -60,6 +60,7 @@ export const sessions = {
   },
   rename: { title: "Rename AI session", description: "Leave blank to use the latest prompt.", label: "Session title", failed: "Failed to rename AI session." },
   detail: {
+    conversationWidth: { label: "Conversation width", full: "Full width", bounded: "Maximum width" },
     selected: "Selected AI session", sessionDetails: "Session details", workspace: "Workspace", session: "Session", appBinding: "App binding", forkedFrom: "Forked from", unknown: "Unknown",
     notBound: "Not bound", collapse: "Collapse details", expand: "Expand", collapsePrompt: "Collapse",
     noSelected: "No AI session selected", loading: "Loading session details…", loadFailed: "Failed to load session details.", retry: "Retry", retryWarning: "Temporary connection issue", sessionError: "Session error", noErrorDetail: "Session failed. No diagnostic details were provided.",
