@@ -15,7 +15,7 @@ use controlled_instance_protocol::{
     AiSessionModelSelectionCapabilities, AiSessionProviderActions, AiSessionProviderCapability,
     AiSessionProviderTimelineCapabilities, AiSessionReasoningEffortCapabilities, AiSessionTimeline,
     AiSessionTimelineActivityStatus, AiSessionTimelineItem, AiSessionTurnTimeline,
-    AI_SESSION_MAX_INLINE_FILE_BYTES,
+    AI_SESSION_MAX_INLINE_FILE_BYTES, AI_SESSION_MENTION_DESCRIPTION_MAX_LENGTH,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Map, Value};
@@ -3869,7 +3869,19 @@ fn collect_mention_result(
     normalize: fn(&Value) -> Vec<AiSessionMentionCandidate>,
 ) {
     match result {
-        Ok(value) => candidates.extend(normalize(&value)),
+        Ok(value) => candidates.extend(normalize(&value).into_iter().map(|mut candidate| {
+            if let Some(description) = candidate.description.as_mut() {
+                let mut utf16_length = 0;
+                let cutoff = description.char_indices().find_map(|(offset, character)| {
+                    utf16_length += character.len_utf16();
+                    (utf16_length > AI_SESSION_MENTION_DESCRIPTION_MAX_LENGTH).then_some(offset)
+                });
+                if let Some(cutoff) = cutoff {
+                    description.truncate(description[..cutoff].trim_end().len());
+                }
+            }
+            candidate
+        })),
         Err(error) => diagnostics.push(AiSessionMentionDiagnostic {
             category,
             code: "CATALOG_QUERY_FAILED".to_string(),
@@ -3941,6 +3953,7 @@ fn normalize_plugin_candidates(value: &Value) -> Vec<AiSessionMentionCandidate> 
                 kind: AiSessionMentionKind::Plugin,
                 name: non_empty_string(interface.get("displayName")).unwrap_or(name),
                 description: non_empty_string(interface.get("shortDescription"))
+                    .or_else(|| non_empty_string(interface.get("description")))
                     .or_else(|| non_empty_string(plugin.get("description"))),
                 path: format!("plugin://{id}"),
                 icon: None,
@@ -6158,6 +6171,59 @@ fn build_websocket_request(
 mod tests {
     use super::*;
     use crate::AiSessionReference;
+
+    #[test]
+    fn mention_catalog_description_fits_the_typescript_wire_limit() {
+        let full_prefix = "x".repeat(1000);
+        let unicode_prefix = "x".repeat(999);
+        let mut candidates = Vec::new();
+        let mut diagnostics = Vec::new();
+
+        collect_mention_result(
+            Ok(json!({ "data": [{ "skills": [
+                { "enabled": true, "name": "short", "path": "/work/short/SKILL.md", "description": "short" },
+                { "enabled": true, "name": "long", "path": "/work/long/SKILL.md", "description": format!("{full_prefix}x") }
+            ] }] })),
+            AiSessionMentionDiagnosticCategory::Skills,
+            &mut candidates,
+            &mut diagnostics,
+            normalize_skill_candidates,
+        );
+        collect_mention_result(
+            Ok(json!({ "marketplaces": [{ "plugins": [{
+                "installed": true, "enabled": true, "name": "plugin", "id": "plugin",
+                "interface": { "description": format!("{unicode_prefix}\u{1f600} rest") }
+            }] }] })),
+            AiSessionMentionDiagnosticCategory::Plugins,
+            &mut candidates,
+            &mut diagnostics,
+            normalize_plugin_candidates,
+        );
+        collect_mention_result(
+            Ok(json!({ "data": [{
+                "isAccessible": true, "isEnabled": true, "name": "app", "id": "app",
+                "description": format!("{full_prefix}x")
+            }] })),
+            AiSessionMentionDiagnosticCategory::Apps,
+            &mut candidates,
+            &mut diagnostics,
+            normalize_app_candidates,
+        );
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.description.as_deref())
+                .collect::<Vec<_>>(),
+            vec![
+                Some("short"),
+                Some(full_prefix.as_str()),
+                Some(unicode_prefix.as_str()),
+                Some(full_prefix.as_str()),
+            ],
+        );
+        assert!(diagnostics.is_empty());
+    }
 
     #[test]
     fn attachment_only_codex_inputs_omit_the_empty_text_part() {

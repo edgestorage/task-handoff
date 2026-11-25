@@ -6411,6 +6411,8 @@ test("queued AI messages preserve their permission mode", async () => {
 test("codex mention facade filters catalogs, invalidates cache, searches cwd, and submits structured inputs", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-mentions-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const fullPrefix = "x".repeat(1000);
+  const unicodePrefix = "x".repeat(999);
   class FakeCodexMentionsClient extends EventEmitter {
     catalogCalls = 0;
     turns = [];
@@ -6420,13 +6422,13 @@ test("codex mention facade filters catalogs, invalidates cache, searches cwd, an
     async listSkills(cwd) {
       this.catalogCalls += 1;
       return { data: [{ cwd, skills: [
-        { name: "docs", description: "Documentation", path: `${cwd}/.agents/skills/docs/SKILL.md`, enabled: true },
+        { name: "docs", description: `${fullPrefix}x`, path: `${cwd}/.agents/skills/docs/SKILL.md`, enabled: true },
         { name: "disabled", description: "Disabled", path: `${cwd}/disabled/SKILL.md`, enabled: false },
       ] }] };
     }
     async listPlugins() {
       return { marketplaces: [{ name: "curated", plugins: [
-        { id: "review@curated", name: "Review", installed: true, enabled: true, availability: "AVAILABLE" },
+        { id: "review@curated", name: "Review", installed: true, enabled: true, availability: "AVAILABLE", interface: { description: `${unicodePrefix}\u{1f600} rest` } },
         { id: "blocked@curated", name: "Blocked", installed: true, enabled: true, availability: "DISABLED_BY_ADMIN" },
       ] }] };
     }
@@ -6462,6 +6464,7 @@ test("codex mention facade filters catalogs, invalidates cache, searches cwd, an
     ["plugin", "Review", "plugin://review@curated"],
     ["app", "GitHub", "app://github"],
   ]);
+  assert.deepEqual(catalog.candidates.map((candidate) => candidate.description), [fullPrefix, unicodePrefix, "Issues and pull requests"]);
   await bridge.mentionCatalog(session);
   assert.equal(fake.catalogCalls, 1);
   fake.emit("notification", { method: "skills/changed", params: {} });

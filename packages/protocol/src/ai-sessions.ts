@@ -438,11 +438,12 @@ export const AiSessionReferenceSchema = z.discriminatedUnion("kind", [
 export const AiSessionReferencesSchema = z.array(AiSessionReferenceSchema).max(AI_SESSION_MAX_REFERENCES).default([]);
 
 export const AiSessionMentionKindSchema = z.enum(["plugin", "skill", "file", "directory", "app"]);
+export const AI_SESSION_MENTION_DESCRIPTION_MAX_LENGTH = 1000;
 
 export const AiSessionMentionCandidateSchema = z.object({
   kind: AiSessionMentionKindSchema,
   name: NonEmptyTrimmedTextSchema.max(240),
-  description: TrimmedTextSchema.max(1000).optional(),
+  description: TrimmedTextSchema.max(AI_SESSION_MENTION_DESCRIPTION_MAX_LENGTH).optional(),
   path: NonEmptyTrimmedTextSchema.max(4096),
   icon: TrimmedTextSchema.max(4096).optional(),
 }).strict().superRefine((candidate, context) => {

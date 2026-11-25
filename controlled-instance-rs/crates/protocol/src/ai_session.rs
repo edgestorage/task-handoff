@@ -344,6 +344,8 @@ impl AiSessionMentionKind {
     }
 }
 
+pub const AI_SESSION_MENTION_DESCRIPTION_MAX_LENGTH: usize = 1000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AiSessionMentionCandidate {

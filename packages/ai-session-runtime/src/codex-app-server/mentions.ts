@@ -1,6 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+  AI_SESSION_MENTION_DESCRIPTION_MAX_LENGTH,
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionReferenceSchema,
@@ -172,8 +173,16 @@ export class CodexAppServerMentions {
     diagnostics: AiSessionMentionDiagnostic[],
     normalize: (value: JsonValue) => AiSessionMentionCandidate[],
   ) {
-    if (result.status === "fulfilled") candidates.push(...normalize(result.value));
-    else diagnostics.push({ category, code: "CATALOG_QUERY_FAILED", message: result.reason instanceof Error ? result.reason.message : String(result.reason) });
+    if (result.status === "fulfilled") {
+      for (const candidate of normalize(result.value)) {
+        const description = candidate.description;
+        if (description && description.length > AI_SESSION_MENTION_DESCRIPTION_MAX_LENGTH) {
+          candidate.description = description.slice(0, AI_SESSION_MENTION_DESCRIPTION_MAX_LENGTH)
+            .replace(/[\uD800-\uDBFF]$/u, "").trimEnd();
+        }
+        candidates.push(candidate);
+      }
+    } else diagnostics.push({ category, code: "CATALOG_QUERY_FAILED", message: result.reason instanceof Error ? result.reason.message : String(result.reason) });
   }
 }
 
@@ -191,7 +200,7 @@ function normalizePlugins(value: JsonValue) {
     const plugin = asRecord(value);
     if (plugin.installed !== true || plugin.enabled !== true || plugin.availability === "DISABLED_BY_ADMIN" || typeof plugin.id !== "string" || typeof plugin.name !== "string") return [];
     const details = asRecord(plugin.interface);
-    return [{ kind: "plugin" as const, name: text(details.displayName) || plugin.name, description: text(details.shortDescription) || text(details.description), path: `plugin://${plugin.id}` }];
+    return [{ kind: "plugin" as const, name: text(details.displayName) || plugin.name, description: text(details.shortDescription) || text(details.description) || text(plugin.description), path: `plugin://${plugin.id}` }];
   });
 }
 
