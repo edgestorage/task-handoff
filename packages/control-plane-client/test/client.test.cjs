@@ -1000,8 +1000,8 @@ test("shared client owns recovery, desktop lifecycle, and command routes used by
   await api.aiSessions.rename("instance/1", "session 1", { title: " Renamed ", expectedTitle: "Original", clientRequestId: "request-rename" });
   await api.aiSessions.executeCommand("instance/1", "session 1", { command: "rename", argument: "Renamed" });
   assert.deepEqual(requests.map((request) => request.path), [
-    "/api/ai-sessions?refresh=true&hierarchy=subagents",
-    "/api/ai-sessions?refresh=true&hierarchy=subagents&instanceId=instance%2F1",
+    "/api/ai-sessions?refresh=true&hierarchy=subagents&nextInputSuggestion=1",
+    "/api/ai-sessions?refresh=true&hierarchy=subagents&nextInputSuggestion=1&instanceId=instance%2F1",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/open-app",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/close",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/title",

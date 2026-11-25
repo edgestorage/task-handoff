@@ -14,7 +14,7 @@ const matrixPath = path.join(root, "controlled-instance-rs", "docs", "http-route
 const BASELINE_HEADING = "## `v0.0.47` compatibility baseline";
 const TARGET_HEADING = "## Target-current Node extensions after `v0.0.47`";
 const BASELINE_ROUTE_COUNT = 202;
-const TARGET_ROUTE_COUNT = 246;
+const TARGET_ROUTE_COUNT = 247;
 const POST_BASELINE_ROUTES = new Set([
   "DELETE /api/browser-control/access",
   "DELETE /api/browser-control/creation-context",
@@ -51,6 +51,7 @@ const POST_BASELINE_ROUTES = new Set([
   "GET /api/internal/remote-desktop/fallback/{}",
   "GET /api/internal/remote-desktop/permissions",
   "GET /api/internal/remote-desktop/settings",
+  "PUT /api/internal/ai-session-next-input-suggestion-settings",
   "POST /api/internal/remote-desktop/force-stop",
   "POST /api/internal/remote-desktop/permissions/request",
   "POST /api/internal/remote-desktop/preflight",

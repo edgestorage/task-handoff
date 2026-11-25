@@ -151,6 +151,35 @@ const displayedPlaceholder = computed(() => (
   props.placeholder
   || (suggestionVisible.value ? props.nextInputSuggestion!.text : t("sessions.composer.followUp"))
 ));
+const SUGGESTION_BADGE_FALLBACK_WIDTH = 132;
+const suggestionBadgeEl = ref<HTMLElement>();
+const suggestionBadgeWidth = ref(0);
+const suggestionInputStyle = computed(() => suggestionVisible.value
+  ? { paddingRight: `${(suggestionBadgeWidth.value || SUGGESTION_BADGE_FALLBACK_WIDTH) + 28}px` }
+  : undefined);
+let stopSuggestionBadgeResize: (() => void) | undefined;
+
+function measureSuggestionBadge() {
+  const width = suggestionBadgeEl.value?.getBoundingClientRect().width ?? 0;
+  suggestionBadgeWidth.value = width > 0 ? Math.ceil(width) : 0;
+}
+
+watch(suggestionVisible, async (visible) => {
+  stopSuggestionBadgeResize?.();
+  stopSuggestionBadgeResize = undefined;
+  if (!visible) {
+    suggestionBadgeWidth.value = 0;
+    return;
+  }
+  await nextTick();
+  measureSuggestionBadge();
+  if (typeof ResizeObserver === "undefined" || !suggestionBadgeEl.value) return;
+  const observer = new ResizeObserver(measureSuggestionBadge);
+  observer.observe(suggestionBadgeEl.value);
+  stopSuggestionBadgeResize = () => observer.disconnect();
+}, { immediate: true });
+
+onBeforeUnmount(() => stopSuggestionBadgeResize?.());
 const mentionPopoverRadius = ref("20px");
 const mentionKinds = ["plugin", "skill", "file", "directory", "app"] as const;
 const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
@@ -682,15 +711,7 @@ function handleInputKeydown(event: KeyboardEvent) {
   ) {
     event.preventDefault();
     event.stopPropagation();
-    rememberConsumedSuggestion(nextInputSuggestionKey.value);
-    draft.value = props.nextInputSuggestion!.text;
-    void nextTick(() => {
-      const element = textareaElement();
-      if (!element) return;
-      element.focus();
-      element.setSelectionRange(props.nextInputSuggestion!.text.length, props.nextInputSuggestion!.text.length);
-      resizeInput();
-    });
+    acceptNextInputSuggestion();
     return;
   }
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
@@ -702,6 +723,19 @@ function handleInputKeydown(event: KeyboardEvent) {
     return;
   }
   submit();
+}
+
+function acceptNextInputSuggestion() {
+  if (!suggestionVisible.value) return;
+  rememberConsumedSuggestion(nextInputSuggestionKey.value);
+  draft.value = props.nextInputSuggestion!.text;
+  void nextTick(() => {
+    const element = textareaElement();
+    if (!element) return;
+    element.focus();
+    element.setSelectionRange(props.nextInputSuggestion!.text.length, props.nextInputSuggestion!.text.length);
+    resizeInput();
+  });
 }
 
 function moveActiveMention(direction: 1 | -1) {
@@ -953,6 +987,7 @@ watch(() => props.busy, (busy) => {
             ref="inputEl"
             v-model="draft"
             class="ai-session-composer__input"
+            :style="suggestionInputStyle"
             :disabled="busy"
             :placeholder="displayedPlaceholder"
             :aria-describedby="suggestionVisible ? suggestionHintId : undefined"
@@ -966,6 +1001,19 @@ watch(() => props.busy, (busy) => {
           <span v-if="suggestionVisible" :id="suggestionHintId" class="ai-session-composer__suggestion-hint">
             {{ t('sessions.composer.acceptSuggestionHint') }}
           </span>
+          <button
+            v-if="suggestionVisible"
+            ref="suggestionBadgeEl"
+            type="button"
+            class="ai-session-composer__suggestion-badge"
+            :aria-label="t('sessions.composer.acceptSuggestionHint')"
+            :title="t('sessions.composer.acceptSuggestionHint')"
+            @click="acceptNextInputSuggestion"
+          >
+            <WandSparkles :size="12" class="ai-session-composer__suggestion-icon" />
+            <span class="ai-session-composer__suggestion-label">{{ t('sessions.composer.suggestionLabel') }}</span>
+            <kbd class="ai-session-composer__suggestion-key">{{ t('sessions.composer.suggestionKey') }}</kbd>
+          </button>
         </div>
       </PopoverAnchor>
       <PopoverContent
@@ -1421,6 +1469,59 @@ watch(() => props.busy, (busy) => {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.ai-session-composer__suggestion-badge {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--surface-inset, color-mix(in srgb, var(--ai-composer-bg, var(--background)) 84%, #000));
+  color: var(--ai-composer-muted, currentColor);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1;
+  padding: 0 4px 0 8px;
+  transition: background-color 140ms ease;
+  white-space: nowrap;
+}
+
+.ai-session-composer__suggestion-badge:is(:hover, :focus-visible) {
+  background: var(--surface-hover, color-mix(in srgb, var(--ai-composer-bg, var(--background)) 76%, #000));
+  outline: none;
+}
+
+.ai-session-composer__suggestion-badge:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--brand-accent, currentColor));
+  outline-offset: 2px;
+}
+
+.ai-session-composer__suggestion-icon {
+  flex: 0 0 auto;
+  color: var(--ai-composer-primary-text, currentColor);
+}
+
+.ai-session-composer__suggestion-key {
+  display: inline-grid;
+  min-width: 30px;
+  height: 17px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--ai-composer-text, currentColor) 18%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ai-composer-text, currentColor) 8%, transparent);
+  color: var(--ai-composer-text, currentColor);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0 5px;
 }
 
 .ai-session-composer__height-hover-zone {

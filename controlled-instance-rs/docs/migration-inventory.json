@@ -223,12 +223,14 @@
       ]
     },
     {
-      "source": "packages/ai-session-runtime/src/{ai-session-attachment-draft-streams,ai-session-attachments,ai-session-close,ai-session-control,ai-session-conversation-attachment-store,ai-session-create,ai-session-discovery,ai-session-fork,ai-session-history-lifecycle,ai-session-history-store,ai-session-open-app,ai-session-persistence-settings,ai-session-provider-registry,ai-session-registry,ai-session-resume,ai-session-title,ai-session-tool-activity-window,ai-session-turns,claude-control-sock,codex-app-server-protocol,codex-app-server,index,opencode,session-history,session-title-coordinator}.ts",
+      "source": "packages/ai-session-runtime/src/{ai-session-attachment-draft-streams,ai-session-attachments,ai-session-close,ai-session-control,ai-session-conversation-attachment-store,ai-session-create,ai-session-discovery,ai-session-fork,ai-session-history-lifecycle,ai-session-history-store,ai-session-next-input,ai-session-open-app,ai-session-persistence-settings,ai-session-provider-registry,ai-session-registry,ai-session-resume,ai-session-title,ai-session-tool-activity-window,ai-session-turns,claude-control-sock,codex-app-server-protocol,codex-app-server,index,opencode,session-history,session-title-coordinator}.ts",
       "rust": [
         "controlled-instance-rs/crates/ai-session/src/lib.rs",
         "controlled-instance-rs/crates/ai-session/src/history.rs",
         "controlled-instance-rs/crates/ai-session/src/timeline.rs",
         "controlled-instance-rs/crates/ai-session/src/attachments.rs",
+        "controlled-instance-rs/crates/ai-session/src/next_input.rs",
+        "controlled-instance-rs/crates/instance/src/ai_session_next_input.rs",
         "controlled-instance-rs/crates/ai-session/src/provider.rs",
         "controlled-instance-rs/crates/ai-session/src/provider_snapshot.rs"
       ],
@@ -237,6 +239,8 @@
         "controlled-instance-rs/crates/ai-session/src/history.rs",
         "controlled-instance-rs/crates/ai-session/src/timeline.rs",
         "controlled-instance-rs/crates/ai-session/src/attachments.rs",
+        "controlled-instance-rs/crates/ai-session/src/next_input.rs",
+        "controlled-instance-rs/crates/instance/src/ai_session_next_input.rs",
         "controlled-instance-rs/crates/ai-session/src/provider.rs"
       ],
       "status": "implemented",

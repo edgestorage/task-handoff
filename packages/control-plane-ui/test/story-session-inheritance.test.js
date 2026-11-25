@@ -7,7 +7,7 @@ const storyView = fs.readFileSync(new URL("story/StoryView.vue", sourceRoot), "u
 const aiSessionPanel = fs.readFileSync(new URL("instance-detail/AiSessionPanel.vue", sourceRoot), "utf8");
 
 test("a new Story session inherits the newest session through the shared Story session derivation", () => {
-  assert.match(storyView, /import \{ allNodesVisible, controlPlaneAgentCapabilities, latestStorySessionForCreation, nodeIsVisible, storySessionRootsInForest, type NodeVisibilityFilter \} from "@task-handoff\/control-plane-client";/);
+  assert.match(storyView, /import \{ allNodesVisible, controlPlaneAgentCapabilities, latestStorySessionForCreation, nodeIsVisible, storySessionAttentionByKey, storySessionRootsInForest, type NodeVisibilityFilter \} from "@task-handoff\/control-plane-client";/);
   assert.match(storyView, /const storySessionRootsFor = \(story: Story\) => storySessionRootsInForest\(\s*storySessionForest\.value,\s*story\.id,\s*instancesForStory\(story\)\.map\(\(instance\) => instance\.id\),\s*\);/);
   assert.match(storyView, /const latestSessionFor = \(story: Story\) => \{[\s\S]*?latestStorySessionForCreation\([\s\S]*?storySessionForest\.value,\s*story\.id,\s*instancesForStory\(story\)\.map\(\(instance\) => instance\.id\),[\s\S]*?\);/);
 });

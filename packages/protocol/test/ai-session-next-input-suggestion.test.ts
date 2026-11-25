@@ -15,22 +15,22 @@ import {
   projectAiSessionStreamEventForConsumer,
   projectAiSessionsSnapshotForConsumer,
   resolveAiSessionNextInputSuggestionReasoningEffort,
-} from "@task-handoff/protocol/ai-sessions";
+} from "../src/ai-sessions.ts";
 import {
   AiSessionHierarchyCapabilitiesSchema,
   supportsAiSessionConsumerNextInputSuggestion,
   supportsAiSessionProviderNextInputSuggestion,
-} from "@task-handoff/protocol/ai-session-provider-capabilities";
+} from "../src/ai-session-provider-capabilities.ts";
 import {
   NodeAgentCapabilitiesSchema,
   supportsNodeAiSessionNextInputSuggestion,
   supportsNodeAiSessionNextInputSuggestionReasoningEffort,
-} from "@task-handoff/protocol/node-agent-capabilities";
+} from "../src/node-agent-capabilities.ts";
 import {
   ControlledInstanceSchema,
   InstanceConfigInputSchema,
   supportsAiSessionNextInputSuggestionReasoningEffort,
-} from "@task-handoff/protocol/control-plane";
+} from "../src/control-plane.ts";
 
 const now = "2026-11-25T00:00:00.000Z";
 const meta = { streamId: "stream", instanceId: "inst", revision: 2, traceId: "trace", generatedAt: now, reason: "startup" };

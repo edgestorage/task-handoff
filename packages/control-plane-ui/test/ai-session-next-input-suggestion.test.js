@@ -44,8 +44,14 @@ test("summary patches keep a valid suggestion and detail merging never introduce
 test("the composer only shows a suggestion after explicit placeholder, busy, draft, attachment and consumption gates", () => {
   assert.match(composer, /const suggestionVisible = computed\(\(\) => Boolean\([\s\S]*!props\.placeholder[\s\S]*props\.nextInputSuggestion\?\.text[\s\S]*!props\.busy[\s\S]*!props\.sessionBusy[\s\S]*!editing\.value[\s\S]*!props\.modelValue[\s\S]*!attachments\.value\.length[\s\S]*!consumedSuggestions\.has\(nextInputSuggestionKey\.value\)[\s\S]*\)\);/);
   assert.match(composer, /const displayedPlaceholder = computed\(\(\) => \(\s*props\.placeholder\s*\|\| \(suggestionVisible\.value \? props\.nextInputSuggestion!\.text : t\("sessions\.composer\.followUp"\)\)\s*\)\);/);
+  assert.match(composer, /:style="suggestionInputStyle"/);
   assert.match(composer, /:aria-describedby="suggestionVisible \? suggestionHintId : undefined"/);
   assert.match(composer, /t\('sessions\.composer\.acceptSuggestionHint'\)/);
+  assert.match(composer, /<button\s+v-if="suggestionVisible"\s+ref="suggestionBadgeEl"\s+type="button"\s+class="ai-session-composer__suggestion-badge"\s+:aria-label="t\('sessions\.composer\.acceptSuggestionHint'\)"\s+:title="t\('sessions\.composer\.acceptSuggestionHint'\)"\s+@click="acceptNextInputSuggestion"/);
+  assert.match(composer, /t\('sessions\.composer\.suggestionLabel'\)/);
+  assert.match(composer, /<kbd class="ai-session-composer__suggestion-key">\{\{ t\('sessions\.composer\.suggestionKey'\) \}\}<\/kbd>/);
+  assert.match(composer, /const suggestionInputStyle = computed\(\(\) => suggestionVisible\.value[\s\S]*?paddingRight: `\$\{\(suggestionBadgeWidth\.value \|\| SUGGESTION_BADGE_FALLBACK_WIDTH\) \+ 28\}px`/);
+  assert.match(composer, /new ResizeObserver\(measureSuggestionBadge\)/);
 });
 
 test("Tab accepts a suggestion after command and mention handling without sending", () => {
@@ -55,10 +61,16 @@ test("Tab accepts a suggestion after command and mention handling without sendin
   assert.ok(command >= 0 && mention > command && accept > mention, "command, mention, then suggestion");
   const block = composer.slice(accept, composer.indexOf("if (event.key !== \"Enter\"", accept));
   assert.match(block, /!event\.altKey[\s\S]*!event\.ctrlKey[\s\S]*!event\.metaKey[\s\S]*!event\.isComposing/);
-  assert.match(block, /rememberConsumedSuggestion\(nextInputSuggestionKey\.value\)/);
-  assert.match(block, /draft\.value = props\.nextInputSuggestion!\.text/);
-  assert.match(block, /setSelectionRange\(props\.nextInputSuggestion!\.text\.length, props\.nextInputSuggestion!\.text\.length\)/);
-  assert.doesNotMatch(block, /emit\("run"\)/);
+  assert.match(block, /acceptNextInputSuggestion\(\)/);
+  const acceptHandler = composer.indexOf("function acceptNextInputSuggestion()");
+  assert.ok(acceptHandler > accept, "shared accept handler follows the keyboard handlers");
+  const handler = composer.slice(acceptHandler, composer.indexOf("function moveActiveMention", acceptHandler));
+  assert.match(handler, /rememberConsumedSuggestion\(nextInputSuggestionKey\.value\)/);
+  assert.match(handler, /draft\.value = props\.nextInputSuggestion!\.text/);
+  assert.match(handler, /setSelectionRange\(props\.nextInputSuggestion!\.text\.length, props\.nextInputSuggestion!\.text\.length\)/);
+  assert.match(handler, /element\.focus\(\)/);
+  assert.match(handler, /resizeInput\(\)/);
+  assert.doesNotMatch(handler, /emit\("run"\)/);
   assert.match(composer, /if \(consumedSuggestions\.size <= 2_000\) return;/);
   assert.match(composer, /if \(consumedSuggestions\.size <= 1_500\) break;/);
 });

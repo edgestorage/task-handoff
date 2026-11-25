@@ -288,13 +288,13 @@ describe('DirectControlPlaneTransport', () => {
 
     expect(factory).toHaveBeenCalledTimes(1);
     listeners.get('open')?.({});
-    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['ai.sessions', 'nodes'], metricInstanceIds: [], aiSessionTransient }));
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true, nextInputSuggestion: true }, topics: ['ai.sessions', 'nodes'], metricInstanceIds: [], aiSessionTransient }));
     listeners.get('message')?.({ data: JSON.stringify({ v: 1, id: 'event-2', seq: 2, type: 'streams.hello', topic: 'system', createdAt: '2026-08-26T00:00:01.000Z', payload: {} }) });
     expect(firstEvent).toHaveBeenCalledTimes(1);
     expect(secondEvent).toHaveBeenCalledTimes(1);
     first.close();
     expect(socket.close).not.toHaveBeenCalled();
-    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['nodes'], metricInstanceIds: [] }));
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true, nextInputSuggestion: true }, topics: ['nodes'], metricInstanceIds: [] }));
     second.close();
     expect(socket.close).toHaveBeenCalledTimes(1);
   });

@@ -7,10 +7,15 @@ import { computed, onMounted, onUnmounted, ref } from "vue"
 import { cn } from "@/lib/utils"
 import { useCommand, useCommandGroup } from "."
 
-const props = defineProps<ListboxItemProps & { class?: HTMLAttributes["class"] }>()
+const props = withDefaults(defineProps<ListboxItemProps & {
+  class?: HTMLAttributes["class"]
+  clearSearchOnSelect?: boolean
+}>(), {
+  clearSearchOnSelect: true,
+})
 const emits = defineEmits<ListboxItemEmits>()
 
-const delegatedProps = reactiveOmit(props, "class")
+const delegatedProps = reactiveOmit(props, "class", "clearSearchOnSelect")
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
 
@@ -67,7 +72,7 @@ onUnmounted(() => {
     ref="itemRef"
     :class="cn('relative flex cursor-default gap-2 select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[highlighted]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0', props.class)"
     @select="() => {
-      filterState.search = ''
+      if (props.clearSearchOnSelect) filterState.search = ''
     }"
   >
     <slot />

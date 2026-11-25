@@ -82,6 +82,7 @@ test("model deletion keeps its target until the asynchronous request completes",
 test("model settings discovers models into an ordered name list with real endpoint testing", () => {
   const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
   const list = read("src/apps/control-plane/settings/ModelEntryList.vue");
+  const commandItem = read("src/components/ui/command/CommandItem.vue");
   const state = read("src/apps/control-plane/settings/useModelSettings.ts");
   assert.match(settings, /<ModelEntryList[\s\S]{0,240}:entries="settingsModel\.modelNames"/);
   assert.match(settings, /:external-label="t\('settings\.modelRegistry\.externalName'\)"/);
@@ -125,6 +126,8 @@ test("model settings discovers models into an ordered name list with real endpoi
   assert.match(settings, /<Command class="model-picker-command"[\s\S]*<CommandInput class="model-picker-search-input [^"]*text-\[13px\]" :placeholder="t\('settings\.modelRegistry\.searchModels'\)"/);
   assert.match(settings, /<ScrollArea class="model-picker-scroll" :horizontal="false">[\s\S]*<CommandList class="model-picker-list" :scrollable="false">/);
   assert.match(settings, /v-for="option in discoveredModels"/);
+  assert.match(settings, /<CommandItem v-for="option in discoveredModels"[^>]*:clear-search-on-select="false"/);
+  assert.match(commandItem, /if \(props\.clearSearchOnSelect\) filterState\.search = ''/);
   assert.match(settings, /<span>\{\{ option\.id \}\}<\/span>[\s\S]*<Check :size="14"/);
   // The picker's check state tracks the upstream model, because the external
   // name is operator-owned and may differ from the discovered id.

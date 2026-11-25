@@ -156,12 +156,12 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
 
 test("AI Session hierarchy capability defaults to flat v0.0.28 behavior", () => {
   const legacy = { agent: "codex", actions: {}, timeline: {} };
-  assert.deepEqual(normalizeAiSessionHierarchyCapabilities(legacy), { subagents: false });
+  assert.deepEqual(normalizeAiSessionHierarchyCapabilities(legacy), { subagents: false, nextInputSuggestion: false });
   assert.equal(supportsAiSessionSubagentHierarchy(legacy), false);
   assert.deepEqual(normalizeAiSessionHierarchyCapabilities({
     ...legacy,
     hierarchy: { subagents: true, future: true },
-  }), { subagents: true });
+  }), { subagents: true, nextInputSuggestion: false });
   assert.equal(supportsAiSessionSubagentHierarchy({
     ...legacy,
     hierarchy: { subagents: true },
