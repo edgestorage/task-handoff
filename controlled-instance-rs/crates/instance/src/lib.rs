@@ -3,6 +3,7 @@ mod ai_session_authority;
 mod ai_session_coordination;
 mod ai_session_delta_coalescer;
 mod ai_session_hierarchy;
+mod ai_session_next_input;
 mod ai_session_open_app;
 mod ai_session_validation;
 mod app_session_authority;

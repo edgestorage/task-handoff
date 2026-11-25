@@ -158,6 +158,10 @@ pub struct FeatureCapabilities {
     pub ai_session_workspace_selection: bool,
     pub ai_session_workspace_checkout: bool,
     pub ai_session_persistence_settings: bool,
+    #[serde(default)]
+    pub ai_session_next_input_suggestion: bool,
+    #[serde(default)]
+    pub ai_session_next_input_suggestion_reasoning_effort: bool,
     pub private_model_catalog: bool,
     pub codex_managed_settings: bool,
     pub node_agent_connection_update: bool,
@@ -286,6 +290,8 @@ pub struct AiSessionReasoningEffortCapabilities {
 #[serde(rename_all = "camelCase")]
 pub struct AiSessionHierarchyCapabilities {
     pub subagents: bool,
+    #[serde(default)]
+    pub next_input_suggestion: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -319,6 +325,19 @@ mod tests {
             crate::INSTANCE_SHELL_PROTOCOL_VERSION
         );
         assert!(value["features"].get("aiSessionTimeline").is_some());
+    }
+
+    #[test]
+    fn hierarchy_capabilities_default_next_input_suggestions_to_false() {
+        let legacy: AiSessionHierarchyCapabilities =
+            serde_json::from_value(serde_json::json!({ "subagents": true })).expect("legacy");
+        assert!(legacy.subagents);
+        assert!(!legacy.next_input_suggestion);
+        let current: AiSessionHierarchyCapabilities = serde_json::from_value(
+            serde_json::json!({ "subagents": true, "nextInputSuggestion": true }),
+        )
+        .expect("current");
+        assert!(current.next_input_suggestion);
     }
 
     #[test]

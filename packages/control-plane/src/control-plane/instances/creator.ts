@@ -6,7 +6,7 @@ import type {
   Project,
   SelectableImage,
 } from "@task-handoff/protocol/control-plane";
-import { InstanceCreateInputSchema, ProjectSourceSchema, projectSourceWithoutGitCredential, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings, supportsNodeGitCredentialRuntimeBroker, supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
+import { InstanceCreateInputSchema, ProjectSourceSchema, projectSourceWithoutGitCredential, supportsNodeAiSessionFileAttachmentLimit, supportsNodeAiSessionNextInputSuggestion, supportsNodeAiSessionNextInputSuggestionReasoningEffort, supportsNodeCodexManagedSettings, supportsNodeGitCredentialRuntimeBroker, supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialRetention, type GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import { now } from "../application/helpers.ts";
@@ -66,6 +66,15 @@ export class ControlledInstanceCreator {
     if (parsedInput.config?.codexSettings !== undefined && !supportsNodeCodexManagedSettings(agentCapabilities)) {
       // Compatibility for v0.0.28: older node agents reject the additive Codex settings field.
       throw publicError("This node does not support managed Codex settings.", 409, "CODEX_MANAGED_SETTINGS_UNSUPPORTED");
+    }
+    if ((parsedInput.config?.aiSessionNextInputSuggestionEnabled !== undefined
+      || parsedInput.config?.aiSessionNextInputSuggestionReasoningEffort !== undefined)
+      && !supportsNodeAiSessionNextInputSuggestion(agentCapabilities)) {
+      throw publicError("This node does not support next-input suggestions.", 409, "AI_SESSION_NEXT_INPUT_SUGGESTION_UNSUPPORTED");
+    }
+    if (parsedInput.config?.aiSessionNextInputSuggestionReasoningEffort !== undefined
+      && !supportsNodeAiSessionNextInputSuggestionReasoningEffort(agentCapabilities)) {
+      throw publicError("This node does not support next-input suggestion reasoning modes.", 409, "AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT_UNSUPPORTED");
     }
     const runtime = await this.options.requireRuntime(node.id, runtimeId);
     const requiresImage = runtime.capabilities.requiresImage ?? runtime.type !== "local";

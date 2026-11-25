@@ -623,7 +623,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       type: 'event-subscribe',
       body: {
         eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
-        aiSessionHierarchy: { subagents: true },
+        aiSessionHierarchy: { subagents: true, nextInputSuggestion: true },
         topics: wildcard ? undefined : [...topics].sort(),
         ...MOBILE_RESOURCE_METRIC_SCOPE,
         ...(aiSessionTransient ? { aiSessionTransient } : {}),

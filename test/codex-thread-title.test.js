@@ -309,6 +309,27 @@ test("Codex client isolates and cleans up an ephemeral structured title turn", a
   assert.equal(start.config["mcp_servers.dangerous.enabled"], false);
   assert.equal("mcp_servers" in start.config, false);
   assert.equal(requests[2].params.effort, "high");
+
+  requests.length = 0;
+  await client.runEphemeralStructuredTurn({
+    cwd: "/workspace",
+    model: "session-model",
+    modelProvider: "session-provider",
+    reasoningEffort: "none",
+    prompt: "Suggest next input",
+    outputSchema: { type: "object" },
+  });
+  assert.equal(requests[2].params.effort, "none");
+
+  requests.length = 0;
+  await client.runEphemeralStructuredTurn({
+    cwd: "/workspace",
+    model: "session-model",
+    modelProvider: "session-provider",
+    prompt: "Suggest next input",
+    outputSchema: { type: "object" },
+  });
+  assert.equal("effort" in requests[2].params, false);
 });
 
 test("Codex client rejects MCP names that cannot be safely disabled with a dotted override", async () => {

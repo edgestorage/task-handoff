@@ -133,6 +133,10 @@ export const NodeAgentCapabilitiesSchema = z.object({
   aiSessionHistoryLimit: z.boolean().optional(),
   aiSessionAttachmentRetention: z.boolean().optional(),
   aiSessionFileAttachmentLimit: z.boolean().optional(),
+  // Additive capability: older node-agents reject the suggestion instance setting.
+  aiSessionNextInputSuggestion: z.boolean().optional(),
+  // Additive capability: older node-agents cannot project the reasoning-mode setting.
+  aiSessionNextInputSuggestionReasoningEffort: z.boolean().optional(),
   folderPlaces: z.boolean().optional(),
   localFolderNameUpdate: z.boolean().optional(),
   // Additive capability: absent on v0.0.21 node-agents.
@@ -342,4 +346,12 @@ export function supportsNodeLocalFolderNameUpdate(capabilities: unknown) {
 
 export function supportsNodeAiSessionFileAttachmentLimit(capabilities: unknown) {
   return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.aiSessionFileAttachmentLimit === true;
+}
+
+export function supportsNodeAiSessionNextInputSuggestion(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.aiSessionNextInputSuggestion === true;
+}
+
+export function supportsNodeAiSessionNextInputSuggestionReasoningEffort(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.aiSessionNextInputSuggestionReasoningEffort === true;
 }

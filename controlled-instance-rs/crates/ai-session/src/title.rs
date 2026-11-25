@@ -13,9 +13,28 @@ pub struct AiSessionTitleInput {
     pub reasoning_effort: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct AiSessionStructuredModelInput {
+    pub schema_name: String,
+    pub prompt: String,
+    pub output_schema: Value,
+    pub model_selection: AiSessionModelSelection,
+    pub reasoning_effort: Option<String>,
+    pub error_code_prefix: String,
+}
+
 #[async_trait]
 pub trait AiSessionTitleGenerator: Send + Sync {
     async fn generate_title(&self, input: AiSessionTitleInput) -> Result<String, ProviderError>;
+}
+
+#[async_trait]
+pub trait AiSessionStructuredModelGenerator: Send + Sync {
+    async fn generate_structured_model(
+        &self,
+        input: AiSessionStructuredModelInput,
+        cancel: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<String, ProviderError>;
 }
 
 pub fn ai_session_title_output_schema() -> Value {

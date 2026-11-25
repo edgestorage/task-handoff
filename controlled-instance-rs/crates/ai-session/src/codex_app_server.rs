@@ -2983,7 +2983,10 @@ impl AiSessionControlProvider for CodexAppServerProvider {
                 select_at_create: true,
                 update_during_session: thread_settings,
             }),
-            hierarchy: Some(AiSessionHierarchyCapabilities { subagents: true }),
+            hierarchy: Some(AiSessionHierarchyCapabilities {
+                subagents: true,
+                next_input_suggestion: true,
+            }),
         }
     }
 
@@ -6665,6 +6668,7 @@ mod tests {
             counters: AiSessionCounters::default(),
             queue: AiSessionQueue::default(),
             unread: false,
+            next_input_suggestion: None,
         }
     }
 

@@ -810,8 +810,11 @@ export function registerSessionRoutes({
   });
 
   app.get("/api/ai-sessions", async (request, reply) => {
-    const query = request.query as { refresh?: string; sinceRevision?: string; instanceId?: string; streamId?: string; hierarchy?: string };
-    const hierarchy = { subagents: query.hierarchy === "subagents" };
+    const query = request.query as { refresh?: string; sinceRevision?: string; instanceId?: string; streamId?: string; hierarchy?: string; nextInputSuggestion?: string };
+    const hierarchy = {
+      subagents: query.hierarchy === "subagents",
+      nextInputSuggestion: query.nextInputSuggestion === "1",
+    };
     if (query.instanceId) await assertRequestInstanceVisible(service, request, query.instanceId);
     if (query.sinceRevision !== undefined) {
       const sinceRevision = Number(query.sinceRevision);
@@ -844,8 +847,11 @@ export function registerSessionRoutes({
   });
 
   app.post("/api/ai-sessions/sync", async (request) => {
-    const query = request.query as { hierarchy?: string };
-    const hierarchy = { subagents: query.hierarchy === "subagents" };
+    const query = request.query as { hierarchy?: string; nextInputSuggestion?: string };
+    const hierarchy = {
+      subagents: query.hierarchy === "subagents",
+      nextInputSuggestion: query.nextInputSuggestion === "1",
+    };
     const input = AiSessionsSyncRequestSchema.parse(request.body || {});
     const descriptors = await aiSessionAggregator.streamDescriptors();
     const visibleInstanceIds = await requestVisibleInstanceIds(service, request);

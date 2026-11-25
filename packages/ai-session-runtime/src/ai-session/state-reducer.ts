@@ -26,6 +26,7 @@ import {
   normalizeAiSessionPhase,
   normalizeAiSessionQueue,
   normalizeAiSessionSubAgents,
+  withValidNextInputSuggestion,
 } from "./persistence";
 
 export type AiSessionPatch = Partial<
@@ -61,6 +62,7 @@ export type AiSessionPatch = Partial<
     | "error"
     | "queue"
     | "unread"
+    | "nextInputSuggestion"
   >
 > & {
   counters?: Partial<AiSessionStatus["counters"]>;
@@ -130,7 +132,7 @@ function buildAiSessionPatch(
     : goalPatch !== undefined
       ? normalizeAiSessionGoal(goalPatch)
       : current.goal;
-  return {
+  return withValidNextInputSuggestion({
     ...current,
     ...sessionPatch,
     id: current.id,
@@ -161,7 +163,7 @@ function buildAiSessionPatch(
     queue: patch.queue ? normalizeAiSessionQueue(patch.queue) : current.queue,
     subAgents: patch.subAgents !== undefined ? normalizeAiSessionSubAgents(patch.subAgents) : current.subAgents,
     goal,
-  };
+  });
 }
 
 export function applyAiSessionPatch(
@@ -211,6 +213,7 @@ const AI_SESSION_BUSINESS_KEYS = [
   "counters",
   "queue",
   "unread",
+  "nextInputSuggestion",
 ] as const satisfies readonly AiSessionBusinessKey[];
 
 function nextUnread(current: boolean, previousStatus: AiSessionLifecycle, status: AiSessionLifecycle) {
@@ -308,6 +311,16 @@ export function reduceAiSessionRealtime(
 ): AiSessionStatus | undefined {
   const updatedAt = event.observedAt ?? current.updatedAt;
   const meta = turnMeta(event);
+  if (event.kind === "next-input-suggestion") {
+    return applyAiSessionPatch(current, {
+      nextInputSuggestion: event.suggestion ?? undefined,
+    }, {
+      updatedAt,
+      meta,
+      preserveUpdatedAt: true,
+      suppressTurnUpdate: true,
+    });
+  }
   if (event.kind === "goal") {
     return applyAiSessionPatch(current, { goal: event.goal }, {
       updatedAt,
@@ -331,7 +344,7 @@ export function reduceAiSessionRealtime(
         userPrompt,
         userMessage: event.userMessage,
       }, updatedAt, meta);
-      return applyAiSessionPatch(current, { turns }, {
+      return applyAiSessionPatch(current, { turns, nextInputSuggestion: undefined }, {
         updatedAt, meta, replaceTurns: true, suppressTurnUpdate: true,
       });
     }
@@ -341,6 +354,7 @@ export function reduceAiSessionRealtime(
       phase: event.phase || "thinking",
       userPrompt,
       userMessage: event.userMessage,
+      nextInputSuggestion: undefined,
     }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "model-selection") {
@@ -371,6 +385,7 @@ export function reduceAiSessionRealtime(
       status,
       phase: event.phase || current.phase,
       currentTool: status === "idle" || status === "failed" ? undefined : current.currentTool,
+      ...(status === "running" || status === "waiting" ? { nextInputSuggestion: undefined } : {}),
     }, {
       updatedAt,
       meta,
@@ -383,6 +398,7 @@ export function reduceAiSessionRealtime(
       activeTurnId: event.activeTurnId || current.activeTurnId,
       status: event.status || "running",
       phase: event.phase || "thinking",
+      nextInputSuggestion: undefined,
     }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "user-message") {
@@ -392,6 +408,7 @@ export function reduceAiSessionRealtime(
       phase: event.phase || "thinking",
       userPrompt: event.userPrompt,
       userMessage: event.userMessage,
+      nextInputSuggestion: undefined,
     }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "assistant-message") {
@@ -405,6 +422,7 @@ export function reduceAiSessionRealtime(
       lastMessageItemId: event.itemId,
       currentTool: undefined,
       toolCallsSinceLastMessage: 0,
+      nextInputSuggestion: undefined,
     }, { updatedAt, meta });
   }
   if (event.kind === "approval-requested") {
@@ -415,6 +433,7 @@ export function reduceAiSessionRealtime(
       summary: event.summary || event.text,
       actions: { ...current.actions, approval: true },
       counters: event.counters || { approvals: 1 },
+      nextInputSuggestion: undefined,
     }, { updatedAt, meta });
   }
   if (event.kind === "tool-activity") {
@@ -427,7 +446,10 @@ export function reduceAiSessionRealtime(
     return applyAiSessionPatch(current, { subAgents: event.subAgents }, { updatedAt, meta, suppressTurnUpdate: true });
   }
   if (event.kind === "session-error") {
-    return applyAiSessionPatch(current, { error: event.error }, { updatedAt, meta, suppressTurnUpdate: true });
+    return applyAiSessionPatch(current, {
+      error: event.error,
+      nextInputSuggestion: undefined,
+    }, { updatedAt, meta, suppressTurnUpdate: true });
   }
   if (event.kind === "context-compaction" && event.contextCompaction) {
     const turnId = event.activeTurnId || current.activeTurnId;
@@ -475,6 +497,7 @@ export function reduceAiSessionRealtime(
       lastMessage: responseText,
       error,
       currentTool: undefined,
+      nextInputSuggestion: undefined,
     }, {
       updatedAt,
       meta,

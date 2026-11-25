@@ -1532,6 +1532,7 @@ impl AiSessionController {
                 error: None,
                 counters: Default::default(),
                 queue: AiSessionQueue::default(),
+                next_input_suggestion: None,
                 unread: false,
             };
             existing = Some(self.runtime.save(session)?);
@@ -1986,6 +1987,7 @@ impl AiSessionController {
             error: None,
             counters: Default::default(),
             queue: AiSessionQueue::default(),
+            next_input_suggestion: None,
             unread: false,
         };
         self.runtime.save(session)?;
@@ -3084,6 +3086,7 @@ impl AiSessionController {
                     error: None,
                     counters: Default::default(),
                     queue: AiSessionQueue::default(),
+                    next_input_suggestion: None,
                     unread: false,
                 };
                 self.runtime.save(session).is_ok()
@@ -4221,7 +4224,7 @@ fn create_fingerprint(
             );
         }
     }
-    strip_null_object_fields(&mut value);
+    crate::strip_null_object_fields(&mut value);
     Ok(hex::encode(Sha256::digest(canonical_json_bytes(&value))))
 }
 
@@ -4230,23 +4233,6 @@ fn is_create_fingerprint(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-fn strip_null_object_fields(value: &mut Value) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                strip_null_object_fields(item);
-            }
-        }
-        Value::Object(object) => {
-            object.retain(|_, value| !value.is_null());
-            for value in object.values_mut() {
-                strip_null_object_fields(value);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn send_fingerprint(session_id: &str, input: &AiSessionMessageInput) -> String {
@@ -4350,6 +4336,7 @@ mod tests {
             error: None,
             counters: AiSessionCounters::default(),
             queue: AiSessionQueue::default(),
+            next_input_suggestion: None,
             unread: false,
         }
     }

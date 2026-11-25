@@ -5,6 +5,7 @@ pub const AI_SESSION_SNAPSHOT_LIMIT: usize = 150;
 pub const AI_SESSION_HISTORY_DEFAULT_LIMIT: usize = 50;
 pub const AI_SESSION_HISTORY_MAX_LIMIT: usize = 500;
 pub const AI_SESSION_HISTORY_MAX_ITEMS: usize = 10_000;
+pub const AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS: usize = 160;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +44,14 @@ pub struct AiSessionQueue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paused: Option<bool>,
     pub items: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AiSessionNextInputSuggestion {
+    pub text: String,
+    pub turn_id: String,
+    pub generated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -120,6 +129,8 @@ pub struct AiSessionSummary {
     pub error: Option<String>,
     #[serde(default)]
     pub queue: AiSessionQueue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_input_suggestion: Option<AiSessionNextInputSuggestion>,
     #[serde(default)]
     pub unread: bool,
 }
@@ -216,15 +227,22 @@ fn has_subagent_lineage(lineage: Option<&Value>) -> bool {
         == Some("subagent")
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AiSessionConsumerProjection {
+    pub subagents: bool,
+    pub next_input_suggestion: bool,
+}
+
 pub fn project_ai_sessions_snapshot_for_consumer(
     mut snapshot: AiSessionsSnapshot,
-    subagents: bool,
+    consumer: AiSessionConsumerProjection,
 ) -> AiSessionsSnapshot {
-    if !subagents {
-        for session in &mut snapshot.sessions {
-            if has_subagent_lineage(session.lineage.as_ref()) {
-                session.lineage = None;
-            }
+    for session in &mut snapshot.sessions {
+        if !consumer.subagents && has_subagent_lineage(session.lineage.as_ref()) {
+            session.lineage = None;
+        }
+        if !consumer.next_input_suggestion {
+            session.next_input_suggestion = None;
         }
     }
     snapshot
@@ -240,24 +258,24 @@ pub fn project_ai_session_history_item_for_consumer(
     item
 }
 
-fn project_ai_session_summary_value(summary: &mut Value, subagents: bool) {
-    if subagents {
-        return;
-    }
+fn project_ai_session_summary_value(summary: &mut Value, consumer: AiSessionConsumerProjection) {
     let Some(object) = summary.as_object_mut() else {
         return;
     };
-    if has_subagent_lineage(object.get("lineage")) {
+    if !consumer.subagents && has_subagent_lineage(object.get("lineage")) {
         object.remove("lineage");
+    }
+    if !consumer.next_input_suggestion {
+        object.remove("nextInputSuggestion");
     }
 }
 
 pub fn project_ai_session_stream_event_payload_for_consumer(
     event_type: &str,
     payload: &mut Value,
-    subagents: bool,
+    consumer: AiSessionConsumerProjection,
 ) {
-    if subagents || event_type == "ai-session.removed" {
+    if event_type == "ai-session.removed" {
         return;
     }
     match event_type {
@@ -268,14 +286,14 @@ pub fn project_ai_session_stream_event_payload_for_consumer(
                 .and_then(Value::as_array_mut)
             {
                 for session in sessions {
-                    project_ai_session_summary_value(session, subagents);
+                    project_ai_session_summary_value(session, consumer);
                 }
             }
         }
         "ai-session.patch" => {
             if let Some(upserted) = payload.get_mut("upserted").and_then(Value::as_array_mut) {
                 for session in upserted {
-                    project_ai_session_summary_value(session, subagents);
+                    project_ai_session_summary_value(session, consumer);
                 }
             }
         }
@@ -283,10 +301,10 @@ pub fn project_ai_session_stream_event_payload_for_consumer(
     }
 }
 
-pub fn project_ai_session_delta_for_consumer(delta: &mut Value, subagents: bool) {
-    if subagents {
-        return;
-    }
+pub fn project_ai_session_delta_for_consumer(
+    delta: &mut Value,
+    consumer: AiSessionConsumerProjection,
+) {
     let Some(events) = delta.get_mut("events").and_then(Value::as_array_mut) else {
         return;
     };
@@ -299,7 +317,7 @@ pub fn project_ai_session_delta_for_consumer(delta: &mut Value, subagents: bool)
             continue;
         };
         if let Some(payload) = event.get_mut("payload") {
-            project_ai_session_stream_event_payload_for_consumer(&event_type, payload, subagents);
+            project_ai_session_stream_event_payload_for_consumer(&event_type, payload, consumer);
         }
     }
 }
@@ -545,6 +563,7 @@ mod tests {
             error: None,
             queue: AiSessionQueue::default(),
             unread: false,
+            next_input_suggestion: None,
         };
         let value = serde_json::to_value(summary).expect("summary serializes");
         assert_eq!(value["creationSource"], "app-session");
@@ -613,10 +632,22 @@ mod tests {
             ],
             updated_at: "2026-11-02T00:00:00.000Z".to_string(),
         };
-        let flat = project_ai_sessions_snapshot_for_consumer(snapshot.clone(), false);
+        let flat = project_ai_sessions_snapshot_for_consumer(
+            snapshot.clone(),
+            AiSessionConsumerProjection {
+                subagents: false,
+                next_input_suggestion: false,
+            },
+        );
         assert!(flat.sessions[0].lineage.is_none());
         assert_eq!(flat.sessions[1].lineage, fork);
-        let nested = project_ai_sessions_snapshot_for_consumer(snapshot, true);
+        let nested = project_ai_sessions_snapshot_for_consumer(
+            snapshot,
+            AiSessionConsumerProjection {
+                subagents: true,
+                next_input_suggestion: true,
+            },
+        );
         assert_eq!(nested.sessions[0].lineage, subagent);
 
         let history: AiSessionHistoryItem = serde_json::from_value(serde_json::json!({
@@ -654,7 +685,10 @@ mod tests {
         project_ai_session_stream_event_payload_for_consumer(
             "ai-session.snapshot",
             &mut snapshot_payload,
-            false,
+            AiSessionConsumerProjection {
+                subagents: false,
+                next_input_suggestion: false,
+            },
         );
         assert!(snapshot_payload["snapshot"]["sessions"][0]
             .get("lineage")
@@ -676,7 +710,13 @@ mod tests {
                 }
             }]
         });
-        project_ai_session_delta_for_consumer(&mut delta, false);
+        project_ai_session_delta_for_consumer(
+            &mut delta,
+            AiSessionConsumerProjection {
+                subagents: false,
+                next_input_suggestion: false,
+            },
+        );
         assert!(delta["events"][0]["payload"]["upserted"][0]
             .get("lineage")
             .is_none());

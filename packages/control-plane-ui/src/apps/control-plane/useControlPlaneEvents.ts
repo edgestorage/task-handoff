@@ -190,7 +190,7 @@ export function useControlPlaneEvents(input: {
       v: 1,
       type: "subscribe",
       eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
-      aiSessionHierarchy: { subagents: true },
+      aiSessionHierarchy: { subagents: true, nextInputSuggestion: true },
       topics: ["*"],
       ...(instanceId ? { instanceIds: [instanceId] } : {}),
       ...(input.resourceMetrics ? { metricInstanceIds: toValue(input.resourceMetricInstanceIds || []) } : {}),

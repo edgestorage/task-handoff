@@ -14,10 +14,10 @@ use controlled_instance_app_runtime::{
 };
 use controlled_instance_core::process::process_start_identity;
 use controlled_instance_protocol::{
-    project_ai_sessions_snapshot_for_consumer, AiSessionHistoryItem, AiSessionsSnapshot,
-    AiSessionsState, AppCounts, ControlledInstanceCapabilities, EmbeddedBrowserTargetDetachParams,
-    EventEnvelope, InstanceStatusSnapshot, WorkspaceGitStatus, WorkspaceStatus,
-    WorkspaceStorageStatus, SESSION_STREAM_PROTOCOL_VERSION,
+    project_ai_sessions_snapshot_for_consumer, AiSessionConsumerProjection, AiSessionHistoryItem,
+    AiSessionsSnapshot, AiSessionsState, AppCounts, ControlledInstanceCapabilities,
+    EmbeddedBrowserTargetDetachParams, EventEnvelope, InstanceStatusSnapshot, WorkspaceGitStatus,
+    WorkspaceStatus, WorkspaceStorageStatus, SESSION_STREAM_PROTOCOL_VERSION,
 };
 use controlled_instance_workspace::{
     triggers::{local_instance_id, TriggerExecutor, TriggerManager, TriggerStore},
@@ -47,6 +47,7 @@ use crate::{
         derive_retention_candidates, derive_subtree, AiSessionHierarchyRecord,
         AiSessionRetentionCandidate,
     },
+    ai_session_next_input::AiSessionNextInputSuggestionCoordinator,
     ai_session_open_app::AiSessionOpenAppCoordinator,
     app_session_authority::AppSessionAuthority,
     auth::WebAuthState,
@@ -61,7 +62,10 @@ use crate::{
     events::{EventBus, EventClientSubscription},
     instance_shell::InstanceShellRuntime,
     node_agent_client::NodeAgentClient,
-    private_model::ControlledModelConfig,
+    private_model::{
+        read_ai_session_next_input_suggestion_enabled,
+        read_ai_session_next_input_suggestion_reasoning_effort, ControlledModelConfig,
+    },
     session_titles::SessionTitleCoordinator,
     story_tools::StoryToolService,
 };
@@ -189,6 +193,7 @@ pub struct AppState {
     pub ai_session_close: Arc<AiSessionCloseCoordinator>,
     pub ai_session_refresh: Arc<AiSessionRefreshScheduler>,
     pub session_titles: Arc<SessionTitleCoordinator>,
+    pub ai_session_next_input: Arc<AiSessionNextInputSuggestionCoordinator>,
     pub ai_session_codex: Arc<CodexAppServerProvider>,
     pub ai_session_claude: Arc<ClaudeControlSockProvider>,
     pub ai_session_opencode: Arc<OpenCodeSessionProvider>,
@@ -360,6 +365,12 @@ impl AppState {
             &config.instance_id,
             Some(ai_session_dir),
         ));
+        let ai_session_next_input = Arc::new(
+            AiSessionNextInputSuggestionCoordinator::with_reasoning_effort(
+                read_ai_session_next_input_suggestion_enabled(&std::env::vars().collect()),
+                read_ai_session_next_input_suggestion_reasoning_effort(&std::env::vars().collect()),
+            ),
+        );
         let ai_session_persistence_settings = Arc::new(AiSessionPersistenceSettingsStore::new(
             &config.storage_paths.data_dir,
         ));
@@ -774,6 +785,7 @@ impl AppState {
             ai_session_close,
             ai_session_refresh,
             session_titles,
+            ai_session_next_input,
             ai_session_codex,
             ai_session_claude,
             ai_session_opencode,
@@ -970,10 +982,20 @@ impl AppState {
 
     pub fn start_ai_session_services(&self) {
         self.start_ai_session_event_projection();
+        {
+            let state = self.clone();
+            tokio::spawn(async move {
+                state.ai_session_next_input.initialize(&state).await;
+            });
+        }
         let mut changes = self.ai_session_controller.subscribe_changes();
         let state = self.clone();
         tokio::spawn(async move {
             while changes.recv().await.is_ok() {
+                state
+                    .ai_session_next_input
+                    .handle_state_change(&state)
+                    .await;
                 state.publish_ai_session_snapshot("provider-event");
             }
         });
@@ -1474,6 +1496,7 @@ impl AppState {
             let state = self.clone();
             tokio::spawn(async move {
                 while let Ok(event) = events.recv().await {
+                    let suggestion_event = event.clone();
                     match event {
                         ProviderEvent::ConnectionChanged { connected: false } => {
                             state
@@ -1519,6 +1542,10 @@ impl AppState {
                             }
                         }
                     }
+                    state
+                        .ai_session_next_input
+                        .handle_provider_event(&state, &suggestion_event)
+                        .await;
                 }
                 state
                     .ai_session_message_deltas
@@ -1919,9 +1946,9 @@ impl AppState {
     pub(crate) fn connect_event_stream(
         &self,
         includes_authority_snapshot: bool,
-        subagents: bool,
+        consumer: AiSessionConsumerProjection,
     ) -> (EventClientSubscription, Vec<EventEnvelope<Value>>) {
-        self.connect_event_stream_before_registration(includes_authority_snapshot, subagents, || {})
+        self.connect_event_stream_before_registration(includes_authority_snapshot, consumer, || {})
     }
 
     // Keep the registration boundary explicit so tests can place a mutation
@@ -1929,7 +1956,7 @@ impl AppState {
     pub(crate) fn connect_event_stream_before_registration(
         &self,
         includes_authority_snapshot: bool,
-        subagents: bool,
+        consumer: AiSessionConsumerProjection,
         before_registration: impl FnOnce(),
     ) -> (EventClientSubscription, Vec<EventEnvelope<Value>>) {
         before_registration();
@@ -1963,7 +1990,7 @@ impl AppState {
                 .published_snapshot()
                 .cloned()
                 .unwrap_or_else(|| self.ai_sessions_snapshot());
-            let snapshot = project_ai_sessions_snapshot_for_consumer(snapshot, subagents);
+            let snapshot = project_ai_sessions_snapshot_for_consumer(snapshot, consumer);
             initial.push((
                 "ai-session.snapshot",
                 ai_authority.snapshot_payload(snapshot, "startup"),
@@ -1978,7 +2005,10 @@ impl AppState {
         self.events.connect_client(initial)
     }
 
-    pub fn ai_session_startup_snapshot_event(&self, subagents: bool) -> EventEnvelope<Value> {
+    pub fn ai_session_startup_snapshot_event(
+        &self,
+        consumer: AiSessionConsumerProjection,
+    ) -> EventEnvelope<Value> {
         let authority = self
             .ai_session_authority
             .lock()
@@ -1987,7 +2017,7 @@ impl AppState {
             .published_snapshot()
             .cloned()
             .unwrap_or_else(|| self.ai_sessions_snapshot());
-        let snapshot = project_ai_sessions_snapshot_for_consumer(snapshot, subagents);
+        let snapshot = project_ai_sessions_snapshot_for_consumer(snapshot, consumer);
         let payload = authority.snapshot_payload(snapshot, "startup");
         self.events.new_event("ai-session.snapshot", payload)
     }
@@ -2748,6 +2778,10 @@ fn controlled_instance_capabilities(
     capabilities.features.ai_session_workspace_selection = true;
     capabilities.features.ai_session_workspace_checkout = true;
     capabilities.features.ai_session_persistence_settings = true;
+    capabilities.features.ai_session_next_input_suggestion = true;
+    capabilities
+        .features
+        .ai_session_next_input_suggestion_reasoning_effort = true;
     capabilities.features.node_agent_connection_update = true;
     if let Some(install_environment) = install_environment {
         capabilities.features.app_install_environment = install_environment.capabilities();

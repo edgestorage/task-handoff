@@ -380,7 +380,10 @@ impl AiSessionControlProvider for ClaudeControlSockProvider {
                 ..Default::default()
             }),
             reasoning_effort: Some(AiSessionReasoningEffortCapabilities::default()),
-            hierarchy: Some(AiSessionHierarchyCapabilities { subagents: false }),
+            hierarchy: Some(AiSessionHierarchyCapabilities {
+                subagents: false,
+                next_input_suggestion: false,
+            }),
         }
     }
 
@@ -668,6 +671,7 @@ mod tests {
             counters: Default::default(),
             queue: Default::default(),
             unread: false,
+            next_input_suggestion: None,
         }
     }
 

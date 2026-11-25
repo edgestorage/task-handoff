@@ -143,22 +143,23 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
 
   return {
     list(signal?: AbortSignal, instanceId?: string) {
-      const query = new URLSearchParams({ hierarchy: "subagents" });
+      const query = new URLSearchParams({ hierarchy: "subagents", nextInputSuggestion: "1" });
       if (instanceId) query.set("instanceId", instanceId);
       return requestData(`/api/ai-sessions?${query}`, ControlPlaneAiSessionsSchema, { signal });
     },
     refresh(signal?: AbortSignal, instanceId?: string) {
       const query = new URLSearchParams({ refresh: "true" });
       query.set("hierarchy", "subagents");
+      query.set("nextInputSuggestion", "1");
       if (instanceId) query.set("instanceId", instanceId);
       return requestData(`/api/ai-sessions?${query}`, ControlPlaneAiSessionsSchema, { signal });
     },
     delta(instanceId: string, streamId: string, sinceRevision: number, signal?: AbortSignal) {
-      const query = new URLSearchParams({ instanceId, streamId, sinceRevision: String(sinceRevision), hierarchy: "subagents" });
+      const query = new URLSearchParams({ instanceId, streamId, sinceRevision: String(sinceRevision), hierarchy: "subagents", nextInputSuggestion: "1" });
       return requestData(`/api/ai-sessions?${query}`, AiSessionDeltaResponseSchema, { signal });
     },
     sync(instances: ReadonlyArray<{ instanceId: string; streamId: string; revision: number }>, signal?: AbortSignal) {
-      const query = new URLSearchParams({ hierarchy: "subagents" });
+      const query = new URLSearchParams({ hierarchy: "subagents", nextInputSuggestion: "1" });
       return requestData(`/api/ai-sessions/sync?${query}`, AiSessionsSyncResponseSchema, jsonRequest("POST", { instances: [...instances] }, signal));
     },
     history(instanceId: string, signal?: AbortSignal, agents: readonly string[] = ["codex", "claude", "opencode"]) {

@@ -222,6 +222,8 @@
         :reasoning-effort-enabled="reasoningEffortEnabled"
         :reasoning-effort-pending="reasoningEffortPending"
         :submit-label="submitLabel"
+        :next-input-suggestion="nextInputSuggestion"
+        :suggestion-key="`${card.instance.id}:${card.session.id}`"
         :permission-key="aiSessionPermissionKey(card.instance.id, card.session.id)"
         :default-permission-mode="card.instance.config.defaultCodexPermissionMode"
         :max-file-attachment-bytes="card.instance.config.aiSessionMaxFileAttachmentBytes"
@@ -247,6 +249,7 @@ import { Boxes, ChevronDown, ChevronUp, CircleHelp, ExternalLink, Folder } from 
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionGoalBadge from "../../../components/ai-session/AiSessionGoalBadge.vue";
+import { selectNextInputSuggestion } from "../../../components/ai-session/next-input-suggestion";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionHeightTransition from "../../../components/ai-session/AiSessionHeightTransition.vue";
 import AiSessionRunningTurnCapsule from "../../../components/ai-session/AiSessionRunningTurnCapsule.vue";
@@ -256,7 +259,7 @@ import AiSessionConversationContent from "../../../components/ai-session/AiSessi
 import type { AiSessionTurnTimelineState } from "../useAiSessionTimelineStore";
 import type { AiSessionToolActivityWindowState } from "../useAiSessionToolActivityWindow";
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
-import type { AiSessionCommandInput, AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionModelSelection, AiSessionNextInputSuggestion, AiSessionPermissionMode, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
@@ -378,6 +381,11 @@ const promptTimestamp = computed(() => (
 const promptUserMessages = computed(() => (
   props.detailState === "ready" ? retainedPromptUserMessages() : []
 ));
+const nextInputSuggestion = computed<AiSessionNextInputSuggestion | undefined>(() => {
+  const session = props.conversationSession;
+  const latestTurnId = session.latestTurnRef?.id || aiSessionTurns(session).at(-1)?.id;
+  return selectNextInputSuggestion(session, latestTurnId);
+});
 const turnNavigatorItems = computed(() => aiSessionTurnMenuItems(
   props.conversationSession,
   props.promptCount,

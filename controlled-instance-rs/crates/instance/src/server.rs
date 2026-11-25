@@ -21,18 +21,19 @@ use controlled_instance_protocol::{
     project_ai_session_stream_event_payload_for_consumer,
     project_ai_sessions_snapshot_for_consumer, AgentRunError, AgentRunMemberInstanceCloseResult,
     AgentRunMemberInstanceCreateResult, AgentRunMemberInstanceStatus, AgentRunResult,
-    AiSessionConversationAttachment, AiSessionTransientSubscription, AiSessionWorkspaceSelection,
-    ApiEnvelope, ApiError, ApiErrorEnvelope, AppDisplayOptions, AppInstallSourceUpdate,
-    AppLaunchRequest, AppManagementOperation, AppManagementOperationRequest, ConfigSyncDirection,
-    ConfigSyncPreset, ConfigSyncRequest, ManagedModelEnvironment, RepositoryAiSessionLaunchResult,
-    RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch,
-    RepositoryAiSessionWorkspaceBranchKind, RepositoryAiSessionWorkspaceCheckout,
-    RepositoryAiSessionWorkspaceCheckoutRequest, RepositoryAiSessionWorkspaceInspectRequest,
-    RepositoryAvailability, RepositoryChangeScope, RepositoryCheckoutBranchRequest,
-    RepositoryCommitRequest, RepositoryCreateBranchRequest, RepositoryCreateFileRequest,
-    RepositoryCreateTrackingBranchRequest, RepositoryCreateWorktreeAiSessionRequest,
-    RepositoryCreateWorktreeRequest, RepositoryDeleteBranchRequest, RepositoryDeleteFileRequest,
-    RepositoryFetchRequest, RepositoryMoveWorktreePreflightRequest, RepositoryMoveWorktreeRequest,
+    AiSessionConsumerProjection, AiSessionConversationAttachment, AiSessionTransientSubscription,
+    AiSessionWorkspaceSelection, ApiEnvelope, ApiError, ApiErrorEnvelope, AppDisplayOptions,
+    AppInstallSourceUpdate, AppLaunchRequest, AppManagementOperation,
+    AppManagementOperationRequest, ConfigSyncDirection, ConfigSyncPreset, ConfigSyncRequest,
+    ManagedModelEnvironment, RepositoryAiSessionLaunchResult, RepositoryAiSessionWorkspace,
+    RepositoryAiSessionWorkspaceBranch, RepositoryAiSessionWorkspaceBranchKind,
+    RepositoryAiSessionWorkspaceCheckout, RepositoryAiSessionWorkspaceCheckoutRequest,
+    RepositoryAiSessionWorkspaceInspectRequest, RepositoryAvailability, RepositoryChangeScope,
+    RepositoryCheckoutBranchRequest, RepositoryCommitRequest, RepositoryCreateBranchRequest,
+    RepositoryCreateFileRequest, RepositoryCreateTrackingBranchRequest,
+    RepositoryCreateWorktreeAiSessionRequest, RepositoryCreateWorktreeRequest,
+    RepositoryDeleteBranchRequest, RepositoryDeleteFileRequest, RepositoryFetchRequest,
+    RepositoryMoveWorktreePreflightRequest, RepositoryMoveWorktreeRequest,
     RepositoryPublishRequest, RepositoryPullRequest, RepositoryPushRequest,
     RepositoryRemoveWorktreeRequest, RepositoryRenameFileRequest, RepositoryRuntimePathInput,
     RepositorySessionKind, RepositoryStartAiSessionRequest, RepositoryWriteFileRequest,
@@ -279,6 +280,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/internal/ai-session-persistence-settings",
             put(update_ai_session_persistence_settings),
+        )
+        .route(
+            "/api/internal/ai-session-next-input-suggestion-settings",
+            put(update_ai_session_next_input_suggestion_settings),
         )
         .route("/api/internal/agent-tools/invoke", post(invoke_agent_tool))
         .route(
@@ -2165,6 +2170,18 @@ fn fastify_query_subagents(query: &serde_json::Map<String, Value>) -> bool {
         query.get("hierarchy"),
         Some(Value::String(hierarchy)) if hierarchy == "subagents"
     )
+}
+
+fn fastify_query_ai_session_consumer(
+    query: &serde_json::Map<String, Value>,
+) -> AiSessionConsumerProjection {
+    AiSessionConsumerProjection {
+        subagents: fastify_query_subagents(query),
+        next_input_suggestion: matches!(
+            query.get("nextInputSuggestion"),
+            Some(Value::String(value)) if value == "1"
+        ),
+    }
 }
 
 fn repository_empty_query_error(query: &serde_json::Map<String, Value>) -> Option<Response> {
@@ -4940,6 +4957,22 @@ fn zod_optional_boolean_field_at(
     }
 }
 
+fn zod_required_boolean_field(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    issues: &mut Vec<ZodIssue>,
+) -> Option<bool> {
+    if !object.contains_key(field) {
+        issues.push(zod_invalid_type(
+            "boolean",
+            zod_field_path(&[], field),
+            "undefined",
+        ));
+        return None;
+    }
+    zod_optional_boolean_field_at(object, field, &[], issues)
+}
+
 fn zod_enum_array_field_at<T>(
     object: &serde_json::Map<String, Value>,
     field: &str,
@@ -5599,6 +5632,55 @@ async fn update_ai_session_persistence_settings(
             )
         }
     }
+}
+
+async fn update_ai_session_next_input_suggestion_settings(
+    State(state): State<AppState>,
+    payload: Result<JsonValueBody, JsonRejection>,
+) -> Response {
+    let JsonValueBody(value) = match payload {
+        Ok(payload) => payload,
+        Err(error) => {
+            return managed_model_body_error(
+                "AI_SESSION_NEXT_INPUT_SUGGESTION_SETTINGS_INVALID",
+                error,
+            )
+        }
+    };
+    if let Err(issues) = validate_ai_session_next_input_suggestion_settings(&value) {
+        return fastify_zod_error(issues);
+    }
+    let enabled = value
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let reasoning_effort = match value.get("reasoningEffort").and_then(Value::as_str) {
+        Some(value) => {
+            controlled_instance_ai_session::AiSessionNextInputSuggestionReasoningEffort::parse(
+                value,
+            )
+            .unwrap_or_default()
+        }
+        // Calls from older node agents omit the field and must keep the mode
+        // already loaded by the instance.
+        None => state.ai_session_next_input.reasoning_effort().await,
+    };
+    state
+        .ai_session_next_input
+        .set_reasoning_effort(&state, reasoning_effort)
+        .await;
+    state
+        .ai_session_next_input
+        .set_enabled(&state, enabled)
+        .await;
+    Json(ApiEnvelope {
+        data: json!({
+            "applied": true,
+            "enabled": enabled,
+            "reasoningEffort": reasoning_effort.as_str(),
+        }),
+    })
+    .into_response()
 }
 
 fn managed_model_body_error(code: &str, error: JsonRejection) -> Response {
@@ -8304,7 +8386,7 @@ fn app_runtime_error(error: controlled_instance_app_runtime::AppRuntimeError) ->
 }
 
 async fn ai_sessions(State(state): State<AppState>, FastifyQuery(query): FastifyQuery) -> Response {
-    let subagents = fastify_query_subagents(&query);
+    let consumer = fastify_query_ai_session_consumer(&query);
     let since_revision = query.get("sinceRevision").and_then(|raw| {
         parse_js_non_negative_integer(&controlled_instance_core::text::js_string(raw))
     });
@@ -8317,11 +8399,11 @@ async fn ai_sessions(State(state): State<AppState>, FastifyQuery(query): Fastify
             );
         };
         let mut delta = state.ai_sessions_delta(stream_id, since_revision);
-        project_ai_session_delta_for_consumer(&mut delta, subagents);
+        project_ai_session_delta_for_consumer(&mut delta, consumer);
         return Json(ApiEnvelope { data: delta }).into_response();
     }
     let mut state = state.ai_sessions_state();
-    state.snapshot = project_ai_sessions_snapshot_for_consumer(state.snapshot, subagents);
+    state.snapshot = project_ai_sessions_snapshot_for_consumer(state.snapshot, consumer);
     Json(ApiEnvelope {
         data: serde_json::to_value(state).unwrap_or_else(|_| json!({})),
     })
@@ -8335,7 +8417,7 @@ async fn ai_sessions_state(
     let mut ai_state = state.ai_sessions_state();
     ai_state.snapshot = project_ai_sessions_snapshot_for_consumer(
         ai_state.snapshot,
-        fastify_query_subagents(&query),
+        fastify_query_ai_session_consumer(&query),
     );
     Json(ApiEnvelope {
         data: serde_json::to_value(ai_state).unwrap_or_else(|_| json!({})),
@@ -9878,6 +9960,75 @@ fn validate_ai_session_persistence_settings(body: &Value) -> Result<(), Vec<ZodI
         Ok(())
     } else {
         Err(issues)
+    }
+}
+
+fn validate_ai_session_next_input_suggestion_settings(body: &Value) -> Result<(), Vec<ZodIssue>> {
+    let mut issues = Vec::new();
+    let Some(object) = zod_object(body, &mut issues) else {
+        return Err(issues);
+    };
+    zod_required_boolean_field(object, "enabled", &mut issues);
+    zod_enum_field(
+        object,
+        "reasoningEffort",
+        &[
+            "session", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ],
+        &mut issues,
+    );
+    zod_unknown_object_keys(
+        object,
+        &["enabled", "reasoningEffort"],
+        Vec::new(),
+        &mut issues,
+    );
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+#[cfg(test)]
+mod next_input_suggestion_settings_tests {
+    use super::validate_ai_session_next_input_suggestion_settings;
+    use serde_json::json;
+
+    #[test]
+    fn settings_require_one_boolean_and_no_unknown_fields() {
+        assert!(
+            validate_ai_session_next_input_suggestion_settings(&json!({ "enabled": true })).is_ok()
+        );
+        for mode in [
+            "session", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ] {
+            assert!(
+                validate_ai_session_next_input_suggestion_settings(
+                    &json!({ "enabled": true, "reasoningEffort": mode })
+                )
+                .is_ok(),
+                "{mode}"
+            );
+        }
+        assert!(
+            validate_ai_session_next_input_suggestion_settings(&json!({ "enabled": false }))
+                .is_ok()
+        );
+        for invalid in [
+            json!({}),
+            json!({ "enabled": "true" }),
+            json!({ "enabled": true, "reasoningEffort": "future" }),
+            json!({ "enabled": true, "reasoningEffort": null }),
+            json!({ "enabled": true, "future": 1 }),
+            json!([]),
+            json!("enabled"),
+        ] {
+            assert!(
+                validate_ai_session_next_input_suggestion_settings(&invalid).is_err(),
+                "{invalid}"
+            );
+        }
     }
 }
 
@@ -12150,7 +12301,7 @@ async fn ai_session_turns(
             .conversation_turns()
             .into_iter()
             .filter_map(|turn| {
-                Some(json!({
+                Some(controlled_instance_ai_session::sanitize_ai_session_protocol_value(&json!({
                     "id": turn.get("id")?.as_str()?,
                     "providerTurnId": turn.get("providerTurnId").and_then(Value::as_str),
                     "status": turn.get("status").and_then(Value::as_str).unwrap_or("running"),
@@ -12160,7 +12311,7 @@ async fn ai_session_turns(
                     "updatedAt": turn.get("updatedAt").and_then(Value::as_str),
                     "completedAt": turn.get("completedAt").and_then(Value::as_str),
                     "bodyRevision": controlled_instance_ai_session::ai_session_turn_body_revision(turn),
-                }))
+                })))
             })
             .collect::<Vec<_>>();
         return Json(ApiEnvelope {
@@ -12267,6 +12418,7 @@ async fn ai_session_turn(
         );
     };
     let revision = controlled_instance_ai_session::ai_session_turn_body_revision(turn);
+    let turn = controlled_instance_ai_session::sanitize_ai_session_protocol_value(turn);
     if fastify_query_string(&query, "revision") == Some(revision.as_str()) {
         return Json(ApiEnvelope {
             data: json!({ "kind": "not-modified", "revision": revision }),
@@ -14164,7 +14316,7 @@ async fn story_ai_session_read(State(state): State<AppState>, Path(id): Path<Str
                 "sessionId": session.id,
                 "revision": session.turns_revision(),
                 "turns": session.conversation_turns().into_iter().filter_map(|turn| {
-                    Some(json!({
+                    Some(controlled_instance_ai_session::sanitize_ai_session_protocol_value(&json!({
                         "id": turn.get("id")?.as_str()?,
                         "providerTurnId": turn.get("providerTurnId").and_then(Value::as_str),
                         "status": turn.get("status").and_then(Value::as_str).unwrap_or("running"),
@@ -14174,7 +14326,7 @@ async fn story_ai_session_read(State(state): State<AppState>, Path(id): Path<Str
                         "updatedAt": turn.get("updatedAt").and_then(Value::as_str),
                         "completedAt": turn.get("completedAt").and_then(Value::as_str),
                         "bodyRevision": controlled_instance_ai_session::ai_session_turn_body_revision(turn),
-                    }))
+                    })))
                 }).collect::<Vec<_>>(),
             },
         }),
@@ -14220,6 +14372,7 @@ async fn story_ai_session_turn_read(
         Err(error) => return ai_session_provider_error(error),
     };
     let revision = controlled_instance_ai_session::ai_session_turn_body_revision(&turn);
+    let turn = controlled_instance_ai_session::sanitize_ai_session_protocol_value(&turn);
     Json(ApiEnvelope {
         data: json!({
             "body": { "sessionId": session.id, "revision": revision, "turn": turn },
@@ -14355,14 +14508,17 @@ async fn events(
     let expects_transient = fastify_query_string(&query, "aiSessionTransient") == Some("1");
     let includes_authority_snapshot =
         fastify_query_string(&query, "aiSessionAuthoritySnapshot") == Some("1");
-    let subagents = fastify_query_string(&query, "aiSessionHierarchy") == Some("subagents");
+    let consumer = AiSessionConsumerProjection {
+        subagents: fastify_query_string(&query, "aiSessionHierarchy") == Some("subagents"),
+        next_input_suggestion: fastify_query_string(&query, "nextInputSuggestion") == Some("1"),
+    };
     websocket_upgrade_with_client_subprotocol(websocket, &headers).on_upgrade(move |socket| {
         handle_events_socket(
             socket,
             state,
             expects_transient,
             includes_authority_snapshot,
-            subagents,
+            consumer,
         )
     })
 }
@@ -14484,7 +14640,7 @@ async fn handle_events_socket(
     state: AppState,
     expects_transient: bool,
     includes_authority_snapshot: bool,
-    subagents: bool,
+    consumer: AiSessionConsumerProjection,
 ) {
     let (mut socket, mut stream) = socket.split();
     let (wire_sender, mut wire_receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -14524,12 +14680,12 @@ async fn handle_events_socket(
     let events = state.events.clone();
     let mut shutdown = state.shutdown_receiver();
     let (mut receiver, bootstrap) =
-        state.connect_event_stream(includes_authority_snapshot, subagents);
+        state.connect_event_stream(includes_authority_snapshot, consumer);
     let mut subscription = ClientSubscription {
         topics: std::collections::HashSet::from(["*".to_string()]),
         transient: expects_transient.then(AiSessionTransientSubscription::default),
         compact: false,
-        subagents,
+        consumer,
     };
     let mut last_replayed_seq = 0;
     for event in bootstrap {
@@ -14575,7 +14731,7 @@ async fn handle_events_socket(
                                     last_replayed_seq = last_replayed_seq.max(event.seq);
                                     let projected = project_ai_session_event_for_consumer(
                                         &event,
-                                        subscription.subagents,
+                                        subscription.consumer,
                                     );
                                     if !enqueue_wire_event(
                                         &wire,
@@ -14607,7 +14763,7 @@ async fn handle_events_socket(
                                     last_replayed_seq = last_replayed_seq.max(event.seq);
                                     let projected = project_ai_session_event_for_consumer(
                                         &event,
-                                        subscription.subagents,
+                                        subscription.consumer,
                                     );
                                     if !enqueue_wire_event(
                                         &wire,
@@ -14649,7 +14805,7 @@ async fn handle_events_socket(
                     {
                         let projected = project_ai_session_event_for_consumer(
                             &event,
-                            subscription.subagents,
+                            subscription.consumer,
                         );
                         if !enqueue_wire_event(
                             &wire,
@@ -14676,7 +14832,7 @@ struct ClientSubscription {
     topics: std::collections::HashSet<String>,
     transient: Option<AiSessionTransientSubscription>,
     compact: bool,
-    subagents: bool,
+    consumer: AiSessionConsumerProjection,
 }
 
 fn parse_subscription(message: &str) -> Option<ClientSubscription> {
@@ -14699,12 +14855,19 @@ fn parse_subscription(message: &str) -> Option<ClientSubscription> {
         None => None,
         Some(value) => Some(parse_ai_session_transient_subscription(value)?),
     };
-    let subagents = match value.get("aiSessionHierarchy") {
-        None => false,
-        Some(Value::Object(hierarchy)) => match hierarchy.get("subagents") {
-            None => false,
-            Some(Value::Bool(subagents)) => *subagents,
-            Some(_) => return None,
+    let consumer = match value.get("aiSessionHierarchy") {
+        None => AiSessionConsumerProjection::default(),
+        Some(Value::Object(hierarchy)) => AiSessionConsumerProjection {
+            subagents: match hierarchy.get("subagents") {
+                None => false,
+                Some(Value::Bool(subagents)) => *subagents,
+                Some(_) => return None,
+            },
+            next_input_suggestion: match hierarchy.get("nextInputSuggestion") {
+                None => false,
+                Some(Value::Bool(enabled)) => *enabled,
+                Some(_) => return None,
+            },
         },
         Some(_) => return None,
     };
@@ -14713,7 +14876,7 @@ fn parse_subscription(message: &str) -> Option<ClientSubscription> {
         transient,
         compact: value.get("eventEnvelopeVersion").and_then(Value::as_str)
             == Some(COMPACT_EVENT_ENVELOPE_VERSION),
-        subagents,
+        consumer,
     })
 }
 
@@ -14779,13 +14942,13 @@ fn js_wire_string(value: &Value) -> String {
 
 fn project_ai_session_event_for_consumer(
     event: &controlled_instance_protocol::EventEnvelope<Value>,
-    subagents: bool,
+    consumer: AiSessionConsumerProjection,
 ) -> controlled_instance_protocol::EventEnvelope<Value> {
     let mut projected = event.clone();
     project_ai_session_stream_event_payload_for_consumer(
         &event.r#type,
         &mut projected.payload,
-        subagents,
+        consumer,
     );
     projected
 }
@@ -15098,6 +15261,9 @@ async fn auth_middleware(State(state): State<AppState>, request: Request, next: 
         "/api/internal/codex-settings" => Some("CODEX_SETTINGS_FORBIDDEN"),
         "/api/internal/ai-session-persistence-settings" => {
             Some("AI_SESSION_PERSISTENCE_SETTINGS_FORBIDDEN")
+        }
+        "/api/internal/ai-session-next-input-suggestion-settings" => {
+            Some("AI_SESSION_NEXT_INPUT_SUGGESTION_SETTINGS_FORBIDDEN")
         }
         _ => None,
     };
@@ -19366,7 +19532,12 @@ mod tests {
             "Published"
         );
 
-        let startup = state.ai_session_startup_snapshot_event(false);
+        let startup = state.ai_session_startup_snapshot_event(
+            controlled_instance_protocol::AiSessionConsumerProjection {
+                subagents: false,
+                next_input_suggestion: false,
+            },
+        );
         assert_eq!(
             startup.payload["snapshot"]["sessions"][0]["title"],
             "Published"
@@ -19631,6 +19802,10 @@ mod tests {
         std::fs::write(&transcript, "line-1\nline-2\r\nline-3\n").expect("transcript");
         let mut session = ai_session_record("ses_0000000000003", "aps_0000000000003");
         session.transcript_path = Some(transcript.display().to_string());
+        if let Some(turns) = session.turns.as_mut() {
+            turns[0]["providerTurnId"] = Value::Null;
+            turns[0]["lastMessage"] = Value::Null;
+        }
         state.ai_sessions.save(session).expect("save");
         let app = router(state);
 
@@ -19647,8 +19822,29 @@ mod tests {
         let index = body_json(index).await;
         assert_eq!(index["data"]["kind"], "updated");
         assert_eq!(index["data"]["index"]["turns"].as_array().unwrap().len(), 2);
+        assert!(index["data"]["index"]["turns"][0]
+            .get("providerTurnId")
+            .is_none());
         let index_revision = index["data"]["revision"].as_str().unwrap().to_string();
         assert_eq!(index["data"]["index"]["revision"], index_revision);
+
+        let null_optional_turn = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ai-sessions/ses_0000000000003/turns/turn-1")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("turn");
+        let null_optional_turn = body_json(null_optional_turn).await;
+        assert!(null_optional_turn["data"]["body"]["turn"]
+            .get("providerTurnId")
+            .is_none());
+        assert!(null_optional_turn["data"]["body"]["turn"]
+            .get("lastMessage")
+            .is_none());
 
         let turn = app
             .clone()
@@ -23391,15 +23587,15 @@ mod tests {
             r#"{"type":"subscribe","topics":["ai.sessions"],"aiSessionHierarchy":{"subagents":true}}"#,
         )
         .expect("nested subscription");
-        assert!(nested.subagents);
+        assert!(nested.consumer.subagents);
         let flat = parse_subscription(
             r#"{"type":"subscribe","topics":["ai.sessions"],"aiSessionHierarchy":{"subagents":false}}"#,
         )
         .expect("flat subscription");
-        assert!(!flat.subagents);
+        assert!(!flat.consumer.subagents);
         let default = parse_subscription(r#"{"type":"subscribe","topics":["ai.sessions"]}"#)
             .expect("default subscription");
-        assert!(!default.subagents);
+        assert!(!default.consumer.subagents);
     }
 
     #[test]

@@ -2,6 +2,7 @@ mod attachments;
 mod claude_control_sock;
 mod codex_app_server;
 mod history;
+mod next_input;
 mod opencode;
 mod persistence;
 mod persistence_settings;
@@ -14,8 +15,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_core::atomic::write_atomic;
 use controlled_instance_protocol::{
-    AiSessionCounters, AiSessionGoal, AiSessionHistoryItem, AiSessionLatestTurnRef, AiSessionQueue,
-    AiSessionSummary, AiSessionsSnapshot, AI_SESSION_SNAPSHOT_LIMIT,
+    AiSessionCounters, AiSessionGoal, AiSessionHistoryItem, AiSessionLatestTurnRef,
+    AiSessionNextInputSuggestion, AiSessionQueue, AiSessionSummary, AiSessionsSnapshot,
+    AI_SESSION_SNAPSHOT_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -47,6 +49,12 @@ pub use codex_app_server::{
     CodexAppServerTargetResolver, CodexThreadSnapshot,
 };
 pub use history::{AiSessionHistoryError, AiSessionHistoryRetentionResult, AiSessionHistoryStore};
+pub use next_input::{
+    ai_session_next_input_context, ai_session_next_input_output_schema,
+    ai_session_next_input_prompt, parse_ai_session_next_input_suggestion,
+    AiSessionNextInputSuggestionReasoningEffort, AI_SESSION_NEXT_INPUT_CONTEXT_MAX_BYTES,
+    AI_SESSION_NEXT_INPUT_RESPONSE_MAX_BYTES,
+};
 pub use opencode::{
     OpenCodeClosedSessionIds, OpenCodeConnection, OpenCodeConnectionProvider,
     OpenCodeModelSelectionProjector, OpenCodeSessionProvider, OpenCodeTrackedSession,
@@ -73,8 +81,8 @@ pub use timeline::{
 };
 pub use title::{
     ai_session_title_output_schema, ai_session_title_prompt, parse_ai_session_title,
-    AiSessionTitleGenerator, AiSessionTitleInput, AI_SESSION_TITLE_MAX_CHARS,
-    AI_SESSION_TITLE_PROMPT_MAX_BYTES,
+    AiSessionStructuredModelGenerator, AiSessionStructuredModelInput, AiSessionTitleGenerator,
+    AiSessionTitleInput, AI_SESSION_TITLE_MAX_CHARS, AI_SESSION_TITLE_PROMPT_MAX_BYTES,
 };
 
 #[derive(Debug, Error)]
@@ -174,6 +182,8 @@ pub struct AiSession {
     pub counters: AiSessionCounters,
     #[serde(default)]
     pub queue: AiSessionQueue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_input_suggestion: Option<AiSessionNextInputSuggestion>,
     #[serde(default)]
     pub unread: bool,
 }
@@ -275,6 +285,7 @@ impl AiSession {
             queue: previous
                 .map(|session| session.queue.clone())
                 .unwrap_or_default(),
+            next_input_suggestion: None,
             unread: previous.is_some_and(|session| session.unread),
         }
     }
@@ -417,6 +428,7 @@ impl AiSession {
                 paused: self.queue.paused.unwrap_or(false).then_some(true),
                 items: Vec::new(),
             },
+            next_input_suggestion: self.next_input_suggestion.clone(),
             unread: self.unread,
         }
     }
@@ -488,6 +500,33 @@ impl AiSession {
 
 pub fn ai_session_turn_body_revision(turn: &Value) -> String {
     turn_body_revision(turn)
+}
+
+/// Projects persisted AI Session values onto the protocol's optional-field
+/// representation. Persisted provider data may contain `null` for optional
+/// fields, while the wire contract omits absent optional fields and does not
+/// accept `null` in their place.
+pub fn sanitize_ai_session_protocol_value(value: &Value) -> Value {
+    let mut projected = value.clone();
+    strip_null_object_fields(&mut projected);
+    projected
+}
+
+pub(crate) fn strip_null_object_fields(value: &mut Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                strip_null_object_fields(item);
+            }
+        }
+        Value::Object(object) => {
+            object.retain(|_, value| !value.is_null());
+            for value in object.values_mut() {
+                strip_null_object_fields(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[derive(Debug)]
@@ -763,6 +802,38 @@ impl AiSessionRuntime {
         }
         session.updated_at = now_iso();
         self.save_locked(&mut session)
+    }
+
+    pub fn set_next_input_suggestion(
+        &self,
+        id: &str,
+        suggestion: Option<AiSessionNextInputSuggestion>,
+    ) -> Result<bool, AiSessionStoreError> {
+        let _guard = self
+            .mutation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut session = self.get(id).ok_or(AiSessionStoreError::NotFound)?;
+        if session.next_input_suggestion == suggestion {
+            return Ok(false);
+        }
+        session.next_input_suggestion = suggestion;
+        self.save_locked(&mut session)?;
+        Ok(true)
+    }
+
+    pub fn clear_next_input_suggestions(&self) -> usize {
+        let mut cleared = 0;
+        for session in self.list() {
+            if session.next_input_suggestion.is_some()
+                && self
+                    .set_next_input_suggestion(&session.id, None)
+                    .unwrap_or(false)
+            {
+                cleared += 1;
+            }
+        }
+        cleared
     }
 
     pub fn queue(&self, id: &str) -> Option<AiSessionQueue> {
@@ -1437,6 +1508,7 @@ mod tests {
             counters: AiSessionCounters::default(),
             queue: AiSessionQueue::default(),
             unread: false,
+            next_input_suggestion: None,
         }
     }
 

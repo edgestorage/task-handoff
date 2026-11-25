@@ -62,6 +62,7 @@ export type OpenCodeSessionBridgeOptions = {
     modelSelection: AiSessionModelSelection;
     reasoningEffort?: AiSessionReasoningEffort;
   }) => Promise<string | undefined>;
+  onSuccessfulTurn?: (sessionId: string, providerTurnId?: string) => void;
 };
 
 // Timeline reads are served from the last projection. SSE events still drive
@@ -90,6 +91,8 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private readonly armedTitleSessions = new Set<string>();
   private readonly attemptedTitleSessions = new Set<string>();
   private readonly titleGenerationBySession = new Map<string, number>();
+  private readonly armedSuggestionSessions = new Set<string>();
+  private readonly unsuggestableTurnBySession = new Map<string, string>();
   private readonly timelineListeners = new Set<AiSessionProviderTimelineItemListener>();
   private readonly reconcileTimers = new Map<string, NodeJS.Timeout>();
   private eventAbort?: AbortController;
@@ -349,6 +352,8 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     // Compatibility for OpenCode v1.18.21: prompt_async persists prompts
     // submitted during an active run and promotes them in its next loop step.
     await this.client.promptAsync(session.providerSessionId, session.cwd, input.messageId, parts, model);
+    this.armedSuggestionSessions.add(session.providerSessionId);
+    this.unsuggestableTurnBySession.delete(session.providerSessionId);
     this.scheduleReconcile(session.providerSessionId, session.cwd);
     return input.messageId;
   }
@@ -362,6 +367,8 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   async interrupt(session: AiSessionStatus): Promise<AiSessionActionResult> {
     if (!session.providerSessionId || !session.cwd) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "OpenCode session identity is missing.", 404);
     await this.client.abort(session.providerSessionId, session.cwd);
+    this.armedSuggestionSessions.delete(session.providerSessionId);
+    if (session.activeTurnId) this.unsuggestableTurnBySession.set(session.providerSessionId, session.activeTurnId);
     const updated = this.registry.applyRealtimeEvent(session.id, {
       kind: "turn-completed",
       activeTurnId: session.activeTurnId,
@@ -457,6 +464,22 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
           error: errorText(error),
         });
       });
+    }
+    if (session) {
+      if (session.status === "running" || session.status === "waiting") this.armedSuggestionSessions.add(providerSessionId);
+      const latestTurn = session.turns?.at(-1);
+      const suppressedTurnId = this.unsuggestableTurnBySession.get(providerSessionId);
+      if (
+        session.status === "idle"
+        && session.queue.pendingCount === 0
+        && latestTurn?.status === "completed"
+        && latestTurn.completedAt
+        && latestTurn.id !== suppressedTurnId
+        && (this.armedSuggestionSessions.has(providerSessionId) || existing?.status === "running" || existing?.status === "waiting")
+      ) {
+        this.armedSuggestionSessions.delete(providerSessionId);
+        this.options.onSuccessfulTurn?.(session.id, latestTurn.id);
+      }
     }
     return session;
   }
@@ -633,6 +656,8 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       const error = parsed.success ? openCodeErrorText(parsed.data.error) : undefined;
       if (error) {
         const turnId = projectedSession.activeTurnId;
+        this.armedSuggestionSessions.delete(sessionID);
+        if (turnId) this.unsuggestableTurnBySession.set(sessionID, turnId);
         this.clearRetryWarning(projectedSession.id, sessionID);
         this.registry.applyRealtimeEvent(projectedSession.id, turnId ? {
           kind: "turn-completed",

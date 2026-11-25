@@ -8,7 +8,7 @@ import { CodexAppServerClient, type CodexAppServerClientOptions } from "./codex-
 import type { CodexAppServerClientLike, CodexThreadResumeOptions } from "./codex-app-server/client/contract";
 import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexDynamicToolSpec, CodexThreadStartOptions } from "./codex-app-server/client/contract";
 import { CodexAppServerConnectionManager, type CodexAppServerConnection } from "./codex-app-server/client/connection-manager";
-import type { CodexAppServerEvent, CodexThread, CodexThreadStatus } from "./codex-app-server/protocol/types";
+import type { CodexAppServerEvent, CodexThread, CodexThreadStatus, JsonValue } from "./codex-app-server/protocol/types";
 import { CodexAppServerApprovalCoordinator } from "./codex-app-server/session/approval-coordinator";
 import { CodexAppServerSessionBinding, type CodexAppSession } from "./codex-app-server/session/binding";
 import { CodexAppServerSessionControl } from "./codex-app-server/session/control";
@@ -19,6 +19,7 @@ import { CodexThreadTitleGenerator } from "./codex-app-server/session/title-gene
 import { CodexTimelineStore } from "./codex-app-server/session/timeline-store";
 import { CodexAppServerMentions } from "./codex-app-server/mentions";
 import { codexItemTimeline, codexThreadTimeline, mergeCodexTimelineItems } from "./codex-app-server/protocol/timeline";
+import { AI_SESSION_NEXT_INPUT_OUTPUT_SCHEMA } from "./ai-session-next-input";
 
 type CodexGoalCommandAction =
   | { kind: "clear" }
@@ -66,6 +67,10 @@ function parseGoalCommand(argument: string): CodexGoalCommandAction {
   return { kind: "set", options: { objective: trimmed, status: "active" } };
 }
 
+function nextInputNonemptyString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function parseCodexGoal(value: unknown): AiSessionGoal | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -99,6 +104,7 @@ type CodexAppServerBridgeOptions = {
     delta: string;
   }) => void;
   onTimelineItem?: (event: { sessionId: string; providerSessionId: string; item: AiSessionTimelineItem }) => void;
+  onSuccessfulTurn?: (sessionId: string, providerTurnId?: string) => void;
   timelineStorePath?: string;
   threadStartDefaults?: Pick<CodexThreadStartOptions, "model" | "modelProvider">;
   resolveModelSelection?: (selection: AiSessionModelSelection) => Pick<CodexThreadStartOptions, "model" | "modelProvider">;
@@ -988,6 +994,42 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     return this.options.createClient ? this.options.createClient(configured) : new CodexAppServerClient(configured);
   }
 
+  async generateNextInputSuggestion(
+    session: AiSessionStatus,
+    prompt: string,
+    signal: AbortSignal,
+    reasoningEffort?: AiSessionReasoningEffort,
+  ) {
+    if (session.agent !== "codex" || !session.providerSessionId || signal.aborted) return undefined;
+    const client = await this.requireReadyClient();
+    if (!client.readThread || !client.runEphemeralStructuredTurn) {
+      this.options.onDiagnostic?.({ code: "CODEX_NEXT_INPUT_SUGGESTION_UNSUPPORTED", sessionId: session.id });
+      return undefined;
+    }
+    const thread = await client.readThread(session.providerSessionId, { includeTurns: false });
+    if (!thread || signal.aborted) return undefined;
+    const resolved = session.modelSelection ? this.options.resolveModelSelection?.(session.modelSelection) : undefined;
+    const model = nextInputNonemptyString(session.modelSelection ? resolved?.model : thread.model);
+    const modelProvider = nextInputNonemptyString(session.modelSelection ? resolved?.modelProvider : thread.modelProvider);
+    const cwd = nextInputNonemptyString(session.cwd) || nextInputNonemptyString(thread.cwd);
+    if (!model || !modelProvider || !cwd) {
+      this.options.onDiagnostic?.({
+        code: "CODEX_NEXT_INPUT_SUGGESTION_ROUTE_UNRESOLVED",
+        sessionId: session.id,
+        modelSelection: session.modelSelection,
+      });
+      return undefined;
+    }
+    return client.runEphemeralStructuredTurn({
+      cwd,
+      model,
+      modelProvider,
+      prompt,
+      outputSchema: AI_SESSION_NEXT_INPUT_OUTPUT_SCHEMA as JsonValue,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    });
+  }
+
   private applyProviderEvent(event: CodexAppServerEvent) {
     if (event.type === "thread") {
       this.upsertThread(event.thread, {
@@ -1005,6 +1047,10 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     }
     this.projector.apply(event);
     this.titleGenerator.handle(event);
+    if (event.type === "turn-completed" && event.status === "completed" && !event.error) {
+      const session = this.registry.getByProviderSessionId("codex", event.threadId);
+      if (session) this.options.onSuccessfulTurn?.(session.id, event.turnId);
+    }
   }
 
   private upsertThread(thread: CodexThread, options: { bindAppSession: boolean; creationSource?: AiSessionStatus["creationSource"] }) {

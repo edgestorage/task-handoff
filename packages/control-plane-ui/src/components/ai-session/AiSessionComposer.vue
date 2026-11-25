@@ -7,7 +7,7 @@ import { AppWindow, ArrowUp, Box, Check, Copy, CornerDownRight, File, FileText, 
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
-import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionModelSelection, AiSessionNextInputSuggestion, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
@@ -78,6 +78,8 @@ const props = defineProps<{
   submitKind?: "send" | "save";
   submitLabel?: string;
   submitHidden?: boolean;
+  nextInputSuggestion?: AiSessionNextInputSuggestion;
+  suggestionKey?: string;
 }>();
 
 const emit = defineEmits<{
@@ -121,6 +123,34 @@ const previewAttachment = ref<AiSessionComposerAttachment>();
 const pastedTextSequence = ref(0);
 const editing = computed(() => Boolean(props.editingLabel));
 const overlayOpen = computed(() => !editing.value && !props.busy && (mentions.open.value || commandOpen.value));
+const suggestionHintId = `ai-session-suggestion-hint-${Math.random().toString(36).slice(2)}`;
+const consumedSuggestions = new Set<string>();
+function rememberConsumedSuggestion(key: string) {
+  consumedSuggestions.add(key);
+  if (consumedSuggestions.size <= 2_000) return;
+  for (const entry of consumedSuggestions) {
+    consumedSuggestions.delete(entry);
+    if (consumedSuggestions.size <= 1_500) break;
+  }
+}
+const suggestionIdentity = computed(() => props.suggestionKey || props.mentionContext?.sessionId || "");
+const nextInputSuggestionKey = computed(() => props.nextInputSuggestion
+  ? `${suggestionIdentity.value}\u0000${props.nextInputSuggestion.turnId}`
+  : "");
+const suggestionVisible = computed(() => Boolean(
+  !props.placeholder
+  && props.nextInputSuggestion?.text
+  && !props.busy
+  && !props.sessionBusy
+  && !editing.value
+  && !props.modelValue
+  && !attachments.value.length
+  && !consumedSuggestions.has(nextInputSuggestionKey.value),
+));
+const displayedPlaceholder = computed(() => (
+  props.placeholder
+  || (suggestionVisible.value ? props.nextInputSuggestion!.text : t("sessions.composer.followUp"))
+));
 const mentionPopoverRadius = ref("20px");
 const mentionKinds = ["plugin", "skill", "file", "directory", "app"] as const;
 const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
@@ -626,6 +656,7 @@ function handleInputKeydown(event: KeyboardEvent) {
       commandOpen.value = false;
       return;
     }
+    if (event.key === "Tab") return;
   }
   if (mentions.open.value) {
     if ((event.key === "Enter" || event.key === "Tab") && mentions.candidates.value[activeMentionIndex.value]) {
@@ -638,6 +669,29 @@ function handleInputKeydown(event: KeyboardEvent) {
       mentions.close();
       return;
     }
+    if (event.key === "Tab") return;
+  }
+  if (
+    event.key === "Tab"
+    && !event.shiftKey
+    && !event.altKey
+    && !event.ctrlKey
+    && !event.metaKey
+    && !event.isComposing
+    && suggestionVisible.value
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    rememberConsumedSuggestion(nextInputSuggestionKey.value);
+    draft.value = props.nextInputSuggestion!.text;
+    void nextTick(() => {
+      const element = textareaElement();
+      if (!element) return;
+      element.focus();
+      element.setSelectionRange(props.nextInputSuggestion!.text.length, props.nextInputSuggestion!.text.length);
+      resizeInput();
+    });
+    return;
   }
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
     return;
@@ -900,7 +954,8 @@ watch(() => props.busy, (busy) => {
             v-model="draft"
             class="ai-session-composer__input"
             :disabled="busy"
-            :placeholder="placeholder || t('sessions.composer.followUp')"
+            :placeholder="displayedPlaceholder"
+            :aria-describedby="suggestionVisible ? suggestionHintId : undefined"
             rows="1"
             @keydown="handleInputKeydown"
             @input="handleComposerInput"
@@ -908,6 +963,9 @@ watch(() => props.busy, (busy) => {
             @keyup="handleInputKeyup"
             @paste="handlePaste"
           />
+          <span v-if="suggestionVisible" :id="suggestionHintId" class="ai-session-composer__suggestion-hint">
+            {{ t('sessions.composer.acceptSuggestionHint') }}
+          </span>
         </div>
       </PopoverAnchor>
       <PopoverContent
@@ -1351,6 +1409,18 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__input-anchor {
   min-width: 0;
   flex: 0 0 auto;
+}
+
+.ai-session-composer__suggestion-hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .ai-session-composer__height-hover-zone {

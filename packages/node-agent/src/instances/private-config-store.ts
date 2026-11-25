@@ -5,6 +5,11 @@ import { z } from "zod";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
 import { CodexInstanceSettingsSchema, parseCodexInstanceSettings, type CodexInstanceSettings } from "@task-handoff/protocol/control-plane";
 import {
+  AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
+  AiSessionNextInputSuggestionReasoningEffortSchema,
+  type AiSessionNextInputSuggestionReasoningEffort,
+} from "@task-handoff/protocol/ai-sessions";
+import {
   InstancePrivateModelCatalogSchema,
   sanitizeInstancePrivateModelCatalog,
   type InstancePrivateModelCatalog,
@@ -22,6 +27,8 @@ export const InstancePrivateConfigSchema = z.object({
   environment: PrivateEnvironmentSchema,
   modelCatalog: InstancePrivateModelCatalogSchema.optional(),
   codexSettings: CodexInstanceSettingsSchema.optional(),
+  aiSessionNextInputSuggestionEnabled: z.boolean().optional(),
+  aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.default(AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT),
   updatedAt: z.string().datetime(),
 }).strict();
 
@@ -53,6 +60,8 @@ function samePrivateConfigPayload(left: InstancePrivateConfig, right: InstancePr
     environment: value.environment,
     modelCatalog: value.modelCatalog,
     codexSettings: value.codexSettings,
+    aiSessionNextInputSuggestionEnabled: value.aiSessionNextInputSuggestionEnabled,
+    aiSessionNextInputSuggestionReasoningEffort: value.aiSessionNextInputSuggestionReasoningEffort,
   });
   return payload(left) === payload(right);
 }
@@ -99,6 +108,8 @@ export class InstancePrivateConfigStore {
       environment: source.environment,
       modelCatalog: source.modelCatalog === undefined ? undefined : sanitizeInstancePrivateModelCatalog(source.modelCatalog),
       codexSettings: source.codexSettings === undefined ? undefined : parseCodexInstanceSettings(source.codexSettings),
+      aiSessionNextInputSuggestionEnabled: source.aiSessionNextInputSuggestionEnabled === true,
+      aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.safeParse(source.aiSessionNextInputSuggestionReasoningEffort).data ?? AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
       updatedAt: source.updatedAt,
     });
     if (parsed.instanceId !== instanceId) {
@@ -153,6 +164,8 @@ export class InstancePrivateConfigStore {
     environment: Record<string, string>,
     modelCatalog?: InstancePrivateModelCatalog,
     codexSettings?: CodexInstanceSettings,
+    aiSessionNextInputSuggestionEnabled = false,
+    aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffort = AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
   ) {
     if (!instanceCredential) {
       throw Object.assign(new Error(`Instance ${instanceId} does not have a long-lived credential.`), {
@@ -167,6 +180,8 @@ export class InstancePrivateConfigStore {
       environment,
       ...(modelCatalog ? { modelCatalog } : {}),
       ...(codexSettings ? { codexSettings } : {}),
+      aiSessionNextInputSuggestionEnabled,
+      aiSessionNextInputSuggestionReasoningEffort,
       updatedAt: new Date().toISOString(),
     });
     // Runtime convergence reconciles through ExecutorContext, which materializes

@@ -218,6 +218,61 @@ test("node agent projects AI Session hierarchy for each control-plane output", (
   forwarder.stop();
 });
 
+test("node agent strips next input suggestions unless the consumer opts into that separate capability", () => {
+  class TestSocket extends EventEmitter {
+    constructor(readyState = WebSocket.OPEN) {
+      super();
+      this.readyState = readyState;
+      this.bufferedAmount = 0;
+      this.sent = [];
+    }
+    send(value) { this.sent.push(JSON.parse(String(value))); }
+    close() {}
+  }
+
+  const input = new TestSocket(WebSocket.CONNECTING);
+  const forwarder = new NodeAgentInstanceEventForwarder(
+    { listInstances: () => [{ id: "inst_authority", target: { api: "http://127.0.0.1:19001" } }] },
+    undefined,
+    {
+      createSocket: () => input,
+      setIntervalFn: () => ({ kind: "interval" }),
+      clearIntervalFn: () => undefined,
+    },
+  );
+  const legacy = new TestSocket();
+  const hierarchyOnly = new TestSocket();
+  const suggestionCurrent = new TestSocket();
+  forwarder.addOutput(legacy, { expectsTransientSubscription: true });
+  forwarder.addOutput(hierarchyOnly, { expectsTransientSubscription: true });
+  forwarder.addOutput(suggestionCurrent, { expectsTransientSubscription: true });
+  assert.equal(forwarder.setOutputSubscription(legacy, {}), true);
+  assert.equal(forwarder.setOutputSubscription(hierarchyOnly, {}, undefined, { subagents: true }), true);
+  assert.equal(forwarder.setOutputSubscription(suggestionCurrent, {}, undefined, { subagents: true, nextInputSuggestion: true }), true);
+  input.readyState = WebSocket.OPEN;
+  input.emit("open");
+
+  const suggestion = { text: "继续补齐测试", turnId: "turn-one", generatedAt: now };
+  const parent = { ...summary("parent"), nextInputSuggestion: suggestion };
+  const child = {
+    ...summary("child"),
+    lineage: { kind: "subagent", parentProviderSessionId: parent.providerSessionId },
+    nextInputSuggestion: suggestion,
+  };
+  input.emit("message", envelope(AiSessionEventType.Snapshot, {
+    meta: meta(1),
+    snapshot: snapshot([parent, child]),
+  }, 1));
+
+  const snapshotOf = (output) => output.sent.find((message) => message.type === "node-agent.event.forwarded").event.payload.snapshot;
+  assert.equal(snapshotOf(legacy).sessions[0].nextInputSuggestion, undefined);
+  assert.equal(snapshotOf(hierarchyOnly).sessions[0].nextInputSuggestion, undefined);
+  assert.equal(snapshotOf(hierarchyOnly).sessions[1].lineage.kind, "subagent");
+  assert.deepEqual(snapshotOf(suggestionCurrent).sessions[0].nextInputSuggestion, suggestion);
+  assert.deepEqual(snapshotOf(suggestionCurrent).sessions[1].nextInputSuggestion, suggestion);
+  forwarder.stop();
+});
+
 test("AI session authority emits one initial snapshot and routine minimal deltas", () => {
   const initial = snapshot([summary("one"), summary("two")]);
   assert.equal(projectAiSessionAuthorityChange(undefined, initial).kind, "snapshot");

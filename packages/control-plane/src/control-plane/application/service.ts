@@ -23,11 +23,15 @@ import {
   sanitizeStoredProject,
   supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionPersistenceSettings,
+  supportsAiSessionNextInputSuggestion,
+  supportsAiSessionNextInputSuggestionReasoningEffort,
   supportsControlledInstanceCodexManagedSettings,
   supportsGitCredentialProxy,
   supportsNodeFolderPlaces,
   supportsNodeLocalFolderNameUpdate,
   supportsNodeAiSessionFileAttachmentLimit,
+  supportsNodeAiSessionNextInputSuggestion,
+  supportsNodeAiSessionNextInputSuggestionReasoningEffort,
   supportsNodeCodexManagedSettings,
   supportsNodeManagedGitCredentialRegistry,
   supportsNodeGitCredentialRuntimeBroker,
@@ -1650,6 +1654,12 @@ export class ControlPlaneService {
     if (parsedInput.config?.codexSettings !== undefined) {
       requireCodexManagedSettingsSupport(node, current);
     }
+    if (parsedInput.config?.aiSessionNextInputSuggestionEnabled !== undefined) {
+      requireAiSessionNextInputSuggestionSupport(node, current);
+    }
+    if (parsedInput.config?.aiSessionNextInputSuggestionReasoningEffort !== undefined) {
+      requireAiSessionNextInputSuggestionReasoningEffortSupport(node, current);
+    }
     const { modelSelection, ...instancePatch } = parsedInput;
     let instance = Object.keys(instancePatch).length
       ? await this.nodeAgentGateway.updateInstance(node, id, instancePatch)
@@ -1765,7 +1775,7 @@ export class ControlPlaneService {
           return { streamId: `bootstrap:${instance.id}:ai.sessions`, revision: 0, lastEventAt: instance.aiSessions.updatedAt, snapshot: instance.aiSessions };
         }
         try {
-          return parseResponse(AiSessionsStateSchema, await this.instanceRequest(instance, "/ai-sessions/state"));
+          return parseResponse(AiSessionsStateSchema, await this.instanceRequest(instance, "/ai-sessions/state?hierarchy=subagents&nextInputSuggestion=1"));
         } catch (error) {
           this.logWarn(
             { instanceId: instance.id, error: errorMessage(error), errorCode: "AI_SESSION_LIVE_REFRESH_FAILED" },
@@ -1821,13 +1831,13 @@ export class ControlPlaneService {
 
   async recoverAiSessionDelta(instanceId: string, streamId: string, sinceRevision: number): Promise<AiSessionDeltaResponse> {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    const query = new URLSearchParams({ streamId, sinceRevision: String(sinceRevision), hierarchy: "subagents" });
+    const query = new URLSearchParams({ streamId, sinceRevision: String(sinceRevision), hierarchy: "subagents", nextInputSuggestion: "1" });
     return parseResponse(AiSessionDeltaResponseSchema, await this.instanceRequest(instance, `/ai-sessions?${query}`));
   }
 
   async recoverAiSessionSnapshot(instanceId: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return parseResponse(AiSessionsStateSchema, await this.instanceRequest(instance, "/ai-sessions/state?hierarchy=subagents"));
+    return parseResponse(AiSessionsStateSchema, await this.instanceRequest(instance, "/ai-sessions/state?hierarchy=subagents&nextInputSuggestion=1"));
   }
 
   async recoverAppSessionDelta(instanceId: string, streamId: string, sinceRevision: number): Promise<AppSessionDeltaResponse> {
@@ -2823,6 +2833,34 @@ function requireCodexManagedSettingsSupport(node: Node, instance: ControlledInst
     throw Object.assign(new Error("This instance does not support managed Codex settings."), {
       statusCode: 409,
       code: "CODEX_MANAGED_SETTINGS_UNSUPPORTED",
+    });
+  }
+}
+
+function requireAiSessionNextInputSuggestionSupport(node: Node, instance: ControlledInstance) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  if (!supportsNodeAiSessionNextInputSuggestion(agentCapabilities)
+    || !supportsAiSessionNextInputSuggestion(instance.capabilities)) {
+    throw Object.assign(new Error("This instance does not support next-input suggestions."), {
+      statusCode: 409,
+      code: "AI_SESSION_NEXT_INPUT_SUGGESTION_UNSUPPORTED",
+    });
+  }
+}
+
+function requireAiSessionNextInputSuggestionReasoningEffortSupport(node: Node, instance: ControlledInstance) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  if (!supportsNodeAiSessionNextInputSuggestionReasoningEffort(agentCapabilities)
+    || !supportsAiSessionNextInputSuggestionReasoningEffort(instance.capabilities)) {
+    throw Object.assign(new Error("This instance does not support next-input suggestion reasoning modes."), {
+      statusCode: 409,
+      code: "AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT_UNSUPPORTED",
     });
   }
 }

@@ -1235,6 +1235,8 @@
             :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : goalComposerEdit ? t('sessions.composer.editingGoal') : undefined"
             :session-busy="selectedSession?.status === 'running' || selectedSession?.status === 'waiting'"
             :submit-label="goalComposerEdit ? t('sessions.composer.saveGoal') : undefined"
+            :next-input-suggestion="selectedNextInputSuggestion"
+            :suggestion-key="`${instance.id}:${selectedSession.id}`"
             @cancel-edit="cancelComposerEdit"
             @command="executeSelectedSessionCommand"
             @run="runSelectedSessionAction"
@@ -1511,6 +1513,7 @@ import { scrollHorizontalOverflow, updateHorizontalOverflowFromEvent, vHorizonta
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import NewWorktreeDialog, { type NewWorktreeSelection } from "./NewWorktreeDialog.vue";
 import AiSessionPathContextMenu from "../../../components/ai-session/AiSessionPathContextMenu.vue";
+import { selectNextInputSuggestion } from "../../../components/ai-session/next-input-suggestion";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
@@ -1885,6 +1888,13 @@ const {
   turnBoundaryReady: selectedSessionTurnBoundaryReady,
   turnIndexKey: selectedSessionTurnIndexKey,
 } = useAiSessionConversationProjection({ instanceId: () => props.instance.id, summary: selectedSession, consumer: "instance-panel" });
+const selectedNextInputSuggestion = computed(() => {
+  const session = selectedSession.value;
+  if (!session) return undefined;
+  const latestTurnId = session.latestTurnRef?.id
+    || aiSessionTurns(selectedConversationSession.value || session).at(-1)?.id;
+  return selectNextInputSuggestion(session, latestTurnId);
+});
 const { setViewMode: persistTimelineViewMode, viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
 const {
   conversationToolActivityWindows,

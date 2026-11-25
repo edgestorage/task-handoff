@@ -797,7 +797,7 @@ export class NodeAgentInstanceEventForwarder {
     const subscriptions = [...this.outputs].map((output) => this.outputSubscriptions.get(output));
     const legacyAll = subscriptions.some((entry) => entry === undefined);
     if (legacyAll) {
-      this.sendInstanceSubscriptionFrame(socket, JSON.stringify({ v: 1, type: "subscribe", eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
+      this.sendInstanceSubscriptionFrame(socket, JSON.stringify({ v: 1, type: "subscribe", eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true, nextInputSuggestion: true }, topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
       return;
     }
     const messageDeltas = subscriptions.some((entry) => entry!.messageDeltas.allInstances || entry!.messageDeltas.instanceIds.includes(instanceId));
@@ -810,7 +810,7 @@ export class NodeAgentInstanceEventForwarder {
       v: 1,
       type: "subscribe",
       eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
-      aiSessionHierarchy: { subagents: true },
+      aiSessionHierarchy: { subagents: true, nextInputSuggestion: true },
       topics: [
         AiSessionEventType.Snapshot,
         AiSessionEventType.Patch,
@@ -1085,6 +1085,7 @@ function instanceEventUrl(instance: ControlledInstance) {
     url.searchParams.set("aiSessionAuthoritySnapshot", "1");
     // Compatibility for v0.0.28: absence asks a current producer for flat sessions.
     url.searchParams.set("aiSessionHierarchy", "subagents");
+    url.searchParams.set("nextInputSuggestion", "1");
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.toString();
   } catch {

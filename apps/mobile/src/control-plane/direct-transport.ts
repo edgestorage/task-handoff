@@ -305,7 +305,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
       for (const topic of subscriber.topics ?? DEFAULT_EVENT_TOPICS) topics.add(topic);
     }
     const aiSessionTransient = aggregateTransientDemand(this.eventSubscribers, topics);
-    socket.send(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: [...topics].sort(), metricInstanceIds: [], ...(aiSessionTransient ? { aiSessionTransient } : {}) }));
+    socket.send(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true, nextInputSuggestion: true }, topics: [...topics].sort(), metricInstanceIds: [], ...(aiSessionTransient ? { aiSessionTransient } : {}) }));
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {

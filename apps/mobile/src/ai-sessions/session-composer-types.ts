@@ -28,6 +28,8 @@ export type SessionComposerProps = {
   reasoningEffortEnabled?: boolean;
   reasoningEffortBusy?: boolean;
   runtimeFileDisabled: boolean;
+  selectionEnd?: number;
+  selectionRequestKey?: number;
   value: string;
   onAction(): void;
   onAddFile(): void;

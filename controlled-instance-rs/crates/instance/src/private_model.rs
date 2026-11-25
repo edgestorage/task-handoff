@@ -1,7 +1,9 @@
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_ai_session::{
     AiSessionModelSelection, AiSessionModelSelectionIntent, AiSessionModelSelectionResolver,
-    AiSessionTitleGenerator, AiSessionTitleInput, OpenCodeModelSelectionProjector, ProviderError,
+    AiSessionNextInputSuggestionReasoningEffort, AiSessionStructuredModelGenerator,
+    AiSessionStructuredModelInput, AiSessionTitleGenerator, AiSessionTitleInput,
+    OpenCodeModelSelectionProjector, ProviderError,
 };
 use controlled_instance_app_runtime::AppRuntime;
 use controlled_instance_core::{
@@ -705,15 +707,19 @@ impl OpenCodeModelSelectionProjector for ControlledModelConfig {
     }
 }
 
-#[async_trait::async_trait]
-impl AiSessionTitleGenerator for ControlledModelConfig {
-    async fn generate_title(&self, input: AiSessionTitleInput) -> Result<String, ProviderError> {
+impl ControlledModelConfig {
+    async fn request_structured_model(
+        &self,
+        input: AiSessionStructuredModelInput,
+        cancel: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<String, ProviderError> {
+        let error_code = |suffix: &str| format!("{}_{suffix}", input.error_code_prefix);
         let (protocol, url, credential) = {
             let state = self.lock();
             let catalog = state.catalog.as_ref().ok_or_else(|| {
                 ProviderError::new(
-                    "AI_SESSION_TITLE_MODEL_UNAVAILABLE",
-                    "The selected title model is unavailable in this instance.",
+                    error_code("MODEL_UNAVAILABLE"),
+                    "The selected model is unavailable in this instance.",
                     409,
                 )
             })?;
@@ -723,8 +729,8 @@ impl AiSessionTitleGenerator for ControlledModelConfig {
                 .find(|entity| entity.id == input.model_selection.model_entity_id)
                 .ok_or_else(|| {
                     ProviderError::new(
-                        "AI_SESSION_TITLE_MODEL_UNAVAILABLE",
-                        "The selected title model is unavailable in this instance.",
+                        error_code("MODEL_UNAVAILABLE"),
+                        "The selected model is unavailable in this instance.",
                         409,
                     )
                 })?;
@@ -739,8 +745,8 @@ impl AiSessionTitleGenerator for ControlledModelConfig {
             })
             .ok_or_else(|| {
                 ProviderError::new(
-                    "AI_SESSION_TITLE_PROTOCOL_UNAVAILABLE",
-                    "The selected title model has no OpenAI-compatible route.",
+                    error_code("PROTOCOL_UNAVAILABLE"),
+                    "The selected model has no OpenAI-compatible route.",
                     409,
                 )
             })?;
@@ -760,8 +766,8 @@ impl AiSessionTitleGenerator for ControlledModelConfig {
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
                 ProviderError::new(
-                    "AI_SESSION_TITLE_CREDENTIAL_UNAVAILABLE",
-                    "The selected title model has no usable route credential.",
+                    error_code("CREDENTIAL_UNAVAILABLE"),
+                    "The selected model has no usable route credential.",
                     409,
                 )
             })?;
@@ -778,57 +784,111 @@ impl AiSessionTitleGenerator for ControlledModelConfig {
             &input.prompt,
             &input.output_schema,
             input.reasoning_effort.as_deref(),
+            &input.schema_name,
         );
-        let response = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|error| {
-                ProviderError::new(
-                    "AI_SESSION_TITLE_MODEL_REQUEST_FAILED",
-                    error.to_string(),
+        let request = async {
+            let response = reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .map_err(|error| {
+                    ProviderError::new(error_code("MODEL_REQUEST_FAILED"), error.to_string(), 502)
+                })?
+                .post(url)
+                .bearer_auth(credential)
+                .header("accept", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|error| {
+                    ProviderError::new(
+                        error_code("MODEL_REQUEST_FAILED"),
+                        format!("Structured model request failed: {error}"),
+                        502,
+                    )
+                })?;
+            let status = response.status();
+            let raw = response.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Err(ProviderError::new(
+                    error_code("MODEL_REQUEST_FAILED"),
+                    format!(
+                        "Structured model returned HTTP {}: {}",
+                        status.as_u16(),
+                        bounded_text(&raw, 4000)
+                    ),
                     502,
-                )
-            })?
-            .post(url)
-            .bearer_auth(credential)
-            .header("accept", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| {
+                ));
+            }
+            let parsed = serde_json::from_str::<Value>(&raw).map_err(|_| {
                 ProviderError::new(
-                    "AI_SESSION_TITLE_MODEL_REQUEST_FAILED",
-                    format!("Title model request failed: {error}"),
+                    error_code("MODEL_RESPONSE_INVALID"),
+                    "Structured model returned invalid JSON.",
                     502,
                 )
             })?;
-        let status = response.status();
-        let raw = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(ProviderError::new(
-                "AI_SESSION_TITLE_MODEL_REQUEST_FAILED",
-                format!(
-                    "Title model returned HTTP {}: {}",
-                    status.as_u16(),
-                    bounded_text(&raw, 4000)
-                ),
-                502,
-            ));
+            title_response_text(protocol, &parsed).ok_or_else(|| {
+                ProviderError::new(
+                    error_code("MODEL_RESPONSE_INVALID"),
+                    "Structured model returned no text output.",
+                    502,
+                )
+            })
+        };
+        let request = tokio::time::timeout(Duration::from_secs(30), request);
+        match cancel {
+            Some(mut cancel) => tokio::select! {
+                _ = cancel.changed() => Err(ProviderError::new(
+                    error_code("CANCELLED"),
+                    "Structured model request was cancelled.",
+                    499,
+                )),
+                result = request => match result {
+                    Ok(result) => result,
+                    Err(_) => Err(ProviderError::new(
+                        error_code("MODEL_REQUEST_FAILED"),
+                        "Structured model request timed out.",
+                        504,
+                    )),
+                },
+            },
+            None => match request.await {
+                Ok(result) => result,
+                Err(_) => Err(ProviderError::new(
+                    error_code("MODEL_REQUEST_FAILED"),
+                    "Structured model request timed out.",
+                    504,
+                )),
+            },
         }
-        let parsed = serde_json::from_str::<Value>(&raw).map_err(|_| {
-            ProviderError::new(
-                "AI_SESSION_TITLE_MODEL_RESPONSE_INVALID",
-                "Title model returned invalid JSON.",
-                502,
-            )
-        })?;
-        title_response_text(protocol, &parsed).ok_or_else(|| {
-            ProviderError::new(
-                "AI_SESSION_TITLE_MODEL_RESPONSE_INVALID",
-                "Title model returned no text output.",
-                502,
-            )
-        })
+    }
+}
+
+#[async_trait::async_trait]
+impl AiSessionStructuredModelGenerator for ControlledModelConfig {
+    async fn generate_structured_model(
+        &self,
+        input: AiSessionStructuredModelInput,
+        cancel: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<String, ProviderError> {
+        self.request_structured_model(input, cancel).await
+    }
+}
+
+#[async_trait::async_trait]
+impl AiSessionTitleGenerator for ControlledModelConfig {
+    async fn generate_title(&self, input: AiSessionTitleInput) -> Result<String, ProviderError> {
+        self.request_structured_model(
+            AiSessionStructuredModelInput {
+                schema_name: "ai_session_title".to_string(),
+                prompt: input.prompt,
+                output_schema: input.output_schema,
+                model_selection: input.model_selection,
+                reasoning_effort: input.reasoning_effort,
+                error_code_prefix: "AI_SESSION_TITLE".to_string(),
+            },
+            None,
+        )
+        .await
     }
 }
 
@@ -850,6 +910,7 @@ fn title_request_body(
     prompt: &str,
     output_schema: &Value,
     reasoning_effort: Option<&str>,
+    schema_name: &str,
 ) -> Value {
     if protocol == PrivateModelProtocol::OpenAiResponses {
         let mut body = json!({
@@ -858,7 +919,7 @@ fn title_request_body(
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": "ai_session_title",
+                    "name": schema_name,
                     "strict": true,
                     "schema": output_schema,
                 }
@@ -875,7 +936,7 @@ fn title_request_body(
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "name": "ai_session_title",
+                "name": schema_name,
                 "strict": true,
                 "schema": output_schema,
             }
@@ -1262,6 +1323,52 @@ fn read_private_config_root(
         Ok(_) => Ok(None),
         Err(error) => Err(ManagedModelError::invalid("PRIVATE_CONFIG_INVALID", error)),
     }
+}
+
+pub(crate) fn read_ai_session_next_input_suggestion_enabled(
+    process_environment: &BTreeMap<String, String>,
+) -> bool {
+    if let Some(value) =
+        process_environment.get("TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_ENABLED")
+    {
+        return matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true");
+    }
+    if process_environment
+        .get("TASK_HANDOFF_PRIVATE_CONFIG_LOADED")
+        .is_some_and(|value| value == "1")
+    {
+        return false;
+    }
+    read_private_config_root(process_environment)
+        .ok()
+        .flatten()
+        .and_then(|root| root.get("aiSessionNextInputSuggestionEnabled").cloned())
+        == Some(Value::Bool(true))
+}
+
+pub(crate) fn read_ai_session_next_input_suggestion_reasoning_effort(
+    process_environment: &BTreeMap<String, String>,
+) -> AiSessionNextInputSuggestionReasoningEffort {
+    if let Some(value) = process_environment
+        .get("TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT")
+    {
+        return AiSessionNextInputSuggestionReasoningEffort::parse(value).unwrap_or_default();
+    }
+    if process_environment
+        .get("TASK_HANDOFF_PRIVATE_CONFIG_LOADED")
+        .is_some_and(|value| value == "1")
+    {
+        return AiSessionNextInputSuggestionReasoningEffort::default();
+    }
+    read_private_config_root(process_environment)
+        .ok()
+        .flatten()
+        .and_then(|root| {
+            root.get("aiSessionNextInputSuggestionReasoningEffort")
+                .and_then(Value::as_str)
+                .and_then(AiSessionNextInputSuggestionReasoningEffort::parse)
+        })
+        .unwrap_or_default()
 }
 
 fn expected_instance_id(environment: &BTreeMap<String, String>) -> Option<String> {
@@ -2451,6 +2558,7 @@ mod tests {
             "Prompt",
             &schema,
             Some("high"),
+            "ai_session_title",
         );
         assert_eq!(responses["model"], "upstream-title");
         assert_eq!(responses["reasoning"]["effort"], "high");
@@ -2472,10 +2580,39 @@ mod tests {
             "Prompt",
             &schema,
             Some("high"),
+            "ai_session_title",
         );
         assert_eq!(chat["messages"][0]["content"], "Prompt");
         assert_eq!(chat["reasoning_effort"], "high");
         assert_eq!(chat["response_format"]["type"], "json_schema");
+
+        let explicit_none = title_request_body(
+            PrivateModelProtocol::OpenAiResponses,
+            "upstream-title",
+            "Prompt",
+            &schema,
+            Some("none"),
+            "ai_session_next_input_suggestion",
+        );
+        assert_eq!(explicit_none["reasoning"]["effort"], "none");
+        let explicit_chat_none = title_request_body(
+            PrivateModelProtocol::OpenAiChatCompletions,
+            "upstream-title",
+            "Prompt",
+            &schema,
+            Some("none"),
+            "ai_session_next_input_suggestion",
+        );
+        assert_eq!(explicit_chat_none["reasoning_effort"], "none");
+        let omitted = title_request_body(
+            PrivateModelProtocol::OpenAiResponses,
+            "upstream-title",
+            "Prompt",
+            &schema,
+            None,
+            "ai_session_next_input_suggestion",
+        );
+        assert!(omitted.get("reasoning").is_none());
         assert_eq!(
             title_route_url(
                 "https://models.example/v1",

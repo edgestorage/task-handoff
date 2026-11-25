@@ -568,7 +568,7 @@ export function sameAiSessionModelSelection(left: AiSessionModelSelection, right
     || left.modelName === right.modelName;
 }
 
-export const AiSessionReasoningEffortSchema = z.enum([
+export const AI_SESSION_REASONING_EFFORTS = [
   "none",
   "minimal",
   "low",
@@ -577,8 +577,28 @@ export const AiSessionReasoningEffortSchema = z.enum([
   "xhigh",
   "max",
   "ultra",
-]);
+] as const;
+export const AiSessionReasoningEffortSchema = z.enum(AI_SESSION_REASONING_EFFORTS);
 export const AI_SESSION_DEFAULT_REASONING_EFFORT = "medium" as const;
+
+/**
+ * Reasoning mode used only for the ephemeral next-input suggestion request.
+ * `session` follows the AI Session selection; every other value overrides it.
+ * The explicit `none` default is intentional: omitting effort would let the
+ * provider apply its own default instead.
+ */
+export const AiSessionNextInputSuggestionReasoningEffortSchema = z.enum([
+  "session",
+  ...AI_SESSION_REASONING_EFFORTS,
+]);
+export const AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT = "none" as const;
+
+export function resolveAiSessionNextInputSuggestionReasoningEffort(
+  mode: AiSessionNextInputSuggestionReasoningEffort,
+  sessionReasoningEffort: AiSessionReasoningEffort | undefined,
+): AiSessionReasoningEffort | undefined {
+  return mode === "session" ? sessionReasoningEffort : mode;
+}
 
 export const AiSessionCreateWorkspaceSelectionSchema = z.discriminatedUnion("type", [
   z.object({
@@ -852,6 +872,22 @@ export const AiSessionTurnSchema = z
   })
   .strict();
 
+export const AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS = 160;
+
+export const AiSessionNextInputSuggestionSchema = z
+  .object({
+    text: TrimmedTextSchema
+      .min(1)
+      .refine((value) => !/[\r\n]/u.test(value), "Next input suggestion must be a single line")
+      .refine(
+        (value) => Array.from(value).length <= AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS,
+        `Next input suggestion must be at most ${AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS} characters`,
+      ),
+    turnId: AiSessionTurnSchema.shape.id,
+    generatedAt: DateTimeStringSchema,
+  })
+  .strict();
+
 export const AiSessionHistoryTurnSchema = AiSessionTurnSchema.pick({
   id: true,
   providerTurnId: true,
@@ -907,6 +943,7 @@ export const AiSessionStatusSchema = z
     error: TrimmedTextSchema.max(4000).optional(),
     counters: AiSessionCountersSchema,
     queue: AiSessionQueueSchema,
+    nextInputSuggestion: AiSessionNextInputSuggestionSchema.optional(),
     // Owned by the controlled-instance AI session runtime: set when a turn
     // settles without a reader and cleared by the explicit read action.
     unread: z.boolean().default(false),
@@ -1186,6 +1223,7 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   updatedAt: true,
   error: true,
   unread: true,
+  nextInputSuggestion: true,
 }).extend({
   // Compatibility for v0.0.21: list snapshots retain the bounded turn summary
   // shape when reading an older producer. Current producers omit turns and use
@@ -1263,6 +1301,7 @@ export const AiSessionEventReasonSchema = z.enum([
   "discovery-scan",
   "control-action",
   "heartbeat-sync",
+  "next-input-suggestion",
   "startup",
 ]);
 
@@ -1456,15 +1495,31 @@ export const AiSessionsSyncResponseSchema = z
   })
   .strict();
 
-type AiSessionHierarchyConsumer = { subagents?: boolean } | undefined;
+type AiSessionHierarchyConsumer = {
+  subagents?: boolean;
+  nextInputSuggestion?: boolean;
+} | undefined;
 
-function projectSessionLineageForConsumer<T extends { lineage?: z.infer<typeof AiSessionLineageSchema> }>(
+function projectSessionForConsumer<T extends {
+  lineage?: z.infer<typeof AiSessionLineageSchema>;
+  nextInputSuggestion?: z.infer<typeof AiSessionNextInputSuggestionSchema>;
+}>(
   session: T,
   consumer: AiSessionHierarchyConsumer,
 ): T {
-  if (consumer?.subagents || session.lineage?.kind !== "subagent") return session;
-  const { lineage: _lineage, ...flatSession } = session;
-  return flatSession as T;
+  let projected: T = session;
+  // Compatibility for v0.0.28: preserve child records but flatten their relation.
+  if (!consumer?.subagents && session.lineage?.kind === "subagent") {
+    const { lineage: _lineage, ...flatSession } = projected;
+    projected = flatSession as T;
+  }
+  // nextInputSuggestion is a separate additive capability. Do not let a truthy
+  // subagents bit bypass stripping it for consumers that did not opt in.
+  if (!consumer?.nextInputSuggestion && projected.nextInputSuggestion !== undefined) {
+    const { nextInputSuggestion: _nextInputSuggestion, ...withoutSuggestion } = projected;
+    projected = withoutSuggestion as T;
+  }
+  return projected;
 }
 
 /** Compatibility for v0.0.28: preserve child records but flatten their relation. */
@@ -1472,10 +1527,10 @@ export function projectAiSessionsSnapshotForConsumer<T extends AiSessionsSnapsho
   snapshot: T,
   consumer: AiSessionHierarchyConsumer,
 ): T {
-  if (consumer?.subagents) return snapshot;
+  if (consumer?.subagents && consumer.nextInputSuggestion) return snapshot;
   return {
     ...snapshot,
-    sessions: snapshot.sessions.map((session) => projectSessionLineageForConsumer(session, consumer)),
+    sessions: snapshot.sessions.map((session) => projectSessionForConsumer(session, consumer)),
   } as T;
 }
 
@@ -1484,7 +1539,7 @@ export function projectAiSessionDeltaForConsumer(
   delta: z.infer<typeof AiSessionDeltaResponseSchema>,
   consumer: AiSessionHierarchyConsumer,
 ): z.infer<typeof AiSessionDeltaResponseSchema> {
-  if (consumer?.subagents) return delta;
+  if (consumer?.subagents && consumer.nextInputSuggestion) return delta;
   return AiSessionDeltaResponseSchema.parse({
     ...delta,
     events: delta.events.map((event) => {
@@ -1502,7 +1557,7 @@ export function projectAiSessionDeltaForConsumer(
           ...event,
           payload: {
             ...event.payload,
-            upserted: event.payload.upserted.map((session) => projectSessionLineageForConsumer(session, consumer)),
+            upserted: event.payload.upserted.map((session) => projectSessionForConsumer(session, consumer)),
           },
         };
       }
@@ -1516,7 +1571,7 @@ export function projectAiSessionStreamEventForConsumer(
   event: AiSessionStreamEvent,
   consumer: AiSessionHierarchyConsumer,
 ): AiSessionStreamEvent {
-  if (consumer?.subagents || event.type === AiSessionEventType.Removed) return event;
+  if ((consumer?.subagents && consumer.nextInputSuggestion) || event.type === AiSessionEventType.Removed) return event;
   if (event.type === AiSessionEventType.Snapshot) {
     return {
       ...event,
@@ -1530,7 +1585,7 @@ export function projectAiSessionStreamEventForConsumer(
     ...event,
     payload: {
       ...event.payload,
-      upserted: event.payload.upserted.map((session) => projectSessionLineageForConsumer(session, consumer)),
+      upserted: event.payload.upserted.map((session) => projectSessionForConsumer(session, consumer)),
     },
   };
 }
@@ -1540,7 +1595,7 @@ export function projectAiSessionHistoryItemForConsumer(
   item: AiSessionHistoryItem,
   consumer: AiSessionHierarchyConsumer,
 ): AiSessionHistoryItem {
-  return AiSessionHistoryItemSchema.parse(projectSessionLineageForConsumer(item, consumer));
+  return AiSessionHistoryItemSchema.parse(projectSessionForConsumer(item, consumer));
 }
 
 export type AiSessionStreamEvent =
@@ -1654,7 +1709,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
 export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("event"),
   sessionId: NonEmptyTrimmedTextSchema.max(120),
-  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction", "model-selection", "reasoning-effort", "goal"]),
+  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction", "model-selection", "reasoning-effort", "goal", "next-input-suggestion"]),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   activeTurnId: TrimmedTextSchema.max(240).optional(),
@@ -1672,6 +1727,7 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   subAgents: AiSessionCurrentSubAgentsSchema.optional(),
   contextCompaction: AiSessionContextCompactionSchema.optional(),
   goal: AiSessionGoalSchema.nullable().optional(),
+  suggestion: AiSessionNextInputSuggestionSchema.nullable().optional(),
   counters: z.object({
     toolCalls: z.number().int().min(0).optional(),
     edits: z.number().int().min(0).optional(),
@@ -1701,6 +1757,13 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
     }
   } else if (input.goal !== undefined) {
     context.addIssue({ code: "custom", path: ["goal"], message: "goal is only valid for goal events" });
+  }
+  if (input.kind === "next-input-suggestion") {
+    if (!Object.prototype.hasOwnProperty.call(input, "suggestion")) {
+      context.addIssue({ code: "custom", path: ["suggestion"], message: "next-input-suggestion events require suggestion (use null when cleared)" });
+    }
+  } else if (input.suggestion !== undefined) {
+    context.addIssue({ code: "custom", path: ["suggestion"], message: "suggestion is only valid for next-input-suggestion events" });
   }
   if (input.kind === "context-compaction") {
     if (!input.contextCompaction) {
@@ -1796,6 +1859,7 @@ export type AiSessionMessageRefInput = z.infer<typeof AiSessionMessageRefInputSc
 export type AiSessionRuntimePath = z.infer<typeof AiSessionRuntimePathSchema>;
 export type AiSessionModelSelection = z.infer<typeof AiSessionModelSelectionSchema>;
 export type AiSessionReasoningEffort = z.infer<typeof AiSessionReasoningEffortSchema>;
+export type AiSessionNextInputSuggestionReasoningEffort = z.infer<typeof AiSessionNextInputSuggestionReasoningEffortSchema>;
 export type AiSessionCreateInput = z.infer<typeof AiSessionCreateInputSchema>;
 export type AiSessionCreateRefInput = z.infer<typeof AiSessionCreateRefInputSchema>;
 export type AiSessionModelSelectionInput = z.infer<typeof AiSessionModelSelectionInputSchema>;
@@ -1833,6 +1897,7 @@ export type AiSessionDetailRead = z.infer<typeof AiSessionDetailReadSchema>;
 export type AiSessionTurnIndexRead = z.infer<typeof AiSessionTurnIndexReadSchema>;
 export type AiSessionTurnBodyRead = z.infer<typeof AiSessionTurnBodyReadSchema>;
 export type AiSessionSummaryTurn = z.infer<typeof AiSessionSummaryTurnSchema>;
+export type AiSessionNextInputSuggestion = z.infer<typeof AiSessionNextInputSuggestionSchema>;
 export type AiSessionStatus = z.infer<typeof AiSessionStatusSchema>;
 export type AiSessionActionResult = z.infer<typeof AiSessionActionResultSchema>;
 export type AiSessionActionResponse = z.infer<typeof AiSessionActionResponseSchema>;

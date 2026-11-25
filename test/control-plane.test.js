@@ -713,6 +713,8 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     aiSessionWorkspaceSelection: false,
     aiSessionWorkspaceCheckout: false,
     aiSessionPersistenceSettings: false,
+    aiSessionNextInputSuggestion: false,
+    aiSessionNextInputSuggestionReasoningEffort: false,
     privateModelCatalog: false,
     codexManagedSettings: false,
     nodeAgentConnectionUpdate: false,
@@ -8197,6 +8199,8 @@ test("node agent provisions one built-in local runtime and creates local instanc
     aiSessionHistoryLimit: 50,
     aiSessionAttachmentRetentionDays: 30,
     aiSessionMaxFileAttachmentBytes: 500 * 1024,
+    aiSessionNextInputSuggestionEnabled: false,
+    aiSessionNextInputSuggestionReasoningEffort: "none",
   });
 
   const mergedConfigUpdate = await app.inject({
@@ -8214,6 +8218,8 @@ test("node agent provisions one built-in local runtime and creates local instanc
     aiSessionHistoryLimit: 50,
     aiSessionAttachmentRetentionDays: 30,
     aiSessionMaxFileAttachmentBytes: 500 * 1024,
+    aiSessionNextInputSuggestionEnabled: false,
+    aiSessionNextInputSuggestionReasoningEffort: "none",
   });
 
   const updatedHistoryLimit = await app.inject({
@@ -8315,7 +8321,7 @@ test("node agent reserves the built-in runtime marker", async (t) => {
     headers: { authorization: "Bearer agent-secret" },
     payload: { labels: { "task-handoff.node-agent.builtin": "true", owner: "updated" } },
   });
-  assert.equal(updated.statusCode, 200);
+  assert.equal(updated.statusCode, 200, JSON.stringify(updated.body));
   assert.deepEqual(updated.json().data.labels, { owner: "updated" });
 
   const deleted = await app.inject({
@@ -11928,12 +11934,25 @@ test("control plane proxies instance websocket routes through reverse node tunne
     ? Promise.resolve(queuedTunnelMessages.shift())
     : new Promise((resolve) => tunnelMessageWaiters.push(resolve));
 
-  const respondToRecoveryRequest = async (data) => {
+  const respondToRecoveryRequest = async (data, expectedPathPrefix) => {
     recoveryRequestPending = true;
     for (;;) {
       const message = await nextTunnelMessage();
       if (message.type !== "control-plane.request") continue;
       assert.equal(message.route, `/instances/${created.body.data.id}/proxy`);
+      const body = JSON.parse(String(decodeNodeTunnelRequestBody(message.init.body)));
+      if (expectedPathPrefix && !body.path.startsWith(expectedPathPrefix)) {
+        if (body.path.startsWith("/api/ai-sessions/state") && fallbackRecoverySnapshot) {
+          tunnel.send(JSON.stringify({
+            type: "node-agent.response",
+            requestId: message.requestId,
+            status: 200,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ data: fallbackRecoverySnapshot }),
+          }));
+        }
+        continue;
+      }
       tunnel.send(JSON.stringify({
         type: "node-agent.response",
         requestId: message.requestId,
@@ -11944,9 +11963,23 @@ test("control plane proxies instance websocket routes through reverse node tunne
       await new Promise((resolve) => setImmediate(resolve));
       if (data.snapshot) fallbackRecoverySnapshot = data;
       recoveryRequestPending = false;
-      return JSON.parse(String(decodeNodeTunnelRequestBody(message.init.body)));
+      return body;
     }
   };
+
+  // Complete the initial board bootstrap before the reverse tunnel advertises
+  // its stream; otherwise a late bootstrap response can overwrite the recovered
+  // snapshot and turn the delta recovery into a second snapshot request.
+  const bootstrapAt = new Date().toISOString();
+  const bootstrapPromise = json(app, "GET", "/api/ai-sessions");
+  await respondToRecoveryRequest({
+    streamId: "bootstrap:ai.sessions",
+    revision: 0,
+    lastEventAt: bootstrapAt,
+    snapshot: { runningCount: 0, waitingCount: 0, staleCount: 0, sessions: [], updatedAt: bootstrapAt },
+  }, "/api/ai-sessions/state");
+  fallbackRecoverySnapshot = undefined;
+  await bootstrapPromise;
 
   const recoveredAt = new Date().toISOString();
   tunnel.send(JSON.stringify({
@@ -11962,8 +11995,8 @@ test("control plane proxies instance websocket routes through reverse node tunne
     revision: 1,
     lastEventAt: recoveredAt,
     snapshot: { runningCount: 0, waitingCount: 0, staleCount: 0, sessions: [], updatedAt: recoveredAt },
-  }), "reverse tunnel initial recovery request", 5_000);
-  assert.equal(initialRecoveryBody.path, "/api/ai-sessions/state?hierarchy=subagents");
+  }, "/api/ai-sessions/state"), "reverse tunnel initial recovery request", 5_000);
+  assert.equal(initialRecoveryBody.path, "/api/ai-sessions/state?hierarchy=subagents&nextInputSuggestion=1");
   await waitForCondition(async () => {
     const response = await json(app, "GET", "/api/ai-sessions");
     return response.body.data.instances.some((entry) => entry.instanceId === created.body.data.id && entry.streamId === "ai_reverse_stream" && entry.revision === 1);
@@ -11994,7 +12027,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
     earliestRetainedRevision: 2,
     syncRequired: false,
     events: deltaEvents,
-  }), "reverse tunnel delta recovery request", 5_000);
+  }, "/api/ai-sessions?"), "reverse tunnel delta recovery request", 5_000);
   assert.match(deltaRecoveryBody.path, /^\/api\/ai-sessions\?/);
   await waitForCondition(async () => {
     const response = await json(app, "GET", "/api/ai-sessions");
@@ -12322,7 +12355,7 @@ test("control plane models deploy to the target node and instances store assignm
     config: { autoImportAgentConfigs: false },
   });
   assert.equal(generalUpdated.statusCode, 200);
-  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: 50, aiSessionAttachmentRetentionDays: 30, aiSessionMaxFileAttachmentBytes: 500 * 1024 });
+  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: 50, aiSessionAttachmentRetentionDays: 30, aiSessionMaxFileAttachmentBytes: 500 * 1024, aiSessionNextInputSuggestionEnabled: false, aiSessionNextInputSuggestionReasoningEffort: "none" });
   const generalUpdateRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}` && request.method === "PATCH" && request.body.config);
   assert.deepEqual(generalUpdateRequest.body.config, { autoImportAgentConfigs: false });
 
@@ -21207,4 +21240,139 @@ test("control plane aggregates ai session pending routes and proxies ai session 
       ["POST", `http://127.0.0.1:8091/api/node-agent/instances/${created.body.data.id}/proxy`, "/api/ai-sessions/ais_waiting/messages", { message: "continue", permissionMode: "ask" }],
     ],
   );
+});
+
+test("control plane edits next-input suggestions only when both node and instance support it", async (t) => {
+  const mockOptions = {
+    health: { capabilities: { aiSessionNextInputSuggestion: true } },
+    instanceCapabilities: { features: {} },
+  };
+  const mock = createMockNodeAgentFetch(mockOptions);
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-next-input-suggestion"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Next Input Project",
+    source: { type: "local-folder", path: "/tmp/workspace" },
+  });
+  const legacy = await json(app, "POST", "/api/controlled-instances", {
+    name: "legacy-next-input",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+  });
+  const rejected = await json(app, "PATCH", `/api/controlled-instances/${legacy.body.data.id}`, {
+    config: { aiSessionNextInputSuggestionEnabled: true },
+  });
+  assert.equal(rejected.statusCode, 409);
+  assert.equal(rejected.body.error.code, "AI_SESSION_NEXT_INPUT_SUGGESTION_UNSUPPORTED");
+  const rejectedMode = await json(app, "PATCH", `/api/controlled-instances/${legacy.body.data.id}`, {
+    config: { aiSessionNextInputSuggestionReasoningEffort: "session" },
+  });
+  assert.equal(rejectedMode.statusCode, 409);
+  assert.equal(rejectedMode.body.error.code, "AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT_UNSUPPORTED");
+
+  mockOptions.instanceCapabilities = { features: { aiSessionNextInputSuggestion: true } };
+  const current = await json(app, "POST", "/api/controlled-instances", {
+    name: "current-next-input",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+    config: { aiSessionNextInputSuggestionEnabled: true },
+  });
+  assert.equal(current.statusCode, 201);
+  assert.equal(current.body.data.config.aiSessionNextInputSuggestionEnabled, true);
+  const createRequest = mock.requests.filter((request) => request.path === "/instances").at(-1);
+  assert.deepEqual(createRequest.body.config, { aiSessionNextInputSuggestionEnabled: true });
+
+  const updated = await json(app, "PATCH", `/api/controlled-instances/${current.body.data.id}`, {
+    config: { aiSessionNextInputSuggestionEnabled: false },
+  });
+  assert.equal(updated.statusCode, 200, JSON.stringify(updated.body));
+  assert.equal(updated.body.data.config.aiSessionNextInputSuggestionEnabled, false);
+
+});
+
+test("control plane edits next-input reasoning modes only when both peers declare the additive capability", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    health: { capabilities: {
+      aiSessionNextInputSuggestion: true,
+      aiSessionNextInputSuggestionReasoningEffort: true,
+    } },
+    instanceCapabilities: { features: {
+      aiSessionNextInputSuggestion: true,
+      aiSessionNextInputSuggestionReasoningEffort: true,
+    } },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-next-input-reasoning"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Next Input Reasoning Project",
+    source: { type: "local-folder", path: "/tmp/workspace" },
+  });
+  const configured = await json(app, "POST", "/api/controlled-instances", {
+    name: "reasoning-next-input",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+    config: {
+      aiSessionNextInputSuggestionEnabled: true,
+      aiSessionNextInputSuggestionReasoningEffort: "session",
+    },
+  });
+  assert.equal(configured.statusCode, 201, JSON.stringify(configured.body));
+  assert.equal(configured.body.data.config.aiSessionNextInputSuggestionReasoningEffort, "session");
+  const configuredCreateRequest = mock.requests.filter((request) => request.path === "/instances").at(-1);
+  assert.deepEqual(configuredCreateRequest.body.config, {
+    aiSessionNextInputSuggestionEnabled: true,
+    aiSessionNextInputSuggestionReasoningEffort: "session",
+  });
+
+  const modeUpdated = await json(app, "PATCH", `/api/controlled-instances/${configured.body.data.id}`, {
+    config: { aiSessionNextInputSuggestionReasoningEffort: "high" },
+  });
+  assert.equal(modeUpdated.statusCode, 200, JSON.stringify(modeUpdated.body));
+  assert.equal(modeUpdated.body.data.config.aiSessionNextInputSuggestionReasoningEffort, "high");
+});
+
+test("control plane rejects next-input suggestions when the node agent cannot project them", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    health: { capabilities: {} },
+    instanceCapabilities: { features: { aiSessionNextInputSuggestion: true } },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-next-input-suggestion-node"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Next Input Node Project",
+    source: { type: "local-folder", path: "/tmp/workspace" },
+  });
+  const instance = await json(app, "POST", "/api/controlled-instances", {
+    name: "node-missing-next-input",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+  });
+  const rejected = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
+    config: { aiSessionNextInputSuggestionEnabled: true },
+  });
+  assert.equal(rejected.statusCode, 409);
+  assert.equal(rejected.body.error.code, "AI_SESSION_NEXT_INPUT_SUGGESTION_UNSUPPORTED");
+  const rejectedMode = await json(app, "PATCH", `/api/controlled-instances/${instance.body.data.id}`, {
+    config: { aiSessionNextInputSuggestionReasoningEffort: "none" },
+  });
+  assert.equal(rejectedMode.statusCode, 409);
+  assert.equal(rejectedMode.body.error.code, "AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT_UNSUPPORTED");
 });

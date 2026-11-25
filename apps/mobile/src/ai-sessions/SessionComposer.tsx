@@ -77,9 +77,15 @@ export function SessionComposer(props: SessionComposerProps) {
   const inputRef = useRef<TextInput>(null);
   useEffect(() => {
     if (!props.focusRequestKey) return;
-    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    const frame = requestAnimationFrame(() => {
+      const input = inputRef.current;
+      input?.focus();
+      if (input && props.selectionRequestKey === props.focusRequestKey && props.selectionEnd !== undefined) {
+        input.setNativeProps({ selection: { start: props.selectionEnd, end: props.selectionEnd } });
+      }
+    });
     return () => cancelAnimationFrame(frame);
-  }, [props.focusRequestKey]);
+  }, [props.focusRequestKey, props.selectionEnd, props.selectionRequestKey]);
   const animatedContainerStyle = useAnimatedStyle(() => ({
     borderRadius: interpolate(expansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_RADIUS, SESSION_COMPOSER_EXPANDED_RADIUS]),
     height: interpolate(expansion.value, [0, 1], [SESSION_COMPOSER_COLLAPSED_HEIGHT, props.expandedHeight.value]),

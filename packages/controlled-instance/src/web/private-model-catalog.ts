@@ -6,6 +6,11 @@ import {
   type InstancePrivateModelCatalog,
 } from "@task-handoff/core/core/instance-private-model-catalog";
 import type { AiSessionModelSelection } from "@task-handoff/protocol/ai-sessions";
+import {
+  AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
+  AiSessionNextInputSuggestionReasoningEffortSchema,
+  type AiSessionNextInputSuggestionReasoningEffort,
+} from "@task-handoff/protocol/ai-sessions";
 import { parseCodexInstanceSettings } from "@task-handoff/protocol/control-plane";
 
 export const ControlledPrivateModelCatalogSchema = InstancePrivateModelCatalogSchema;
@@ -48,6 +53,33 @@ export function readControlledPrivateCodexSettings(env: NodeJS.ProcessEnv = proc
   if (!filePath || !fs.existsSync(filePath)) return undefined;
   const root = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
   return root.codexSettings === undefined ? undefined : parseCodexInstanceSettings(root.codexSettings);
+}
+
+export function readControlledPrivateAiSessionNextInputSuggestionEnabled(env: NodeJS.ProcessEnv = process.env) {
+  const projected = env.TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_ENABLED;
+  if (projected !== undefined) {
+    const normalized = projected.trim().toLowerCase();
+    return normalized === "1" || normalized === "true";
+  }
+  if (env.TASK_HANDOFF_PRIVATE_CONFIG_LOADED === "1") return false;
+  const filePath = privateConfigFilePath(env);
+  if (!filePath || !fs.existsSync(filePath)) return false;
+  const root = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  return root.aiSessionNextInputSuggestionEnabled === true;
+}
+
+export function readControlledPrivateAiSessionNextInputSuggestionReasoningEffort(
+  env: NodeJS.ProcessEnv = process.env,
+): AiSessionNextInputSuggestionReasoningEffort {
+  const parse = (value: unknown) => AiSessionNextInputSuggestionReasoningEffortSchema.safeParse(value).data
+    ?? AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT;
+  const projected = env.TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT;
+  if (projected !== undefined) return parse(projected.trim().toLowerCase());
+  if (env.TASK_HANDOFF_PRIVATE_CONFIG_LOADED === "1") return AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT;
+  const filePath = privateConfigFilePath(env);
+  if (!filePath || !fs.existsSync(filePath)) return AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT;
+  const root = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  return parse(root.aiSessionNextInputSuggestionReasoningEffort);
 }
 
 /**

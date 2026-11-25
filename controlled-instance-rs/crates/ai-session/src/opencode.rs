@@ -2161,7 +2161,10 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                 select_at_create: true,
                 update_during_session: true,
             }),
-            hierarchy: Some(AiSessionHierarchyCapabilities { subagents: true }),
+            hierarchy: Some(AiSessionHierarchyCapabilities {
+                subagents: true,
+                next_input_suggestion: true,
+            }),
         }
     }
 
@@ -2275,6 +2278,15 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
         })?;
         let directory = self.resolve_directory(provider_session_id).await?;
         self.client.abort(provider_session_id, &directory).await?;
+        if let Some(turn_id) = session.active_turn_id.clone() {
+            let _ = self.events.send(ProviderEvent::TurnCompleted {
+                provider_session_id: provider_session_id.to_string(),
+                turn_id: Some(turn_id),
+                status: Some("interrupted".to_string()),
+                error: None,
+                completed_at: Some(now_iso()),
+            });
+        }
         let _ = self
             .reconcile_tx
             .send((provider_session_id.to_string(), directory));

@@ -1,0 +1,113 @@
+{
+  "parser": [
+    { "raw": "{\"suggestion\":\"  继续修复测试。  \"}", "expected": "继续修复测试。" },
+    { "raw": "{\"suggestion\":\"\\\"加一个回归测试。\\\"\"}", "expected": "加一个回归测试。" },
+    { "raw": "{\"suggestion\":\"a\\n\\tb\"}", "expected": "a b" },
+    { "raw": "{\"suggestion\":\"   \"}", "expected": null },
+    { "raw": "{\"other\":\"x\"}", "expected": null },
+    { "raw": "[1,2]", "expected": null },
+    { "raw": "not json", "expected": null }
+  ],
+  "context": [
+    {
+      "name": "latest two completed turns under a tight bound",
+      "maxBytes": 60,
+      "expectedUsers": ["最新问题"],
+      "session": {
+        "id": "ses_0000000000001",
+        "agent": "codex",
+        "status": "idle",
+        "startedAt": "2026-11-25T00:00:00.000Z",
+        "updatedAt": "2026-11-25T00:04:00.000Z",
+        "turns": [
+          { "id": "turn_1", "status": "completed", "userPrompt": "old", "summary": "old reply" },
+          { "id": "turn_2", "status": "failed", "userPrompt": "failed", "summary": "failed reply" },
+          { "id": "turn_3", "status": "completed", "userPrompt": "最近的问题", "summary": "最近的回答" },
+          { "id": "turn_4", "status": "completed", "userPrompt": "最新问题", "summary": "最新回答" }
+        ]
+      }
+    },
+    {
+      "name": "only the last two completed turns",
+      "maxBytes": 8192,
+      "expectedUsers": ["第二问", "最新问题"],
+      "session": {
+        "id": "ses_0000000000002",
+        "agent": "opencode",
+        "status": "idle",
+        "startedAt": "2026-11-25T00:00:00.000Z",
+        "updatedAt": "2026-11-25T00:04:00.000Z",
+        "turns": [
+          { "id": "turn_1", "status": "completed", "userPrompt": "第一问", "summary": "第一答" },
+          { "id": "turn_2", "status": "completed", "userPrompt": "第二问", "summary": "第二答" },
+          { "id": "turn_3", "status": "failed", "userPrompt": "中途取消", "summary": "取消" },
+          { "id": "turn_4", "status": "completed", "userPrompt": "最新问题", "summary": "最新回答" }
+        ]
+      }
+    }
+  ],
+  "eligibility": [
+    {
+      "name": "settled idle turn",
+      "expected": true,
+      "session": { "id": "ses_a", "agent": "codex", "status": "idle", "queue": { "pendingCount": 0 }, "turns": [{ "id": "turn_1", "status": "completed" }] }
+    },
+    {
+      "name": "queued message blocks",
+      "expected": false,
+      "session": { "id": "ses_b", "agent": "codex", "status": "idle", "queue": { "pendingCount": 2 }, "turns": [{ "id": "turn_1", "status": "completed" }] }
+    },
+    {
+      "name": "running session blocks",
+      "expected": false,
+      "session": { "id": "ses_c", "agent": "codex", "status": "running", "queue": { "pendingCount": 0 }, "turns": [{ "id": "turn_1", "status": "completed" }] }
+    },
+    {
+      "name": "unsettled latest turn blocks",
+      "expected": false,
+      "session": { "id": "ses_d", "agent": "codex", "status": "idle", "queue": { "pendingCount": 0 }, "turns": [{ "id": "turn_1", "status": "running" }] }
+    },
+    {
+      "name": "subagent blocks",
+      "expected": false,
+      "session": { "id": "ses_e", "agent": "codex", "status": "idle", "queue": { "pendingCount": 0 }, "lineage": { "kind": "subagent", "parentProviderSessionId": "thread-root" }, "turns": [{ "id": "turn_1", "status": "completed" }] }
+    },
+    {
+      "name": "no settled turn",
+      "expected": false,
+      "session": { "id": "ses_f", "agent": "codex", "status": "idle", "queue": { "pendingCount": 0 } }
+    }
+  ],
+  "reasoningEffort": [
+    { "mode": "session", "sessionEffort": "high", "expected": "high" },
+    { "mode": "session", "sessionEffort": null, "expected": null },
+    { "mode": "none", "sessionEffort": "high", "expected": "none" },
+    { "mode": "minimal", "sessionEffort": "high", "expected": "minimal" },
+    { "mode": "low", "sessionEffort": "high", "expected": "low" },
+    { "mode": "medium", "sessionEffort": "high", "expected": "medium" },
+    { "mode": "high", "sessionEffort": "low", "expected": "high" },
+    { "mode": "xhigh", "sessionEffort": "low", "expected": "xhigh" },
+    { "mode": "max", "sessionEffort": "low", "expected": "max" },
+    { "mode": "ultra", "sessionEffort": "low", "expected": "ultra" }
+  ],
+  "consumer": [
+    { "subagents": false, "nextInputSuggestion": false, "expectedSuggestion": false, "expectedLineage": false },
+    { "subagents": false, "nextInputSuggestion": true, "expectedSuggestion": true, "expectedLineage": false },
+    { "subagents": true, "nextInputSuggestion": false, "expectedSuggestion": false, "expectedLineage": true },
+    { "subagents": true, "nextInputSuggestion": true, "expectedSuggestion": true, "expectedLineage": true }
+  ],
+  "config": [
+    { "env": { "TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_ENABLED": "1", "TASK_HANDOFF_PRIVATE_CONFIG_LOADED": "1" }, "expected": true },
+    { "env": { "TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_ENABLED": " true ", "TASK_HANDOFF_PRIVATE_CONFIG_LOADED": "1" }, "expected": true },
+    { "env": { "TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_ENABLED": "0", "TASK_HANDOFF_PRIVATE_CONFIG_LOADED": "1" }, "expected": false },
+    { "env": { "TASK_HANDOFF_PRIVATE_CONFIG_LOADED": "1" }, "expected": false },
+    { "env": {}, "expected": false }
+  ],
+  "reasoningEffortConfig": [
+    { "env": { "TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT": " HIGh ", "TASK_HANDOFF_PRIVATE_CONFIG_LOADED": "1" }, "expected": "high" },
+    { "env": { "TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT": "session", "TASK_HANDOFF_PRIVATE_CONFIG_LOADED": "1" }, "expected": "session" },
+    { "env": { "TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT": "future", "TASK_HANDOFF_PRIVATE_CONFIG_LOADED": "1" }, "expected": "none" },
+    { "env": { "TASK_HANDOFF_PRIVATE_CONFIG_LOADED": "1" }, "expected": "none" },
+    { "env": {}, "expected": "none" }
+  ]
+}

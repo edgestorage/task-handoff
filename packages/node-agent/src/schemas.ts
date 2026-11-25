@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AiSessionNextInputSuggestionReasoningEffortSchema, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
 import { GitWorkspaceProvisioningInputSchema } from "@task-handoff/protocol/managed-git-credentials";
 import {
   ControlledInstanceSchema,
@@ -64,6 +64,8 @@ export const CreateNodeInstanceSchema = z
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
       aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
       aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
+      aiSessionNextInputSuggestionEnabled: z.boolean().optional(),
+      aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection,
     gitWorkspaceProvisioning: GitWorkspaceProvisioningInputSchema.optional(),
@@ -93,6 +95,8 @@ export const UpdateNodeInstanceSchema = z
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
       aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
       aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
+      aiSessionNextInputSuggestionEnabled: z.boolean().optional(),
+      aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   })

@@ -73,6 +73,36 @@ test("instance lifecycle reducer preserves an authoritative heartbeat that races
   assert.equal(reduced.apps.runningCount, 2);
 });
 
+test("runtime lifecycle probe survives a racing heartbeat that only inherited unknown target state", () => {
+  const baseline = instance({ status: "starting", stateRevision: 4 });
+  const heartbeat = instance({
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    agentStatus: "online",
+    targetStatus: "unknown",
+    uiAccessStatus: "unknown",
+    ready: true,
+    stateRevision: 6,
+    lastHeartbeatAt: "2026-07-28T00:00:01.000Z",
+  });
+
+  const reduced = reduceInstanceLifecycle(heartbeat, {
+    type: "runtime-lifecycle-completed",
+    baseline,
+    observation: {
+      target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:32000" },
+      targetStatus: "reachable",
+      uiAccessStatus: "reachable",
+    },
+  }, "2026-07-28T00:00:02.000Z");
+
+  assert.equal(reduced.status, "running");
+  assert.equal(reduced.targetStatus, "reachable");
+  assert.equal(reduced.uiAccessStatus, "reachable");
+  assert.equal(reduced.target.web, "http://127.0.0.1:32000");
+});
+
 test("instance lifecycle reducer applies runtime start facts when no newer heartbeat exists", () => {
   const baseline = instance({ status: "starting", stateRevision: 4 });
   const reduced = reduceInstanceLifecycle(baseline, {

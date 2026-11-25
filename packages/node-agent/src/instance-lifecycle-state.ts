@@ -53,8 +53,12 @@ function runtimeLifecycleCompleted(
       health: latest.health,
       connectionStatus: latest.connectionStatus,
       agentStatus: latest.agentStatus,
-      targetStatus: latest.targetStatus,
-      uiAccessStatus: latest.uiAccessStatus,
+      // A process report inherits targetStatus from the stored instance instead
+      // of observing it. Keep the adapter's fresh probe result in observation;
+      // otherwise a restart racing the first heartbeat restores the stale
+      // "unknown" value and disables every endpoint-dependent live sync.
+      ...(observation.targetStatus === undefined ? { targetStatus: latest.targetStatus } : {}),
+      ...(observation.uiAccessStatus === undefined ? { uiAccessStatus: latest.uiAccessStatus } : {}),
     } : {}),
     ready: hasFreshProcessReport ? latest.ready : false,
     // Runtime adapters own endpoint topology. A concurrent controlled-instance

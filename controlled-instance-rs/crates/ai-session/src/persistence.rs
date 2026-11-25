@@ -2,7 +2,8 @@ use crate::AiSession;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use controlled_instance_core::text::js_string;
 use controlled_instance_protocol::{
-    AiSessionCounters, AiSessionGoal, AiSessionGoalStatus, AiSessionQueue,
+    AiSessionCounters, AiSessionGoal, AiSessionGoalStatus, AiSessionNextInputSuggestion,
+    AiSessionQueue, AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS,
 };
 use serde_json::{Map, Value};
 use sha1::{Digest, Sha1};
@@ -49,7 +50,7 @@ fn decode_session(value: &Value) -> Option<AiSession> {
     let phase = normalize_phase(record.get("phase"))?;
     let queue = normalize_queue(record.get("queue"))?;
 
-    Some(AiSession {
+    let mut session = AiSession {
         id,
         agent,
         creation_source: if record.get("creationSource").and_then(Value::as_str)
@@ -108,8 +109,63 @@ fn decode_session(value: &Value) -> Option<AiSession> {
         error: optional_text(record.get("error"), 4000),
         counters: normalize_counters(record.get("counters"))?,
         queue,
+        next_input_suggestion: normalize_next_input_suggestion(record.get("nextInputSuggestion")),
         unread: record.get("unread") == Some(&Value::Bool(true)),
+    };
+    with_valid_next_input_suggestion(&mut session);
+    Some(session)
+}
+
+pub(crate) fn normalize_next_input_suggestion(
+    value: Option<&Value>,
+) -> Option<AiSessionNextInputSuggestion> {
+    let record = value?.as_object()?;
+    if record
+        .keys()
+        .any(|key| !matches!(key.as_str(), "text" | "turnId" | "generatedAt"))
+    {
+        return None;
+    }
+    let text = record.get("text")?.as_str()?.trim();
+    if text.is_empty()
+        || text.contains(['\r', '\n'])
+        || text.chars().count() > AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS
+    {
+        return None;
+    }
+    let turn_id = required_text(record.get("turnId"), 240)?;
+    let generated_at = required_timestamp(record.get("generatedAt"))?;
+    Some(AiSessionNextInputSuggestion {
+        text: text.to_string(),
+        turn_id,
+        generated_at,
     })
+}
+
+pub(crate) fn with_valid_next_input_suggestion(session: &mut AiSession) {
+    let Some(suggestion) = session.next_input_suggestion.as_ref() else {
+        return;
+    };
+    let latest_turn = session.turns.as_deref().unwrap_or_default().last();
+    let valid = session.status == "idle"
+        && session.queue.pending_count == 0
+        && session
+            .lineage
+            .as_ref()
+            .and_then(|lineage| lineage.get("kind"))
+            .and_then(Value::as_str)
+            != Some("subagent")
+        && latest_turn
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str)
+            == Some(suggestion.turn_id.as_str())
+        && latest_turn
+            .and_then(|turn| turn.get("status"))
+            .and_then(Value::as_str)
+            == Some("completed");
+    if !valid {
+        session.next_input_suggestion = None;
+    }
 }
 
 fn normalize_goal(value: Option<&Value>) -> Option<AiSessionGoal> {
@@ -1837,6 +1893,116 @@ mod tests {
         assert!(decode_persisted_session(&session)
             .expect("session")
             .goal
+            .is_none());
+    }
+
+    fn next_input_session(turn_status: &str, status: &str, pending_count: u64) -> Value {
+        json!({
+            "id": "ses_0000000000001",
+            "agent": "codex",
+            "providerSessionId": "thread-1",
+            "status": status,
+            "phase": "unknown",
+            "queue": { "revision": 0, "pendingCount": pending_count, "items": [] },
+            "startedAt": "2026-11-25T00:00:00.000Z",
+            "updatedAt": "2026-11-25T00:01:00.000Z",
+            "turns": [{
+                "id": "turn_1",
+                "status": turn_status,
+                "completedAt": "2026-11-25T00:00:30.000Z"
+            }]
+        })
+    }
+
+    fn next_input_value(text: &str) -> Value {
+        json!({
+            "text": text,
+            "turnId": "turn_1",
+            "generatedAt": "2026-11-25T00:00:31.000Z"
+        })
+    }
+
+    #[test]
+    fn next_input_suggestion_sanitize_keeps_only_a_current_settled_turn() {
+        let mut session = next_input_session("completed", "idle", 0);
+        session["nextInputSuggestion"] = next_input_value("  继续修复。 ");
+        let decoded = decode_persisted_session(&session).expect("session");
+        assert_eq!(
+            decoded.next_input_suggestion.expect("suggestion").text,
+            "继续修复。"
+        );
+
+        let mut pending = next_input_session("completed", "idle", 0);
+        pending["queue"]["items"] = json!([{
+            "id": "queue_1",
+            "message": "next",
+            "status": "queued",
+            "createdAt": "2026-11-25T00:01:00.000Z",
+            "updatedAt": "2026-11-25T00:01:00.000Z"
+        }]);
+        for (mut mutated, name) in [
+            (
+                next_input_session("running", "idle", 0),
+                "unsettled latest turn",
+            ),
+            (
+                next_input_session("completed", "running", 0),
+                "running session",
+            ),
+            (pending, "pending queue"),
+        ] {
+            mutated["nextInputSuggestion"] = next_input_value("继续修复。");
+            assert!(
+                decode_persisted_session(&mutated)
+                    .expect("session")
+                    .next_input_suggestion
+                    .is_none(),
+                "{name}"
+            );
+        }
+
+        let mut stale = next_input_session("completed", "idle", 0);
+        stale["nextInputSuggestion"] = json!({
+            "text": "旧建议",
+            "turnId": "turn_0",
+            "generatedAt": "2026-11-25T00:00:31.000Z"
+        });
+        assert!(decode_persisted_session(&stale)
+            .expect("session")
+            .next_input_suggestion
+            .is_none());
+
+        let mut subagent = next_input_session("completed", "idle", 0);
+        subagent["lineage"] = json!({ "kind": "subagent", "parentProviderSessionId": "root" });
+        subagent["nextInputSuggestion"] = next_input_value("继续修复。");
+        assert!(decode_persisted_session(&subagent)
+            .expect("session")
+            .next_input_suggestion
+            .is_none());
+
+        let mut multiline = next_input_session("completed", "idle", 0);
+        multiline["nextInputSuggestion"] = next_input_value("a\nb");
+        assert!(decode_persisted_session(&multiline)
+            .expect("session")
+            .next_input_suggestion
+            .is_none());
+
+        let mut unknown = next_input_session("completed", "idle", 0);
+        unknown["nextInputSuggestion"] = json!({
+            "text": "继续修复。",
+            "turnId": "turn_1",
+            "generatedAt": "2026-11-25T00:00:31.000Z",
+            "future": true
+        });
+        assert!(decode_persisted_session(&unknown)
+            .expect("session")
+            .next_input_suggestion
+            .is_none());
+
+        let legacy = next_input_session("completed", "idle", 0);
+        assert!(decode_persisted_session(&legacy)
+            .expect("session")
+            .next_input_suggestion
             .is_none());
     }
 }

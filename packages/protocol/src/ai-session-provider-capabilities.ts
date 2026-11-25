@@ -34,7 +34,8 @@ export const AiSessionReasoningEffortCapabilitiesSchema = z.object({
 
 export const AiSessionHierarchyCapabilitiesSchema = z.object({
   subagents: z.boolean().default(false),
-}).strip().default({ subagents: false });
+  nextInputSuggestion: z.boolean().default(false),
+}).strip().default({ subagents: false, nextInputSuggestion: false });
 
 export const AiSessionProviderCapabilitySchema = z.object({
   agent: AiSessionCapabilityAgentSchema,
@@ -102,6 +103,18 @@ export function normalizeAiSessionHierarchyCapabilities(
 
 export function supportsAiSessionSubagentHierarchy(capability: unknown) {
   return normalizeAiSessionHierarchyCapabilities(capability).subagents;
+}
+
+export function supportsAiSessionProviderNextInputSuggestion(capability: unknown) {
+  return normalizeAiSessionHierarchyCapabilities(capability).nextInputSuggestion;
+}
+
+export function normalizeAiSessionConsumerHierarchyCapabilities(value: unknown): AiSessionHierarchyCapabilities {
+  return AiSessionHierarchyCapabilitiesSchema.parse(value);
+}
+
+export function supportsAiSessionConsumerNextInputSuggestion(value: unknown) {
+  return normalizeAiSessionConsumerHierarchyCapabilities(value).nextInputSuggestion;
 }
 
 export function supportsAiSessionProviderRename(capability: unknown) {

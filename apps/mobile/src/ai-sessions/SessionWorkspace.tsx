@@ -24,6 +24,8 @@ import { ADAPTIVE_READING_MAX_WIDTH, useAdaptiveContentLayout } from '../compone
 import { Icon, type IconName } from '../components/Icon';
 import { AttachmentImage } from './AttachmentImage';
 import { SessionComposer } from './SessionComposer';
+import { SessionNextInputSuggestionCard } from './SessionNextInputSuggestionCard';
+import { consumeNextInputSuggestion, nextInputSuggestionForSession, nextInputSuggestionKey, visibleNextInputSuggestion } from './next-input-suggestion';
 import { RunningTurnCapsule } from './RunningTurnCapsule';
 import { SessionGoalBar } from './SessionGoalBar';
 import {
@@ -214,6 +216,8 @@ export function SessionWorkspace({
   const goalEditRef = useRef(goalEdit);
   goalEditRef.current = goalEdit;
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const [composerSelectionEnd, setComposerSelectionEnd] = useState<number>();
+  const [composerSelectionRequestKey, setComposerSelectionRequestKey] = useState<number>();
   const [queueOrderPreview, setQueueOrderPreview] = useState<string[]>();
   const [draggingQueueId, setDraggingQueueId] = useState<string>();
   const queueDragOffsetY = useSharedValue(0);
@@ -607,6 +611,17 @@ export function SessionWorkspace({
   const authoritativeActionsEnabled = syncPhase === 'ready';
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
   const latestTurn = session.turns?.[latestTurnIndex];
+  const latestVisibleTurnId = latestTurn?.id || aiSessionDisplayTurns(session).at(-1)?.id;
+  const visibleSuggestion = visibleNextInputSuggestion({
+    controlPlaneId,
+    instanceId,
+    sessionId: session.id,
+    suggestion: nextInputSuggestionForSession(session, latestVisibleTurnId),
+    draft,
+    attachmentCount: attachments.length,
+    editing: Boolean(activeQueueEdit || activeGoalEdit),
+    actionsEnabled: authoritativeActionsEnabled,
+  });
   const latestTurnRunning = session.status === 'running' && (latestTurn ? latestTurn.status === 'running' : true);
   const showLatestTurnRunningCapsule = detailMode === 'turn' && selectedTurnIndex < latestTurnIndex && latestTurnRunning;
   const latestTurnActivity = latestTurnRunning ? sessionActivityText(session, t) : undefined;
@@ -977,6 +992,26 @@ export function SessionWorkspace({
     if (draftTimer.current) clearTimeout(draftTimer.current);
     if (drafts) draftTimer.current = setTimeout(() => { void drafts.write(controlPlaneId, instanceId, session.id, text); }, 150);
   };
+  const acceptNextInputSuggestion = () => {
+    if (!visibleSuggestion) return;
+    consumeNextInputSuggestion(nextInputSuggestionKey(controlPlaneId, instanceId, session.id, visibleSuggestion.turnId));
+    const text = visibleSuggestion.text;
+    setDraft(text);
+    latestDraft.current = text;
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    if (drafts) void drafts.write(controlPlaneId, instanceId, session.id, text);
+    setComposerFocused(true);
+    const nextFocusRequest = composerFocusRequest + 1;
+    setComposerSelectionEnd(text.length);
+    setComposerSelectionRequestKey(nextFocusRequest);
+    setComposerFocusRequest(nextFocusRequest);
+    rerender((value) => value + 1);
+  };
+  const dismissNextInputSuggestion = () => {
+    if (!visibleSuggestion) return;
+    consumeNextInputSuggestion(nextInputSuggestionKey(controlPlaneId, instanceId, session.id, visibleSuggestion.turnId));
+    rerender((value) => value + 1);
+  };
   const addTextToConversation = (text: string) => {
     const next = appendConversationText(latestDraft.current, text);
     if (next === latestDraft.current) return;
@@ -1238,6 +1273,11 @@ export function SessionWorkspace({
           onCommand={(command) => { void executeGoalCommand(command); }}
           onEdit={() => { if (session.goal) beginGoalEdit(session.goal); }}
         /> : null}
+        {visibleSuggestion ? <SessionNextInputSuggestionCard
+          onDismiss={dismissNextInputSuggestion}
+          onUse={acceptNextInputSuggestion}
+          text={visibleSuggestion.text}
+        /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surface }]}>
           {attachment.kind === 'image' && attachment.previewUri ? <AttachmentImage compact name={attachment.name} uri={attachment.previewUri} /> : <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />}
           <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size, locale)}` : attachment.name} style={styles.attachmentCopy}>
@@ -1292,6 +1332,8 @@ export function SessionWorkspace({
           reasoningEffortBusy={reasoningState?.phase === 'busy'}
           onReasoningEffortChange={(effort) => { void updateReasoningEffort(effort); }}
           runtimeFileDisabled={!authoritativeActionsEnabled || !client || !session.cwd}
+          selectionEnd={composerSelectionEnd}
+          selectionRequestKey={composerSelectionRequestKey}
           value={draft}
         />
       </View>

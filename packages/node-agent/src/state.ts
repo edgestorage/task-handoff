@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AI_SESSION_HISTORY_DEFAULT_LIMIT } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AI_SESSION_HISTORY_DEFAULT_LIMIT, AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT } from "@task-handoff/protocol/ai-sessions";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceHeartbeatSchema,
@@ -684,6 +684,8 @@ export class NodeAgentState {
       },
       this.modelRegistry.privateCatalog(instance.id),
       instance.config.codexSettings,
+      instance.config.aiSessionNextInputSuggestionEnabled,
+      instance.config.aiSessionNextInputSuggestionReasoningEffort,
     );
   }
 
@@ -792,6 +794,8 @@ export class NodeAgentState {
         aiSessionHistoryLimit: input.config?.aiSessionHistoryLimit ?? AI_SESSION_HISTORY_DEFAULT_LIMIT,
         aiSessionAttachmentRetentionDays: input.config?.aiSessionAttachmentRetentionDays ?? 30,
         aiSessionMaxFileAttachmentBytes: input.config?.aiSessionMaxFileAttachmentBytes ?? AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
+        aiSessionNextInputSuggestionEnabled: input.config?.aiSessionNextInputSuggestionEnabled ?? false,
+        aiSessionNextInputSuggestionReasoningEffort: input.config?.aiSessionNextInputSuggestionReasoningEffort ?? AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
       },
       // Git workspaces on Docker are materialized by the asynchronous
       // provisioning controller, so the record starts in the pending phase.

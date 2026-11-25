@@ -217,9 +217,13 @@ async fn c03_mutation_at_registration_cannot_fall_between_hello_and_live_stream(
     // or receive its event. No missing-event timeout is used: revision 3 is a
     // fence that exposes a missing revision 2 immediately.
     let (mut receiver, bootstrap) =
-        state.connect_event_stream_before_registration(true, false, || {
+        state.connect_event_stream_before_registration(
+            true,
+            controlled_instance_protocol::AiSessionConsumerProjection::default(),
+            || {
             publish(&state, "Before connect");
-        });
+            },
+        );
     publish(&state, "After connect");
     let first_live = tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv())
         .await

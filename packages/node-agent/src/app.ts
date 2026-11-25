@@ -23,6 +23,7 @@ import {
   sanitizeCrossVersionControlledInstanceHeartbeat,
   sanitizeCrossVersionControlledInstanceRegister,
   supportsGitCliCredentialBroker,
+  supportsAiSessionNextInputSuggestionReasoningEffort,
   supportsControlledInstanceNodeAgentConnectionUpdate,
   UpdateControlledInstanceNodeAgentConnectionSchema,
   type BuildInfo,
@@ -98,6 +99,7 @@ import { registerInstanceLifecycleRoutes } from "./instances/lifecycle-routes.ts
 import { InstanceImageProvisioningController } from "./instances/image-provisioning.ts";
 import { InstanceGitWorkspaceProvisioningController } from "./instances/git-provisioning.ts";
 import { InstanceOperationGate } from "./instances/instance-operation-gate.ts";
+import { syncAiSessionNextInputSuggestionSettings as syncAiSessionNextInputSuggestionSettingsRequest } from "./instances/ai-session-next-input-settings.ts";
 import { EnvironmentTemplateService } from "./environment-templates/service.ts";
 import { registerEnvironmentTemplateRoutes } from "./environment-templates/routes.ts";
 import {
@@ -1028,6 +1030,28 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       return false;
     }
   };
+  const aiSessionNextInputSuggestionSyncKeys = new Map<string, string>();
+  const syncAiSessionNextInputSuggestionSettings = async (id: string) => {
+    const instance = state.requireInstance(id);
+    if (instance.targetStatus !== "reachable" || !instance.registrationToken) return false;
+    try {
+      return await syncAiSessionNextInputSuggestionSettingsRequest({
+        instanceId: id,
+        webUrl: await resolveInstanceWeb(instance),
+        registrationToken: instance.registrationToken,
+        enabled: instance.config.aiSessionNextInputSuggestionEnabled === true,
+        reasoningEffort: instance.config.aiSessionNextInputSuggestionReasoningEffort,
+        reasoningEffortSupported: supportsAiSessionNextInputSuggestionReasoningEffort(instance.capabilities),
+        processIncarnationId: instance.processIncarnationId,
+        syncKeys: aiSessionNextInputSuggestionSyncKeys,
+        request: (url, init) => fetchWithTimeout(fetchImpl, url, init, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS),
+        warn: (data, message) => lifecycleLoggers.warn(data, message),
+      });
+    } catch (error) {
+      lifecycleLoggers.warn({ instanceId: id, error: error instanceof Error ? error.message : String(error) }, "node instance next-input suggestion settings live sync deferred");
+      return false;
+    }
+  };
   const convergeAssignedModelEnvironment = createAssignedModelEnvironmentConvergence(
     (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb),
     (data, message) => lifecycleLoggers.warn(data, message),
@@ -1886,6 +1910,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           aiSessionHistoryLimit: true,
           aiSessionAttachmentRetention: true,
           aiSessionFileAttachmentLimit: true,
+          aiSessionNextInputSuggestion: true,
+          aiSessionNextInputSuggestionReasoningEffort: true,
           codexManagedSettings: true,
           controlPlaneTrust: true,
           folderPlaces: true,
@@ -2085,6 +2111,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       await Promise.all([
         syncAiSessionPersistenceSettings(instance.id),
         syncCodexManagedSettings(instance.id),
+        syncAiSessionNextInputSuggestionSettings(instance.id),
       ]);
     },
     afterReport: (instance, report) => {
@@ -2093,6 +2120,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       reconcileReportedEndpoint(instance);
       void syncAiSessionPersistenceSettings(instance.id);
       void syncCodexManagedSettings(instance.id);
+      void syncAiSessionNextInputSuggestionSettings(instance.id);
       // Registration is the first report that carries the instance's declared
       // capabilities, so it is also the first moment the assigned catalog can be
       // projected for the process this node agent just started.

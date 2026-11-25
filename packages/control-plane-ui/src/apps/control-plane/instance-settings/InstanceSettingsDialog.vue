@@ -99,6 +99,8 @@
               </div>
               <div class="instance-settings-control-surface instance-settings-surface">
                 <div class="instance-settings-general-controls">
+                  <label class="instance-settings-checkbox"><Checkbox :model-value="aiSessionNextInputSuggestionEnabled" :disabled="savingGeneral || !nextInputSuggestionSupported" @update:model-value="aiSessionNextInputSuggestionEnabled = $event === true" /><span><strong>{{ t("instances.settings.aiSessionNextInputSuggestion") }}</strong><small>{{ nextInputSuggestionSupported ? t("instances.settings.aiSessionNextInputSuggestionDescription") : t("instances.settings.aiSessionNextInputSuggestionUnsupported") }}</small></span></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.aiSessionNextInputSuggestionReasoning") }}</strong><small>{{ nextInputSuggestionReasoningEffortSupported ? t("instances.settings.aiSessionNextInputSuggestionReasoningDescription") : t("instances.settings.aiSessionNextInputSuggestionReasoningUnsupported") }}</small></span><ControlPlaneSelect v-model="aiSessionNextInputSuggestionReasoningEffort" :disabled="savingGeneral || !nextInputSuggestionReasoningEffortSupported"><ControlPlaneSelectItem value="session">{{ t("instances.settings.aiSessionNextInputSuggestionFollowSession") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-for="effort in AI_SESSION_REASONING_EFFORTS" :key="effort" :value="effort">{{ t(`instances.settings.codexReasoning.${effort}`) }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
                   <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionFileAttachmentLimit") }}</strong><small>{{ fileAttachmentLimitSupported ? t("instances.settings.aiSessionFileAttachmentLimitDescription") : t("instances.settings.aiSessionFileAttachmentLimitUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionMaxFileAttachmentKiB" type="number" min="1" :max="AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024" step="1" :disabled="savingGeneral || !fileAttachmentLimitSupported" /></label>
                   <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionAttachmentRetention") }}</strong><small>{{ attachmentRetentionSupported ? t("instances.settings.aiSessionAttachmentRetentionDescription") : t("instances.settings.aiSessionAttachmentRetentionUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionAttachmentRetentionDays" type="number" min="0" :max="AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS" step="1" :disabled="savingGeneral || !attachmentRetentionSupported" /></label>
                   <p v-if="attachmentRetentionWillShorten" class="instance-settings-help instance-settings-row-note">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
@@ -469,8 +471,8 @@
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Accessibility, Bot, Boxes, ChevronRight, Clock3, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
-import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
-import { controlledInstanceAppInstallEnvironmentCapabilities, supportsAiSessionFileSizeLimitSettings, supportsControlledInstanceAppInstallEnvironment, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT, type AiSessionModelSelection, type AiSessionNextInputSuggestionReasoningEffort, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import { controlledInstanceAppInstallEnvironmentCapabilities, supportsAiSessionFileSizeLimitSettings, supportsAiSessionNextInputSuggestion, supportsAiSessionNextInputSuggestionReasoningEffort, supportsControlledInstanceAppInstallEnvironment, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeAiSessionNextInputSuggestion, supportsNodeAiSessionNextInputSuggestionReasoningEffort, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, CodexInstanceSettings, InstanceBoardItem, ManagedAppProjection, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
@@ -554,6 +556,8 @@ const codexReasoningEfforts = AI_SESSION_REASONING_EFFORTS;
 const aiSessionHistoryLimit = ref("50");
 const aiSessionAttachmentRetentionDays = ref("30");
 const aiSessionMaxFileAttachmentKiB = ref("500");
+const aiSessionNextInputSuggestionEnabled = ref(false);
+const aiSessionNextInputSuggestionReasoningEffort = ref<AiSessionNextInputSuggestionReasoningEffort>(AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT);
 const modelSelection = ref<ModelSelection>({});
 const savingGeneral = ref(false);
 const savingCodex = ref(false);
@@ -768,6 +772,8 @@ const aiChanged = computed(() => Boolean(props.instance && (
   || (historyLimitSupported.value && Number(aiSessionHistoryLimit.value) !== props.instance.config.aiSessionHistoryLimit)
   || (attachmentRetentionSupported.value && Number(aiSessionAttachmentRetentionDays.value) !== props.instance.config.aiSessionAttachmentRetentionDays)
   || (fileAttachmentLimitSupported.value && Number(aiSessionMaxFileAttachmentKiB.value) * 1024 !== props.instance.config.aiSessionMaxFileAttachmentBytes)
+  || (nextInputSuggestionSupported.value && aiSessionNextInputSuggestionEnabled.value !== props.instance.config.aiSessionNextInputSuggestionEnabled)
+  || (nextInputSuggestionReasoningEffortSupported.value && aiSessionNextInputSuggestionReasoningEffort.value !== props.instance.config.aiSessionNextInputSuggestionReasoningEffort)
 )));
 const codexSettingsSupported = computed(() => {
   const agent = props.instance?.node?.capabilities?.agent;
@@ -889,6 +895,23 @@ const fileAttachmentLimitSupported = computed(() => {
   return supportsNodeAiSessionFileAttachmentLimit(nodeCapabilities)
     && supportsAiSessionFileSizeLimitSettings(props.instance?.capabilities);
 });
+const nextInputSuggestionSupported = computed(() => {
+  const nodeAgent = props.instance?.node?.capabilities?.agent;
+  const nodeCapabilities = nodeAgent && typeof nodeAgent === "object" && !Array.isArray(nodeAgent)
+    ? (nodeAgent as Record<string, unknown>).capabilities
+    : undefined;
+  return supportsNodeAiSessionNextInputSuggestion(nodeCapabilities)
+    && supportsAiSessionNextInputSuggestion(props.instance?.capabilities);
+});
+const nextInputSuggestionReasoningEffortSupported = computed(() => {
+  const nodeAgent = props.instance?.node?.capabilities?.agent;
+  const nodeCapabilities = nodeAgent && typeof nodeAgent === "object" && !Array.isArray(nodeAgent)
+    ? (nodeAgent as Record<string, unknown>).capabilities
+    : undefined;
+  return nextInputSuggestionSupported.value
+    && supportsNodeAiSessionNextInputSuggestionReasoningEffort(nodeCapabilities)
+    && supportsAiSessionNextInputSuggestionReasoningEffort(props.instance?.capabilities);
+});
 const attachmentRetentionWillShorten = computed(() => Boolean(
   props.instance
   && attachmentRetentionSupported.value
@@ -947,6 +970,8 @@ watch(
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
+    aiSessionNextInputSuggestionEnabled.value = props.instance.config.aiSessionNextInputSuggestionEnabled === true;
+    aiSessionNextInputSuggestionReasoningEffort.value = props.instance.config.aiSessionNextInputSuggestionReasoningEffort;
     modelSelection.value = normalizedSelection(props.instance.modelSelection);
     appFilter.value = "all";
     appView.value = "catalog";
@@ -1026,6 +1051,8 @@ async function saveGeneral() {
         ...(historyLimitSupported.value ? { aiSessionHistoryLimit: Number(aiSessionHistoryLimit.value) } : {}),
         ...(attachmentRetentionSupported.value ? { aiSessionAttachmentRetentionDays: Number(aiSessionAttachmentRetentionDays.value) } : {}),
         ...(fileAttachmentLimitSupported.value ? { aiSessionMaxFileAttachmentBytes: Number(aiSessionMaxFileAttachmentKiB.value) * 1024 } : {}),
+        ...(nextInputSuggestionSupported.value ? { aiSessionNextInputSuggestionEnabled: aiSessionNextInputSuggestionEnabled.value } : {}),
+        ...(nextInputSuggestionReasoningEffortSupported.value ? { aiSessionNextInputSuggestionReasoningEffort: aiSessionNextInputSuggestionReasoningEffort.value } : {}),
       },
     };
     if (generalChanged.value) input.name = instanceName.value.trim();
@@ -1038,6 +1065,8 @@ async function saveGeneral() {
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
+    aiSessionNextInputSuggestionEnabled.value = props.instance.config.aiSessionNextInputSuggestionEnabled === true;
+    aiSessionNextInputSuggestionReasoningEffort.value = props.instance.config.aiSessionNextInputSuggestionReasoningEffort;
     showControlPlaneToast(translateApiError(cause, t), "error");
   } finally {
     savingGeneral.value = false;
