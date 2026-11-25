@@ -375,7 +375,7 @@
                           <div class="instance-app-main">
                             <div class="instance-app-identity">
                               <span class="instance-app-icon" aria-hidden="true">
-                                <AiAgentIcon v-if="app.id === 'codex' || app.id === 'claude'" :agent="app.id" :size="17" />
+                                <AiAgentIcon v-if="isAiAgentId(app.id)" :agent="app.id" :size="17" />
                                 <component :is="managedAppIcon(app)" v-else :size="17" />
                               </span>
                               <div class="instance-app-copy">
@@ -477,6 +477,7 @@ import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescript
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
+import { isAiAgentId } from "../../../components/aiAgentIcon";
 import { AI_SESSION_REASONING_EFFORTS } from "../../../components/ai-session/aiSessionReasoningEfforts";
 import { sameModelSelectionRef } from "../../../components/ai-session/modelSelectionRef";
 import { Checkbox } from "../../../components/ui/checkbox";

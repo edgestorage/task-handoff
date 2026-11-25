@@ -249,6 +249,8 @@ pub struct AiSessionProviderActions {
     pub steer: bool,
     pub interrupt: bool,
     pub archive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_resume: Option<bool>,
     pub delete: bool,
     pub fork: bool,
     pub rename: bool,
@@ -328,5 +330,68 @@ mod tests {
         assert_eq!(value["component"], "controlled-instance");
         assert_eq!(value["protocolVersion"], CONTROL_PLANE_PROTOCOL_VERSION);
         assert!(value.get("imageRef").is_none());
+    }
+
+    #[test]
+    fn capability_document_accepts_future_provider_fields_without_changing_native_actions() {
+        let mut document =
+            serde_json::to_value(ControlledInstanceCapabilities::default()).expect("serializes");
+        document["futureRoot"] = serde_json::json!({ "ignored": true });
+        let features = document["features"]
+            .as_object_mut()
+            .expect("feature capabilities");
+        features.insert(
+            "futureFeature".into(),
+            serde_json::json!({ "ignored": true }),
+        );
+        features.insert(
+            "aiSessionProviders".into(),
+            serde_json::json!([
+                {
+                    "agent": "codex",
+                    "actions": {
+                        "create": true, "send": true, "queue": true, "steer": true,
+                        "interrupt": true, "archive": true, "delete": true, "fork": true,
+                        "rename": true, "approvalDecisions": ["allow", "deny", "skip"]
+                    },
+                    "permissionModes": ["ask", "auto-review", "full-access"],
+                    "timeline": { "sessionRead": true, "turnRead": true, "liveItems": true }
+                },
+                {
+                    "agent": "future-agent",
+                    "actions": {
+                        "create": true, "send": true, "queue": false, "steer": false,
+                        "interrupt": true, "archive": false, "historyResume": true,
+                        "delete": false, "fork": false, "rename": false,
+                        "approvalDecisions": ["allow", "deny"], "futureAction": "ignored"
+                    },
+                    "permissionModes": [],
+                    "timeline": {
+                        "sessionRead": true, "turnRead": true, "liveItems": true,
+                        "futureTimelineField": true
+                    },
+                    "futureCapability": { "ignored": true }
+                }
+            ]),
+        );
+
+        let parsed: ControlledInstanceCapabilities =
+            serde_json::from_value(document).expect("future provider document parses");
+        assert_eq!(parsed.features.ai_session_providers.len(), 2);
+        assert_eq!(parsed.features.ai_session_providers[0].agent, "codex");
+        assert!(parsed.features.ai_session_providers[0].actions.create);
+        assert_eq!(
+            parsed.features.ai_session_providers[1].agent,
+            "future-agent"
+        );
+        assert_eq!(
+            parsed.features.ai_session_providers[1]
+                .actions
+                .history_resume,
+            Some(true)
+        );
+        let serialized = serde_json::to_value(parsed).expect("reserializes");
+        assert!(serialized["features"].get("futureFeature").is_none());
+        assert!(serialized.get("futureRoot").is_none());
     }
 }

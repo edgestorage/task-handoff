@@ -2373,7 +2373,7 @@ async function resolveAiSessionApprovalAction(instance: InstanceBoardItem, sessi
   }
   aiApprovalBusyKey.value = busyKey;
   try {
-    await resolveAiSessionApproval(instance.id, session.id, decision);
+    await resolveAiSessionApproval(instance.id, session.id, decision, session.actions?.approvalRequest?.id);
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
       queryClient.invalidateQueries({ queryKey: ["control-plane-app-sessions"] }),

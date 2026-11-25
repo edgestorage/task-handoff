@@ -75,12 +75,13 @@
 <script setup lang="ts">
 import { Boxes, Folder } from "@lucide/vue";
 import AiAgentIcon from "../AiAgentIcon.vue";
+import type { AiAgentId } from "../aiAgentIcon";
 import { ContextMenu, ContextMenuTrigger } from "../ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import AiSessionPathContextMenu from "./AiSessionPathContextMenu.vue";
 
 withDefaults(defineProps<{
-  agent: "codex" | "claude" | "opencode";
+  agent: AiAgentId;
   canCopyFolderPath?: boolean;
   canOpenFolder?: boolean;
   folderName: string;

@@ -360,10 +360,12 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
 function actionsForSession(session: AiSessionStatus): AiSessionStatus["actions"] {
   const active = session.status === "running" || session.status === "waiting";
   const configured = session.actions || {};
+  const approval = Boolean(session.status === "waiting" && session.phase === "approval" && configured.approval !== false);
   return {
     send: configured.send ?? true,
     interrupt: Boolean(active && configured.interrupt !== false),
-    approval: Boolean(session.status === "waiting" && session.phase === "approval" && configured.approval !== false),
+    approval,
+    ...(approval && configured.approvalRequest ? { approvalRequest: configured.approvalRequest } : {}),
     fork: configured.fork ?? false,
     rename: configured.rename ?? false,
     openApp: configured.openApp ?? Boolean(session.providerSessionId && !session.appSessionId),

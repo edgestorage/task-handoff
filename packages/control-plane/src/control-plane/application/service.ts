@@ -2004,8 +2004,8 @@ export class ControlPlaneService {
     return instances.map((instance) => ({ id: instance.id, name: instance.name }));
   }
 
-  resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
-    return this.aiSessionActionService.resolveApproval(instanceId, sessionId, decision);
+  resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip", approvalRequestId?: string) {
+    return this.aiSessionActionService.resolveApproval(instanceId, sessionId, decision, approvalRequestId);
   }
 
   listAiSessionHistory(instanceId: string, agents?: readonly string[]) {

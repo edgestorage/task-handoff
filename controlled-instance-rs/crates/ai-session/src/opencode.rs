@@ -2133,6 +2133,7 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                 steer: true,
                 interrupt: true,
                 archive: true,
+                history_resume: None,
                 delete: true,
                 fork: true,
                 rename: true,

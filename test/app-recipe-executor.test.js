@@ -475,10 +475,17 @@ test("Managed npm recipes install into the instance prefix and remove only that 
   assert.equal(commands.length, 1);
   assert.equal(commands[0].args.includes("--global"), false);
   assert.ok(commands[0].args.includes("--prefix"));
+  assert.ok(commands[0].args.includes("--no-save"));
+  // Native dependencies published as optional npm packages must be installed
+  // with the Agent, not dropped by npm's default optional-dependency policy.
+  assert.ok(commands[0].args.includes("--include=optional"));
   assert.ok(commands[0].args.includes("@openai/codex@0.165.0"));
   const target = path.join(root, "managed-apps", "node-package", "codex");
   assert.equal(fs.existsSync(path.join(target, "managed-app.json")), true);
   assert.equal(fs.existsSync(path.join(target, "node_modules", "@openai", "codex", "bin", "codex.js")), true);
+  const manifest = JSON.parse(fs.readFileSync(path.join(target, "managed-app.json"), "utf8"));
+  assert.equal(manifest.source, "npm");
+  assert.deepEqual(manifest.packages, { "@openai/codex": "0.165.0" });
 
   await execute("uninstall", recipe, executionContext);
   assert.equal(fs.existsSync(target), false);
@@ -508,6 +515,203 @@ test("Managed npm recipes keep the previous install when staging validation fail
     (error) => error instanceof AppRecipeExecutionError && error.code === "postcondition_failed",
   );
   assert.equal(JSON.parse(fs.readFileSync(path.join(target, "managed-app.json"), "utf8")).packages["@openai/codex"], "0.164.0");
+});
+
+function nodeInstallSourcePolicy(npmRegistry) {
+  return {
+    createExecutionPolicy: () => ({
+      revision: 1,
+      effective: npmRegistry ? { npmRegistry } : {},
+      ...(npmRegistry ? { npmRegistry } : {}),
+      prepareNodeRuntime: async () => ({}),
+      nodeEnvironment: (env) => npmRegistry
+        ? { ...env, npm_config_registry: npmRegistry, NPM_CONFIG_REGISTRY: npmRegistry }
+        : env,
+      aptSourceConfiguration: () => undefined,
+    }),
+  };
+}
+
+function seedManagedNodePackage(prefix) {
+  const packageRoot = path.join(prefix, "node_modules", "@openai", "codex");
+  fs.mkdirSync(path.join(packageRoot, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "bin", "codex.js"), "#!/usr/bin/env node\n");
+  fs.chmodSync(path.join(packageRoot, "bin", "codex.js"), 0o755);
+  fs.mkdirSync(path.join(prefix, "node_modules", ".bin"), { recursive: true });
+  fs.symlinkSync(path.join("..", "@openai", "codex", "bin", "codex.js"), path.join(prefix, "node_modules", ".bin", "codex"));
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ bin: { codex: "bin/codex.js" } }));
+}
+
+const managedNpmRecipe = {
+  type: "node-package", platforms: ["linux"], installer: "npm", packages: ["@openai/codex"],
+  managed: true, version: "0.165.0", privilege: "user",
+};
+
+const managedNpmContext = (appId = "codex") => ({
+  appId,
+  capabilities: { platform: "linux", arch: "x64", installers: ["npm"], privilege: "user" },
+});
+
+test("Managed npm recipes fall back when the preferred registry does not respond", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-node-source-fallback-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const requests = [];
+  const output = [];
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    installEnvironment: nodeInstallSourcePolicy("https://primary.example.test"),
+    fetcher: async (url, init) => {
+      requests.push({ url: String(url), range: requestRange(init) });
+      if (String(url).startsWith("https://primary.example.test/")) throw new Error("connect timed out after 3000ms");
+      if (!String(url).startsWith("https://registry.npmjs.org/")) throw new Error("unexpected fallback source");
+      return new Response(null, { status: 206 });
+    },
+    commandRunner: async (command) => {
+      commands.push(command);
+      seedManagedNodePackage(command.args[command.args.indexOf("--prefix") + 1]);
+      return { exitCode: 0, stdout: "installed", stderr: "" };
+    },
+  });
+
+  await execute("install", managedNpmRecipe, { ...managedNpmContext(), onOutput: (stream, chunk) => output.push({ stream, chunk }) });
+
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].env.npm_config_registry, "https://registry.npmjs.org");
+  assert.equal(commands[0].env.NPM_CONFIG_REGISTRY, "https://registry.npmjs.org");
+  assert.deepEqual(requests.map(({ url }) => new URL(url).hostname), ["primary.example.test", "registry.npmjs.org"]);
+  assert.equal(requests[0].url, "https://primary.example.test/@openai/codex/0.165.0");
+  assert.equal(requests[0].range, "bytes=0-0");
+  const log = output.map(({ chunk }) => chunk).join("");
+  assert.match(log, /npm source https:\/\/primary\.example\.test unavailable/);
+  assert.match(log, /Using fallback npm source https:\/\/registry\.npmjs\.org/);
+});
+
+test("Managed npm recipes retry the next registry after a network failure", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-node-source-retry-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const commands = [];
+  const output = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    installEnvironment: nodeInstallSourcePolicy("https://primary.example.test"),
+    fetcher: async (url, init) => {
+      if (!["primary.example.test", "registry.npmjs.org"].includes(new URL(String(url)).hostname)) throw new Error("unexpected source");
+      return new Response(null, { status: requestRange(init) ? 206 : 200 });
+    },
+    commandRunner: async (command) => {
+      commands.push(command);
+      if (commands.length === 1) return { exitCode: 1, stdout: "", stderr: "npm ERR! code ETIMEDOUT\nnpm ERR! network request to https://primary.example.test/@openai%2fcodex failed, reason: connect ETIMEDOUT\n" };
+      seedManagedNodePackage(command.args[command.args.indexOf("--prefix") + 1]);
+      return { exitCode: 0, stdout: "installed", stderr: "" };
+    },
+  });
+
+  await execute("install", managedNpmRecipe, { ...managedNpmContext(), onOutput: (stream, chunk) => output.push({ stream, chunk }) });
+
+  assert.deepEqual(commands.map((command) => command.env.npm_config_registry), [
+    "https://primary.example.test",
+    "https://registry.npmjs.org",
+  ]);
+  const log = output.map(({ chunk }) => chunk).join("");
+  assert.match(log, /npm source https:\/\/primary\.example\.test failed: npm ERR! code ETIMEDOUT/);
+  assert.match(log, /Using fallback npm source https:\/\/registry\.npmjs\.org/);
+  assert.equal(fs.existsSync(path.join(root, "managed-apps", "node-package", "codex", "node_modules", "@openai", "codex", "package.json")), true);
+});
+
+test("Managed npm recipes keep the configured registry for package content failures", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-node-source-no-retry-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    installEnvironment: nodeInstallSourcePolicy("https://primary.example.test"),
+    fetcher: async () => new Response(null, { status: 206 }),
+    commandRunner: async (command) => {
+      commands.push(command);
+      return { exitCode: 1, stdout: "", stderr: "npm ERR! code E404\nnpm ERR! 404 Not Found - GET https://primary.example.test/@openai%2fcodex - Not found\n" };
+    },
+  });
+
+  await assert.rejects(
+    execute("install", managedNpmRecipe, managedNpmContext()),
+    (error) => error instanceof AppRecipeExecutionError && error.code === "package_manager_failed",
+  );
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].env.npm_config_registry, "https://primary.example.test");
+});
+
+test("Managed npm recipes report every unavailable registry and preserve the previous install", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-node-source-offline-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const target = path.join(root, "managed-apps", "node-package", "codex");
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, "managed-app.json"), JSON.stringify({ appId: "codex", packages: { "@openai/codex": "0.164.0" } }));
+  const requests = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    installEnvironment: nodeInstallSourcePolicy("https://primary.example.test"),
+    fetcher: async (url) => {
+      requests.push(new URL(String(url)).hostname);
+      throw new Error("connect timeout");
+    },
+    commandRunner: async () => { throw new Error("npm must not run without a reachable source"); },
+  });
+
+  await assert.rejects(
+    execute("update", managedNpmRecipe, managedNpmContext()),
+    (error) => error instanceof AppRecipeExecutionError
+      && error.code === "npm_registry_unavailable"
+      && error.retryable === true
+      && error.message.includes("https://registry.npmjs.org")
+      && error.message.includes("https://registry.npmmirror.com"),
+  );
+  assert.deepEqual(requests, ["primary.example.test", "registry.npmjs.org", "registry.npmmirror.com"]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(target, "managed-app.json"), "utf8")).packages["@openai/codex"], "0.164.0");
+});
+
+test("Managed npm recipes without a configured registry leave npm configuration intact", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-node-source-environment-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const commands = [];
+  const execute = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps"),
+    stateDir: path.join(root, "state"),
+    env: { PATH: process.env.PATH },
+    installEnvironment: nodeInstallSourcePolicy(undefined),
+    fetcher: async () => { throw new Error("an npm configuration source must not be probed"); },
+    commandRunner: async (command) => {
+      commands.push(command);
+      seedManagedNodePackage(command.args[command.args.indexOf("--prefix") + 1]);
+      return { exitCode: 0, stdout: "installed", stderr: "" };
+    },
+  });
+  const baseEnv = { PATH: process.env.PATH, npm_config_registry: "https://registry.example.test/team" };
+  const executeWithEnv = createAppRecipeExecutor({
+    installBaseDir: path.join(root, "managed-apps-env"),
+    stateDir: path.join(root, "state-env"),
+    env: baseEnv,
+    installEnvironment: nodeInstallSourcePolicy(undefined),
+    fetcher: async (url) => {
+      if (new URL(String(url)).hostname !== "registry.example.test") throw new Error("unexpected source");
+      return new Response(null, { status: 206 });
+    },
+    commandRunner: async (command) => {
+      commands.push(command);
+      seedManagedNodePackage(command.args[command.args.indexOf("--prefix") + 1]);
+      return { exitCode: 0, stdout: "installed", stderr: "" };
+    },
+  });
+
+  await execute("install", managedNpmRecipe, managedNpmContext());
+  assert.equal(commands[0].env.npm_config_registry, undefined);
+
+  await executeWithEnv("install", managedNpmRecipe, managedNpmContext());
+  assert.equal(commands[1].env.npm_config_registry, "https://registry.example.test/team");
 });
 
 for (const launcher of ["missing", "external"]) {

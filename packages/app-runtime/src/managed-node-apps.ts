@@ -55,7 +55,7 @@ function managedTarget(root: string, definition: ManagedAppDefinition, platform:
     const target = path.resolve(base, archive.installRoot, command);
     return target.startsWith(`${base}${path.sep}`) ? target : undefined;
   }
-  if (selected?.type === "node-package" && selected.managed) return path.join(managedNodePackageBin(root, definition.launcher.id), definition.launcher.id);
+  if (selected?.type === "node-package" && selected.managed) return path.join(managedNodePackageBin(root, definition.launcher.id), selected.binName ?? definition.launcher.id);
   return undefined;
 }
 

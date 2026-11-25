@@ -1,5 +1,6 @@
 import { detectManagedApp } from "../managed-apps";
 import type { AppCatalogItem, ManagedAppDefinition } from "../types";
+import { managedAcpAppProviders } from "./acp-agents";
 import { ccSwitchProvider } from "./cc-switch";
 import { chromiumProvider } from "./chromium";
 import { claudeProvider } from "./claude";
@@ -65,6 +66,7 @@ export const builtinManagedAppRegistry = createManagedAppRegistry([
   codexProvider,
   opencodeProvider,
   claudeProvider,
+  ...managedAcpAppProviders,
   terminalGuiProvider,
   chromiumProvider,
   vscodeWebProvider,

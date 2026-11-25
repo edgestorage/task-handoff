@@ -1,23 +1,23 @@
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_ai_session::{
-    AiSession, AiSessionAttachmentDraftStreams, AiSessionController,
-    AiSessionConversationAttachmentStore, AiSessionHistoryStore, AiSessionModelSelection,
-    AiSessionPersistenceSettingsStore, AiSessionRuntime, AiSessionTimelineStore,
-    ClaudeControlClient, ClaudeControlSockProvider, CodexAppServerClient, CodexAppServerProvider,
-    CodexAppServerTarget, CodexAppServerTargetResolver, OpenCodeConnection,
-    OpenCodeConnectionProvider, OpenCodeSessionProvider, OpenCodeTrackedSession, ProviderError,
-    ProviderEvent,
+    invalidate_disconnected_provider_session, AcpLaunch, AcpSessionProvider, AiSession,
+    AiSessionAttachmentDraftStreams, AiSessionController, AiSessionConversationAttachmentStore,
+    AiSessionHistoryStore, AiSessionModelSelection, AiSessionPersistenceSettingsStore,
+    AiSessionRuntime, AiSessionTimelineStore, ClaudeControlClient, ClaudeControlSockProvider,
+    CodexAppServerClient, CodexAppServerProvider, CodexAppServerTarget,
+    CodexAppServerTargetResolver, OpenCodeConnection, OpenCodeConnectionProvider,
+    OpenCodeSessionProvider, OpenCodeTrackedSession, ProviderError, ProviderEvent,
 };
 use controlled_instance_app_runtime::{
-    AppInstallEnvironmentManager, AppManagementManager, AppManagementSession, AppRuntime,
-    AppRuntimeError,
+    AppInstallEnvironmentManager, AppManagementManager, AppManagementSession, AppPackageLifecycle,
+    AppRecipeExecutionError, AppRuntime, AppRuntimeError, MANAGED_ACP_AGENTS,
 };
 use controlled_instance_core::process::process_start_identity;
 use controlled_instance_protocol::{
     project_ai_sessions_snapshot_for_consumer, AiSessionHistoryItem, AiSessionsSnapshot,
-    AiSessionsState, AppCounts, ControlledInstanceCapabilities, EmbeddedBrowserTargetDetachParams,
-    EventEnvelope, InstanceStatusSnapshot, WorkspaceGitStatus, WorkspaceStatus,
-    WorkspaceStorageStatus, SESSION_STREAM_PROTOCOL_VERSION,
+    AiSessionsState, AppCounts, AppManagementOperation, ControlledInstanceCapabilities,
+    EmbeddedBrowserTargetDetachParams, EventEnvelope, InstanceStatusSnapshot, WorkspaceGitStatus,
+    WorkspaceStatus, WorkspaceStorageStatus, SESSION_STREAM_PROTOCOL_VERSION,
 };
 use controlled_instance_workspace::{
     triggers::{local_instance_id, TriggerExecutor, TriggerManager, TriggerStore},
@@ -70,6 +70,29 @@ use crate::{
 struct ClaudeSubscriptionHandle {
     control_sock: PathBuf,
     abort: tokio::task::AbortHandle,
+}
+
+struct AcpPackageLifecycle(Arc<AcpSessionProvider>);
+
+#[async_trait::async_trait]
+impl AppPackageLifecycle for AcpPackageLifecycle {
+    async fn before_change(
+        &self,
+        operation: AppManagementOperation,
+    ) -> Result<(), AppRecipeExecutionError> {
+        if operation != AppManagementOperation::Install {
+            self.0.close().await;
+        }
+        Ok(())
+    }
+
+    async fn changed(
+        &self,
+        _operation: AppManagementOperation,
+        _succeeded: bool,
+    ) -> Result<(), AppRecipeExecutionError> {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -192,6 +215,7 @@ pub struct AppState {
     pub ai_session_codex: Arc<CodexAppServerProvider>,
     pub ai_session_claude: Arc<ClaudeControlSockProvider>,
     pub ai_session_opencode: Arc<OpenCodeSessionProvider>,
+    ai_session_acp: BTreeMap<&'static str, Arc<AcpSessionProvider>>,
     pub ai_session_history: Arc<AiSessionHistoryStore>,
     pub ai_session_persistence_settings: Arc<AiSessionPersistenceSettingsStore>,
     pub ai_session_timeline: Arc<AiSessionTimelineStore>,
@@ -475,6 +499,92 @@ impl AppState {
         // post-start install becomes visible without restarting the instance.
         // Discovery remains inventory-gated in refresh_all_ai_sessions.
         ai_session_controller.register_provider(ai_session_opencode.clone());
+        for session in ai_sessions.list() {
+            if session.provider_session_id.is_some()
+                && MANAGED_ACP_AGENTS
+                    .iter()
+                    .any(|agent| agent.id == session.agent)
+            {
+                if let Err(error) = ai_sessions.update(&session.id, |session| {
+                    Ok(invalidate_disconnected_provider_session(session))
+                }) {
+                    tracing::warn!(ai_session_id = %session.id, %error, "failed to invalidate disconnected ACP session");
+                }
+            }
+        }
+        let config_sync_environment =
+            ConfigSyncEnvironment::from_storage_paths(&config.storage_paths);
+        let controlled_models = Arc::new(ControlledModelConfig::load(
+            &config.instance_id,
+            config.control_mode,
+            &config_sync_environment,
+            std::env::vars().collect(),
+            &started_at,
+        )?);
+        let ai_session_acp: BTreeMap<_, _> = MANAGED_ACP_AGENTS
+            .iter()
+            .filter_map(|agent| {
+                if !env_flag(
+                    &format!("TASK_HANDOFF_ACP_{}_ENABLED", agent.id.to_ascii_uppercase()),
+                    false,
+                ) {
+                    return None;
+                }
+                let runtime = app_runtime.clone();
+                let controlled_models = controlled_models.clone();
+                let acp_config_dir = config.storage_paths.data_dir.join("acp-session-config");
+                let timeline = AiSessionTimelineStore::from_directory(
+                    config
+                        .storage_paths
+                        .data_dir
+                        .join("ai-session-timeline")
+                        .join(agent.id),
+                );
+                let provider = Arc::new(AcpSessionProvider::new(
+                    agent.id,
+                    move |input| {
+                        let (executable, mut env) = runtime
+                            .prepare_managed_agent_launch(agent.id)
+                            .map_err(|error| {
+                                ProviderError::new(
+                                    "AI_SESSION_PROVIDER_UNAVAILABLE",
+                                    error.to_string(),
+                                    409,
+                                )
+                            })?;
+                        let config = controlled_models
+                            .acp_launch_config_for_session(
+                                agent.id,
+                                input.model_selection.as_ref(),
+                                &acp_config_dir,
+                                input.provider_session_id.as_deref(),
+                                Some(input.cwd.as_path()),
+                            )
+                            .map_err(|error| {
+                                ProviderError::new(error.code, error.message, error.status_code)
+                            })?;
+                        env.extend(config.env);
+                        let mut args = agent
+                            .acp_args
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>();
+                        args.extend(config.args);
+                        Ok(AcpLaunch {
+                            executable,
+                            env,
+                            args,
+                            cleanup_dir: config.cleanup_dir,
+                            session_home: config.session_home,
+                        })
+                    },
+                    timeline,
+                    agent.load_session,
+                ));
+                ai_session_controller.register_provider(provider.clone());
+                Some((agent.id, provider))
+            })
+            .collect();
         ai_session_controller.set_story_agent_tool_resolver(Arc::new(story_tools.clone()));
         let ai_session_resume = Arc::new(AiSessionResumeCoordinator::default());
         let ai_session_fork = Arc::new(AiSessionForkCoordinator::new(
@@ -520,8 +630,6 @@ impl AppState {
             )
             .map_err(anyhow::Error::msg)?,
         );
-        let config_sync_environment =
-            ConfigSyncEnvironment::from_storage_paths(&config.storage_paths);
         let trigger_store = Arc::new(TriggerStore::new(
             &config.storage_paths.triggers_dir,
             local_instance_id(),
@@ -617,13 +725,19 @@ impl AppState {
             managed_app_root.clone(),
             app_management_state_dir.clone(),
         ));
-        let desktop_hooks: BTreeMap<
+        let mut package_hooks: BTreeMap<
             &str,
             Arc<dyn controlled_instance_app_runtime::AppPackageLifecycle>,
         > = BTreeMap::from([(
             controlled_instance_app_runtime::remote_desktop::APP_ID,
             desktop_lifecycle as Arc<dyn controlled_instance_app_runtime::AppPackageLifecycle>,
         )]);
+        package_hooks.extend(ai_session_acp.iter().map(|(&id, provider)| {
+            (
+                id,
+                Arc::new(AcpPackageLifecycle(provider.clone())) as Arc<dyn AppPackageLifecycle>,
+            )
+        }));
         let app_management = Arc::new(
             AppManagementManager::new_with_runtime_hook_and_install_environment(
                 app_management_state_dir,
@@ -691,10 +805,7 @@ impl AppState {
                 },
                 install_environment.clone(),
             )
-            .with_package_lifecycles(move |app_id| {
-                // Provider registration, not a branch inside the generic executor.
-                desktop_hooks.get(app_id).cloned()
-            }),
+            .with_package_lifecycles(move |app_id| package_hooks.get(app_id).cloned()),
         );
         let _ = desktop_admission.set(Arc::downgrade(&app_management));
         let management_admission = Arc::downgrade(&app_management);
@@ -707,13 +818,6 @@ impl AppState {
         // startup. That establishes sequence 1 for both the HTTP snapshot and
         // the first WebSocket projection.
         app_management.publish_snapshot();
-        let controlled_models = Arc::new(ControlledModelConfig::load(
-            &config.instance_id,
-            config.control_mode,
-            &config_sync_environment,
-            std::env::vars().collect(),
-            &started_at,
-        )?);
         let mut managed_app_environment = controlled_models.runtime_environment();
         managed_app_environment.extend(install_environment.runtime_overrides());
         ai_session_codex
@@ -777,6 +881,7 @@ impl AppState {
             ai_session_codex,
             ai_session_claude,
             ai_session_opencode,
+            ai_session_acp,
             ai_session_history,
             ai_session_persistence_settings,
             ai_session_timeline,
@@ -1464,7 +1569,10 @@ impl AppState {
                 }
             }
         });
-        for agent in ["codex", "opencode"] {
+        for agent in ["codex", "opencode"]
+            .into_iter()
+            .chain(self.ai_session_acp.keys().copied())
+        {
             let Ok(provider) = self.ai_session_controller.provider(agent) else {
                 continue;
             };
@@ -1508,7 +1616,7 @@ impl AppState {
                             } else {
                                 None
                             };
-                            state.publish_ai_session_transient_event(event);
+                            state.publish_ai_session_transient_event(agent, event);
                             if let Some((provider_session_id, text)) = title_prompt {
                                 let state = state.clone();
                                 tokio::spawn(async move {
@@ -1530,7 +1638,7 @@ impl AppState {
         }
     }
 
-    pub(crate) fn publish_ai_session_transient_event(&self, event: ProviderEvent) {
+    pub(crate) fn publish_ai_session_transient_event(&self, agent: &str, event: ProviderEvent) {
         match event {
             ProviderEvent::AgentMessageDelta {
                 provider_session_id,
@@ -1538,7 +1646,10 @@ impl AppState {
                 item_id,
                 delta,
             } => {
-                let Some(session) = self.ai_session_for_provider(&provider_session_id) else {
+                let Some(session) = self
+                    .ai_sessions
+                    .get_by_provider_session_id(agent, &provider_session_id)
+                else {
                     return;
                 };
                 let mut payload = self.ai_session_event_payload(&session, &provider_session_id);
@@ -1564,7 +1675,10 @@ impl AppState {
                 provider_session_id,
                 item,
             } => {
-                let Some(session) = self.ai_session_for_provider(&provider_session_id) else {
+                let Some(session) = self
+                    .ai_sessions
+                    .get_by_provider_session_id(agent, &provider_session_id)
+                else {
                     return;
                 };
                 let key = AiSessionDeltaKey::new(
@@ -1575,6 +1689,13 @@ impl AppState {
                 );
                 self.ai_session_timeline_item_deltas
                     .flush(&key, FlushReason::AuthoritativeEvent);
+                if matches!(
+                    &item,
+                    controlled_instance_protocol::AiSessionTimelineItem::AiMessage { .. }
+                ) {
+                    self.ai_session_message_deltas
+                        .flush(&key, FlushReason::AuthoritativeEvent);
+                }
                 let mut payload = self.ai_session_event_payload(&session, &provider_session_id);
                 insert_event_fields(&mut payload, json!({ "item": item }));
                 self.events.publish("ai-session.timeline-item", payload);
@@ -1589,7 +1710,10 @@ impl AppState {
                 if field != "output" || delta.is_empty() {
                     return;
                 }
-                let Some(session) = self.ai_session_for_provider(&provider_session_id) else {
+                let Some(session) = self
+                    .ai_sessions
+                    .get_by_provider_session_id(agent, &provider_session_id)
+                else {
                     return;
                 };
                 let mut payload = self.ai_session_event_payload(&session, &provider_session_id);
@@ -1624,7 +1748,10 @@ impl AppState {
         provider_session_id: &str,
         disposition: &str,
     ) {
-        let Some(session) = self.ai_session_for_provider(provider_session_id) else {
+        let Some(session) = self
+            .ai_sessions
+            .get_by_provider_session_id("opencode", provider_session_id)
+        else {
             return;
         };
         let result = if disposition == "cleared" {
@@ -1656,7 +1783,10 @@ impl AppState {
         else {
             return;
         };
-        let Some(session) = self.ai_session_for_provider(provider_session_id) else {
+        let Some(session) = self
+            .ai_sessions
+            .get_by_provider_session_id("codex", provider_session_id)
+        else {
             return;
         };
         if session
@@ -1721,7 +1851,10 @@ impl AppState {
         let Some(title) = controlled_instance_ai_session::parse_ai_session_title(&response) else {
             return;
         };
-        let Some(latest) = self.ai_session_for_provider(provider_session_id) else {
+        let Some(latest) = self
+            .ai_sessions
+            .get_by_provider_session_id("codex", provider_session_id)
+        else {
             return;
         };
         if !self
@@ -1740,13 +1873,6 @@ impl AppState {
         if self.ai_sessions.rename(&latest.id, &title, None).is_ok() {
             self.publish_ai_session_snapshot("provider-event");
         }
-    }
-
-    fn ai_session_for_provider(&self, provider_session_id: &str) -> Option<AiSession> {
-        self.ai_sessions
-            .list()
-            .into_iter()
-            .find(|session| session.provider_session_id.as_deref() == Some(provider_session_id))
     }
 
     fn ai_session_event_payload(&self, session: &AiSession, provider_session_id: &str) -> Value {
@@ -1820,6 +1946,12 @@ impl AppState {
         }
         self.ai_session_codex.client().stop().await;
         self.ai_session_opencode.close();
+        futures_util::future::join_all(
+            self.ai_session_acp
+                .values()
+                .map(|provider| provider.close()),
+        )
+        .await;
         self.app_runtime.stop_shared_opencode();
         self.ai_session_message_deltas
             .close(FlushReason::ServiceClose);
@@ -2766,6 +2898,7 @@ fn controlled_instance_capabilities(
         "openai-responses".to_string(),
         "openai-chat-completions".to_string(),
         "anthropic-messages".to_string(),
+        "google-generative-ai".to_string(),
     ];
     capabilities.features.model_relay.streaming = true;
     capabilities

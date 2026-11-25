@@ -4,6 +4,7 @@ const PrivateModelProtocolSchema = z.enum([
   "openai-responses",
   "openai-chat-completions",
   "anthropic-messages",
+  "google-generative-ai",
 ]);
 
 // Compatibility for v0.0.34: this released private catalog projects upstream
@@ -23,7 +24,7 @@ const PrivateModelNameEntrySchema = z.object({
 
 const PrivateModelCatalogEntityBase = {
   id: z.string().trim().min(1).max(120),
-  protocols: z.array(PrivateModelProtocolSchema).min(1).max(3),
+  protocols: z.array(PrivateModelProtocolSchema).min(1).max(4),
   modelNames: z.array(PrivateModelNameEntrySchema).min(1).max(256),
 };
 
@@ -48,7 +49,7 @@ export const InstancePrivateModelRelayCatalogSchema = z.object({
     routes: z.array(z.object({
       protocol: PrivateModelProtocolSchema,
       baseUrl: z.string().trim().min(1).max(2048),
-    }).strip()).min(1).max(3),
+    }).strip()).min(1).max(4),
   }).strip().superRefine((entity, context) => {
     const seen = new Set<string>();
     for (const [index, route] of entity.routes.entries()) {
@@ -139,7 +140,7 @@ export function instancePrivateModelCatalogBaseUrl(
 
 const PrivateModelCatalogEntitySummarySchema = z.object({
   id: z.string().trim().min(1).max(120),
-  protocols: z.array(PrivateModelProtocolSchema).min(1).max(3),
+  protocols: z.array(PrivateModelProtocolSchema).min(1).max(4),
   modelNames: z.array(PrivateModelNameEntrySchema).min(1).max(256),
 }).strip();
 

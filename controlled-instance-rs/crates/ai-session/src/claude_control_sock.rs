@@ -368,6 +368,7 @@ impl AiSessionControlProvider for ClaudeControlSockProvider {
                 steer: true,
                 interrupt: true,
                 archive: true,
+                history_resume: None,
                 delete: false,
                 fork: false,
                 rename: false,

@@ -1,4 +1,5 @@
 import { EMBEDDED_BROWSER_APP_ID } from "../useInstanceSessions.ts";
+import { AI_AGENT_IDS, isAiAgentId } from "../../../components/aiAgentIcon.ts";
 
 export type AppLaunchIconIdentity = {
   id: string;
@@ -9,10 +10,10 @@ export type AppLaunchIconIdentity = {
 
 export type AppLaunchIconKind = "agent" | "terminal" | "browser" | "web" | "desktop" | "generic";
 
-export const AI_AGENT_APP_IDS = ["codex", "claude", "opencode"] as const;
+export const AI_AGENT_APP_IDS = AI_AGENT_IDS;
 
 export function appLaunchIconKind(app: AppLaunchIconIdentity): AppLaunchIconKind {
-  if (app.agent === true || AI_AGENT_APP_IDS.some((id) => id === app.id)) return "agent";
+  if (app.agent === true || isAiAgentId(app.id)) return "agent";
   if (app.id === EMBEDDED_BROWSER_APP_ID) return "browser";
   if (app.kind === "tty") return "terminal";
   if (app.kind === "web") return "web";

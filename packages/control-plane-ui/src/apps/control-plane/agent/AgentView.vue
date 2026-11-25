@@ -407,6 +407,7 @@ import { useQueryClient } from "@tanstack/vue-query";
 import type { AgentDefinitionCreateInput, AgentDefinitionUpdateInput, AgentProcessSandbox, AgentWorkspaceMaterializer } from "@task-handoff/protocol/agent-definitions";
 import { CircleAlert, LoaderCircle, Pencil, Play, Plus, RefreshCw, Trash2, X } from "@lucide/vue";
 import AiAgentIcon from "@/components/AiAgentIcon.vue";
+import { isAiAgentId, type AiAgentId } from "@/components/aiAgentIcon";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -507,9 +508,9 @@ const groupedAgents = computed(() => agentCatalogGroups({ ...catalog.value, agen
 
 const selectedAgent = computed(() => agentsByKey.value.get(selectedAgentKey.value));
 /** 只有已知 app 有品牌图标；未知 provider 只呈现文字标签，不猜图标。 */
-const providerBrand = computed<"codex" | "claude" | "opencode" | undefined>(() => {
+const providerBrand = computed<AiAgentId | undefined>(() => {
   const providerId = selectedAgent.value?.providerId;
-  return providerId === "codex" || providerId === "claude" || providerId === "opencode" ? providerId : undefined;
+  return isAiAgentId(providerId) ? providerId : undefined;
 });
 /** 编排能力由 Node 的 capability document 决定：详情头部、内容选择器与列表右键菜单共用同一份判定。 */
 function nodeOrchestrationsSupported(nodeId?: string) {

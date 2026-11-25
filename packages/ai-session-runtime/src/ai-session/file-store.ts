@@ -187,7 +187,10 @@ export class AiSessionFileStore {
     try {
       this.ensureDirectory();
       const persisted = encodePersistedAiSession(session);
-      writeFileAtomic.sync(this.sessionPath(session.id), `${JSON.stringify(persisted, null, 2)}\n`, { encoding: "utf8" });
+      const disk = persisted.actions?.approvalRequest
+        ? { ...persisted, actions: { ...persisted.actions, approval: false, approvalRequest: undefined } }
+        : persisted;
+      writeFileAtomic.sync(this.sessionPath(session.id), `${JSON.stringify(disk, null, 2)}\n`, { encoding: "utf8" });
       committed = decodePersistedAiSession(persisted);
       if (!committed) {
         throw new Error(`Failed to decode persisted AI session ${JSON.stringify(session.id)}`);

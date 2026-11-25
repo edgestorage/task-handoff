@@ -16,7 +16,7 @@ import { codexPermissionOverrides } from "./codex-app-server/session/control";
 import { CodexAppServerSessionDiscovery } from "./codex-app-server/session/discovery";
 import { CodexAppServerSessionProjector } from "./codex-app-server/session/projector";
 import { CodexThreadTitleGenerator } from "./codex-app-server/session/title-generator";
-import { CodexTimelineStore } from "./codex-app-server/session/timeline-store";
+import { AiSessionTimelineStore as CodexTimelineStore } from "./ai-session/timeline-store";
 import { CodexAppServerMentions } from "./codex-app-server/mentions";
 import { codexItemTimeline, codexThreadTimeline, mergeCodexTimelineItems } from "./codex-app-server/protocol/timeline";
 

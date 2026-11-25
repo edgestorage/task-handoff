@@ -183,6 +183,6 @@ test("current approval summary remains visible while navigating messages", () =>
 
 test("waiting approval state is the only source for approval actions", () => {
   for (const detail of [panel, floatingDock]) {
-    assert.doesNotMatch(detail, /actions\?\.approval/);
+    assert.doesNotMatch(detail, /actions\?\.approval(?!Request)/);
   }
 });

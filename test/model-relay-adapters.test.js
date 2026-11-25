@@ -10,13 +10,15 @@ const { ControlledInstanceSchema } = require("../packages/protocol/src/control-p
 const { modelRelayRoutePath } = require("../packages/node-agent/src/models/relay-routes.ts");
 const { ModelRelayService } = require("../packages/node-agent/src/models/relay/server.ts");
 const { createOpenAiResponsesAdapter } = require("../packages/node-agent/src/models/relay/adapters/openai-responses.ts");
+const { createGoogleGenerativeAiAdapter } = require("../packages/node-agent/src/models/relay/adapters/google-generative-ai.ts");
 
 const INSTANCE_ID = "inst_adapters";
 const INSTANCE_TOKEN = "instance-adapters-token";
 const CODEX_KEY = "codex-upstream-secret";
 const CHAT_KEY = "chat-upstream-secret";
 const CLAUDE_KEY = "claude-upstream-secret";
-const PROTOCOLS = ["openai-responses", "openai-chat-completions", "anthropic-messages"];
+const GOOGLE_KEY = "google-upstream-secret";
+const PROTOCOLS = ["openai-responses", "openai-chat-completions", "anthropic-messages", "google-generative-ai"];
 
 function tempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-relay-adapters-"));
@@ -82,6 +84,7 @@ async function setupRelay(t, upstream) {
     { key: "codex", name: "Codex adapter model", app: "codex", protocol: "openai-responses", endpoint: `${upstream.origin}/v1`, model: CODEX_KEY, external: "public-codex", upstreamName: "upstream-codex" },
     { key: "chat", name: "Chat adapter model", app: "opencode", protocol: "openai-chat-completions", endpoint: `${upstream.origin}/v1`, model: CHAT_KEY, external: "public-chat", upstreamName: "upstream-chat" },
     { key: "claude", name: "Claude adapter model", app: "claude", protocol: "anthropic-messages", endpoint: upstream.origin, model: CLAUDE_KEY, external: "public-claude", upstreamName: "upstream-claude" },
+    { key: "google", name: "Google adapter model", app: "opencode", protocol: "google-generative-ai", endpoint: `${upstream.origin}/v1beta`, model: GOOGLE_KEY, external: "public-google", upstreamName: "upstream-google" },
   ];
   for (const definition of definitions) {
     const created = await app.inject({
@@ -113,6 +116,47 @@ async function setupRelay(t, upstream) {
 function header(record, name) {
   return record.headers[name.toLowerCase()];
 }
+
+test("google generative ai normalizes versioned upstream endpoints", () => {
+  const adapter = createGoogleGenerativeAiAdapter();
+  const plan = adapter.planOperation({
+    method: "POST",
+    operationPath: "/v1beta/models/upstream-google:generateContent",
+    search: "?alt=json",
+    model: { endpoint: "https://generativelanguage.googleapis.com/v1beta" },
+  });
+  assert.equal(plan.kind, "upstream");
+  assert.equal(plan.method, "POST");
+  assert.equal(plan.url, "https://generativelanguage.googleapis.com/v1beta/models/upstream-google:generateContent?alt=json");
+  assert.equal(plan.responseMode, "json");
+});
+
+test("google generative ai forwards model operations with the Google credential header", async (t) => {
+  let upstreamRequest;
+  const upstream = await startUpstream((record, _request, response) => {
+    upstreamRequest = record;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }));
+  });
+  const relay = await setupRelay(t, upstream);
+  t.after(async () => { await relay.app.close(); await upstream.close(); });
+  const body = JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hello" }] }] });
+  const response = await fetch(
+    `${relay.route("google", "/v1beta/models/upstream-google:generateContent")}?alt=json`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": INSTANCE_TOKEN },
+      body,
+    },
+  );
+  assert.equal(response.status, 200);
+  await response.text();
+  assert.equal(upstreamRequest.method, "POST");
+  assert.equal(upstreamRequest.url, "/v1beta/models/upstream-google:generateContent?alt=json");
+  assert.equal(header(upstreamRequest, "x-goog-api-key"), GOOGLE_KEY);
+  assert.equal(header(upstreamRequest, "authorization"), undefined);
+  assert.equal(upstreamRequest.body.toString(), body);
+});
 
 test("codex responses rewrites the request model and maps the JSON response back", async (t) => {
   let upstreamRequest;

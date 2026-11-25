@@ -991,6 +991,36 @@ impl AppRuntime {
             .map(|env| env.unwrap_or_else(|| base.clone()))
     }
 
+    pub fn prepare_managed_agent_launch(
+        &self,
+        app_id: &str,
+    ) -> Result<(PathBuf, BTreeMap<String, String>), AppRuntimeError> {
+        if self.is_draining() {
+            return Err(AppRuntimeError::Draining(
+                "App launches are unavailable while the instance is draining.".into(),
+            ));
+        }
+        self.require_app_launch_admission(app_id)?;
+        let entry = self
+            .inner
+            .catalog
+            .find(app_id)
+            .filter(|entry| {
+                entry.source == crate::catalog::AppSource::Builtin
+                    && self
+                        .inner
+                        .catalog
+                        .managed_node_apps()
+                        .is_some_and(|apps| apps.contains(app_id))
+            })
+            .ok_or_else(|| AppRuntimeError::NotFound("Managed app not found.".into()))?;
+        let executable = entry
+            .executable
+            .ok_or_else(|| self.missing_app_command(&entry.app))?;
+        let env = self.environment(&entry.app, &AppLaunchOptions::default(), false)?;
+        Ok((executable, env))
+    }
+
     pub fn prepare_shell(
         &self,
         command: &str,

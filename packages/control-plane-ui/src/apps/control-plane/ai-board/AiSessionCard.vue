@@ -144,6 +144,7 @@ import { useI18n } from "vue-i18n";
 import { Ban, Boxes, Check, ChevronLeft, ChevronRight, Folder, X } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
+import { isAiAgentId, type AiAgentId } from "../../../components/aiAgentIcon";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMarks.vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
@@ -211,9 +212,9 @@ function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
 const isStoppingAppSession = computed(() => props.stoppingAppSessionKey === props.card.key);
 const isForking = computed(() => props.forkingSessionKey === props.card.key);
 const storyTarget = computed(() => aiSessionStoryTarget(props.card.instance, props.card.session));
-const agentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {
+const agentIcon = computed<AiAgentId | undefined>(() => {
   const agent = props.card.session.agent;
-  return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
+  return isAiAgentId(agent) ? agent : undefined;
 });
 const agentDisplayName = computed(() => {
   const agent = props.card.session.agent;

@@ -10,7 +10,8 @@
 import { computed } from "vue";
 import { Globe2, Monitor, Play, SquareTerminal } from "@lucide/vue";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
-import { AI_AGENT_APP_IDS, appLaunchIconKind, type AppLaunchIconIdentity } from "./appLaunchIcon";
+import { appLaunchIconKind, type AppLaunchIconIdentity } from "./appLaunchIcon";
+import { isAiAgentId } from "../../../components/aiAgentIcon";
 
 const props = withDefaults(defineProps<{
   app: AppLaunchIconIdentity;
@@ -20,5 +21,5 @@ const props = withDefaults(defineProps<{
 });
 
 const iconKind = computed(() => appLaunchIconKind(props.app));
-const agent = computed(() => AI_AGENT_APP_IDS.find((id) => id === props.app.id));
+const agent = computed(() => isAiAgentId(props.app.id) ? props.app.id : undefined);
 </script>

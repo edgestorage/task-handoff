@@ -123,6 +123,7 @@ function buildAiSessionPatch(
     // carry that stale value into the running state.
     interrupt: status === "running" || status === "waiting",
   };
+  if (status !== "waiting") delete actions.approvalRequest;
 
   const { userMessage: _userMessage, goal: goalPatch, ...sessionPatch } = patch;
   const goal = goalPatch === null
@@ -413,7 +414,7 @@ export function reduceAiSessionRealtime(
       status: event.status || "waiting",
       phase: event.phase || "approval",
       summary: event.summary || event.text,
-      actions: { ...current.actions, approval: true },
+      actions: { ...current.actions, approval: true, approvalRequest: event.approvalRequest },
       counters: event.counters || { approvals: 1 },
     }, { updatedAt, meta });
   }

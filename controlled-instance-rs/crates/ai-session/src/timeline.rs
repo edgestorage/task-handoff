@@ -121,6 +121,29 @@ impl AiSessionTimelineStore {
         } else {
             items.push(item);
         }
+        self.write_items(provider_session_id, items)
+    }
+
+    pub(crate) fn replace_items(
+        &self,
+        provider_session_id: &str,
+        items: Vec<AiSessionTimelineItem>,
+    ) -> std::io::Result<()> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.write_items(
+            provider_session_id,
+            items.into_iter().filter_map(sanitize_item).collect(),
+        )
+    }
+
+    fn write_items(
+        &self,
+        provider_session_id: &str,
+        items: Vec<AiSessionTimelineItem>,
+    ) -> std::io::Result<()> {
         write_json_atomic(
             &self.file_path(provider_session_id),
             &StoredCodexTimeline {

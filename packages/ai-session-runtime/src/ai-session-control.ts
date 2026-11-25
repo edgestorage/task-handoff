@@ -154,7 +154,7 @@ export interface AiSessionControlProvider {
   /** Reports the provider's current runtime support for each independent Timeline operation. */
   timelineCapabilities?(): AiSessionProviderTimelineCapabilities;
   interrupt(session: AiSessionStatus): Promise<AiSessionActionResult>;
-  resolveApproval?(session: AiSessionStatus, decision: AiSessionApprovalDecision): Promise<AiSessionActionResult>;
+  resolveApproval?(session: AiSessionStatus, decision: AiSessionApprovalDecision, approvalRequestId?: string): Promise<AiSessionActionResult>;
 }
 
 export class PendingAiSessionApprovalStore {
@@ -684,11 +684,11 @@ export class AiSessionController {
     return aiSessionToolActivityWindow(await this.turnTimeline(sessionId, turnId));
   }
 
-  async resolveApproval(sessionId: string, decision: AiSessionApprovalDecision) {
+  async resolveApproval(sessionId: string, decision: AiSessionApprovalDecision, approvalRequestId?: string) {
     const session = this.requireSession(sessionId);
     const provider = this.requireProvider(session);
     if (provider.resolveApproval) {
-      return provider.resolveApproval(session, decision);
+      return provider.resolveApproval(session, decision, approvalRequestId);
     }
     throw aiSessionControlError("AI_SESSION_APPROVAL_UNSUPPORTED", `${session.agent} sessions do not expose structured approval control.`, 400);
   }

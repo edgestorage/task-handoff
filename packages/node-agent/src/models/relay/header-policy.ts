@@ -13,7 +13,7 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   // host & forwarding
   "host", "forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port", "x-real-ip", "via",
   // downstream authentication; upstream auth is injected from the private model record
-  "authorization", "x-api-key", "cookie",
+  "authorization", "x-api-key", "x-goog-api-key", "cookie",
   // caller-supplied provider routing
   "x-provider", "x-upstream", "x-upstream-url", "x-target-endpoint", "x-api-base-url", "x-model-endpoint", "x-relay-target", "x-original-url",
   // let the HTTP client negotiate and transparently decode the upstream encoding
@@ -54,6 +54,10 @@ export function upstreamRequestHeaders(
   if (input.protocol === "anthropic-messages") {
     headers["x-api-key"] = input.credential;
     delete headers.authorization;
+  } else if (input.protocol === "google-generative-ai") {
+    headers["x-goog-api-key"] = input.credential;
+    delete headers.authorization;
+    delete headers["x-api-key"];
   } else {
     headers.authorization = `Bearer ${input.credential}`;
     delete headers["x-api-key"];

@@ -146,6 +146,7 @@ export function approvalCenterBadgeText(count: number) {
  */
 export function aiSessionApprovalDecisions(session: ControlPlaneAiSessionSummary, capabilities: unknown): readonly AiSessionApprovalDecision[] {
   if (!isAiSessionApprovalPending(session)) return [];
+  if (session.actions?.approvalRequest) return session.actions.approvalRequest.decisions;
   const provider = directoryAiSessionProviderCapability(capabilities, session.agent);
   if (provider) return provider.actions.approvalDecisions;
   // Compatibility for v0.0.21: provider capabilities were absent and all

@@ -217,7 +217,7 @@ export const AiSessionConversationAttachmentCapabilitiesSchema = z.object({
  * Absence on v0.0.34 instances only disables the relay feature domain.
  */
 export const ControlledInstanceModelRelayCapabilitiesSchema = z.object({
-  protocols: z.array(ModelProtocolSchema).max(3).default([]),
+  protocols: z.array(ModelProtocolSchema).max(4).default([]),
   streaming: z.boolean().default(false),
 }).strip();
 
@@ -1554,7 +1554,7 @@ export const ModelConfigSchema = z
     // name list and inert outside the node model relay.
     mappings: ModelRequestMappingsSchema,
     // Empty is accepted for N-1 records; owners normalize it from the legacy app field.
-    protocols: z.array(ModelProtocolSchema).max(3).default([]),
+  protocols: z.array(ModelProtocolSchema).max(4).default([]),
     // Provider-level capabilities apply to every model name under this entity.
     capabilities: ModelProviderCapabilitiesSchema.optional(),
     /** @deprecated Compatibility discriminator for pre-protocol model records. */
@@ -4264,7 +4264,7 @@ export const ModelDiscoveryInputSchema = z.object({
 export const ModelTestInputSchema = ModelDiscoveryInputSchema.extend({
   model: ModelConfigSchema.shape.model,
   app: ModelConfigSchema.shape.app.optional(),
-  protocol: z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"]).optional(),
+  protocol: ModelProtocolSchema.optional(),
 }).strict().refine((input) => Boolean(input.protocol || input.app), { message: "A model protocol is required.", path: ["protocol"] });
 
 export const NodeAuthInputSchema = z.object({

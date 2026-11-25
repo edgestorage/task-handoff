@@ -29,7 +29,7 @@ const {
   builtinManagedAppDefinitions,
   publicManagedAppDefinitions,
 } = require("../packages/app-runtime/src/catalog.ts");
-const { managedAppLauncherPath } = require("../packages/app-runtime/src/managed-node-apps.ts");
+const { ManagedApps, managedAppLauncherPath } = require("../packages/app-runtime/src/managed-node-apps.ts");
 const {
   builtinManagedAppRegistry,
   createManagedAppRegistry,
@@ -654,4 +654,52 @@ test("managed native and node apps resolve from the instance root and do not fal
   const resolved = resolveApp(app, { PATH: "" }, options);
   assert.equal(resolved.executable, executable);
   assert.equal(resolved.app.command, executable);
+});
+
+test("ACP app IDs resolve to the pinned package binaries in independent private roots", () => {
+  const definitions = builtinManagedAppDefinitions();
+  for (const [id, binName, packageName, version] of [
+    ["gemini", "gemini", "@google/gemini-cli", "0.71.1"],
+    ["commandcode", "cmd", "command-code", "1.93.2"],
+    ["dsh", "dsh", "@deepseek-ai/dsh", "0.2.2-rc.5"],
+  ]) {
+    const definition = definitions.find((entry) => entry.launcher.id === id);
+    const [recipe] = definition.distribution.recipes;
+    assert.equal(definition.launcher.name.length > 0, true);
+    assert.match(definition.launcher.description, /ACP\.$/);
+    assert.equal(recipe.type, "node-package");
+    assert.equal(recipe.installer, "npm");
+    assert.equal(recipe.binName, binName);
+    assert.deepEqual(recipe.packages, [packageName]);
+    assert.equal(recipe.version, version);
+    assert.equal(recipe.managed, true);
+    assert.equal(managedAppLauncherPath("/private/apps", definition), path.join("/private/apps", "node-package", id, "node_modules", ".bin", binName));
+  }
+});
+
+test("ACP launchers inherit instance-private authentication without exposing secrets in public catalog metadata", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-auth-environment-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const apps = new ManagedApps(root, builtinManagedAppDefinitions());
+  const env = apps.environment({
+    PATH: process.env.PATH,
+    HOME: root,
+    DSH_HOME: path.join(root, ".dsh"),
+    GEMINI_API_KEY: "gemini-test-secret",
+    COMMAND_CODE_API_KEY: "command-code-test-secret",
+    DEEPSEEK_API_KEY: "deepseek-test-secret",
+  });
+
+  assert.equal(env.GEMINI_API_KEY, "gemini-test-secret");
+  assert.equal(env.COMMAND_CODE_API_KEY, "command-code-test-secret");
+  assert.equal(env.DEEPSEEK_API_KEY, "deepseek-test-secret");
+  assert.equal(env.DSH_HOME, path.join(root, ".dsh"));
+  assert.equal(env.HOME, root);
+
+  const catalog = builtinAppCatalog();
+  for (const id of ["gemini", "commandcode", "dsh"]) {
+    const item = catalog.find((entry) => entry.id === id);
+    assert.equal(JSON.stringify(item).includes("test-secret"), false);
+    assert.equal(item.env, undefined);
+  }
 });

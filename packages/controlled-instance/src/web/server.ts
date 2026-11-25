@@ -1,7 +1,10 @@
 import { INSTANCE_CAPABILITIES_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/remote-desktop";
 import { DesktopService } from "../remote-desktop/service";
 import { registerDesktopRoutes } from "../remote-desktop/routes";
-import { DESKTOP_COMPONENT_APP_ID, readManagedDesktopPackage, removeLegacyManagedDesktopPackage } from "@task-handoff/app-runtime";
+import { DESKTOP_COMPONENT_APP_ID, managedAcpAgents, readManagedDesktopPackage, removeLegacyManagedDesktopPackage } from "@task-handoff/app-runtime";
+import { AcpSessionProvider, invalidateAcpSession } from "@task-handoff/ai-session-runtime/acp";
+import { acpPermissionModes } from "@task-handoff/ai-session-runtime/acp-model";
+import { AiSessionTimelineStore } from "@task-handoff/ai-session-runtime/ai-session/timeline-store";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -82,6 +85,7 @@ import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { aiSessionRetentionCandidates, aiSessionRootNode, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
 import { ControlledPrivateModelCatalogSchema, readControlledPrivateCodexSettings, readControlledPrivateModelCatalog, readControlledPrivateModelCatalogSource, resolveControlledPrivateModelSelection, type ControlledPrivateModelCatalogSource } from "./private-model-catalog";
+import { prepareAcpLaunchConfig } from "./acp-model-config";
 import { requestControlledAiSessionTitle } from "./session-title-model";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
 import { GitCredentialBroker, installGitBrokerEnvironment } from "./git-credential-broker";
@@ -796,6 +800,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   }]]);
   app.addHook("onClose",()=>desktopService.close());
+  const acpProviders = new Map<string, AcpSessionProvider>();
   const appManagement = options.appManagement || new AppManagementManager({
     packageLifecycle:(appId)=>packageLifecycles.get(appId),
     stateDir: appManagementStateDir,
@@ -805,7 +810,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       ...appRuntime.listSessions(),
       ...aiSessions.list().filter((session) => session.activeTurnId).map((session) => ({ id: session.id, appId: session.agent, status: "running" })),
     ],
-    stopAppRuntime: (appId) => appRuntime.stopSharedResource(appId),
+    stopAppRuntime: async (appId) => {
+      appRuntime.stopSharedResource(appId);
+      await acpProviders.get(appId)?.close();
+    },
     publish: (event) => {
       events.publish("app.management", event);
       if(event.job?.appId===DESKTOP_COMPONENT_APP_ID)queueMicrotask(desktopChanged);
@@ -1268,8 +1276,70 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       hierarchy: { subagents: true },
     },
   });
+  for (const { id, acpArgs, loadSession } of managedAcpAgents) {
+    for (const session of aiSessions.all()) {
+      if (session.agent === id && session.providerSessionId && (session.actions?.send !== false || session.actions?.approval || session.status === "running" || session.status === "waiting")) {
+        invalidateAcpSession(aiSessions, session);
+      }
+    }
+    if (!envFlag(`TASK_HANDOFF_ACP_${id.toUpperCase()}_ENABLED`)) continue;
+    fs.mkdirSync(path.join(storagePaths.dataDir, "acp-session-config"), { recursive: true, mode: 0o700 });
+    const provider = new AcpSessionProvider(id, aiSessions, ({ cwd, modelSelection, providerSessionId }) => {
+      const launch = appRuntime.prepareManagedAgentLaunch(id);
+      const config = prepareAcpLaunchConfig({
+        agent: id,
+        catalog: privateModelCatalog,
+        instanceCredential: process.env.TASK_HANDOFF_REGISTRATION_TOKEN?.trim(),
+        modelSelection,
+        dataDir: path.join(storagePaths.dataDir, "acp-session-config"),
+        providerSessionId,
+        cwd,
+      });
+      return {
+        executable: launch.executable,
+        args: [...acpArgs, ...config.args],
+        env: { ...launch.env, ...config.env },
+        cleanupDir: config.cleanupDir,
+        persistSessionHome: config.persistSessionHome,
+      };
+    }, (delta) => {
+      aiSessionMessageDeltas.push(AiSessionMessageDeltaEventSchema.parse({
+        instanceId, nodeId: process.env.TASK_HANDOFF_NODE_ID, ...delta, generatedAt: new Date().toISOString(),
+      }));
+    }, new AiSessionTimelineStore(path.join(storagePaths.dataDir, "ai-session-timeline", id)), loadSession);
+    acpProviders.set(id, provider);
+    aiSessionProviders.register({
+      agent: id,
+      controlProvider: provider,
+      resume: (item) => provider.restore(item.providerSessionId, item.cwd, item.modelSelection, item.reasoningEffort),
+      capability: () => ({
+        agent: id,
+        actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: false, historyResume: provider.historyResume, delete: false, fork: false, rename: true, approvalDecisions: ["allow", "deny"] },
+        permissionModes: acpPermissionModes(id),
+        timeline: { sessionRead: true, turnRead: true, liveItems: true },
+        modelSelection: {
+          selectModelAtCreate: true,
+          selectProviderAtCreate: true,
+          selectModelAtResume: true,
+          selectProviderAtResume: true,
+          switchModelWithinProvider: true,
+          switchProviderDuringSession: id !== "gemini",
+          stableIdentity: true,
+        },
+        reasoningEffort: id === "gemini"
+          ? { selectAtCreate: false, updateDuringSession: false }
+          : { selectAtCreate: true, updateDuringSession: true },
+      }),
+    });
+  }
   const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory, (agent) => Boolean(aiSessionProviders.get(agent)));
   const unsubscribeTimelineItems = aiSessionController.subscribeTimelineItems((timelineItem) => {
+    if (timelineItem.item.type === "ai-message") aiSessionMessageDeltas.flush({
+      instanceId,
+      sessionId: timelineItem.sessionId,
+      turnId: timelineItem.item.turnId,
+      itemId: timelineItem.item.id,
+    }, "authoritative-event");
     aiSessionTimelineItemDeltas.flush({
       instanceId,
       sessionId: timelineItem.sessionId,
@@ -1789,6 +1859,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     appRuntime.beginDrain();
     codexAppServer.stop();
     openCode.close();
+    await Promise.all([...acpProviders.values()].map((provider) => provider.close()));
     aiSessionMessageDeltas.close("service-close");
     aiSessionTimelineItemDeltas.close("service-close");
   });
@@ -2332,7 +2403,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     const hierarchy = { subagents: request.query.hierarchy === "subagents" };
     return { data: AiSessionHistoryListSchema.parse({
       items: aiSessionHistory.list()
-        .filter((item) => agents.has(item.agent) && !agentRunMembers.getBySession(item.id))
+        .filter((item) => (agents.has("*") || agents.has(item.agent)) && !agentRunMembers.getBySession(item.id))
         .map((item) => projectAiSessionHistoryItemForConsumer(item, hierarchy)),
     }) };
   });
@@ -2987,7 +3058,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/approval", async (request, reply) => {
     try {
       const body = AiSessionApprovalInputSchema.parse(request.body || {});
-      const result = AiSessionActionResultSchema.parse(await aiSessionController.resolveApproval(request.params.id, body.decision));
+      const result = AiSessionActionResultSchema.parse(await aiSessionController.resolveApproval(request.params.id, body.decision, body.approvalRequestId));
       publishAiSessionSnapshot("control-action");
       return { data: projectAiSessionActionResponse(result) };
     } catch (error: unknown) {

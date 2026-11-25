@@ -1063,8 +1063,8 @@ export function interruptAiSession(instanceId: string, sessionId: string) {
   return sharedAiSessionsApi.interrupt(instanceId, sessionId);
 }
 
-export function resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
-  return sharedAiSessionsApi.approval(instanceId, sessionId, decision);
+export function resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip", approvalRequestId?: string) {
+  return sharedAiSessionsApi.approval(instanceId, sessionId, decision, approvalRequestId);
 }
 
 export function listStories(nodeId?: string): Promise<StoryNodePayload> {

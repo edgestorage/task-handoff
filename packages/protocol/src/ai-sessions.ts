@@ -262,11 +262,18 @@ export const AiSessionGoalSchema = z.object({
   timeUsedSeconds: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
 }).strict();
 
+export const AiSessionApprovalDecisionSchema = z.enum(["allow", "deny", "skip"]);
+export const AiSessionApprovalRequestSchema = z.object({
+  id: NonEmptyTrimmedTextSchema.max(120),
+  decisions: z.array(AiSessionApprovalDecisionSchema).min(1).max(3),
+});
+
 export const AiSessionActionsSchema = z
   .object({
     send: z.boolean().optional(),
     interrupt: z.boolean().optional(),
     approval: z.boolean().optional(),
+    approvalRequest: AiSessionApprovalRequestSchema.optional(),
     fork: z.boolean().optional(),
     rename: z.boolean().optional(),
     openApp: z.boolean().optional(),
@@ -742,7 +749,8 @@ export const AiSessionActionErrorSchema = z.object({
 }).strict();
 
 export const AiSessionApprovalInputSchema = z.object({
-  decision: z.enum(["allow", "deny", "skip"]),
+  decision: AiSessionApprovalDecisionSchema,
+  approvalRequestId: NonEmptyTrimmedTextSchema.max(120).optional(),
 }).strict();
 
 export const AiSessionQueueReorderInputSchema = z.object({
@@ -1655,6 +1663,7 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("event"),
   sessionId: NonEmptyTrimmedTextSchema.max(120),
   kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction", "model-selection", "reasoning-effort", "goal"]),
+  approvalRequest: AiSessionApprovalRequestSchema.optional(),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   activeTurnId: TrimmedTextSchema.max(240).optional(),

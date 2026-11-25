@@ -505,6 +505,9 @@ importers:
 
   packages/ai-session-runtime:
     dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 2.9.1
+        version: 2.9.1(zod@4.6.7)
       '@task-handoff/core':
         specifier: workspace:*
         version: link:../core
@@ -1005,6 +1008,15 @@ importers:
         version: 3.5.38(typescript@6.0.3)
 
 packages:
+
+  '@agentclientprotocol/sdk@2.9.1':
+    resolution: {integrity: sha512-8iJdxGa3SunLfzqLLb3RfQFmr4hnmWeAyeAK6MbkJiXJbrRlMRgKsVnDl/7Hu48yu/30gAlytNDzh5W77rv5SA==}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.4.0
+      zod: ^3.25.76 || ^4.0.0
+    peerDependenciesMeta:
+      '@modelcontextprotocol/server':
+        optional: true
 
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
@@ -8704,6 +8716,10 @@ packages:
     resolution: {integrity: sha512-V50KMwwzqJV0NpZIZFwfOD5/lyny3WlSzRiXgA0G7VUnRlqttta1L6UQIHzd6EuBY/cHGfwTIck7w1yH6Q5zUw==}
 
 snapshots:
+
+  '@agentclientprotocol/sdk@2.9.1(zod@4.6.7)':
+    dependencies:
+      zod: 4.6.7
 
   '@alloc/quick-lru@5.2.0': {}
 

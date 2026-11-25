@@ -889,6 +889,26 @@ fn normalize_actions(value: Option<&Value>) -> Option<Value> {
             actions.insert(name.to_string(), Value::Bool(value));
         }
     }
+    if let Some(request) = record.and_then(|record| record.get("approvalRequest")) {
+        if let (Some(id), Some(decisions)) = (
+            request.get("id").and_then(Value::as_str),
+            request.get("decisions").and_then(Value::as_array),
+        ) {
+            if !id.is_empty()
+                && id.len() <= 120
+                && !decisions.is_empty()
+                && decisions.len() <= 3
+                && decisions
+                    .iter()
+                    .all(|value| matches!(value.as_str(), Some("allow" | "deny" | "skip")))
+            {
+                actions.insert(
+                    "approvalRequest".into(),
+                    serde_json::json!({"id": id, "decisions": decisions}),
+                );
+            }
+        }
+    }
     (!actions.is_empty()).then_some(Value::Object(actions))
 }
 

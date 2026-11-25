@@ -1,3 +1,7 @@
+mod acp;
+mod acp_connection;
+mod acp_model;
+mod acp_timeline;
 mod attachments;
 mod claude_control_sock;
 mod codex_app_server;
@@ -9,6 +13,8 @@ mod provider;
 mod provider_snapshot;
 mod timeline;
 mod title;
+
+pub use acp::{AcpLaunch, AcpSessionHome, AcpSessionProvider};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{SecondsFormat, Utc};
@@ -55,12 +61,13 @@ pub use persistence_settings::{
     AiSessionPersistenceSettingsError, AiSessionPersistenceSettingsStore,
 };
 pub use provider::{
-    AiSessionActionResult, AiSessionAttachmentInput, AiSessionAttachmentSourceInput,
-    AiSessionControlProvider, AiSessionController, AiSessionCreateInput, AiSessionCreateResult,
-    AiSessionForkResult, AiSessionManagedCreateOptions, AiSessionMessageInput,
-    AiSessionModelSelection, AiSessionModelSelectionIntent, AiSessionModelSelectionResolver,
-    AiSessionPermissionMode, AiSessionReference, AiSessionResumeResult, AiSessionRuntimePathInput,
-    AiSessionSendMode, AiSessionStoryAgentToolResolver, ProviderAction, ProviderApprovalObserver,
+    invalidate_disconnected_provider_session, AiSessionActionResult, AiSessionAttachmentInput,
+    AiSessionAttachmentSourceInput, AiSessionControlProvider, AiSessionController,
+    AiSessionCreateInput, AiSessionCreateResult, AiSessionForkResult,
+    AiSessionManagedCreateOptions, AiSessionMessageInput, AiSessionModelSelection,
+    AiSessionModelSelectionIntent, AiSessionModelSelectionResolver, AiSessionPermissionMode,
+    AiSessionReference, AiSessionResumeResult, AiSessionRuntimePathInput, AiSessionSendMode,
+    AiSessionStoryAgentToolResolver, ProviderAction, ProviderApprovalObserver,
     ProviderApprovalUpdate, ProviderAttachment, ProviderCreateInput, ProviderCreateResult,
     ProviderError, ProviderEvent, ProviderForkCreation, ProviderForkInput, ProviderMessage,
     ProviderMessageInput, ProviderResumeResult,
@@ -295,7 +302,7 @@ impl AiSession {
             .app_session_id
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty());
-        serde_json::json!({
+        let mut actions = serde_json::json!({
             "send": configured_bool("send").unwrap_or(true),
             "interrupt": active && configured_bool("interrupt").unwrap_or(true),
             "approval": self.status == "waiting"
@@ -306,7 +313,13 @@ impl AiSession {
             "openApp": configured_bool("openApp")
                 .unwrap_or(has_provider_session && !has_app_session),
             "close": configured_bool("close").unwrap_or(has_provider_session),
-        })
+        });
+        if actions["approval"] == true {
+            if let Some(request) = configured.and_then(|actions| actions.get("approvalRequest")) {
+                actions["approvalRequest"] = request.clone();
+            }
+        }
+        actions
     }
 
     pub fn summary(&self) -> AiSessionSummary {
@@ -1134,7 +1147,21 @@ impl AiSessionRuntime {
             return Ok(());
         };
         std::fs::create_dir_all(directory)?;
-        let bytes = serde_json::to_vec_pretty(session)?;
+        let bytes = if session
+            .actions
+            .as_ref()
+            .and_then(|actions| actions.get("approvalRequest"))
+            .is_some()
+        {
+            let mut persisted = session.clone();
+            if let Some(actions) = persisted.actions.as_mut().and_then(Value::as_object_mut) {
+                actions.remove("approvalRequest");
+                actions.insert("approval".into(), Value::Bool(false));
+            }
+            serde_json::to_vec_pretty(&persisted)?
+        } else {
+            serde_json::to_vec_pretty(session)?
+        };
         let mut file = bytes;
         file.push(b'\n');
         write_atomic(

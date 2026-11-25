@@ -638,6 +638,14 @@ pub trait AiSessionControlProvider: Send + Sync {
         )))
     }
 
+    fn message_acknowledged(
+        &self,
+        _session: &AiSession,
+        _action: &ProviderAction,
+        _accepted: bool,
+    ) {
+    }
+
     async fn steer_message(
         &self,
         _session: &AiSession,
@@ -668,6 +676,16 @@ pub trait AiSessionControlProvider: Send + Sync {
             "{} sessions do not expose structured approval control.",
             self.agent()
         )))
+    }
+
+    async fn resolve_approval_with_request(
+        &self,
+        session: &AiSession,
+        decision: &str,
+        _approval_request_id: Option<&str>,
+        observe: &ProviderApprovalObserver<'_>,
+    ) -> Result<ProviderAction, ProviderError> {
+        self.resolve_approval(session, decision, observe).await
     }
 
     async fn rename_session(
@@ -850,9 +868,9 @@ pub struct AiSessionController {
     pending_sends: Mutex<HashMap<String, (String, SharedOperation<AiSessionActionResult>)>>,
     pending_settings: Mutex<HashSet<String>>,
     draining_queues: Mutex<HashSet<String>>,
-    tool_activity: Mutex<HashMap<String, ToolActivityTracker>>,
-    sub_agents: Mutex<HashMap<String, CodexSubAgentTracker>>,
-    sub_agent_lifecycles: Mutex<HashMap<String, Value>>,
+    tool_activity: Mutex<HashMap<(String, String), ToolActivityTracker>>,
+    sub_agents: Mutex<HashMap<(String, String), CodexSubAgentTracker>>,
+    sub_agent_lifecycles: Mutex<HashMap<(String, String), Value>>,
 }
 
 #[derive(Default)]
@@ -1150,7 +1168,10 @@ impl AiSessionController {
                         } if snapshot.status == "idle" => Some(provider_session_id.clone()),
                         _ => None,
                     };
-                    if controller.apply_provider_event(event).await {
+                    if controller
+                        .apply_scoped_provider_event(&event_agent, event)
+                        .await
+                    {
                         controller.notify_change();
                     }
                     if let Some(provider_session_id) = completed_provider_session_id {
@@ -2390,7 +2411,9 @@ impl AiSessionController {
                 &input.message.message,
                 &staged.message_id,
                 &staged.attachments,
-            )?;
+            );
+            provider.message_acknowledged(session, &action, updated.is_ok());
+            let updated = updated?;
             // The provider has accepted this message. Preserve its authoritative
             // acknowledgement if publishing the local attachment owner fails.
             self.attachments.commit_message(
@@ -2685,6 +2708,14 @@ impl AiSessionController {
         let updated = self.runtime.update(&session.id, |session| {
             let turn_id = session.active_turn_id.clone();
             if preserves_turn {
+                if !is_session_busy(session)
+                    || action
+                        .turn_id
+                        .as_ref()
+                        .is_some_and(|turn| turn_id.as_ref() != Some(turn))
+                {
+                    return Ok(false);
+                }
                 session.status = "running".to_string();
                 session.phase = "unknown".to_string();
                 session.actions = Some(self.session_actions_for(session, Some("running")));
@@ -2716,6 +2747,16 @@ impl AiSessionController {
         session_id: &str,
         decision: &str,
     ) -> Result<AiSessionActionResult, ProviderError> {
+        self.resolve_approval_with_request(session_id, decision, None)
+            .await
+    }
+
+    pub async fn resolve_approval_with_request(
+        &self,
+        session_id: &str,
+        decision: &str,
+        approval_request_id: Option<&str>,
+    ) -> Result<AiSessionActionResult, ProviderError> {
         if !matches!(decision, "allow" | "deny" | "skip") {
             return Err(ProviderError::new(
                 "AI_SESSION_CONTROL_INVALID",
@@ -2744,7 +2785,7 @@ impl AiSessionController {
                             session.provider_session_id.as_deref().ok_or_else(|| {
                                 ProviderError::not_found("Provider session identity is missing.")
                             })?;
-                        self.apply_adapter_snapshot(provider_session_id, *snapshot)
+                        self.apply_adapter_snapshot(&session.agent, provider_session_id, *snapshot)
                             .await?;
                         self.notify_change();
                     }
@@ -2753,7 +2794,7 @@ impl AiSessionController {
             })
         };
         let action = provider
-            .resolve_approval(&session, decision, &observe)
+            .resolve_approval_with_request(&session, decision, approval_request_id, &observe)
             .await?;
         let updated = self.require_session(session_id)?;
         Ok(AiSessionActionResult {
@@ -3015,7 +3056,8 @@ impl AiSessionController {
             .map_err(Into::into)
     }
 
-    async fn apply_provider_event(&self, event: ProviderEvent) -> bool {
+    async fn apply_scoped_provider_event(&self, agent: &str, event: ProviderEvent) -> bool {
+        let key = |id: &str| (agent.to_string(), id.to_string());
         let changed = match event {
             #[cfg(test)]
             ProviderEvent::OwnerBarrier { committed } => {
@@ -3034,7 +3076,7 @@ impl AiSessionController {
                 parent_provider_session_id,
             } => {
                 if self.runtime.list().iter().any(|session| {
-                    session.agent == "opencode"
+                    session.agent == agent
                         && session.provider_session_id.as_deref()
                             == Some(provider_session_id.as_str())
                 }) {
@@ -3043,10 +3085,10 @@ impl AiSessionController {
                 let timestamp = now_iso();
                 let session = AiSession {
                     id: mint_entity_id("ses"),
-                    agent: "opencode".to_string(),
+                    agent: agent.to_string(),
                     creation_source: "ai-session".to_string(),
                     app_session_id: None,
-                    app_id: Some("opencode".to_string()),
+                    app_id: Some(agent.to_string()),
                     provider_session_id: Some(provider_session_id),
                     lineage: parent_provider_session_id.map(|parent| {
                         json!({
@@ -3060,7 +3102,7 @@ impl AiSessionController {
                     reasoning_effort,
                     story_id: None,
                     app_binding_keys: None,
-                    actions: Some(self.actions_for_agent("opencode", Some(&status))),
+                    actions: Some(self.actions_for_agent(agent, Some(&status))),
                     active_turn_id,
                     title: name,
                     cwd: Some(cwd),
@@ -3101,69 +3143,87 @@ impl AiSessionController {
             } => {
                 let lifecycle_changed = match status.as_str() {
                     "running" | "waiting" => {
-                        self.record_sub_agent_lifecycle(&provider_session_id, "running", None)
-                            .await
+                        self.record_sub_agent_lifecycle(
+                            agent,
+                            &provider_session_id,
+                            "running",
+                            None,
+                        )
+                        .await
                     }
                     "failed" => {
-                        self.record_sub_agent_lifecycle(&provider_session_id, "errored", None)
-                            .await
+                        self.record_sub_agent_lifecycle(
+                            agent,
+                            &provider_session_id,
+                            "errored",
+                            None,
+                        )
+                        .await
                     }
                     "idle" => {
-                        self.record_sub_agent_lifecycle(&provider_session_id, "completed", None)
-                            .await
+                        self.record_sub_agent_lifecycle(
+                            agent,
+                            &provider_session_id,
+                            "completed",
+                            None,
+                        )
+                        .await
                     }
                     _ => false,
                 };
-                let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
-                    let observed_model = match model_selection {
-                        Some(selection) => Some(Some(selection)),
-                        None => model
-                            .as_deref()
-                            .filter(|value| !value.trim().is_empty())
-                            .zip(
-                                model_provider
-                                    .as_deref()
-                                    .filter(|value| !value.trim().is_empty()),
-                            )
-                            .and_then(|(model, model_provider)| {
-                                self.project_observed_model_selection(
-                                    "codex",
-                                    model_provider,
-                                    model,
+                let session_changed =
+                    self.update_by_provider_id(agent, &provider_session_id, |session| {
+                        let observed_model = match model_selection {
+                            Some(selection) => Some(Some(selection)),
+                            None => model
+                                .as_deref()
+                                .filter(|value| !value.trim().is_empty())
+                                .zip(
+                                    model_provider
+                                        .as_deref()
+                                        .filter(|value| !value.trim().is_empty()),
                                 )
-                            }),
-                    };
-                    if let Some(cwd) = cwd.as_deref().filter(|value| !value.trim().is_empty()) {
-                        session.cwd = Some(cwd.to_string());
-                    }
-                    if let Some(name) = name.as_deref().filter(|value| !value.trim().is_empty()) {
-                        session.title = Some(name.to_string());
-                    }
-                    if let Some(selection) = observed_model {
-                        session.model_selection = selection
-                            .as_ref()
-                            .and_then(|selection| serde_json::to_value(selection).ok());
-                    }
-                    if let Some(effort) = reasoning_effort.as_deref() {
-                        session.reasoning_effort = Some(effort.to_string());
-                    }
-                    if apply_lifecycle(session, &status) {
-                        if let Some(phase) =
-                            phase.as_deref().filter(|value| !value.trim().is_empty())
-                        {
-                            session.phase = phase.to_string();
+                                .and_then(|(model, model_provider)| {
+                                    self.project_observed_model_selection(
+                                        "codex",
+                                        model_provider,
+                                        model,
+                                    )
+                                }),
+                        };
+                        if let Some(cwd) = cwd.as_deref().filter(|value| !value.trim().is_empty()) {
+                            session.cwd = Some(cwd.to_string());
                         }
-                        session.actions = Some(self.session_actions_for(session, Some(&status)));
-                    }
-                    true
-                });
+                        if let Some(name) = name.as_deref().filter(|value| !value.trim().is_empty())
+                        {
+                            session.title = Some(name.to_string());
+                        }
+                        if let Some(selection) = observed_model {
+                            session.model_selection = selection
+                                .as_ref()
+                                .and_then(|selection| serde_json::to_value(selection).ok());
+                        }
+                        if let Some(effort) = reasoning_effort.as_deref() {
+                            session.reasoning_effort = Some(effort.to_string());
+                        }
+                        if apply_lifecycle(session, &status) {
+                            if let Some(phase) =
+                                phase.as_deref().filter(|value| !value.trim().is_empty())
+                            {
+                                session.phase = phase.to_string();
+                            }
+                            session.actions =
+                                Some(self.session_actions_for(session, Some(&status)));
+                        }
+                        true
+                    });
                 lifecycle_changed || session_changed
             }
             ProviderEvent::AdapterSnapshot {
                 provider_session_id,
                 snapshot,
             } => self
-                .apply_adapter_snapshot(&provider_session_id, *snapshot)
+                .apply_adapter_snapshot(agent, &provider_session_id, *snapshot)
                 .await
                 .unwrap_or(false),
             ProviderEvent::TurnStarted {
@@ -3172,42 +3232,43 @@ impl AiSessionController {
                 started_at,
             } => {
                 let lifecycle_changed = self
-                    .record_sub_agent_lifecycle(&provider_session_id, "running", None)
+                    .record_sub_agent_lifecycle(agent, &provider_session_id, "running", None)
                     .await;
-                let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
-                    // A start notification repeating the control acknowledgement carries
-                    // no new body content. Preserve its source, clock and revision.
-                    if session.active_turn_id.as_deref() == Some(turn_id.as_str())
-                        && session.status == "running"
-                        && session.phase == "thinking"
-                        && session.error.is_none()
-                        && session.turns.as_deref().is_some_and(|turns| {
-                            turns.iter().any(|turn| {
-                                turn["id"] == turn_id
-                                    && turn["status"] == "running"
-                                    && turn["phase"] == "thinking"
+                let session_changed =
+                    self.update_by_provider_id(agent, &provider_session_id, |session| {
+                        // A start notification repeating the control acknowledgement carries
+                        // no new body content. Preserve its source, clock and revision.
+                        if session.active_turn_id.as_deref() == Some(turn_id.as_str())
+                            && session.status == "running"
+                            && session.phase == "thinking"
+                            && session.error.is_none()
+                            && session.turns.as_deref().is_some_and(|turns| {
+                                turns.iter().any(|turn| {
+                                    turn["id"] == turn_id
+                                        && turn["status"] == "running"
+                                        && turn["phase"] == "thinking"
+                                })
                             })
-                        })
-                    {
-                        return false;
-                    }
-                    let timestamp = started_at.unwrap_or_else(now_iso);
-                    session.error = None;
-                    session.active_turn_id = Some(turn_id.clone());
-                    session.status = "running".to_string();
-                    session.phase = "thinking".to_string();
-                    session.actions = Some(self.session_actions_for(session, Some("running")));
-                    let turns = session.turns.get_or_insert_with(Vec::new);
-                    let turn = ensure_turn(turns, &turn_id, &timestamp);
-                    let object = turn.as_object_mut().expect("turn object");
-                    object.insert("source".to_string(), json!("realtime"));
-                    object.insert("status".to_string(), json!("running"));
-                    object.insert("phase".to_string(), json!("thinking"));
-                    object.insert("startedAt".to_string(), json!(timestamp));
-                    object.insert("updatedAt".to_string(), json!(now_iso()));
-                    bump_turn_revision(object);
-                    true
-                });
+                        {
+                            return false;
+                        }
+                        let timestamp = started_at.unwrap_or_else(now_iso);
+                        session.error = None;
+                        session.active_turn_id = Some(turn_id.clone());
+                        session.status = "running".to_string();
+                        session.phase = "thinking".to_string();
+                        session.actions = Some(self.session_actions_for(session, Some("running")));
+                        let turns = session.turns.get_or_insert_with(Vec::new);
+                        let turn = ensure_turn(turns, &turn_id, &timestamp);
+                        let object = turn.as_object_mut().expect("turn object");
+                        object.insert("source".to_string(), json!("realtime"));
+                        object.insert("status".to_string(), json!("running"));
+                        object.insert("phase".to_string(), json!("thinking"));
+                        object.insert("startedAt".to_string(), json!(timestamp));
+                        object.insert("updatedAt".to_string(), json!(now_iso()));
+                        bump_turn_revision(object);
+                        true
+                    });
                 lifecycle_changed || session_changed
             }
             ProviderEvent::TurnCompleted {
@@ -3224,6 +3285,7 @@ impl AiSessionController {
                 };
                 let lifecycle_changed = self
                     .record_sub_agent_lifecycle(
+                        agent,
                         &provider_session_id,
                         lifecycle_status,
                         error.as_deref(),
@@ -3233,36 +3295,37 @@ impl AiSessionController {
                     .tool_activity
                     .lock()
                     .await
-                    .get_mut(&provider_session_id)
+                    .get_mut(&key(&provider_session_id))
                     .map(ToolActivityTracker::clear_active_tools);
-                let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
-                    let turn_id = turn_id.or_else(|| session.active_turn_id.clone());
-                    let status = if status.as_deref() == Some("failed") {
-                        "failed"
-                    } else {
-                        "completed"
-                    };
-                    let changed = complete_session_turn(
-                        session,
-                        turn_id.as_deref(),
-                        turn_id.as_deref(),
-                        status,
-                        &completed_at.unwrap_or_else(now_iso),
-                        None,
-                        "realtime",
-                    );
-                    let error = if status == "failed" { error } else { None };
-                    let error_changed = session.error != error;
-                    session.error = error;
-                    session.actions = Some(self.session_actions_for(session, None));
-                    changed || error_changed
-                });
+                let session_changed =
+                    self.update_by_provider_id(agent, &provider_session_id, |session| {
+                        let turn_id = turn_id.or_else(|| session.active_turn_id.clone());
+                        let status = if status.as_deref() == Some("failed") {
+                            "failed"
+                        } else {
+                            "completed"
+                        };
+                        let changed = complete_session_turn(
+                            session,
+                            turn_id.as_deref(),
+                            turn_id.as_deref(),
+                            status,
+                            &completed_at.unwrap_or_else(now_iso),
+                            None,
+                            "realtime",
+                        );
+                        let error = if status == "failed" { error } else { None };
+                        let error_changed = session.error != error;
+                        session.error = error;
+                        session.actions = Some(self.session_actions_for(session, None));
+                        changed || error_changed
+                    });
                 lifecycle_changed || session_changed
             }
             ProviderEvent::SessionError {
                 provider_session_id,
                 error,
-            } => self.update_by_provider_id(&provider_session_id, |session| {
+            } => self.update_by_provider_id(agent, &provider_session_id, |session| {
                 session.error = Some(error);
                 true
             }),
@@ -3278,10 +3341,10 @@ impl AiSessionController {
                     .tool_activity
                     .lock()
                     .await
-                    .entry(provider_session_id.clone())
+                    .entry(key(&provider_session_id))
                     .or_default()
                     .compacting(&turn_id, &status, observed_at.as_deref());
-                self.update_by_provider_id(&provider_session_id, |session| {
+                self.update_by_provider_id(agent, &provider_session_id, |session| {
                     session.current_tool = tool_activity.current_tool.clone();
                     let turns = session.turns.get_or_insert_with(Vec::new);
                     let turn = ensure_turn(turns, &turn_id, &timestamp);
@@ -3311,34 +3374,61 @@ impl AiSessionController {
                 provider_session_id,
             } => {
                 let lifecycle_changed = self
-                    .record_sub_agent_lifecycle(&provider_session_id, "shutdown", None)
+                    .record_sub_agent_lifecycle(agent, &provider_session_id, "shutdown", None)
                     .await;
-                self.tool_activity.lock().await.remove(&provider_session_id);
-                self.sub_agents.lock().await.remove(&provider_session_id);
-                let session_changed = self.update_by_provider_id(&provider_session_id, |session| {
-                    let timestamp = now_iso();
-                    let active_turn_id = session.active_turn_id.take();
-                    session.status = "idle".to_string();
-                    session.phase = "unknown".to_string();
-                    session.completed_at = Some(timestamp.clone());
-                    session.error = None;
-                    session.summary = Some("Codex thread closed.".to_string());
-                    session.last_message = Some("Codex thread closed.".to_string());
-                    session.current_tool = None;
-                    session.actions = Some(self.session_actions_for(session, None));
-                    if let (Some(turn_id), Some(turns)) = (active_turn_id, session.turns.as_mut()) {
-                        if let Some(turn) = find_turn_mut(turns, &turn_id) {
-                            let object = turn.as_object_mut().expect("turn object");
-                            object.insert("status".to_string(), json!("completed"));
-                            object.insert("phase".to_string(), json!("unknown"));
-                            object.insert("completedAt".to_string(), json!(timestamp));
-                            object.insert("updatedAt".to_string(), json!(timestamp));
-                            bump_turn_revision(object);
+                self.tool_activity
+                    .lock()
+                    .await
+                    .remove(&key(&provider_session_id));
+                self.sub_agents
+                    .lock()
+                    .await
+                    .remove(&key(&provider_session_id));
+                let session_changed =
+                    self.update_by_provider_id(agent, &provider_session_id, |session| {
+                        let timestamp = now_iso();
+                        let active_turn_id = session.active_turn_id.take();
+                        session.status = "idle".to_string();
+                        session.phase = "unknown".to_string();
+                        session.completed_at = Some(timestamp.clone());
+                        session.error = None;
+                        session.summary = Some("Codex thread closed.".to_string());
+                        session.last_message = Some("Codex thread closed.".to_string());
+                        session.current_tool = None;
+                        session.actions = Some(self.session_actions_for(session, None));
+                        if let (Some(turn_id), Some(turns)) =
+                            (active_turn_id, session.turns.as_mut())
+                        {
+                            if let Some(turn) = find_turn_mut(turns, &turn_id) {
+                                let object = turn.as_object_mut().expect("turn object");
+                                object.insert("status".to_string(), json!("completed"));
+                                object.insert("phase".to_string(), json!("unknown"));
+                                object.insert("completedAt".to_string(), json!(timestamp));
+                                object.insert("updatedAt".to_string(), json!(timestamp));
+                                bump_turn_revision(object);
+                            }
                         }
-                    }
-                    true
-                });
+                        true
+                    });
                 lifecycle_changed || session_changed
+            }
+            ProviderEvent::ProviderSessionLifecycle {
+                provider_session_id,
+                disposition,
+            } if disposition == "disconnected" => {
+                self.update_by_provider_id(agent, &provider_session_id, |session| {
+                    let actions = self.session_actions_for(session, Some(&session.status));
+                    if actions.get("send") != Some(&Value::Bool(false)) {
+                        return false;
+                    }
+                    let active = matches!(session.status.as_str(), "running" | "waiting");
+                    if active {
+                        invalidate_disconnected_provider_session(session);
+                    }
+                    let changed = session.actions.as_ref() != Some(&actions);
+                    session.actions = Some(actions);
+                    active || changed
+                })
             }
             ProviderEvent::ProviderSessionLifecycle { .. } => false,
             ProviderEvent::UserMessage {
@@ -3348,7 +3438,7 @@ impl AiSessionController {
                 text,
                 observed_at,
                 ..
-            } => self.update_by_provider_id(&provider_session_id, |session| {
+            } => self.update_by_provider_id(agent, &provider_session_id, |session| {
                 let timestamp = observed_at.unwrap_or_else(now_iso);
                 session.user_prompt = Some(text.clone());
                 let turns = session.turns.get_or_insert_with(Vec::new);
@@ -3390,10 +3480,10 @@ impl AiSessionController {
                     .tool_activity
                     .lock()
                     .await
-                    .entry(provider_session_id.clone())
+                    .entry(key(&provider_session_id))
                     .or_default()
                     .reset_for_agent_message();
-                self.update_by_provider_id(&provider_session_id, |session| {
+                self.update_by_provider_id(agent, &provider_session_id, |session| {
                     let timestamp = observed_at.unwrap_or_else(now_iso);
                     session.summary = Some(text.clone());
                     session.last_message = Some(text.clone());
@@ -3418,7 +3508,7 @@ impl AiSessionController {
             ProviderEvent::GoalUpdated {
                 provider_session_id,
                 goal,
-            } => self.update_by_provider_id(&provider_session_id, |session| {
+            } => self.update_by_provider_id(agent, &provider_session_id, |session| {
                 if session.goal == goal {
                     return false;
                 }
@@ -3430,14 +3520,14 @@ impl AiSessionController {
                 provider_session_id,
                 sub_agents,
             } => {
-                self.replace_sub_agents(&provider_session_id, &sub_agents)
+                self.replace_sub_agents(agent, &provider_session_id, &sub_agents)
                     .await
             }
             ProviderEvent::SubAgentActivity {
                 provider_session_id,
                 updates,
             } => {
-                self.apply_sub_agent_updates(&provider_session_id, &updates)
+                self.apply_sub_agent_updates(agent, &provider_session_id, &updates)
                     .await
             }
             ProviderEvent::ToolActivity {
@@ -3449,14 +3539,14 @@ impl AiSessionController {
             } => {
                 let tool_activity = {
                     let mut trackers = self.tool_activity.lock().await;
-                    let tracker = trackers.entry(provider_session_id.clone()).or_default();
+                    let tracker = trackers.entry(key(&provider_session_id)).or_default();
                     if running {
                         tracker.started(item.clone())
                     } else {
                         tracker.completed(item.clone())
                     }
                 };
-                self.update_by_provider_id(&provider_session_id, |session| {
+                self.update_by_provider_id(agent, &provider_session_id, |session| {
                     session.current_tool = tool_activity.current_tool.clone();
                     session.tool_calls_since_last_message =
                         tool_activity.tool_calls_since_last_message;
@@ -3471,7 +3561,7 @@ impl AiSessionController {
                 turn_id,
                 summary,
                 ..
-            } => self.update_by_provider_id(&provider_session_id, |session| {
+            } => self.update_by_provider_id(agent, &provider_session_id, |session| {
                 if let Some(turn_id) = turn_id.as_deref() {
                     session.active_turn_id = Some(turn_id.to_string());
                 }
@@ -3501,16 +3591,25 @@ impl AiSessionController {
             ProviderEvent::ApprovalResolved {
                 provider_session_id,
                 decision,
-            } => self.update_by_provider_id(&provider_session_id, |session| {
+            } => self.update_by_provider_id(agent, &provider_session_id, |session| {
                 let changed = apply_approval_resolution(session, &decision);
                 session.actions = Some(self.session_actions_for(session, Some(&session.status)));
                 changed
             }),
             ProviderEvent::ConnectionChanged { connected } => {
                 if !connected {
-                    self.tool_activity.lock().await.clear();
-                    self.sub_agents.lock().await.clear();
-                    self.sub_agent_lifecycles.lock().await.clear();
+                    self.tool_activity
+                        .lock()
+                        .await
+                        .retain(|(owner, _), _| owner != agent);
+                    self.sub_agents
+                        .lock()
+                        .await
+                        .retain(|(owner, _), _| owner != agent);
+                    self.sub_agent_lifecycles
+                        .lock()
+                        .await
+                        .retain(|(owner, _), _| owner != agent);
                 }
                 false
             }
@@ -3520,14 +3619,14 @@ impl AiSessionController {
 
     async fn apply_adapter_snapshot(
         &self,
+        agent: &str,
         provider_session_id: &str,
         snapshot: crate::provider_snapshot::ProviderSessionSnapshot,
     ) -> Result<bool, ProviderError> {
-        let Some(session) =
-            self.runtime.list().into_iter().find(|session| {
-                session.provider_session_id.as_deref() == Some(provider_session_id)
-            })
-        else {
+        let Some(session) = self.runtime.list().into_iter().find(|session| {
+            session.agent == agent
+                && session.provider_session_id.as_deref() == Some(provider_session_id)
+        }) else {
             return Ok(false);
         };
         let before = session.clone();
@@ -3543,26 +3642,39 @@ impl AiSessionController {
             _ => "completed",
         };
         let lifecycle_changed = self
-            .record_sub_agent_lifecycle(provider_session_id, status, updated.error.as_deref())
+            .record_sub_agent_lifecycle(
+                agent,
+                provider_session_id,
+                status,
+                updated.error.as_deref(),
+            )
             .await;
         Ok(session_changed || lifecycle_changed)
     }
 
-    async fn replace_sub_agents(&self, provider_session_id: &str, sub_agents: &[Value]) -> bool {
+    async fn replace_sub_agents(
+        &self,
+        agent: &str,
+        provider_session_id: &str,
+        sub_agents: &[Value],
+    ) -> bool {
         let lifecycles = self
             .sub_agent_lifecycles
             .lock()
             .await
-            .values()
-            .cloned()
+            .iter()
+            .filter(|((owner, _), _)| owner == agent)
+            .map(|(_, value)| value.clone())
             .collect::<Vec<_>>();
         let sub_agents = {
             let mut trackers = self.sub_agents.lock().await;
-            let tracker = trackers.entry(provider_session_id.to_string()).or_default();
+            let tracker = trackers
+                .entry((agent.to_string(), provider_session_id.to_string()))
+                .or_default();
             let values = tracker.replace(sub_agents);
             replay_sub_agent_lifecycles(tracker, values, &lifecycles)
         };
-        self.update_by_provider_id(provider_session_id, |session| {
+        self.update_by_provider_id(agent, provider_session_id, |session| {
             if session.sub_agents == sub_agents {
                 return false;
             }
@@ -3571,21 +3683,29 @@ impl AiSessionController {
         })
     }
 
-    async fn apply_sub_agent_updates(&self, provider_session_id: &str, updates: &[Value]) -> bool {
+    async fn apply_sub_agent_updates(
+        &self,
+        agent: &str,
+        provider_session_id: &str,
+        updates: &[Value],
+    ) -> bool {
         let lifecycles = self
             .sub_agent_lifecycles
             .lock()
             .await
-            .values()
-            .cloned()
+            .iter()
+            .filter(|((owner, _), _)| owner == agent)
+            .map(|(_, value)| value.clone())
             .collect::<Vec<_>>();
         let sub_agents = {
             let mut trackers = self.sub_agents.lock().await;
-            let tracker = trackers.entry(provider_session_id.to_string()).or_default();
+            let tracker = trackers
+                .entry((agent.to_string(), provider_session_id.to_string()))
+                .or_default();
             let values = tracker.apply(updates, &now_iso());
             replay_sub_agent_lifecycles(tracker, values, &lifecycles)
         };
-        self.update_by_provider_id(provider_session_id, |session| {
+        self.update_by_provider_id(agent, provider_session_id, |session| {
             if session.sub_agents == sub_agents {
                 return false;
             }
@@ -3596,6 +3716,7 @@ impl AiSessionController {
 
     async fn record_sub_agent_lifecycle(
         &self,
+        agent: &str,
         provider_session_id: &str,
         status: &str,
         message: Option<&str>,
@@ -3610,17 +3731,19 @@ impl AiSessionController {
         if let Some(message) = message.map(str::trim).filter(|value| !value.is_empty()) {
             update["message"] = json!(message);
         }
-        self.sub_agent_lifecycles
-            .lock()
-            .await
-            .insert(provider_session_id.to_string(), update.clone());
+        self.sub_agent_lifecycles.lock().await.insert(
+            (agent.to_string(), provider_session_id.to_string()),
+            update.clone(),
+        );
 
         let parent_updates = {
             let mut trackers = self.sub_agents.lock().await;
             trackers
                 .iter_mut()
-                .filter(|(_, tracker)| tracker.contains(provider_session_id))
-                .map(|(parent_session_id, tracker)| {
+                .filter(|((owner, _), tracker)| {
+                    owner == agent && tracker.contains(provider_session_id)
+                })
+                .map(|((_, parent_session_id), tracker)| {
                     let sub_agents = tracker.apply(&[update.clone()], &observed_at);
                     (parent_session_id.clone(), sub_agents)
                 })
@@ -3628,7 +3751,7 @@ impl AiSessionController {
         };
         let mut changed = false;
         for (parent_session_id, sub_agents) in parent_updates {
-            changed |= self.update_by_provider_id(&parent_session_id, |session| {
+            changed |= self.update_by_provider_id(agent, &parent_session_id, |session| {
                 if session.sub_agents == sub_agents {
                     return false;
                 }
@@ -3639,15 +3762,14 @@ impl AiSessionController {
         changed
     }
 
-    fn update_by_provider_id<F>(&self, provider_session_id: &str, mutate: F) -> bool
+    fn update_by_provider_id<F>(&self, agent: &str, provider_session_id: &str, mutate: F) -> bool
     where
         F: FnOnce(&mut AiSession) -> bool,
     {
-        let Some(session) =
-            self.runtime.list().into_iter().find(|session| {
-                session.provider_session_id.as_deref() == Some(provider_session_id)
-            })
-        else {
+        let Some(session) = self.runtime.list().into_iter().find(|session| {
+            session.agent == agent
+                && session.provider_session_id.as_deref() == Some(provider_session_id)
+        }) else {
             return false;
         };
         self.runtime
@@ -4019,6 +4141,28 @@ fn apply_lifecycle(session: &mut AiSession, status: &str) -> bool {
 // A lifecycle acknowledgement is authoritative at the controller boundary. The
 // later provider completion repeats that transition and must preserve the
 // committed turn's timestamp, response, source and content revision.
+pub fn invalidate_disconnected_provider_session(session: &mut AiSession) -> bool {
+    let active = matches!(session.status.as_str(), "running" | "waiting");
+    if active {
+        let turn_id = session.active_turn_id.clone();
+        complete_session_turn(
+            session,
+            turn_id.as_deref(),
+            turn_id.as_deref(),
+            "failed",
+            &now_iso(),
+            None,
+            "realtime",
+        );
+        session.error =
+            Some("The ACP Agent disconnected before confirming the prompt outcome.".into());
+    }
+    let actions = json!({ "send": false, "interrupt": false, "approval": false, "close": true, "openApp": false, "rename": false, "fork": false });
+    let changed = session.actions.as_ref() != Some(&actions);
+    session.actions = Some(actions);
+    active || changed
+}
+
 fn complete_session_turn(
     session: &mut AiSession,
     turn_id: Option<&str>,
@@ -4309,7 +4453,7 @@ mod tests {
     }
     use controlled_instance_protocol::{
         AiSessionCounters, AiSessionProviderActions, AiSessionProviderTimelineCapabilities,
-        AiSessionQueue,
+        AiSessionQueue, AiSessionTimelineItem,
     };
 
     fn test_session() -> AiSession {
@@ -4684,6 +4828,454 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn acp_adapter_resolves_only_the_current_sessions_approval_and_cancel() {
+        use crate::{AcpLaunch, AcpSessionProvider};
+        use controlled_instance_protocol::AiSessionTimelineItem;
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..")
+                .canonicalize()
+                .unwrap();
+            let fixture = cwd.join("test/fixtures/fake-acp-agent.mjs");
+            let directory = tempfile::tempdir().unwrap();
+            let fixture_mode = Arc::new(std::sync::Mutex::new(String::new()));
+            let launch_mode = fixture_mode.clone();
+            let timeline_store = crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline"));
+            let provider = AcpSessionProvider::new("commandcode", move |_input| {
+                Ok(AcpLaunch {
+                    executable: PathBuf::from("node"),
+                    args: vec![fixture.to_string_lossy().into_owned(), launch_mode.lock().unwrap().clone()],
+                    env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                    cleanup_dir: None,
+                    session_home: None,
+                })
+            }, timeline_store.clone(), true);
+            let created = provider.create_session(ProviderCreateInput {
+                cwd, runtime_workspace_roots: Vec::new(), permission_mode: None,
+                model_selection: None, reasoning_effort: None, story_agent_tools: None,
+            }).await.unwrap();
+            let mut session = test_session();
+            session.agent = "commandcode".into();
+            session.provider_session_id = Some(created.provider_session_id);
+            let mut events = provider.subscribe_events().unwrap();
+            let observe = |_| -> futures_util::future::BoxFuture<'_, Result<(), ProviderError>> {
+                Box::pin(async { Ok(()) })
+            };
+            session.cwd = Some(created.cwd.to_string_lossy().into_owned());
+            let mut previous_approval = None;
+            for mode in ["approval", "cancel", "tools", "exit-pending"] {
+                let action = provider.start_message(&session, ProviderMessage {
+                    message: mode.into(), attachments: Vec::new(), references: Vec::new(),
+                    permission_mode: None, message_id: None, user_message_attachments: Vec::new(),
+                    story_agent_tools: None,
+                }).await.unwrap();
+                assert!(events.try_recv().is_err());
+                provider.message_acknowledged(&session, &action, true);
+                assert!(matches!(events.recv().await.unwrap(), ProviderEvent::TimelineItem { item: AiSessionTimelineItem::UserMessage { .. }, .. }));
+                if mode == "tools" {
+                    loop {
+                        if let ProviderEvent::TurnCompleted { status, .. } = events.recv().await.unwrap() {
+                            assert_eq!(status.as_deref(), Some("completed"));
+                            break;
+                        }
+                    }
+                    let timeline = provider.turn_timeline(&session, action.turn_id.as_deref().unwrap()).await.unwrap();
+                    assert!(matches!(timeline.items.as_slice(), [
+                        AiSessionTimelineItem::UserMessage { .. },
+                        AiSessionTimelineItem::AiMessage { text: before, .. },
+                        AiSessionTimelineItem::Activity { output: Some(output), .. },
+                        AiSessionTimelineItem::AiMessage { text: after, .. },
+                    ] if before == "before" && output == "tool output" && after == "after"));
+                    continue;
+                }
+                {
+                    assert!(matches!(events.recv().await.unwrap(), ProviderEvent::AgentMessageDelta { delta, .. } if delta == "before approval"));
+                    assert!(matches!(events.recv().await.unwrap(), ProviderEvent::ApprovalRequested { .. }));
+                    let actions = provider.session_actions_for(&session, Some("waiting"));
+                    let approval_id = actions["approvalRequest"]["id"].as_str();
+                    assert_eq!(actions["approvalRequest"]["decisions"], json!(["allow"]));
+                    assert_eq!(provider.resolve_approval_with_request(&session, "allow", Some("stale"), &observe).await.unwrap_err().code, "AI_SESSION_APPROVAL_STALE");
+                    assert_eq!(provider.resolve_approval_with_request(&session, "deny", approval_id, &observe).await.unwrap_err().code, "AI_SESSION_APPROVAL_UNSUPPORTED");
+                    if mode == "approval" {
+                        previous_approval = approval_id.map(ToString::to_string);
+                        provider.resolve_approval_with_request(&session, "allow", approval_id, &observe).await.unwrap();
+                        assert!(matches!(events.recv().await.unwrap(), ProviderEvent::AgentMessageDelta { delta, .. } if delta == "approve-once"));
+                    } else if mode == "cancel" {
+                        let (first, second) = tokio::join!(provider.interrupt(&session), provider.interrupt(&session));
+                        first.unwrap();
+                        second.unwrap();
+                    }
+                    assert!(matches!(events.recv().await.unwrap(), ProviderEvent::TimelineItem { item: AiSessionTimelineItem::AiMessage { .. }, .. }));
+                    assert!(matches!(events.recv().await.unwrap(), ProviderEvent::AgentMessageCompleted { .. }));
+                }
+                let expected = match mode { "approval" => "completed", "cancel" => "interrupted", _ => "failed" };
+                let completion = tokio::time::timeout(std::time::Duration::from_secs(3), events.recv()).await.unwrap_or_else(|_| panic!("missing completion for {mode}")).unwrap();
+                assert!(matches!(completion, ProviderEvent::TurnCompleted { status, .. } if status.as_deref() == Some(expected)));
+                assert_eq!(provider.session_actions_for(&session, Some("idle"))["approval"], false);
+            }
+            provider.close().await;
+            while matches!(events.try_recv(), Ok(ProviderEvent::ProviderSessionLifecycle { .. })) {}
+            let retained = provider.timeline(&session).await.unwrap().items;
+            for mode in ["no-load", "failed-load"] {
+                *fixture_mode.lock().unwrap() = mode.into();
+                provider.resume_session(&session).await.unwrap_err();
+                assert_eq!(provider.timeline(&session).await.unwrap().items, retained);
+            }
+            fixture_mode.lock().unwrap().clear();
+            provider.resume_session(&session).await.unwrap();
+            assert_eq!(provider.timeline(&session).await.unwrap().items, retained);
+            assert!(events.try_recv().is_err());
+            provider.close().await;
+            assert!(matches!(events.recv().await.unwrap(), ProviderEvent::ProviderSessionLifecycle { .. }));
+            timeline_store.replace_items(session.provider_session_id.as_deref().unwrap(), vec![AiSessionTimelineItem::UserMessage {
+                id: "turn-known".into(), turn_id: "turn-known".into(), text: "known prompt".into(), attachments: None,
+            }]).unwrap();
+            *fixture_mode.lock().unwrap() = "replay-known".into();
+            provider.resume_session(&session).await.unwrap();
+            let items = provider.timeline(&session).await.unwrap().items;
+            assert!(matches!(items.as_slice(), [AiSessionTimelineItem::UserMessage { .. }, AiSessionTimelineItem::AiMessage { text, .. }] if text == "recovered reply"));
+            assert!(events.try_recv().is_err());
+            let action = provider.start_message(&session, ProviderMessage {
+                message: "approval".into(), attachments: Vec::new(), references: Vec::new(),
+                permission_mode: None, message_id: None, user_message_attachments: Vec::new(), story_agent_tools: None,
+            }).await.unwrap();
+            provider.message_acknowledged(&session, &action, true);
+            while !matches!(events.recv().await.unwrap(), ProviderEvent::ApprovalRequested { .. }) {}
+            assert_eq!(provider.resolve_approval_with_request(&session, "allow", previous_approval.as_deref(), &observe).await.unwrap_err().code, "AI_SESSION_APPROVAL_STALE");
+            let restored = provider.session_actions_for(&session, Some("waiting"));
+            provider.resolve_approval_with_request(&session, "allow", restored["approvalRequest"]["id"].as_str(), &observe).await.unwrap();
+            while !matches!(events.recv().await.unwrap(), ProviderEvent::TurnCompleted { .. }) {}
+            provider.close().await;
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn acp_adapter_projects_tool_calls_into_reusable_timeline_activities() {
+        use crate::{AcpLaunch, AcpSessionProvider};
+        use controlled_instance_protocol::{
+            AiSessionTimelineActivityStatus, AiSessionTimelineItem,
+        };
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..")
+                .canonicalize()
+                .unwrap();
+            let fixture = root.join("test/fixtures/fake-acp-agent.mjs");
+            let directory = tempfile::tempdir().unwrap();
+            let provider = AcpSessionProvider::new(
+                "gemini",
+                move |_input| {
+                    Ok(AcpLaunch {
+                        executable: PathBuf::from("node"),
+                        args: vec![fixture.to_string_lossy().into_owned(), "tool-kinds".into()],
+                        env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                        cleanup_dir: None,
+                        session_home: None,
+                    })
+                },
+                crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline")),
+                true,
+            );
+            let created = provider
+                .create_session(ProviderCreateInput {
+                    cwd: root,
+                    runtime_workspace_roots: Vec::new(),
+                    permission_mode: None,
+                    model_selection: None,
+                    reasoning_effort: None,
+                    story_agent_tools: None,
+                })
+                .await
+                .unwrap();
+            let mut session = test_session();
+            session.agent = "gemini".into();
+            session.provider_session_id = Some(created.provider_session_id);
+            session.cwd = Some(created.cwd.to_string_lossy().into_owned());
+            let mut events = provider.subscribe_events().unwrap();
+            let action = provider
+                .start_message(
+                    &session,
+                    ProviderMessage {
+                        message: "tool-kinds".into(),
+                        attachments: Vec::new(),
+                        references: Vec::new(),
+                        permission_mode: None,
+                        message_id: None,
+                        user_message_attachments: Vec::new(),
+                        story_agent_tools: None,
+                    },
+                )
+                .await
+                .unwrap();
+            provider.message_acknowledged(&session, &action, true);
+            let mut realtime = Vec::new();
+            loop {
+                match events.recv().await.unwrap() {
+                    ProviderEvent::TimelineItem { item, .. } => {
+                        if matches!(item, AiSessionTimelineItem::Activity { .. }) {
+                            realtime.push(item);
+                        }
+                    }
+                    ProviderEvent::TurnCompleted { status, .. } => {
+                        assert_eq!(status.as_deref(), Some("completed"));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let timeline = provider.timeline(&session).await.unwrap();
+            let activities = timeline
+                .items
+                .iter()
+                .filter(|item| matches!(item, AiSessionTimelineItem::Activity { .. }))
+                .collect::<Vec<_>>();
+            assert_eq!(activities.len(), 7);
+            let kinds = activities
+                .iter()
+                .map(|item| match item {
+                    AiSessionTimelineItem::Activity { activity_kind, .. } => activity_kind.as_str(),
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                kinds,
+                [
+                    "fileList",
+                    "fileRead",
+                    "fileChange",
+                    "fileSearch",
+                    "commandExecution",
+                    "webFetch",
+                    "dynamicToolCall",
+                ]
+            );
+            assert!(matches!(
+                activities[0],
+                AiSessionTimelineItem::Activity {
+                    activity_kind,
+                    title,
+                    status: Some(AiSessionTimelineActivityStatus::Completed),
+                    summary: Some(summary),
+                    output: Some(output),
+                    paths: Some(paths),
+                    ..
+                } if activity_kind == "fileList"
+                    && title == "List"
+                    && summary == "/root"
+                    && output == "- /root/notes.txt"
+                    && paths == &vec!["/root".to_string()]
+            ));
+            assert!(matches!(
+                activities[1],
+                AiSessionTimelineItem::Activity {
+                    activity_kind,
+                    title,
+                    status: Some(AiSessionTimelineActivityStatus::Completed),
+                    summary: Some(summary),
+                    output: Some(output),
+                    paths: Some(paths),
+                    ..
+                } if activity_kind == "fileRead"
+                    && title == "Read"
+                    && summary == "notes.txt"
+                    && output == "alpha"
+                    && paths == &vec!["/root/notes.txt".to_string()]
+            ));
+            assert!(matches!(
+                activities[2],
+                AiSessionTimelineItem::Activity {
+                    activity_kind,
+                    title,
+                    output: Some(output),
+                    paths: Some(paths),
+                    ..
+                } if activity_kind == "fileChange"
+                    && title == "File change"
+                    && paths == &vec!["/root/notes.txt".to_string()]
+                    && unified_change(output).contains("+after")
+                    && unified_change(output).contains("-before")
+            ));
+            assert!(matches!(
+                activities[3],
+                AiSessionTimelineItem::Activity {
+                    activity_kind,
+                    title,
+                    summary: Some(summary),
+                    paths: Some(paths),
+                    ..
+                } if activity_kind == "fileSearch"
+                    && title == "Search"
+                    && summary == "needle in /root"
+                    && paths == &vec!["/root".to_string()]
+            ));
+            assert!(matches!(
+                activities[4],
+                AiSessionTimelineItem::Activity {
+                    activity_kind,
+                    title,
+                    input: Some(input),
+                    output: Some(output),
+                    exit_code: Some(0),
+                    ..
+                } if activity_kind == "commandExecution"
+                    && title == "Command"
+                    && input == "printf hi"
+                    && output == "hi"
+            ));
+            assert!(matches!(
+                activities[5],
+                AiSessionTimelineItem::Activity {
+                    activity_kind,
+                    title,
+                    summary: Some(summary),
+                    output: Some(output),
+                    ..
+                } if activity_kind == "webFetch"
+                    && title == "Fetch URL"
+                    && summary == "https://example.com/docs"
+                    && output == "page"
+            ));
+            assert!(matches!(
+                activities[6],
+                AiSessionTimelineItem::Activity {
+                    activity_kind,
+                    title,
+                    input: Some(input),
+                    output: Some(output),
+                    ..
+                } if activity_kind == "dynamicToolCall"
+                    && title == "Custom tool"
+                    && input == "{\"value\":1}"
+                    && output == "{\"ok\":true}"
+            ));
+            assert!(realtime.iter().any(|item| matches!(
+                item,
+                AiSessionTimelineItem::Activity {
+                    activity_kind,
+                    title,
+                    output: Some(output),
+                    ..
+                } if activity_kind == "reasoning"
+                    && title == "Reasoning"
+                    && output == "reasoned"
+            )));
+            assert!(timeline.items.iter().all(|item| !matches!(
+                item,
+                AiSessionTimelineItem::Activity { activity_kind, .. }
+                    if activity_kind == "reasoning"
+            )));
+            assert!(matches!(
+                timeline.items.last(),
+                Some(AiSessionTimelineItem::AiMessage { text, .. }) if text == "after"
+            ));
+            provider.close().await;
+        })
+        .await
+        .unwrap();
+    }
+
+    fn unified_change(output: &str) -> String {
+        serde_json::from_str::<serde_json::Value>(output)
+            .ok()
+            .and_then(|value| value[0]["diff"].as_str().map(ToString::to_string))
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn acp_adapter_sends_attachments_and_preserves_user_message_metadata() {
+        use crate::{AcpLaunch, AcpSessionProvider};
+        use controlled_instance_protocol::{
+            AiSessionAttachmentContentState, AiSessionAttachmentKind,
+            AiSessionConversationAttachment, AiSessionMessageAttachmentMeta,
+            AiSessionMessageAttachmentSourceType, AiSessionTimelineItem,
+        };
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..")
+                .canonicalize()
+                .unwrap();
+            let fixture = cwd.join("test/fixtures/fake-acp-agent.mjs");
+            let directory = tempfile::tempdir().unwrap();
+            let timeline_store = crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline"));
+            let provider = AcpSessionProvider::new("commandcode", move |_input| {
+                Ok(AcpLaunch {
+                    executable: PathBuf::from("node"),
+                    args: vec![fixture.to_string_lossy().into_owned(), "image".into()],
+                    env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                    cleanup_dir: None,
+                    session_home: None,
+                })
+            }, timeline_store.clone(), true);
+            let created = provider.create_session(ProviderCreateInput {
+                cwd: cwd.clone(), runtime_workspace_roots: Vec::new(), permission_mode: None,
+                model_selection: None, reasoning_effort: None, story_agent_tools: None,
+            }).await.unwrap();
+            let mut session = test_session();
+            session.agent = "commandcode".into();
+            session.provider_session_id = Some(created.provider_session_id);
+            session.cwd = Some(created.cwd.to_string_lossy().into_owned());
+            let files = tempfile::tempdir().unwrap();
+            let file_path = files.path().join("notes.txt");
+            let image_path = files.path().join("pixel.png");
+            std::fs::write(&file_path, b"notes").unwrap();
+            std::fs::write(&image_path, [137, 80, 78, 71]).unwrap();
+            let user_attachments = vec![
+                AiSessionConversationAttachment {
+                    id: "att-file".into(), kind: AiSessionAttachmentKind::File,
+                    name: "notes.txt".into(), mime: "text/plain".into(), size: 5,
+                    content_state: AiSessionAttachmentContentState::Available,
+                },
+                AiSessionConversationAttachment {
+                    id: "att-image".into(), kind: AiSessionAttachmentKind::Image,
+                    name: "pixel.png".into(), mime: "image/png".into(), size: 4,
+                    content_state: AiSessionAttachmentContentState::Available,
+                },
+            ];
+            let mut events = provider.subscribe_events().unwrap();
+            let action = provider.start_message(&session, ProviderMessage {
+                message: "attachments".into(),
+                attachments: vec![
+                    ProviderAttachment {
+                        meta: AiSessionMessageAttachmentMeta {
+                            id: "att-file".into(), kind: AiSessionAttachmentKind::File,
+                            name: "notes.txt".into(), mime: "text/plain".into(), size: 5,
+                            source_type: AiSessionMessageAttachmentSourceType::RuntimePath,
+                        },
+                        path: file_path,
+                        source: ProviderAttachmentSource::RuntimePath,
+                        runtime_path: None,
+                    },
+                    ProviderAttachment {
+                        meta: AiSessionMessageAttachmentMeta {
+                            id: "att-image".into(), kind: AiSessionAttachmentKind::Image,
+                            name: "pixel.png".into(), mime: "image/png".into(), size: 4,
+                            source_type: AiSessionMessageAttachmentSourceType::RuntimePath,
+                        },
+                        path: image_path,
+                        source: ProviderAttachmentSource::RuntimePath,
+                        runtime_path: None,
+                    },
+                ],
+                references: Vec::new(), permission_mode: None, message_id: None,
+                user_message_attachments: user_attachments.clone(), story_agent_tools: None,
+            }).await.unwrap();
+            provider.message_acknowledged(&session, &action, true);
+            loop {
+                if matches!(events.recv().await.unwrap(), ProviderEvent::TurnCompleted { .. }) {
+                    break;
+                }
+            }
+            let items = provider.turn_timeline(&session, action.turn_id.as_deref().unwrap()).await.unwrap().items;
+            assert!(matches!(&items[0], AiSessionTimelineItem::UserMessage { attachments: Some(values), .. } if *values == user_attachments));
+            assert!(matches!(&items[1], AiSessionTimelineItem::AiMessage { text, .. } if text == "text,resource_link,image:image/png"));
+            provider.close().await;
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn interrupt_preserving_providers_wait_for_the_authoritative_completion_event() {
         let (runtime, controller, _directory) = test_controller();
         let mut session = test_session();
@@ -4838,15 +5430,18 @@ mod tests {
         let (runtime, controller, _directory) = test_controller();
         assert!(
             controller
-                .apply_provider_event(ProviderEvent::SubAgentSnapshot {
-                    provider_session_id: "thread-1".to_string(),
-                    sub_agents: vec![json!({
-                        "threadId": "sub-1",
-                        "path": "researcher",
-                        "status": "running",
-                        "updatedAt": "2026-11-02T00:00:00.000Z"
-                    })],
-                })
+                .apply_scoped_provider_event(
+                    "codex",
+                    ProviderEvent::SubAgentSnapshot {
+                        provider_session_id: "thread-1".to_string(),
+                        sub_agents: vec![json!({
+                            "threadId": "sub-1",
+                            "path": "researcher",
+                            "status": "running",
+                            "updatedAt": "2026-11-02T00:00:00.000Z"
+                        })],
+                    }
+                )
                 .await
         );
         let session = runtime.get("ses_0000000000001").expect("session");
@@ -4854,41 +5449,50 @@ mod tests {
         assert_eq!(session.sub_agents[0]["status"], "running");
 
         controller
-            .apply_provider_event(ProviderEvent::ThreadSnapshot {
-                provider_session_id: "sub-1".to_string(),
-                cwd: None,
-                name: None,
-                model: None,
-                model_provider: None,
-                model_selection: None,
-                reasoning_effort: None,
-                status: "failed".to_string(),
-                phase: None,
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ThreadSnapshot {
+                    provider_session_id: "sub-1".to_string(),
+                    cwd: None,
+                    name: None,
+                    model: None,
+                    model_provider: None,
+                    model_selection: None,
+                    reasoning_effort: None,
+                    status: "failed".to_string(),
+                    phase: None,
+                },
+            )
             .await;
         let session = runtime.get("ses_0000000000001").expect("session");
         assert_eq!(session.sub_agents[0]["status"], "errored");
 
         controller
-            .apply_provider_event(ProviderEvent::SubAgentActivity {
-                provider_session_id: "thread-1".to_string(),
-                updates: vec![json!({
-                    "threadId": "sub-1",
-                    "status": "running",
-                    "path": "researcher",
-                    "activity": "interacted",
-                    "observation": "activity"
-                })],
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::SubAgentActivity {
+                    provider_session_id: "thread-1".to_string(),
+                    updates: vec![json!({
+                        "threadId": "sub-1",
+                        "status": "running",
+                        "path": "researcher",
+                        "activity": "interacted",
+                        "observation": "activity"
+                    })],
+                },
+            )
             .await;
         let session = runtime.get("ses_0000000000001").expect("session");
         assert_eq!(session.sub_agents[0]["status"], "errored");
         assert_eq!(session.sub_agents[0]["activity"], "interacted");
 
         controller
-            .apply_provider_event(ProviderEvent::ThreadClosed {
-                provider_session_id: "sub-1".to_string(),
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ThreadClosed {
+                    provider_session_id: "sub-1".to_string(),
+                },
+            )
             .await;
         let session = runtime.get("ses_0000000000001").expect("session");
         assert_eq!(session.sub_agents[0]["status"], "shutdown");
@@ -5102,12 +5706,15 @@ mod tests {
         );
 
         let changed = controller
-            .apply_provider_event(ProviderEvent::AgentMessageDelta {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "item-1".to_string(),
-                delta: "partial".to_string(),
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::AgentMessageDelta {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "item-1".to_string(),
+                    delta: "partial".to_string(),
+                },
+            )
             .await;
         assert!(!changed);
         let session = runtime.get("ses_0000000000001").expect("session");
@@ -5115,13 +5722,16 @@ mod tests {
         assert_eq!(session.last_message_item_id, None);
 
         let changed = controller
-            .apply_provider_event(ProviderEvent::AgentMessageCompleted {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "item-1".to_string(),
-                text: "partial complete".to_string(),
-                observed_at: None,
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::AgentMessageCompleted {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "item-1".to_string(),
+                    text: "partial complete".to_string(),
+                    observed_at: None,
+                },
+            )
             .await;
         assert!(changed);
         let session = runtime.get("ses_0000000000001").expect("session");
@@ -5147,17 +5757,20 @@ mod tests {
         );
 
         let changed = controller
-            .apply_provider_event(ProviderEvent::ThreadSnapshot {
-                provider_session_id: "thread-1".to_string(),
-                cwd: None,
-                name: Some("Renamed in Codex".to_string()),
-                model: None,
-                model_provider: None,
-                model_selection: None,
-                reasoning_effort: Some("high".to_string()),
-                status: "idle".to_string(),
-                phase: Some("unknown".to_string()),
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ThreadSnapshot {
+                    provider_session_id: "thread-1".to_string(),
+                    cwd: None,
+                    name: Some("Renamed in Codex".to_string()),
+                    model: None,
+                    model_provider: None,
+                    model_selection: None,
+                    reasoning_effort: Some("high".to_string()),
+                    status: "idle".to_string(),
+                    phase: Some("unknown".to_string()),
+                },
+            )
             .await;
 
         assert!(changed);
@@ -5187,8 +5800,16 @@ mod tests {
             parent_provider_session_id: Some("opencode-parent".to_string()),
         };
 
-        assert!(controller.apply_provider_event(event()).await);
-        assert!(!controller.apply_provider_event(event()).await);
+        assert!(
+            controller
+                .apply_scoped_provider_event("opencode", event())
+                .await
+        );
+        assert!(
+            !controller
+                .apply_scoped_provider_event("opencode", event())
+                .await
+        );
 
         let sessions = runtime
             .list()
@@ -5222,6 +5843,60 @@ mod tests {
             }),
             Some("opencode-parent")
         );
+    }
+
+    #[tokio::test]
+    async fn a_provider_approval_never_changes_an_equal_id_owned_by_another_agent() {
+        let (runtime, controller, _directory) = test_controller();
+        for agent in ["gemini", "commandcode", "dsh"] {
+            assert!(
+                controller
+                    .apply_scoped_provider_event(
+                        agent,
+                        ProviderEvent::ThreadDiscovered {
+                            provider_session_id: "shared-acp-session".to_string(),
+                            cwd: "/workspace".to_string(),
+                            name: None,
+                            model_selection: None,
+                            reasoning_effort: None,
+                            status: "running".to_string(),
+                            phase: None,
+                            active_turn_id: None,
+                            parent_provider_session_id: None,
+                        }
+                    )
+                    .await
+            );
+        }
+        assert!(
+            controller
+                .apply_scoped_provider_event(
+                    "commandcode",
+                    ProviderEvent::ApprovalRequested {
+                        provider_session_id: "shared-acp-session".to_string(),
+                        turn_id: None,
+                        summary: "Review operation".to_string(),
+                        kind: "permission".to_string(),
+                        item_id: None,
+                    }
+                )
+                .await
+        );
+        let sessions = runtime.list();
+        for agent in ["gemini", "commandcode", "dsh"] {
+            let session = sessions
+                .iter()
+                .find(|session| session.agent == agent)
+                .unwrap();
+            assert_eq!(
+                session.status,
+                if agent == "commandcode" {
+                    "waiting"
+                } else {
+                    "running"
+                }
+            );
+        }
     }
 
     struct TestObservedModelResolver;
@@ -5272,17 +5947,20 @@ mod tests {
         controller.set_model_selection_resolver(Arc::new(TestObservedModelResolver));
 
         let changed = controller
-            .apply_provider_event(ProviderEvent::ThreadSnapshot {
-                provider_session_id: "thread-1".to_string(),
-                cwd: None,
-                name: None,
-                model: Some("upstream-primary".to_string()),
-                model_provider: Some("task-handoff-model-primary".to_string()),
-                model_selection: None,
-                reasoning_effort: None,
-                status: "idle".to_string(),
-                phase: None,
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ThreadSnapshot {
+                    provider_session_id: "thread-1".to_string(),
+                    cwd: None,
+                    name: None,
+                    model: Some("upstream-primary".to_string()),
+                    model_provider: Some("task-handoff-model-primary".to_string()),
+                    model_selection: None,
+                    reasoning_effort: None,
+                    status: "idle".to_string(),
+                    phase: None,
+                },
+            )
             .await;
 
         assert!(changed);
@@ -5320,13 +5998,16 @@ mod tests {
             .expect("seed response");
 
         controller
-            .apply_provider_event(ProviderEvent::TurnCompleted {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: Some("turn-1".to_string()),
-                status: Some("completed".to_string()),
-                error: None,
-                completed_at: Some("2026-11-02T00:01:00.000Z".to_string()),
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::TurnCompleted {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    status: Some("completed".to_string()),
+                    error: None,
+                    completed_at: Some("2026-11-02T00:01:00.000Z".to_string()),
+                },
+            )
             .await;
         let completed = runtime.get("ses_0000000000001").expect("completed session");
         assert_eq!(completed.summary, None);
@@ -5341,13 +6022,16 @@ mod tests {
             })
             .expect("seed duplicate completion");
         controller
-            .apply_provider_event(ProviderEvent::TurnCompleted {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: Some("turn-1".to_string()),
-                status: Some("completed".to_string()),
-                error: None,
-                completed_at: Some("2026-11-02T00:02:00.000Z".to_string()),
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::TurnCompleted {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    status: Some("completed".to_string()),
+                    error: None,
+                    completed_at: Some("2026-11-02T00:02:00.000Z".to_string()),
+                },
+            )
             .await;
         let duplicate = runtime
             .get("ses_0000000000001")
@@ -5371,13 +6055,16 @@ mod tests {
         });
         for item in [first.clone(), second.clone(), first.clone()] {
             controller
-                .apply_provider_event(ProviderEvent::ToolActivity {
-                    provider_session_id: "thread-1".to_string(),
-                    turn_id: Some("turn-1".to_string()),
-                    item,
-                    running: true,
-                    observed_at: None,
-                })
+                .apply_scoped_provider_event(
+                    "codex",
+                    ProviderEvent::ToolActivity {
+                        provider_session_id: "thread-1".to_string(),
+                        turn_id: Some("turn-1".to_string()),
+                        item,
+                        running: true,
+                        observed_at: None,
+                    },
+                )
                 .await;
         }
         let running = runtime.get("ses_0000000000001").expect("running session");
@@ -5393,13 +6080,16 @@ mod tests {
         assert_eq!(running.counters.tool_calls, 0);
 
         controller
-            .apply_provider_event(ProviderEvent::ToolActivity {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: Some("turn-1".to_string()),
-                item: first,
-                running: false,
-                observed_at: None,
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ToolActivity {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    item: first,
+                    running: false,
+                    observed_at: None,
+                },
+            )
             .await;
         let after_first = runtime.get("ses_0000000000001").expect("first completed");
         assert_eq!(
@@ -5414,13 +6104,16 @@ mod tests {
         assert_eq!(after_first.counters.tool_calls, 0);
 
         controller
-            .apply_provider_event(ProviderEvent::ToolActivity {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: Some("turn-1".to_string()),
-                item: second,
-                running: false,
-                observed_at: None,
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ToolActivity {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    item: second,
+                    running: false,
+                    observed_at: None,
+                },
+            )
             .await;
         let after_second = runtime.get("ses_0000000000001").expect("second completed");
         assert!(after_second.current_tool.is_none());
@@ -5431,48 +6124,60 @@ mod tests {
     async fn agent_message_resets_and_thread_close_clears_tool_tracking() {
         let (runtime, controller, _directory) = test_controller();
         controller
-            .apply_provider_event(ProviderEvent::ToolActivity {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: Some("turn-1".to_string()),
-                item: json!({
-                    "id": "tool-a",
-                    "kind": "commandExecution",
-                    "name": "Command A"
-                }),
-                running: true,
-                observed_at: None,
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ToolActivity {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    item: json!({
+                        "id": "tool-a",
+                        "kind": "commandExecution",
+                        "name": "Command A"
+                    }),
+                    running: true,
+                    observed_at: None,
+                },
+            )
             .await;
         controller
-            .apply_provider_event(ProviderEvent::AgentMessageCompleted {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "message-1".to_string(),
-                text: "Done".to_string(),
-                observed_at: None,
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::AgentMessageCompleted {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "message-1".to_string(),
+                    text: "Done".to_string(),
+                    observed_at: None,
+                },
+            )
             .await;
         let responded = runtime.get("ses_0000000000001").expect("responded session");
         assert!(responded.current_tool.is_none());
         assert_eq!(responded.tool_calls_since_last_message, 0);
 
         controller
-            .apply_provider_event(ProviderEvent::ToolActivity {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: Some("turn-1".to_string()),
-                item: json!({
-                    "id": "tool-b",
-                    "kind": "commandExecution",
-                    "name": "Command B"
-                }),
-                running: true,
-                observed_at: None,
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ToolActivity {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    item: json!({
+                        "id": "tool-b",
+                        "kind": "commandExecution",
+                        "name": "Command B"
+                    }),
+                    running: true,
+                    observed_at: None,
+                },
+            )
             .await;
         controller
-            .apply_provider_event(ProviderEvent::ThreadClosed {
-                provider_session_id: "thread-1".to_string(),
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ThreadClosed {
+                    provider_session_id: "thread-1".to_string(),
+                },
+            )
             .await;
         let closed = runtime.get("ses_0000000000001").expect("closed session");
         assert_eq!(closed.status, "idle");
@@ -5484,10 +6189,13 @@ mod tests {
     async fn session_error_and_context_compaction_match_realtime_semantics() {
         let (runtime, controller, _directory) = test_controller();
         controller
-            .apply_provider_event(ProviderEvent::SessionError {
-                provider_session_id: "thread-1".to_string(),
-                error: "Realtime connection failed".to_string(),
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::SessionError {
+                    provider_session_id: "thread-1".to_string(),
+                    error: "Realtime connection failed".to_string(),
+                },
+            )
             .await;
         let failed = runtime.get("ses_0000000000001").expect("session error");
         assert_eq!(failed.status, "running");
@@ -5495,13 +6203,16 @@ mod tests {
         assert_eq!(failed.error.as_deref(), Some("Realtime connection failed"));
 
         controller
-            .apply_provider_event(ProviderEvent::ContextCompaction {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "context_compaction:turn-1".to_string(),
-                status: "running".to_string(),
-                observed_at: Some("2026-11-02T00:01:00.000Z".to_string()),
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ContextCompaction {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "context_compaction:turn-1".to_string(),
+                    status: "running".to_string(),
+                    observed_at: Some("2026-11-02T00:01:00.000Z".to_string()),
+                },
+            )
             .await;
         let compacting = runtime.get("ses_0000000000001").expect("compacting turn");
         let compaction = compacting
@@ -5530,13 +6241,16 @@ mod tests {
         );
 
         controller
-            .apply_provider_event(ProviderEvent::ContextCompaction {
-                provider_session_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "context_compaction:turn-1".to_string(),
-                status: "completed".to_string(),
-                observed_at: Some("2026-11-02T00:02:00.000Z".to_string()),
-            })
+            .apply_scoped_provider_event(
+                "codex",
+                ProviderEvent::ContextCompaction {
+                    provider_session_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "context_compaction:turn-1".to_string(),
+                    status: "completed".to_string(),
+                    observed_at: Some("2026-11-02T00:02:00.000Z".to_string()),
+                },
+            )
             .await;
         let compacted = runtime.get("ses_0000000000001").expect("compacted turn");
         let compactions = compacted
@@ -5563,5 +6277,554 @@ mod tests {
                 .and_then(Value::as_str),
             Some("Context compacted")
         );
+    }
+
+    async fn run_acp_prompt(
+        provider: &crate::AcpSessionProvider,
+        session: &AiSession,
+        message: &str,
+    ) -> Vec<AiSessionTimelineItem> {
+        run_acp_prompt_with_permission(provider, session, message, None).await
+    }
+
+    async fn run_acp_prompt_with_permission(
+        provider: &crate::AcpSessionProvider,
+        session: &AiSession,
+        message: &str,
+        permission_mode: Option<AiSessionPermissionMode>,
+    ) -> Vec<AiSessionTimelineItem> {
+        let mut events = provider.subscribe_events().unwrap();
+        let action = provider
+            .start_message(
+                session,
+                ProviderMessage {
+                    message: message.into(),
+                    attachments: Vec::new(),
+                    references: Vec::new(),
+                    permission_mode,
+                    message_id: None,
+                    user_message_attachments: Vec::new(),
+                    story_agent_tools: None,
+                },
+            )
+            .await
+            .unwrap();
+        provider.message_acknowledged(session, &action, true);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let ProviderEvent::TurnCompleted { status, .. } = events.recv().await.unwrap() {
+                    assert_eq!(status.as_deref(), Some("completed"));
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        provider.timeline(session).await.unwrap().items
+    }
+
+    #[tokio::test]
+    async fn acp_model_selection_applies_stable_legacy_and_namespaced_options() {
+        use crate::{AcpLaunch, AcpSessionProvider};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        let fixture = root.join("test/fixtures/fake-acp-agent.mjs");
+        for (agent, mode, first, second) in [
+            (
+                "commandcode",
+                "commandcode",
+                "task-handoff-demo/model-b",
+                "task-handoff-demo/model-a",
+            ),
+            ("gemini", "legacy-models", "model-b", "model-a"),
+            (
+                "dsh",
+                "dsh-json",
+                "[\"task-handoff-demo\",\"model-b\"]",
+                "[\"task-handoff-demo\",\"model-a\"]",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let timeline_store =
+                crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline"));
+            let fixture = fixture.clone();
+            let mode = mode.to_string();
+            let provider = AcpSessionProvider::new(
+                agent,
+                move |_input| {
+                    Ok(AcpLaunch {
+                        executable: PathBuf::from("node"),
+                        args: vec![fixture.to_string_lossy().into_owned(), mode.clone()],
+                        env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                        cleanup_dir: None,
+                        session_home: None,
+                    })
+                },
+                timeline_store,
+                true,
+            );
+            let selection = |name: &str| AiSessionModelSelection {
+                model_entity_id: "demo".into(),
+                model_name: format!("Model {name}"),
+                model_upstream_name: Some(name.into()),
+            };
+            let created = provider
+                .create_session(ProviderCreateInput {
+                    cwd: root.clone(),
+                    runtime_workspace_roots: Vec::new(),
+                    permission_mode: None,
+                    model_selection: Some(selection("model-b")),
+                    reasoning_effort: None,
+                    story_agent_tools: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                created
+                    .model_selection
+                    .unwrap()
+                    .model_upstream_name
+                    .as_deref(),
+                Some("model-b")
+            );
+            let mut session = test_session();
+            session.agent = agent.into();
+            session.provider_session_id = Some(created.provider_session_id);
+            session.cwd = Some(created.cwd.to_string_lossy().into_owned());
+            session.status = "idle".into();
+            let items = run_acp_prompt(&provider, &session, "selected-model").await;
+            assert!(items.iter().any(|item| matches!(
+                item,
+                AiSessionTimelineItem::AiMessage { text, .. } if text == first
+            )));
+            provider
+                .update_model_selection(&session, &selection("model-a"))
+                .await
+                .unwrap();
+            let items = run_acp_prompt(&provider, &session, "selected-model").await;
+            assert!(items.iter().any(|item| matches!(
+                item,
+                AiSessionTimelineItem::AiMessage { text, .. } if text == second
+            )));
+            provider.close().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn acp_gemini_selects_configured_models_without_cross_entity_switching() {
+        use crate::{AcpLaunch, AcpSessionProvider};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        let fixture = root.join("test/fixtures/fake-acp-agent.mjs");
+        let directory = tempfile::tempdir().unwrap();
+        let timeline_store =
+            crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline"));
+        let provider = AcpSessionProvider::new(
+            "gemini",
+            move |_input| {
+                Ok(AcpLaunch {
+                    executable: PathBuf::from("node"),
+                    args: vec![
+                        fixture.to_string_lossy().into_owned(),
+                        "legacy-unlisted-model".into(),
+                    ],
+                    env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                    cleanup_dir: None,
+                    session_home: None,
+                })
+            },
+            timeline_store,
+            true,
+        );
+        let selection = |entity: &str, name: &str| AiSessionModelSelection {
+            model_entity_id: entity.into(),
+            model_name: format!("Model {name}"),
+            model_upstream_name: Some(name.into()),
+        };
+        let created = provider
+            .create_session(ProviderCreateInput {
+                cwd: root,
+                runtime_workspace_roots: Vec::new(),
+                permission_mode: None,
+                model_selection: Some(selection("demo", "model-a")),
+                reasoning_effort: None,
+                story_agent_tools: None,
+            })
+            .await
+            .unwrap();
+        let mut session = test_session();
+        session.agent = "gemini".into();
+        session.provider_session_id = Some(created.provider_session_id);
+        session.cwd = Some(created.cwd.to_string_lossy().into_owned());
+        session.status = "idle".into();
+        let items = run_acp_prompt(&provider, &session, "selected-model").await;
+        assert!(items.iter().any(|item| matches!(
+            item,
+            AiSessionTimelineItem::AiMessage { text, .. } if text == "model-a"
+        )));
+
+        let error = provider
+            .update_model_selection(&session, &selection("other", "model-b"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "AI_SESSION_MODEL_SELECTION_UNSUPPORTED");
+        provider
+            .update_model_selection(&session, &selection("demo", "model-b"))
+            .await
+            .unwrap();
+        let items = run_acp_prompt(&provider, &session, "selected-model").await;
+        assert!(items.iter().any(|item| matches!(
+            item,
+            AiSessionTimelineItem::AiMessage { text, .. } if text == "model-b"
+        )));
+        provider.close().await;
+    }
+
+    #[tokio::test]
+    async fn acp_reasoning_effort_switches_thought_level_option() {
+        use crate::{AcpLaunch, AcpSessionProvider};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        let fixture = root.join("test/fixtures/fake-acp-agent.mjs");
+        let directory = tempfile::tempdir().unwrap();
+        let timeline_store =
+            crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline"));
+        let provider = AcpSessionProvider::new(
+            "commandcode",
+            move |_input| {
+                Ok(AcpLaunch {
+                    executable: PathBuf::from("node"),
+                    args: vec![fixture.to_string_lossy().into_owned(), "commandcode".into()],
+                    env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                    cleanup_dir: None,
+                    session_home: None,
+                })
+            },
+            timeline_store,
+            true,
+        );
+        let created = provider
+            .create_session(ProviderCreateInput {
+                cwd: root,
+                runtime_workspace_roots: Vec::new(),
+                permission_mode: None,
+                model_selection: Some(AiSessionModelSelection {
+                    model_entity_id: "demo".into(),
+                    model_name: "Model A".into(),
+                    model_upstream_name: Some("model-a".into()),
+                }),
+                reasoning_effort: Some("high".into()),
+                story_agent_tools: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.reasoning_effort.as_deref(), Some("high"));
+        let mut session = test_session();
+        session.agent = "commandcode".into();
+        session.provider_session_id = Some(created.provider_session_id);
+        session.cwd = Some(created.cwd.to_string_lossy().into_owned());
+        session.status = "idle".into();
+        let items = run_acp_prompt(&provider, &session, "selected-effort").await;
+        assert!(items.iter().any(|item| matches!(
+            item,
+            AiSessionTimelineItem::AiMessage { text, .. } if text == "high"
+        )));
+        provider
+            .update_reasoning_effort(&session, "low")
+            .await
+            .unwrap();
+        let items = run_acp_prompt(&provider, &session, "selected-effort").await;
+        assert!(items.iter().any(|item| matches!(
+            item,
+            AiSessionTimelineItem::AiMessage { text, .. } if text == "low"
+        )));
+        provider.close().await;
+    }
+
+    #[tokio::test]
+    async fn acp_keeps_empty_provider_default_reasoning_after_model_selection() {
+        use crate::{AcpLaunch, AcpSessionProvider};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        let fixture = root.join("test/fixtures/fake-acp-agent.mjs");
+        let directory = tempfile::tempdir().unwrap();
+        let timeline_store =
+            crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline"));
+        let provider = AcpSessionProvider::new(
+            "dsh",
+            move |_input| {
+                Ok(AcpLaunch {
+                    executable: PathBuf::from("node"),
+                    args: vec![
+                        fixture.to_string_lossy().into_owned(),
+                        "dsh-empty-effort-current".into(),
+                    ],
+                    env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                    cleanup_dir: None,
+                    session_home: None,
+                })
+            },
+            timeline_store,
+            true,
+        );
+        let created = provider
+            .create_session(ProviderCreateInput {
+                cwd: root,
+                runtime_workspace_roots: Vec::new(),
+                permission_mode: None,
+                model_selection: Some(AiSessionModelSelection {
+                    model_entity_id: "demo".into(),
+                    model_name: "Model B".into(),
+                    model_upstream_name: Some("model-b".into()),
+                }),
+                reasoning_effort: Some("high".into()),
+                story_agent_tools: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.reasoning_effort.as_deref(), Some("high"));
+        let mut session = test_session();
+        session.agent = "dsh".into();
+        session.provider_session_id = Some(created.provider_session_id);
+        session.cwd = Some(created.cwd.to_string_lossy().into_owned());
+        session.status = "idle".into();
+        let items = run_acp_prompt(&provider, &session, "selected-effort").await;
+        assert!(items.iter().any(|item| matches!(
+            item,
+            AiSessionTimelineItem::AiMessage { text, .. } if text == "high"
+        )));
+        provider.close().await;
+    }
+
+    #[tokio::test]
+    async fn acp_permission_modes_follow_negotiated_agent_modes() {
+        use crate::{AcpLaunch, AcpSessionProvider};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        let fixture = root.join("test/fixtures/fake-acp-agent.mjs");
+        for (agent, fixture_mode, initial, initial_mode, next, next_mode) in [
+            (
+                "gemini",
+                "gemini-modes",
+                AiSessionPermissionMode::AutoReview,
+                "autoEdit",
+                AiSessionPermissionMode::FullAccess,
+                "yolo",
+            ),
+            (
+                "commandcode",
+                "commandcode-modes",
+                AiSessionPermissionMode::FullAccess,
+                "bypass",
+                AiSessionPermissionMode::AutoReview,
+                "auto-accept",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let timeline_store =
+                crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline"));
+            let fixture = fixture.clone();
+            let fixture_mode = fixture_mode.to_string();
+            let provider = AcpSessionProvider::new(
+                agent,
+                move |_input| {
+                    Ok(AcpLaunch {
+                        executable: PathBuf::from("node"),
+                        args: vec![fixture.to_string_lossy().into_owned(), fixture_mode.clone()],
+                        env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                        cleanup_dir: None,
+                        session_home: None,
+                    })
+                },
+                timeline_store,
+                true,
+            );
+            assert_eq!(
+                provider.capability().permission_modes,
+                vec![
+                    "ask".to_string(),
+                    "auto-review".to_string(),
+                    "full-access".to_string()
+                ]
+            );
+            let created = provider
+                .create_session(ProviderCreateInput {
+                    cwd: root.clone(),
+                    runtime_workspace_roots: Vec::new(),
+                    permission_mode: Some(initial),
+                    model_selection: None,
+                    reasoning_effort: None,
+                    story_agent_tools: None,
+                })
+                .await
+                .unwrap();
+            let mut session = test_session();
+            session.agent = agent.into();
+            session.provider_session_id = Some(created.provider_session_id);
+            session.cwd = Some(created.cwd.to_string_lossy().into_owned());
+            session.status = "idle".into();
+            let items = run_acp_prompt(&provider, &session, "selected-mode").await;
+            assert!(items.iter().any(|item| matches!(
+                item,
+                AiSessionTimelineItem::AiMessage { text, .. } if text == initial_mode
+            )));
+            let items =
+                run_acp_prompt_with_permission(&provider, &session, "selected-mode", Some(next))
+                    .await;
+            assert!(items.iter().any(|item| matches!(
+                item,
+                AiSessionTimelineItem::AiMessage { text, .. } if text == next_mode
+            )));
+            let items = run_acp_prompt_with_permission(
+                &provider,
+                &session,
+                "selected-mode",
+                Some(AiSessionPermissionMode::Ask),
+            )
+            .await;
+            assert!(items.iter().any(|item| matches!(
+                item,
+                AiSessionTimelineItem::AiMessage { text, .. } if text == "default"
+            )));
+            provider.close().await;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let timeline_store =
+            crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline"));
+        let dsh = AcpSessionProvider::new(
+            "dsh",
+            move |_input| {
+                Ok(AcpLaunch {
+                    executable: PathBuf::from("node"),
+                    args: vec![fixture.to_string_lossy().into_owned(), "dsh-json".into()],
+                    env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                    cleanup_dir: None,
+                    session_home: None,
+                })
+            },
+            timeline_store,
+            true,
+        );
+        assert!(dsh.capability().permission_modes.is_empty());
+        let error = dsh
+            .create_session(ProviderCreateInput {
+                cwd: root.clone(),
+                runtime_workspace_roots: Vec::new(),
+                permission_mode: Some(AiSessionPermissionMode::Ask),
+                model_selection: None,
+                reasoning_effort: None,
+                story_agent_tools: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "AI_SESSION_PERMISSION_MODE_UNAVAILABLE");
+        dsh.close().await;
+    }
+
+    #[tokio::test]
+    async fn acp_rejects_setting_changes_during_an_active_turn() {
+        use crate::{AcpLaunch, AcpSessionProvider};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        let fixture = root.join("test/fixtures/fake-acp-agent.mjs");
+        let directory = tempfile::tempdir().unwrap();
+        let timeline_store =
+            crate::AiSessionTimelineStore::from_directory(directory.path().join("timeline"));
+        let provider = AcpSessionProvider::new(
+            "commandcode",
+            move |_input| {
+                Ok(AcpLaunch {
+                    executable: PathBuf::from("node"),
+                    args: vec![fixture.to_string_lossy().into_owned(), "commandcode".into()],
+                    env: BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]),
+                    cleanup_dir: None,
+                    session_home: None,
+                })
+            },
+            timeline_store,
+            true,
+        );
+        let created = provider
+            .create_session(ProviderCreateInput {
+                cwd: root,
+                runtime_workspace_roots: Vec::new(),
+                permission_mode: None,
+                model_selection: Some(AiSessionModelSelection {
+                    model_entity_id: "demo".into(),
+                    model_name: "Model A".into(),
+                    model_upstream_name: Some("model-a".into()),
+                }),
+                reasoning_effort: None,
+                story_agent_tools: None,
+            })
+            .await
+            .unwrap();
+        let mut session = test_session();
+        session.agent = "commandcode".into();
+        session.provider_session_id = Some(created.provider_session_id);
+        session.cwd = Some(created.cwd.to_string_lossy().into_owned());
+        session.status = "idle".into();
+        let mut events = provider.subscribe_events().unwrap();
+        let action = provider
+            .start_message(
+                &session,
+                ProviderMessage {
+                    message: "approval".into(),
+                    attachments: Vec::new(),
+                    references: Vec::new(),
+                    permission_mode: None,
+                    message_id: None,
+                    user_message_attachments: Vec::new(),
+                    story_agent_tools: None,
+                },
+            )
+            .await
+            .unwrap();
+        provider.message_acknowledged(&session, &action, true);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if matches!(
+                    events.recv().await.unwrap(),
+                    ProviderEvent::ApprovalRequested { .. }
+                ) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let error = provider
+            .update_model_selection(
+                &session,
+                &AiSessionModelSelection {
+                    model_entity_id: "demo".into(),
+                    model_name: "Model B".into(),
+                    model_upstream_name: Some("model-b".into()),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "AI_SESSION_MODEL_SELECTION_CONFLICT");
+        provider.interrupt(&session).await.unwrap();
+        provider.close().await;
     }
 }

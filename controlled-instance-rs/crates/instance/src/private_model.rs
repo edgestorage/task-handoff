@@ -1,7 +1,8 @@
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_ai_session::{
-    AiSessionModelSelection, AiSessionModelSelectionIntent, AiSessionModelSelectionResolver,
-    AiSessionTitleGenerator, AiSessionTitleInput, OpenCodeModelSelectionProjector, ProviderError,
+    AcpSessionHome, AiSessionModelSelection, AiSessionModelSelectionIntent,
+    AiSessionModelSelectionResolver, AiSessionTitleGenerator, AiSessionTitleInput,
+    OpenCodeModelSelectionProjector, ProviderError,
 };
 use controlled_instance_app_runtime::AppRuntime;
 use controlled_instance_core::{
@@ -28,6 +29,7 @@ use std::{
 };
 
 const MANAGED_PROVIDER_PREFIX: &str = controlled_instance_protocol::MANAGED_MODEL_PROVIDER_PREFIX;
+const COMMAND_CODE_LOCAL_AUTH: &str = "task-handoff-local-only";
 const MANAGED_ENV_KEYS: [&str; 9] = [
     "CODEX_HOME",
     "OPENAI_API_KEY",
@@ -117,6 +119,22 @@ pub struct ManagedModelCatalogSnapshot {
     pub source: String,
     pub loaded_at: Option<String>,
     pub catalog: Option<PrivateModelCatalogSummary>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AcpPrivateLaunchConfig {
+    pub env: BTreeMap<String, String>,
+    pub args: Vec<String>,
+    pub cleanup_dir: Option<PathBuf>,
+    pub session_home: Option<AcpSessionHome>,
+}
+
+struct AcpModelEntity {
+    id: String,
+    protocol: PrivateModelProtocol,
+    base_url: String,
+    credential: String,
+    model_names: Vec<PrivateModelNameEntry>,
 }
 
 #[derive(Debug)]
@@ -274,9 +292,10 @@ impl ControlledModelConfig {
         requested: Option<&AiSessionModelSelection>,
         intent: AiSessionModelSelectionIntent,
     ) -> Result<Option<AiSessionModelSelection>, ManagedModelError> {
-        let Some(protocol) = private_model_protocol_for_agent(agent) else {
+        let protocols = private_model_protocols_for_agent(agent);
+        if protocols.is_empty() {
             return Ok(None);
-        };
+        }
         let state = self.lock();
         let Some(catalog) = state.catalog.as_ref() else {
             if requested.is_none() {
@@ -288,10 +307,12 @@ impl ControlledModelConfig {
                 409,
             ));
         };
-        let mut entities = catalog
-            .entities()
-            .into_iter()
-            .filter(|entity| entity.protocols.contains(&protocol));
+        let mut entities = catalog.entities().into_iter().filter(|entity| {
+            entity
+                .protocols
+                .iter()
+                .any(|protocol| protocols.contains(protocol))
+        });
         let entity = match requested {
             Some(selection) => entities.find(|entity| entity.id == selection.model_entity_id),
             None => entities.next(),
@@ -390,6 +411,65 @@ impl ControlledModelConfig {
     /// Environment entries that must be present in every managed agent/app
     /// process. This mirrors the Node runtime's managed-app environment and is
     /// also used by the direct Codex app-server connection.
+    #[cfg(test)]
+    pub(crate) fn acp_launch_config(
+        &self,
+        agent: &str,
+        model_selection: Option<&AiSessionModelSelection>,
+        data_dir: &Path,
+    ) -> Result<AcpPrivateLaunchConfig, ManagedModelError> {
+        self.acp_launch_config_for_session(agent, model_selection, data_dir, None, None)
+    }
+
+    pub(crate) fn acp_launch_config_for_session(
+        &self,
+        agent: &str,
+        model_selection: Option<&AiSessionModelSelection>,
+        data_dir: &Path,
+        provider_session_id: Option<&str>,
+        cwd: Option<&Path>,
+    ) -> Result<AcpPrivateLaunchConfig, ManagedModelError> {
+        let state = self.lock();
+        let environment = self.current_environment(&state);
+        let entities = state
+            .catalog
+            .as_ref()
+            .map(|catalog| acp_model_entities(catalog, &environment, agent))
+            .unwrap_or_default();
+        if entities.is_empty() && agent != "gemini" {
+            return Ok(AcpPrivateLaunchConfig::default());
+        }
+        fs::create_dir_all(data_dir)?;
+        restrict_path(data_dir, 0o700)?;
+        let root = data_dir.join(format!("acp-session-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root)?;
+        restrict_path(&root, 0o700)?;
+        let session_home = if agent == "commandcode" {
+            let home = AcpSessionHome {
+                source: root.join(".commandcode"),
+                durable_root: data_dir.join("acp-session-homes").join("commandcode"),
+            };
+            if let Some(provider_session_id) = provider_session_id {
+                home.restore(provider_session_id).map_err(|error| {
+                    ManagedModelError::failed("MODEL_CONFIG_WRITE_FAILED", error)
+                })?;
+            }
+            Some(home)
+        } else {
+            None
+        };
+        let result = write_acp_model_config(agent, &entities, model_selection, &root, cwd);
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&root);
+        }
+        result.map(|(env, args)| AcpPrivateLaunchConfig {
+            env,
+            args,
+            cleanup_dir: Some(root),
+            session_home,
+        })
+    }
+
     pub fn runtime_environment(&self) -> BTreeMap<String, String> {
         let state = self.lock();
         state
@@ -958,12 +1038,298 @@ fn bounded_text(value: &str, limit: usize) -> String {
     truncate_utf16(value, limit)
 }
 
-fn private_model_protocol_for_agent(agent: &str) -> Option<PrivateModelProtocol> {
+fn acp_model_entities(
+    catalog: &InstancePrivateModelCatalog,
+    environment: &BTreeMap<String, String>,
+    agent: &str,
+) -> Vec<AcpModelEntity> {
+    let protocols = private_model_protocols_for_agent(agent);
+    let relay_credential = env_trimmed(environment, "TASK_HANDOFF_REGISTRATION_TOKEN");
+    catalog
+        .entities()
+        .into_iter()
+        .flat_map(|entity| {
+            let (protocol, base_url) = protocols.iter().find_map(|protocol| {
+                entity.protocols.contains(protocol).then(|| {
+                    catalog
+                        .base_url(&entity.id, *protocol)
+                        .map(|base_url| (*protocol, base_url.to_string()))
+                })?
+            })?;
+            let credential = match catalog {
+                InstancePrivateModelCatalog::Direct { entities, .. } => entities
+                    .iter()
+                    .find(|candidate| candidate.id == entity.id)
+                    .map(|candidate| candidate.key.clone())
+                    .unwrap_or_default(),
+                InstancePrivateModelCatalog::Relay { .. } => {
+                    relay_credential.clone().unwrap_or_default()
+                }
+            };
+            Some(AcpModelEntity {
+                id: entity.id,
+                protocol,
+                base_url,
+                credential,
+                model_names: entity.model_names,
+            })
+        })
+        .collect()
+}
+
+fn acp_managed_provider_key(model_entity_id: &str) -> String {
+    let mut normalized = String::new();
+    let mut previous_was_invalid = false;
+    for character in model_entity_id.to_lowercase().chars() {
+        if character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || matches!(character, '_' | '-')
+        {
+            normalized.push(character);
+            previous_was_invalid = false;
+        } else if !previous_was_invalid {
+            normalized.push('-');
+            previous_was_invalid = true;
+        }
+    }
+    let normalized = normalized.trim_matches('-');
+    format!(
+        "{}{}",
+        controlled_instance_protocol::MANAGED_MODEL_PROVIDER_PREFIX,
+        if normalized.is_empty() {
+            "model"
+        } else {
+            normalized
+        }
+    )
+}
+
+fn acp_gemini_base_url(base_url: &str) -> String {
+    base_url
+        .strip_suffix("/v1beta/")
+        .or_else(|| base_url.strip_suffix("/v1beta"))
+        .unwrap_or(base_url)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn write_acp_model_file(
+    root: &Path,
+    relative: &Path,
+    contents: &str,
+) -> Result<PathBuf, ManagedModelError> {
+    let path = root.join(relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        restrict_path(parent, 0o700)?;
+    }
+    write_atomic(&path, contents.as_bytes(), Some(0o600))?;
+    Ok(path)
+}
+
+fn write_acp_model_config(
+    agent: &str,
+    entities: &[AcpModelEntity],
+    selection: Option<&AiSessionModelSelection>,
+    root: &Path,
+    cwd: Option<&Path>,
+) -> Result<(BTreeMap<String, String>, Vec<String>), ManagedModelError> {
+    let mut env = BTreeMap::new();
+    if agent == "gemini" {
+        if let Some(cwd) = cwd {
+            // Gemini 0.71.1 rejects autoEdit/yolo outside a trusted folder.
+            // Trust only the session workspace instead of enabling a global
+            // trust-everything switch.
+            let trust = write_acp_model_file(
+                root,
+                Path::new("trustedFolders.json"),
+                &serde_json::to_string_pretty(&json!({
+                    cwd.to_string_lossy().as_ref(): "TRUST_FOLDER"
+                }))
+                .map_err(|error| ManagedModelError::failed("MODEL_CONFIG_WRITE_FAILED", error))?,
+            )?;
+            env.insert(
+                "GEMINI_CLI_TRUSTED_FOLDERS_PATH".to_string(),
+                trust.to_string_lossy().into_owned(),
+            );
+        }
+        let target = selection
+            .and_then(|selection| {
+                entities
+                    .iter()
+                    .find(|entity| entity.id == selection.model_entity_id)
+            })
+            .or_else(|| entities.first());
+        let Some(target) = target else {
+            return Ok((env, Vec::new()));
+        };
+        let model = selection
+            .map(AiSessionModelSelection::upstream_name)
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                target
+                    .model_names
+                    .first()
+                    .map(PrivateModelNameEntry::identity)
+            })
+            .unwrap_or_default();
+        if target.base_url.trim().is_empty() {
+            return Err(ManagedModelError::new(
+                "AI_SESSION_MODEL_TARGET_UNAVAILABLE",
+                "The selected Gemini model has no configured relay route.",
+                409,
+            ));
+        }
+        env.insert(
+            "GOOGLE_GEMINI_BASE_URL".to_string(),
+            acp_gemini_base_url(&target.base_url),
+        );
+        env.insert("GEMINI_API_KEY".to_string(), target.credential.clone());
+        env.insert("GOOGLE_API_KEY".to_string(), target.credential.clone());
+        env.insert("GOOGLE_GENAI_USE_VERTEXAI".to_string(), "false".to_string());
+        env.insert("GEMINI_MODEL".to_string(), model.to_string());
+        return Ok((env, Vec::new()));
+    }
+    if agent == "commandcode" {
+        let mut providers = serde_json::Map::new();
+        for (index, entity) in entities.iter().enumerate() {
+            let env_name = format!("TASK_HANDOFF_ACP_MODEL_KEY_{index}");
+            env.insert(env_name.clone(), entity.credential.clone());
+            let api = match entity.protocol {
+                PrivateModelProtocol::OpenAiChatCompletions => "openai-completions",
+                PrivateModelProtocol::OpenAiResponses => "openai-responses",
+                PrivateModelProtocol::AnthropicMessages => "anthropic-messages",
+                PrivateModelProtocol::GoogleGenerativeAi => "google-generative-ai",
+            };
+            let models = entity
+                .model_names
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.identity().to_string(),
+                        json!({
+                            "name": entry.name,
+                            "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+                        }),
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>();
+            providers.insert(
+                acp_managed_provider_key(&entity.id),
+                json!({
+                    "name": entity.id,
+                    "api": api,
+                    "baseURL": entity.base_url,
+                    "apiKey": format!("${env_name}"),
+                    "models": models,
+                }),
+            );
+        }
+        let contents = serde_json::to_string_pretty(&json!({ "provider": providers }))
+            .map_err(|error| ManagedModelError::failed("MODEL_CONFIG_WRITE_FAILED", error))?;
+        write_acp_model_file(
+            root,
+            Path::new(".commandcode").join("providers.json").as_path(),
+            &format!("{contents}\n"),
+        )?;
+        env.insert("HOME".to_string(), root.display().to_string());
+        // Command Code rejects session/new without an auth token even when all
+        // models are private BYOK providers. Local-only mode prevents Command
+        // Code traffic, and this fixed value is not a usable cloud credential.
+        env.insert(
+            "COMMAND_CODE_API_KEY".to_string(),
+            COMMAND_CODE_LOCAL_AUTH.to_string(),
+        );
+        env.insert("CMD_LOCAL_ONLY".to_string(), "1".to_string());
+        return Ok((env, Vec::new()));
+    }
+    let mut lines = vec![
+        "- id: llm-pi-ai".to_string(),
+        "  config:".to_string(),
+        "    providers:".to_string(),
+    ];
+    for (index, entity) in entities.iter().enumerate() {
+        let provider_key = acp_managed_provider_key(&entity.id);
+        let env_name = format!("TASK_HANDOFF_ACP_MODEL_KEY_{index}");
+        env.insert(env_name.clone(), entity.credential.clone());
+        let api = match entity.protocol {
+            PrivateModelProtocol::OpenAiChatCompletions => "openai-completions",
+            PrivateModelProtocol::OpenAiResponses => "openai-responses",
+            PrivateModelProtocol::AnthropicMessages => "anthropic-messages",
+            PrivateModelProtocol::GoogleGenerativeAi => "google-generative-ai",
+        };
+        let base_url = if entity.protocol == PrivateModelProtocol::GoogleGenerativeAi
+            && !entity.base_url.trim_end_matches('/').ends_with("/v1beta")
+        {
+            // pi-ai treats a Google baseURL as already versioned. Relay routes
+            // end at /v1, so add the operation prefix expected by the adapter.
+            format!("{}/v1beta", entity.base_url.trim_end_matches('/'))
+        } else {
+            entity.base_url.clone()
+        };
+        lines.push(format!("      {}:", yaml_string(&provider_key)));
+        lines.push(format!("        displayName: {}", yaml_string(&entity.id)));
+        lines.push(format!("        apiKeyEnv: {}", yaml_string(&env_name)));
+        lines.push(format!("        api: {}", yaml_string(api)));
+        lines.push(format!("        baseURL: {}", yaml_string(&base_url)));
+        lines.push("        models:".to_string());
+        for entry in &entity.model_names {
+            lines.push(format!("          - id: {}", yaml_string(entry.identity())));
+            lines.push(format!("            name: {}", yaml_string(&entry.name)));
+            lines.push("            reasoningEfforts:".to_string());
+            lines.push("              \"off\":".to_string());
+            lines.push("              minimal: \"minimal\"".to_string());
+            lines.push("              low: \"low\"".to_string());
+            lines.push("              medium: \"medium\"".to_string());
+            lines.push("              high: \"high\"".to_string());
+            if entity.protocol != PrivateModelProtocol::GoogleGenerativeAi {
+                lines.push("              xhigh: \"xhigh\"".to_string());
+                lines.push("              max: \"max\"".to_string());
+            }
+        }
+    }
+    let patch = write_acp_model_file(
+        root,
+        Path::new("acp-model.patch.yml"),
+        &format!("{}\n", lines.join("\n")),
+    )?;
+    env.insert("DSH_HOME".to_string(), root.display().to_string());
+    Ok((
+        env,
+        vec!["--patch".to_string(), patch.display().to_string()],
+    ))
+}
+
+fn yaml_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+const CODEX_MODEL_PROTOCOLS: &[PrivateModelProtocol] = &[PrivateModelProtocol::OpenAiResponses];
+const CLAUDE_MODEL_PROTOCOLS: &[PrivateModelProtocol] = &[PrivateModelProtocol::AnthropicMessages];
+const OPENCODE_MODEL_PROTOCOLS: &[PrivateModelProtocol] =
+    &[PrivateModelProtocol::OpenAiChatCompletions];
+const GEMINI_MODEL_PROTOCOLS: &[PrivateModelProtocol] = &[PrivateModelProtocol::GoogleGenerativeAi];
+const COMMANDCODE_MODEL_PROTOCOLS: &[PrivateModelProtocol] = &[
+    PrivateModelProtocol::OpenAiChatCompletions,
+    PrivateModelProtocol::OpenAiResponses,
+    PrivateModelProtocol::AnthropicMessages,
+];
+const DSH_MODEL_PROTOCOLS: &[PrivateModelProtocol] = &[
+    PrivateModelProtocol::OpenAiChatCompletions,
+    PrivateModelProtocol::OpenAiResponses,
+    PrivateModelProtocol::AnthropicMessages,
+    PrivateModelProtocol::GoogleGenerativeAi,
+];
+
+fn private_model_protocols_for_agent(agent: &str) -> &'static [PrivateModelProtocol] {
     match agent {
-        "codex" => Some(PrivateModelProtocol::OpenAiResponses),
-        "claude" => Some(PrivateModelProtocol::AnthropicMessages),
-        "opencode" => Some(PrivateModelProtocol::OpenAiChatCompletions),
-        _ => None,
+        "codex" => CODEX_MODEL_PROTOCOLS,
+        "claude" => CLAUDE_MODEL_PROTOCOLS,
+        "opencode" => OPENCODE_MODEL_PROTOCOLS,
+        "gemini" => GEMINI_MODEL_PROTOCOLS,
+        "commandcode" => COMMANDCODE_MODEL_PROTOCOLS,
+        "dsh" => DSH_MODEL_PROTOCOLS,
+        _ => &[],
     }
 }
 
@@ -2661,5 +3027,189 @@ mod tests {
                 .model_entity_id,
             "model-b"
         );
+    }
+
+    #[test]
+    fn acp_agents_resolve_catalog_models_and_write_private_launch_config() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let catalog = json!({
+            "protocolVersion": "2026-08-27",
+            "instanceId": "ins_0000000000000",
+            "entities": [{
+                "id": "model-primary",
+                "protocols": [
+                    "openai-responses",
+                    "openai-chat-completions",
+                    "anthropic-messages",
+                    "google-generative-ai"
+                ],
+                "modelNames": [{
+                    "upstreamName": "upstream-primary",
+                    "name": "Primary Label",
+                    "order": 0
+                }],
+                "endpoint": "https://models.example/v1beta",
+                "key": "secret"
+            }],
+            "updatedAt": "2026-11-02T00:00:00.000Z"
+        });
+        let config = config_with_catalog(root.path(), catalog);
+        let selection = AiSessionModelSelection {
+            model_entity_id: "model-primary".into(),
+            model_name: "Primary Label".into(),
+            model_upstream_name: Some("upstream-primary".into()),
+        };
+        for agent in ["gemini", "commandcode", "dsh"] {
+            let resolved = config
+                .resolve_selection(
+                    agent,
+                    Some(&selection),
+                    AiSessionModelSelectionIntent::Target,
+                )
+                .expect("resolve")
+                .expect("selection");
+            assert_eq!(resolved.model_entity_id, "model-primary");
+        }
+
+        let data_dir = root.path().join("acp-session-config");
+        let gemini = config
+            .acp_launch_config("gemini", Some(&selection), &data_dir)
+            .expect("gemini config");
+        assert_eq!(
+            gemini.env.get("GOOGLE_GEMINI_BASE_URL").map(String::as_str),
+            Some("https://models.example")
+        );
+        assert_eq!(
+            gemini.env.get("GEMINI_MODEL").map(String::as_str),
+            Some("upstream-primary")
+        );
+        assert_eq!(
+            gemini.env.get("GEMINI_API_KEY").map(String::as_str),
+            Some("secret")
+        );
+        assert!(gemini
+            .cleanup_dir
+            .as_ref()
+            .is_some_and(|path| path.exists()));
+        let gemini_trusted = config
+            .acp_launch_config_for_session(
+                "gemini",
+                Some(&selection),
+                &data_dir,
+                None,
+                Some(Path::new("/workspace/demo")),
+            )
+            .expect("gemini trusted config");
+        let trust_path = gemini_trusted
+            .env
+            .get("GEMINI_CLI_TRUSTED_FOLDERS_PATH")
+            .expect("gemini trust file");
+        let trust: Value = serde_json::from_str(
+            &std::fs::read_to_string(trust_path).expect("gemini trust file contents"),
+        )
+        .expect("gemini trust JSON");
+        assert_eq!(trust["/workspace/demo"], "TRUST_FOLDER");
+
+        let relay_config = config_with_catalog(
+            root.path(),
+            json!({
+                "protocolVersion": "2026-10-02",
+                "instanceId": "ins_0000000000000",
+                "entities": [{
+                    "id": "model-primary",
+                    "protocols": ["google-generative-ai"],
+                    "modelNames": [{
+                        "upstreamName": "upstream-primary",
+                        "name": "Primary Label",
+                        "order": 0
+                    }],
+                    "routes": [{
+                        "protocol": "google-generative-ai",
+                        "baseUrl": "https://node.example/api/node-agent/model-relay/instances/ins_0000000000000/routes/rly_demo/v1"
+                    }]
+                }],
+                "updatedAt": "2026-11-02T00:00:00.000Z"
+            }),
+        );
+        let relay_gemini = relay_config
+            .acp_launch_config("gemini", Some(&selection), &data_dir)
+            .expect("relay gemini config");
+        assert_eq!(
+            relay_gemini
+                .env
+                .get("GOOGLE_GEMINI_BASE_URL")
+                .map(String::as_str),
+            Some("https://node.example/api/node-agent/model-relay/instances/ins_0000000000000/routes/rly_demo/v1")
+        );
+        let relay_dsh = relay_config
+            .acp_launch_config("dsh", Some(&selection), &data_dir)
+            .expect("relay dsh config");
+        let relay_patch = std::fs::read_to_string(relay_dsh.args.get(1).expect("relay dsh patch"))
+            .expect("relay dsh patch contents");
+        assert!(relay_patch.contains(
+            "baseURL: \"https://node.example/api/node-agent/model-relay/instances/ins_0000000000000/routes/rly_demo/v1/v1beta\""
+        ));
+
+        let commandcode = config
+            .acp_launch_config("commandcode", Some(&selection), &data_dir)
+            .expect("commandcode config");
+        let home = commandcode.env.get("HOME").expect("commandcode home");
+        assert_eq!(
+            commandcode
+                .env
+                .get("COMMAND_CODE_API_KEY")
+                .map(String::as_str),
+            Some("task-handoff-local-only")
+        );
+        assert_eq!(
+            commandcode.env.get("CMD_LOCAL_ONLY").map(String::as_str),
+            Some("1")
+        );
+        let providers =
+            std::fs::read_to_string(Path::new(home).join(".commandcode").join("providers.json"))
+                .expect("providers config");
+        assert!(providers.contains("task-handoff-model-primary"));
+        assert!(providers.contains("$TASK_HANDOFF_ACP_MODEL_KEY_0"));
+        let session_file = Path::new(home)
+            .join(".commandcode")
+            .join("sessions")
+            .join("session-1.jsonl");
+        std::fs::create_dir_all(session_file.parent().unwrap()).unwrap();
+        std::fs::write(&session_file, "{\"message\":\"kept\"}\n").unwrap();
+        commandcode
+            .session_home
+            .as_ref()
+            .expect("commandcode session home")
+            .persist("session-1")
+            .expect("persist commandcode home");
+        let resumed = config
+            .acp_launch_config_for_session(
+                "commandcode",
+                Some(&selection),
+                &data_dir,
+                Some("session-1"),
+                None,
+            )
+            .expect("resumed commandcode config");
+        let resumed_home = resumed.env.get("HOME").expect("resumed commandcode home");
+        assert_eq!(
+            std::fs::read_to_string(
+                Path::new(resumed_home)
+                    .join(".commandcode")
+                    .join("sessions")
+                    .join("session-1.jsonl")
+            )
+            .expect("restored commandcode session"),
+            "{\"message\":\"kept\"}\n"
+        );
+
+        let dsh = config
+            .acp_launch_config("dsh", Some(&selection), &data_dir)
+            .expect("dsh config");
+        let dsh_home = dsh.env.get("DSH_HOME").expect("dsh home");
+        let patch = std::fs::read_to_string(Path::new(dsh_home).join("acp-model.patch.yml"))
+            .expect("dsh patch");
+        assert!(patch.contains("task-handoff-model-primary"));
+        assert_eq!(dsh.args.first().map(String::as_str), Some("--patch"));
     }
 }

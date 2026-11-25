@@ -613,7 +613,7 @@ export function SessionWorkspace({
   const approvalPending = isAiSessionApprovalPending(session);
   const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(providerCapability);
   // Compatibility for v0.0.21: older directory responses do not publish provider decision capabilities.
-  const approvalDecisions: ('allow' | 'deny' | 'skip')[] = providerCapability?.actions.approvalDecisions
+  const approvalDecisions: ('allow' | 'deny' | 'skip')[] = session.actions?.approvalRequest?.decisions ?? providerCapability?.actions.approvalDecisions
     ?? (session.agent === 'codex' || session.agent === 'claude' ? ['allow', 'skip', 'deny'] : []);
   const state = (action: Parameters<typeof mobileAiSessionBusyKey>[3], queueId?: string) => actions?.state(mobileAiSessionBusyKey(controlPlaneId, instanceId, session.id, action, queueId));
   const sendState = state('send');
@@ -1109,7 +1109,7 @@ export function SessionWorkspace({
                   const decisionLabel = t(`workspace.${decision}` as 'workspace.allow');
                   Alert.alert(t('workspace.resolveApproval'), t('workspace.sendDecision', { decision: decisionLabel }), [
                     { text: t('common.cancel'), style: 'cancel' },
-                    { text: decisionLabel, onPress: () => { if (actions) void performAction(decisionLabel, () => actions.approval(instanceId, session.id, decision)); } },
+                    { text: decisionLabel, onPress: () => { if (actions) void performAction(decisionLabel, () => actions.approval(instanceId, session.id, decision, session.actions?.approvalRequest?.id)); } },
                   ]);
                 }} />
               ))}

@@ -265,6 +265,7 @@ import { aiSessionPermissionKey } from "../useAiSessionPermissionMode";
 import { useAiSessionQueuePlacement } from "../useAiSessionQueuePlacement";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
+import { isAiAgentId, type AiAgentId } from "../../../components/aiAgentIcon";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import {
@@ -383,13 +384,13 @@ const turnNavigatorItems = computed(() => aiSessionTurnMenuItems(
   props.promptCount,
   t,
 ));
-const agentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {
+const agentIcon = computed<AiAgentId | undefined>(() => {
   const agent = props.card.session.agent;
-  return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
+  return isAiAgentId(agent) ? agent : undefined;
 });
 const agentDisplayName = computed(() => {
   const agent = props.card.session.agent;
-  return agent === "codex" || agent === "claude" || agent === "opencode"
+  return isAiAgentId(agent)
     ? t(`common.products.${agent}`)
     : agent;
 });

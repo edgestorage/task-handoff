@@ -161,7 +161,7 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       const query = new URLSearchParams({ hierarchy: "subagents" });
       return requestData(`/api/ai-sessions/sync?${query}`, AiSessionsSyncResponseSchema, jsonRequest("POST", { instances: [...instances] }, signal));
     },
-    history(instanceId: string, signal?: AbortSignal, agents: readonly string[] = ["codex", "claude", "opencode"]) {
+    history(instanceId: string, signal?: AbortSignal, agents: readonly string[] = ["*", "codex", "claude", "opencode"]) {
       const query = new URLSearchParams({ hierarchy: "subagents" });
       if (agents.length) query.set("agents", agents.join(","));
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history?${query}`, AiSessionHistoryListSchema, { signal });
@@ -258,8 +258,8 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       });
       return requestData(`${sessionRoute(instanceId, sessionId)}/messages`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", body));
     },
-    approval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/approval`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", AiSessionApprovalInputSchema.parse({ decision })));
+    approval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip", approvalRequestId?: string) {
+      return requestData(`${sessionRoute(instanceId, sessionId)}/approval`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", AiSessionApprovalInputSchema.parse({ decision, approvalRequestId })));
     },
     interrupt(instanceId: string, sessionId: string) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/interrupt`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", {}));

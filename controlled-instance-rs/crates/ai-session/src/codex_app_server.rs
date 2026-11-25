@@ -2949,6 +2949,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
                 steer: true,
                 interrupt: true,
                 archive: true,
+                history_resume: None,
                 delete: true,
                 // Node advertises the action from the adapter contract; the
                 // version-derived fork mode is enforced when the action runs.

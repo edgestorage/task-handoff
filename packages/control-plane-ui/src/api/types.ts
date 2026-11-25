@@ -244,7 +244,7 @@ export type Project = {
 };
 
 export type ModelApp = "codex" | "claude" | "opencode";
-export type ModelProtocol = "openai-responses" | "openai-chat-completions" | "anthropic-messages";
+export type ModelProtocol = "openai-responses" | "openai-chat-completions" | "anthropic-messages" | "google-generative-ai";
 /** `upstreamName` is omitted while it equals the external `name`. */
 export type ModelNameEntry = { name: string; upstreamName?: string; order: number };
 /** Relay-only rewrite from a client-requested model name to an upstream name. */

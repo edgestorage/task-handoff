@@ -177,7 +177,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   }
 
   function setProtocols(values: unknown) {
-    const supported = new Set<ModelProtocol>(["openai-responses", "openai-chat-completions", "anthropic-messages"]);
+    const supported = new Set<ModelProtocol>(["openai-responses", "openai-chat-completions", "anthropic-messages", "google-generative-ai"]);
     settingsModel.protocols = Array.isArray(values)
       ? values.filter((value): value is ModelProtocol => typeof value === "string" && supported.has(value as ModelProtocol))
       : [];

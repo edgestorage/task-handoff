@@ -1,6 +1,7 @@
 import {
   isCurrentAiSessionSubAgent,
   normalizeAiSessionLineage,
+  AiSessionApprovalRequestSchema,
   AiSessionMessageAttachmentMetaSchema,
   AiSessionGoalSchema,
   AiSessionModelSelectionSchema,
@@ -149,6 +150,7 @@ function normalizeActions(value: unknown): AiSessionStatus["actions"] {
     send: typeof record.send === "boolean" ? record.send : undefined,
     interrupt: typeof record.interrupt === "boolean" ? record.interrupt : undefined,
     approval: typeof record.approval === "boolean" ? record.approval : undefined,
+    approvalRequest: AiSessionApprovalRequestSchema.safeParse(record.approvalRequest).data,
     fork: typeof record.fork === "boolean" ? record.fork : undefined,
     rename: typeof record.rename === "boolean" ? record.rename : undefined,
     openApp: typeof record.openApp === "boolean" ? record.openApp : undefined,
