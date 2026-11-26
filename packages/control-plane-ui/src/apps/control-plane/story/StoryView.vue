@@ -426,39 +426,32 @@
   />
 
   <Dialog v-model:open="editorOpen">
-    <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><ScrollArea class="story-editor-scroll" :horizontal="false"><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-      <button type="button" class="story-editor-advanced-toggle" :aria-expanded="editorAdvancedOpen" aria-controls="story-editor-advanced-settings" @click="editorAdvancedOpen = !editorAdvancedOpen"><ChevronRight :size="15" aria-hidden="true" /><span>{{ t("stories.editor.advancedSettings") }}</span></button>
-      <div id="story-editor-advanced-settings" v-show="editorAdvancedOpen" class="story-editor-advanced-settings">
-        <label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label>
+    <DialogContent class="story-editor-dialog story-details-dialog"><DialogHeader class="story-dialog-header story-details-header"><div>
+      <DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle>
+      <DialogDescription v-if="editing" class="story-node-meta"><Boxes :size="14" aria-hidden="true" /><span>{{ t('stories.editor.ownerNode') }}</span><span class="story-node-name">{{ nodeById(draftNodeId)?.name || draftNodeId }}</span></DialogDescription>
+      <DialogDescription v-else>{{ t('stories.editor.description') }}</DialogDescription>
+    </div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader>
+    <ScrollArea class="story-editor-scroll" :horizontal="false" fade-top><div class="story-editor-fields">
+      <label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label>
+      <label v-if="!editing">{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+      <label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label>
+      <fieldset v-if="storyContextVisible && draftStoryContextProjectsSupported" class="story-agent-tool-settings story-context-settings story-context-projects" :disabled="saving || storyContextState !== 'ready'">
+        <legend :class="{ 'sr-only': storyContextState === 'ready' }">{{ t('stories.editor.storyContextProjects') }}</legend>
+        <div v-if="storyContextState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.storyContextLoading") }}</div>
+        <div v-else-if="storyContextState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.storyContextUnsupported") }}</div>
+        <div v-else-if="storyContextState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ storyContextError || t("stories.editor.storyContextUnavailable") }}</div>
+        <StoryProjectField v-else-if="storyContextState === 'ready'" :key="draftNodeId" v-model="draftProjectFolderIds" :folders="nodeLocalFoldersByNodeId[draftNodeId] || []" :disabled="saving" />
+      </fieldset>
+      <Collapsible v-model:open="editorAdvancedOpen">
+      <CollapsibleTrigger as-child><button type="button" class="story-editor-advanced-toggle"><ChevronRight :size="15" aria-hidden="true" /><span>{{ t("stories.editor.advancedSettings") }}</span></button></CollapsibleTrigger>
+      <CollapsibleContent class="story-advanced-motion"><div class="story-editor-advanced-settings">
         <label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label>
-        <fieldset v-if="storyContextVisible" class="story-agent-tool-settings story-context-settings" :disabled="saving || storyContextState !== 'ready'">
-          <legend>{{ t("stories.editor.storyContext") }}</legend>
-          <div v-if="storyContextState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.storyContextLoading") }}</div>
-          <div v-else-if="storyContextState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.storyContextUnsupported") }}</div>
-          <div v-else-if="storyContextState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ storyContextError || t("stories.editor.storyContextUnavailable") }}</div>
-          <template v-else-if="storyContextState === 'ready'">
-            <div v-if="draftStoryContextProjectsSupported" class="story-context-section">
-              <div class="story-context-section-heading"><span>{{ t("stories.editor.storyContextProjects") }}</span><span>{{ draftProjectFolderIds.length }} / {{ STORY_CONTEXT_MAX_PROJECTS }}</span></div>
-              <p class="story-context-note">{{ t("stories.editor.storyContextProjectsNote") }}</p>
-              <div v-if="draftProjectFolderIds.length" class="story-context-project-list">
-                <div v-for="(folderId, index) in draftProjectFolderIds" :key="folderId" class="story-context-project-row">
-                  <span class="story-context-project-index">{{ index + 1 }}</span>
-                  <span class="story-context-project-copy"><span>{{ storyContextFolder(folderId)?.name || t("stories.editor.storyContextProjectUnavailable") }}</span><small>{{ storyContextFolder(folderId)?.path || folderId }}</small></span>
-                  <span class="story-context-project-actions">
-                    <Button variant="ghost" size="icon-sm" :disabled="index === 0" :aria-label="t('stories.editor.storyContextMoveUp', { name: storyContextFolder(folderId)?.name || folderId })" :title="t('stories.editor.storyContextMoveUp', { name: storyContextFolder(folderId)?.name || folderId })" @click="moveStoryContextProject(index, -1)"><ArrowUp :size="13" /></Button>
-                    <Button variant="ghost" size="icon-sm" :disabled="index === draftProjectFolderIds.length - 1" :aria-label="t('stories.editor.storyContextMoveDown', { name: storyContextFolder(folderId)?.name || folderId })" :title="t('stories.editor.storyContextMoveDown', { name: storyContextFolder(folderId)?.name || folderId })" @click="moveStoryContextProject(index, 1)"><ArrowDown :size="13" /></Button>
-                    <Button variant="ghost" size="icon-sm" :aria-label="t('stories.editor.storyContextRemoveProject', { name: storyContextFolder(folderId)?.name || folderId })" :title="t('stories.editor.storyContextRemoveProject', { name: storyContextFolder(folderId)?.name || folderId })" @click="removeStoryContextProject(folderId)"><X :size="13" /></Button>
-                  </span>
-                </div>
-              </div>
-              <div v-else class="story-agent-tool-state">{{ t("stories.editor.storyContextProjectsEmpty") }}</div>
-              <ControlPlaneSelect :model-value="storyContextAddProjectId" :disabled="!availableStoryContextFolders.length || draftProjectFolderIds.length >= STORY_CONTEXT_MAX_PROJECTS" :placeholder="availableStoryContextFolders.length ? t('stories.editor.storyContextAddProject') : t('stories.editor.storyContextNoProjects')" :aria-label="t('stories.editor.storyContextAddProject')" @update:model-value="addStoryContextProject">
-                <ControlPlaneSelectItem v-for="folder in availableStoryContextFolders" :key="folder.id" :value="folder.id">{{ folder.name }} · {{ folder.path }}</ControlPlaneSelectItem>
-              </ControlPlaneSelect>
-            </div>
-            <label v-if="draftStoryContextPromptSupported" class="story-context-prompt">{{ t("stories.editor.storyContextPrompt") }}<Textarea v-model="draftStoryContextPrompt" :maxlength="STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH" :placeholder="t('stories.editor.storyContextPromptPlaceholder')" /><span class="story-context-budget">{{ draftStoryContextPrompt.length }} / {{ STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH }}</span></label>
-            <p class="story-context-note">{{ t("stories.editor.storyContextOrder") }}</p>
-          </template>
+        <fieldset v-if="storyContextVisible && draftStoryContextPromptSupported && (storyContextState === 'ready' || !draftStoryContextProjectsSupported)" class="story-agent-tool-settings story-context-settings story-context-prompt-settings" :disabled="saving || storyContextState !== 'ready'">
+          <legend :class="{ 'sr-only': storyContextState === 'ready' }">{{ t("stories.editor.storyContextPrompt") }}</legend>
+          <div v-if="!draftStoryContextProjectsSupported && storyContextState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.storyContextLoading") }}</div>
+          <div v-else-if="!draftStoryContextProjectsSupported && storyContextState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.storyContextUnsupported") }}</div>
+          <div v-else-if="!draftStoryContextProjectsSupported && storyContextState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ storyContextError || t("stories.editor.storyContextUnavailable") }}</div>
+          <label v-if="storyContextState === 'ready'" class="story-context-prompt">{{ t("stories.editor.storyContextPrompt") }}<Textarea v-model="draftStoryContextPrompt" :maxlength="STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH" :placeholder="t('stories.editor.storyContextPromptPlaceholder')" /><span class="story-context-budget">{{ draftStoryContextPrompt.length }} / {{ STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH }}</span></label>
         </fieldset>
         <fieldset v-if="agentToolSettingsState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || agentToolSettingsState !== 'ready'">
           <legend>{{ t("stories.editor.agentTools") }}</legend>
@@ -500,9 +493,9 @@
             </div>
           </template>
         </fieldset>
-      </div>
+      </div></CollapsibleContent></Collapsible>
       <div v-if="storyEditorError" class="story-editor-error" role="alert">{{ storyEditorError }}</div>
-    </div></ScrollArea><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
+    </div></ScrollArea><DialogFooter class="story-details-footer"><Button variant="ghost" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
   </Dialog>
   <Dialog v-model:open="assignSessionOpen"><DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t("stories.assign.title") }}</DialogTitle><DialogDescription>{{ t("stories.assign.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.assign.session") }}<ControlPlaneSelect v-model="assignSessionId"><ControlPlaneSelectItem v-for="entry in availableSessions" :key="`${entry.instance.id}:${entry.session.id}`" :value="`${entry.instance.id}:${entry.session.id}`">{{ entry.session.title || entry.session.userPrompt || entry.session.id }} · {{ entry.instance.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label></div><DialogFooter><Button variant="outline" @click="assignSessionOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!assignSessionId || assigningSession" @click="assignExistingSession">{{ assigningSession ? t("stories.assign.adding") : t("stories.assign.submit") }}</Button></DialogFooter></DialogContent></Dialog>
   <Dialog :open="actionEditorOpen" @update:open="handleActionEditorOpenChange">
@@ -561,11 +554,13 @@
 import { computed, nextTick, onBeforeUnmount, provide, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/vue-query";
-import { Archive, ArrowDown, ArrowUp, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleHelp, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pause, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
+import { Archive, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleHelp, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pause, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
+import StoryProjectField from "./StoryProjectField.vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../../../components/ui/collapsible";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
@@ -609,7 +604,6 @@ import {
 } from "@task-handoff/protocol/node-agent-capabilities";
 import {
   STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH,
-  STORY_CONTEXT_MAX_PROJECTS,
   type StoryContextSettings,
 } from "@task-handoff/protocol/story-context";
 import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
@@ -1074,14 +1068,9 @@ const storyContextStoryKey = computed(() => {
 const storyContextStoryId = computed(() => selectedResource.value?.kind === "story" && editing.value ? selectedResource.value.story.id : "");
 const storyContextDirty = computed(() => draftStoryContextPrompt.value !== savedStoryContextPrompt.value
   || JSON.stringify(draftProjectFolderIds.value) !== JSON.stringify(savedProjectFolderIds.value));
-const storyContextFolder = (folderId: string) => (props.nodeLocalFoldersByNodeId[draftNodeId.value] || []).find((folder) => folder.id === folderId);
-const availableStoryContextFolders = computed(() => (props.nodeLocalFoldersByNodeId[draftNodeId.value] || [])
-  .filter((folder) => !draftProjectFolderIds.value.includes(folder.id)));
-const storyContextAddProjectId = ref("");
 const storyContextSettingsQuery = useQuery({
   queryKey: computed(() => controlPlaneQueryKeys.storyContextSettings(draftNodeId.value, storyContextStoryId.value)),
   enabled: computed(() => Boolean(editorOpen.value
-    && editorAdvancedOpen.value
     && editing.value
     && storyContextStoryId.value
     && storyContextVisible.value)),
@@ -1706,7 +1695,6 @@ function resetStoryContextDraft(ownerNode: Node | undefined, readyState: "ready"
   draftStoryContextPrompt.value = "";
   savedStoryContextPrompt.value = "";
   storyContextLoadedKey.value = "";
-  storyContextAddProjectId.value = "";
 }
 function applyStoryContextSettings(settings: StoryContextSettings) {
   storyContextRevision.value = settings.revision;
@@ -1718,21 +1706,6 @@ function applyStoryContextSettings(settings: StoryContextSettings) {
   storyContextLoadedKey.value = `${draftNodeId.value}\u0000${settings.storyId}`;
   storyContextState.value = "ready";
   storyContextError.value = "";
-}
-function addStoryContextProject(folderId: string) {
-  if (!folderId || draftProjectFolderIds.value.includes(folderId) || draftProjectFolderIds.value.length >= STORY_CONTEXT_MAX_PROJECTS) return;
-  draftProjectFolderIds.value = [...draftProjectFolderIds.value, folderId];
-  storyContextAddProjectId.value = "";
-}
-function moveStoryContextProject(index: number, offset: -1 | 1) {
-  const target = index + offset;
-  if (target < 0 || target >= draftProjectFolderIds.value.length) return;
-  const next = [...draftProjectFolderIds.value];
-  [next[index], next[target]] = [next[target], next[index]];
-  draftProjectFolderIds.value = next;
-}
-function removeStoryContextProject(folderId: string) {
-  draftProjectFolderIds.value = draftProjectFolderIds.value.filter((id) => id !== folderId);
 }
 watch([() => storyContextSettingsQuery.isEnabled.value, () => storyContextSettingsQuery.data.value], ([enabled, settings]) => {
   if (!enabled || !settings) return;
@@ -2485,33 +2458,36 @@ onBeforeUnmount(() => {
 .story-error { color:var(--status-danger); font-size:12px; }
 .story-editor-fields { display:grid; gap:14px; padding-right:8px; }
 .story-editor-fields label { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
-.story-editor-advanced-toggle { display:flex; width:100%; align-items:center; gap:6px; border:1px solid var(--line); border-radius:7px; background:transparent; color:var(--text-muted); cursor:pointer; font:inherit; font-size:12px; font-weight:500; padding:9px 10px; text-align:left; }
-.story-editor-advanced-toggle:hover { background:var(--surface-hover); color:var(--text-strong); }
+.story-editor-advanced-toggle { display:flex; width:100%; align-items:center; gap:6px; border:0; border-top:1px solid var(--line); border-radius:0; background:transparent; color:var(--text-muted); cursor:pointer; font:inherit; font-size:12px; font-weight:500; padding:9px 0; text-align:left; }
+.story-editor-advanced-toggle:hover { color:var(--text-strong); }
 .story-editor-advanced-toggle:focus-visible { outline:2px solid var(--focus-ring); outline-offset:-2px; }
 .story-editor-advanced-toggle svg { flex:0 0 auto; transition:transform 120ms ease; }
 .story-editor-advanced-toggle[aria-expanded="true"] svg { transform:rotate(90deg); }
-.story-editor-advanced-settings { display:grid; gap:14px; min-width:0; }
+.story-editor-advanced-settings { display:grid; gap:14px; min-width:0; padding-top:14px; }
+.story-advanced-motion { margin-inline:-2px; padding-inline:2px; }
+.story-advanced-motion[data-state="open"] { animation:story-expand 180ms ease-out; }
+.story-advanced-motion[data-state="closed"] { animation:story-collapse 150ms ease-in; }
+@keyframes story-expand { from { height:0; opacity:0; } to { height:var(--reka-collapsible-content-height); opacity:1; } }
+@keyframes story-collapse { from { height:var(--reka-collapsible-content-height); opacity:1; } to { height:0; opacity:0; } }
+@media (prefers-reduced-motion: reduce) { .story-advanced-motion[data-state] { animation:none; transition:none; } }
 @media (prefers-reduced-motion: reduce) { .story-editor-advanced-toggle svg { transition-duration:0ms; } }
-.story-agent-tool-settings { display:grid; gap:0; min-width:0; border:1px solid var(--line); border-radius:7px; padding:0 12px 4px; }
-.story-agent-tool-settings legend { padding:0 6px; color:var(--text-muted); font-size:12px; font-weight:500; }
+.story-agent-tool-settings { display:grid; gap:0; min-width:0; border:0; border-radius:0; padding:0; }
+.story-agent-tool-settings legend { padding:0; margin-bottom:4px; color:var(--text-muted); font-size:12px; font-weight:500; }
+.story-details-header { padding:18px 20px 14px; }
+.story-details-header > div { min-width:0; }
+.story-node-meta { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin:4px 0 0; font-size:12px; color:var(--text-muted); }
+.story-node-name { color:var(--text); overflow-wrap:anywhere; }
+.story-details-dialog .story-editor-fields { padding:2px 20px calc(var(--story-footer-height) + 12px); gap:14px; }
+.story-details-dialog .story-editor-scroll,.story-details-footer { grid-area:2 / 1; }
+.story-details-dialog .story-editor-scroll :deep([data-task-handoff-scroll-viewport]) { scroll-padding-block:18px var(--story-footer-height); }
+.story-details-dialog .story-editor-advanced-toggle { border-top:0; width:fit-content; padding:4px 0; }
+.story-details-footer { position:relative; align-self:end; z-index:1; display:flex; flex-direction:row; align-items:center; justify-content:flex-end; gap:8px; height:var(--story-footer-height); padding:10px 20px calc(10px + env(safe-area-inset-bottom)); border-top:1px solid var(--line-subtle); background:color-mix(in srgb,var(--surface-raised) 68%,transparent); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); pointer-events:none; }
+.story-details-footer :deep(button) { pointer-events:auto; }
 .story-agent-tool-option { display:flex !important; grid-template-columns:none !important; flex-direction:row; align-items:center; min-height:38px; gap:10px !important; color:var(--text-strong) !important; }
 .story-agent-tool-option + .story-agent-tool-option { border-top:1px solid var(--line); }
 .story-agent-tool-state,.story-editor-error { color:var(--text-muted); font-size:12px; line-height:1.5; padding:10px 0; }
-.story-context-settings { gap:12px; padding-bottom:12px; }
+.story-context-settings { gap:8px; padding-bottom:0; }
 .story-context-section { display:grid; gap:8px; min-width:0; }
-.story-context-section-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--text-strong); font-size:12px; font-weight:500; }
-.story-context-section-heading span:last-child { color:var(--text-muted); font-weight:400; }
-.story-context-note { margin:0; color:var(--text-muted); font-size:12px; line-height:1.5; }
-.story-context-project-list { display:grid; min-width:0; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
-.story-context-project-row { display:flex; min-width:0; align-items:center; gap:8px; padding:7px 8px; }
-.story-context-project-row + .story-context-project-row { border-top:1px solid var(--line); }
-.story-context-project-index { flex:0 0 20px; color:var(--text-muted); font-size:12px; text-align:right; }
-.story-context-project-copy { display:grid; flex:1 1 auto; min-width:0; gap:2px; }
-.story-context-project-copy span,.story-context-project-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.story-context-project-copy span { color:var(--text-strong); font-size:12px; font-weight:400; }
-.story-context-project-copy small { color:var(--text-muted); font-size:12px; }
-.story-context-project-actions { display:flex; flex:0 0 auto; align-items:center; gap:2px; }
-.story-context-prompt { padding-top:10px; border-top:1px solid var(--line); }
 .story-context-prompt textarea { min-height:110px; }
 .story-context-budget { justify-self:end; color:var(--text-muted); font-size:12px; font-variant-numeric:tabular-nums; }
 .story-agent-entry-note { margin:4px 0 6px; color:var(--text-muted); font-size:12px; line-height:1.5; }
@@ -2523,6 +2499,7 @@ onBeforeUnmount(() => {
 .story-agent-entry-orchestration { width:190px; flex:0 0 auto; margin-right:2px; }
 .story-editor-error { color:var(--danger); padding:0; }
 :global(.story-editor-dialog) { max-width:460px; grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; }
+:global(.story-editor-dialog.story-details-dialog) { --story-footer-height:calc(52px + env(safe-area-inset-bottom)); grid-template-rows:auto minmax(0,1fr); width:min(500px,calc(100% - 24px)); max-width:none; padding:0; gap:0; }
 .story-history-drawer-drag-region { -webkit-app-region:drag; height:var(--control-plane-titlebar-height); flex:0 0 var(--control-plane-titlebar-height); border-bottom:1px solid var(--line); }
 .story-history-drawer-close { -webkit-app-region:no-drag; position:absolute; top:calc(var(--control-plane-titlebar-height) + 10px); left:-42px; display:grid; width:32px; height:32px; place-items:center; border:1px solid var(--line); border-radius:6px; background:var(--surface-raised); box-shadow:var(--shadow-soft); color:var(--text-muted); cursor:pointer; padding:0; }
 .story-history-drawer-close:hover,.story-history-drawer-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }

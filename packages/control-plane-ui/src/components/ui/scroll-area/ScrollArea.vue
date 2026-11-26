@@ -13,16 +13,22 @@ import ScrollBar from "./ScrollBar.vue"
 const props = withDefaults(defineProps<ScrollAreaRootProps & {
   class?: HTMLAttributes["class"]
   horizontal?: boolean
+  fadeTop?: boolean
 }>(), {
   horizontal: true,
 })
 
-const delegatedProps = reactiveOmit(props, "class", "horizontal")
+const delegatedProps = reactiveOmit(props, "class", "horizontal", "fadeTop")
+
+function updateFade(event: Event) {
+  const viewport = event.currentTarget as HTMLElement
+  viewport.style.setProperty('--scroll-fade-top', `${Math.min(18, Math.max(0, viewport.scrollTop))}px`)
+}
 </script>
 
 <template>
-  <ScrollAreaRoot v-bind="delegatedProps" :class="cn('relative overflow-hidden', props.class)">
-    <ScrollAreaViewport data-task-handoff-scroll-viewport class="h-full w-full rounded-[inherit]">
+  <ScrollAreaRoot v-bind="delegatedProps" :class="cn('relative overflow-hidden', { 'fade-top': fadeTop }, props.class)">
+    <ScrollAreaViewport data-task-handoff-scroll-viewport class="h-full w-full rounded-[inherit]" v-on="fadeTop ? { scroll: updateFade } : {}">
       <slot />
     </ScrollAreaViewport>
     <ScrollBar />
@@ -30,3 +36,7 @@ const delegatedProps = reactiveOmit(props, "class", "horizontal")
     <ScrollAreaCorner />
   </ScrollAreaRoot>
 </template>
+
+<style scoped>
+.fade-top > :deep([data-task-handoff-scroll-viewport]) { mask-image:linear-gradient(to bottom, transparent, black var(--scroll-fade-top, 0px)); }
+</style>

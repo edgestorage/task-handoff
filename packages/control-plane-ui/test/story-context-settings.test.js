@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { STORY_CONTEXT_MAX_PROJECTS } from "@task-handoff/protocol/story-context";
+import { filterProjects, moveLinkedProject, projectChoices, setProjectLinked } from "../src/apps/control-plane/story/storyProjectSelection.ts";
 import { controlPlaneDomainQueryKeys } from "../src/api/queryInvalidation.ts";
 import { controlPlaneQueryKeys } from "../src/api/queryKeys.ts";
 import { controlPlaneEventDomains } from "../src/apps/control-plane/eventInvalidation.ts";
@@ -8,16 +10,43 @@ import { controlPlaneEventDomains } from "../src/apps/control-plane/eventInvalid
 const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
 const storiesApi = fs.readFileSync(new URL("../../control-plane-client/src/stories.ts", import.meta.url), "utf8");
 
-test("Story context settings load only after advanced editing is open", () => {
-  assert.match(storyView, /enabled: computed\(\(\) => Boolean\(editorOpen\.value[\s\S]*?editorAdvancedOpen\.value[\s\S]*?editing\.value[\s\S]*?storyContextStoryId\.value[\s\S]*?storyContextVisible\.value\)\)/);
+test("Story context settings load when the editor opens for related projects", () => {
+  assert.match(storyView, /enabled: computed\(\(\) => Boolean\(editorOpen\.value\s*&& editing\.value\s*&& storyContextStoryId\.value\s*&& storyContextVisible\.value\)\)/);
+  const query = storyView.slice(storyView.indexOf("const storyContextSettingsQuery"), storyView.indexOf("const storyAgentEntryCandidates"));
+  assert.doesNotMatch(query, /editorAdvancedOpen/);
   assert.match(storyView, /queryFn: \(\) => sharedControlPlaneClient\.stories\.contextSettings\(storyContextStoryId\.value, draftNodeId\.value\)/);
   assert.match(storyView, /if \(!storyContextSettingsQuery\.isEnabled\.value\) return;/);
+});
+
+test("related projects render outside advanced settings while the prompt stays inside", () => {
+  const advancedStart = storyView.indexOf('<CollapsibleContent class="story-advanced-motion">');
+  const description = storyView.indexOf('{{ t("stories.editor.descriptionLabel") }}');
+  const projects = storyView.indexOf('class="story-agent-tool-settings story-context-settings story-context-projects"');
+  const prompt = storyView.indexOf('class="story-agent-tool-settings story-context-settings story-context-prompt-settings"');
+  assert.ok(advancedStart > 0);
+  assert.ok(description > 0 && description < advancedStart);
+  assert.ok(projects > 0 && projects < advancedStart);
+  assert.ok(prompt > advancedStart);
+  const zhStories = fs.readFileSync(new URL("../src/i18n/locales/zh-CN/stories.ts", import.meta.url), "utf8");
+  const enStories = fs.readFileSync(new URL("../src/i18n/locales/en-US/stories.ts", import.meta.url), "utf8");
+  assert.match(zhStories, /storyContextProjects: "相关项目"/);
+  assert.match(enStories, /storyContextProjects: "Related projects"/);
+  assert.doesNotMatch(storyView, /storyContextProjectsNote|storyContextOrder|storyContextProjectsEmpty/);
+  assert.doesNotMatch(zhStories, /storyContextProjectsNote|storyContextOrder|storyContextProjectsEmpty/);
+  assert.doesNotMatch(enStories, /storyContextProjectsNote|storyContextOrder|storyContextProjectsEmpty/);
+});
+
+test("Story editor settings use flat sections instead of nested borders", () => {
+  assert.match(storyView, /\.story-editor-advanced-toggle \{[^}]*border:0;/);
+  assert.match(storyView, /\.story-agent-tool-settings \{[^}]*border:0;/);
+  assert.match(storyView, /\.story-agent-tool-settings legend \{[^}]*color:var\(--text-muted\);/);
 });
 
 test("Story context controls follow the normalized node capability", () => {
   assert.match(storyView, /function storyContextStateForNode\(ownerNode: Node \| undefined, readyState: "ready" \| "loading"\): StorySettingsState/);
   assert.match(storyView, /if \(!capabilities\.settings \|\| \(!capabilities\.projects && !capabilities\.sessionPrompting\)\) return "hidden"/);
-  assert.match(storyView, /<fieldset v-if="storyContextVisible"/);
+  assert.match(storyView, /<fieldset v-if="storyContextVisible && draftStoryContextProjectsSupported"/);
+  assert.match(storyView, /<fieldset v-if="storyContextVisible && draftStoryContextPromptSupported &&/);
   assert.match(storyView, /draftStoryContextProjectsSupported/);
   assert.match(storyView, /draftStoryContextPromptSupported/);
 });
@@ -41,11 +70,25 @@ test("Story context refetches settle back to ready even when cached data is stru
 });
 
 test("Story context drafts preserve order and unavailable folder ids", () => {
-  assert.match(storyView, /draftProjectFolderIds\.value = \[\.\.\.draftProjectFolderIds\.value, folderId\]/);
-  assert.match(storyView, /\[next\[index\], next\[target\]\] = \[next\[target\], next\[index\]\]/);
-  assert.match(storyView, /draftProjectFolderIds\.value\.filter\(\(id\) => id !== folderId\)/);
-  assert.match(storyView, /storyContextFolder\(folderId\)\?\.name \|\| t\("stories\.editor\.storyContextProjectUnavailable"\)/);
-  assert.match(storyView, /storyContextFolder\(folderId\)\?\.path \|\| folderId/);
+  const saved = ['missing', 'mobile'];
+  const folders = [{ id: 'mobile', name: 'Client', path: '/apps/ios' }, { id: 'web', name: 'Client', path: '/apps/web' }];
+  const choices = projectChoices(folders, saved, 'Unavailable');
+  assert.deepEqual(choices.linked, [{ id: 'missing', name: 'Unavailable', path: 'missing' }, folders[0]]);
+  assert.deepEqual(filterProjects(choices.all, ' client '), folders);
+  assert.deepEqual(filterProjects(choices.all, 'WEB'), [folders[1]]);
+  assert.deepEqual(filterProjects(choices.linked, 'web'), []);
+  const draft = setProjectLinked(saved, 'web', true);
+  assert.deepEqual(setProjectLinked(draft, 'web', true), draft);
+  assert.deepEqual(moveLinkedProject(draft, 'web', -1), ['missing', 'web', 'mobile']);
+  assert.deepEqual(setProjectLinked(draft, 'missing', false), ['mobile', 'web']);
+  assert.deepEqual(saved, ['missing', 'mobile']);
+});
+
+test('the link limit blocks additions but allows removal and replacement', () => {
+  const full = Array.from({ length: STORY_CONTEXT_MAX_PROJECTS }, (_, index) => String(index));
+  assert.deepEqual(setProjectLinked(full, 'extra', true), full);
+  const replaced = setProjectLinked(setProjectLinked(full, '0', false), 'extra', true);
+  assert.deepEqual(replaced, [...full.slice(1), 'extra']);
 });
 
 test("Story context saves after Story fields and before Agent tools and entry Agents", () => {

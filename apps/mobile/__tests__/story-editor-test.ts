@@ -177,7 +177,7 @@ describe('StoryEditor', () => {
     expect(screen.getByLabelText('Preset actions').props.value).toBe(true);
   });
 
-  test('does not request Story context until the advanced section opens', async () => {
+  test('loads related projects before advanced settings and keeps the prompt inside advanced', async () => {
     const story = StorySchema.parse({
       id: 'story-1', ownerNodeId: 'node-1', title: 'Release', actions: [], documents: [],
       createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
@@ -199,12 +199,15 @@ describe('StoryEditor', () => {
 
     const screen = await render(createElement(StoryEditor, { nodeId: 'node-1', onSaved: jest.fn(), storyId: 'story-1' }));
     await screen.findByLabelText('Title');
-    expect(contextSettings).not.toHaveBeenCalled();
+    expect(await screen.findByText('Related projects')).toBeTruthy();
+    expect(screen.queryByText('No related projects')).toBeNull();
+    expect(contextSettings).toHaveBeenCalledWith('story-1', 'node-1', expect.any(AbortSignal));
+    expect(screen.queryByLabelText('Story additional instructions')).toBeNull();
 
     await expandAdvanced(screen);
     const prompt = await screen.findByLabelText('Story additional instructions');
     expect(prompt.props.value).toBe('Shared Story instructions');
-    expect(contextSettings).toHaveBeenCalledWith('story-1', 'node-1', expect.any(AbortSignal));
+    expect(contextSettings).toHaveBeenCalledTimes(1);
   });
 
   test('sorts projects, clears the prompt, and preserves an unavailable project', async () => {
@@ -277,7 +280,7 @@ describe('StoryEditor', () => {
     const screen = await render(createElement(StoryEditor, { nodeId: 'node-1', onSaved: jest.fn(), storyId: 'story-1' }));
     await expandAdvanced(screen);
     await screen.findByText('Agent tools');
-    expect(screen.queryByText('Story context')).toBeNull();
+    expect(screen.queryByText('Related projects')).toBeNull();
     expect(contextSettings).not.toHaveBeenCalled();
   });
 
@@ -372,7 +375,10 @@ describe('StoryEditor', () => {
       createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
     });
     const create = jest.fn().mockResolvedValue(created);
-    mockRuntime.mockReturnValue({ api: { stories: { create } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockRuntime.mockReturnValue({ api: {
+      resources: { node: contextNode({}), nodeLocalFolders: jest.fn().mockResolvedValue([]) },
+      stories: { create },
+    } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
     mockDirectories.mockReturnValue({ state: { instances: [], nodes: [{ id: 'node-1', name: 'Node', connectionPhase: 'online' }] } } as unknown as ReturnType<typeof useActiveDirectories>);
 
     const screen = await render(createElement(StoryEditor, { onSaved: jest.fn() }));

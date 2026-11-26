@@ -134,7 +134,7 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
   }, [directory.nodes, nodeId, runtime.api, storyId]);
 
   useEffect(() => {
-    if (!advancedOpen || !runtime.api || !selectedOwnerNodeId) return;
+    if (!runtime.api || !selectedOwnerNodeId) return;
     if (storyId && contextLoadedKey === contextKey && contextState === 'ready') return;
     const api = runtime.api;
     const controller = new AbortController();
@@ -181,7 +181,7 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
       cancelled = true;
       controller.abort();
     };
-  }, [advancedOpen, contextKey, runtime.api, selectedOwnerNodeId, storyId]);
+  }, [contextKey, runtime.api, selectedOwnerNodeId, storyId]);
 
   const setAgentTool = (category: keyof StoryAgentToolPolicy, value: boolean) => {
     setAgentToolPolicy((current) => ({ ...current, [category]: value }));
@@ -275,6 +275,49 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
       </NewSessionContextMenu>
     </View> : null}
 
+    {contextState === 'loading' || contextState === 'unavailable' || (contextState === 'ready' && contextVisible && contextCapabilities.projects) ? <View style={styles.contextSettings}>
+      <View style={styles.sectionHeader}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('stories.storyContextProjects')}</Text>
+        {contextState === 'ready' && contextCapabilities.projects ? <Text style={[styles.contextCount, { color: colors.textMuted }]}>{projectFolderIds.length} / {STORY_CONTEXT_MAX_PROJECTS}</Text> : null}
+      </View>
+      {contextState === 'loading' ? <Text style={[styles.stateText, { color: colors.textMuted }]}>{t('stories.storyContextLoading')}</Text> : null}
+      {contextState === 'unavailable' ? <Text style={[styles.stateText, { color: colors.error }]}>{contextError || t('stories.storyContextUnavailable')}</Text> : null}
+      {contextState === 'ready' && contextCapabilities.projects ? <View style={styles.contextBody}>
+        {projectFolderIds.length ? <View style={styles.projectList}>
+          {projectFolderIds.map((folderId, index) => {
+            const folder = folderById(folderId);
+            const name = folder?.name || t('stories.storyContextProjectUnavailable');
+            return <View key={folderId} style={[styles.projectRow, { borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth }]}>
+              <Text style={[styles.projectIndex, { color: colors.textMuted }]}>{index + 1}</Text>
+              <View style={styles.projectCopy}>
+                <Text numberOfLines={1} style={[styles.projectName, { color: colors.text }]}>{name}</Text>
+                <Text numberOfLines={1} style={[styles.projectPath, { color: colors.textMuted }]}>{folder?.path || folderId}</Text>
+              </View>
+              <Pressable accessibilityLabel={t('stories.storyContextMoveUp', { name })} accessibilityRole="button" accessibilityState={{ disabled: index === 0 || busy }} disabled={index === 0 || busy} onPress={() => moveProject(index, -1)} style={styles.projectAction}>
+                <Icon color={colors.textMuted} name="chevron-up" size={16} />
+              </Pressable>
+              <Pressable accessibilityLabel={t('stories.storyContextMoveDown', { name })} accessibilityRole="button" accessibilityState={{ disabled: index === projectFolderIds.length - 1 || busy }} disabled={index === projectFolderIds.length - 1 || busy} onPress={() => moveProject(index, 1)} style={styles.projectAction}>
+                <Icon color={colors.textMuted} name="chevron-down" size={16} />
+              </Pressable>
+              <Pressable accessibilityLabel={t('stories.storyContextRemoveProject', { name })} accessibilityRole="button" disabled={busy} onPress={() => removeProject(folderId)} style={styles.projectAction}>
+                <Icon color={colors.textMuted} name="close" size={16} />
+              </Pressable>
+            </View>;
+          })}
+        </View> : null}
+        <NewSessionContextMenu
+          cancelLabel={t('common.cancel')}
+          disabled={!availableFolders.length || projectFolderIds.length >= STORY_CONTEXT_MAX_PROJECTS || busy}
+          onSelect={addProject}
+          options={availableFolders.map((folder) => ({ value: folder.id, label: folder.name, description: folder.path, systemImage: 'folder' }))}
+          selectedValue=""
+          title={t('stories.storyContextAddProject')}
+        >
+          {(onPress) => <ContextPill disabled={!availableFolders.length || projectFolderIds.length >= STORY_CONTEXT_MAX_PROJECTS || busy} icon="add-outline" label={availableFolders.length ? t('stories.storyContextAddProject') : t('stories.storyContextNoProjects')} onPress={onPress} />}
+        </NewSessionContextMenu>
+      </View> : null}
+    </View> : null}
+
     <View style={[styles.advancedCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       <Pressable
         accessibilityLabel={t('stories.advancedSettings')}
@@ -304,7 +347,26 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
           />
         </View>
 
-        {agentToolState !== 'hidden' ? <View style={[styles.toolSettings, { borderColor: colors.border }]}>
+        {contextVisible && contextCapabilities.sessionPrompting && (contextState === 'ready' || !contextCapabilities.projects) ? <View style={styles.contextSettings}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('stories.storyContextPrompt')}</Text>
+          {!contextCapabilities.projects && contextState === 'loading' ? <Text style={[styles.stateText, { color: colors.textMuted }]}>{t('stories.storyContextLoading')}</Text> : null}
+          {!contextCapabilities.projects && contextState === 'unavailable' ? <Text style={[styles.stateText, { color: colors.error }]}>{contextError || t('stories.storyContextUnavailable')}</Text> : null}
+          {contextState === 'ready' ? <View style={styles.contextBody}>
+            <TextInput
+              accessibilityLabel={t('stories.storyContextPrompt')}
+              maxLength={STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH}
+              multiline
+              onChangeText={setStoryContextPrompt}
+              placeholder={t('stories.storyContextPromptPlaceholder')}
+              placeholderTextColor={colors.textMuted}
+              style={[styles.input, styles.contextTextarea, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
+              value={storyContextPrompt}
+            />
+            <Text style={[styles.contextCount, styles.contextCountEnd, { color: colors.textMuted }]}>{storyContextPrompt.length} / {STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH}</Text>
+          </View> : null}
+        </View> : null}
+
+        {agentToolState !== 'hidden' ? <View style={styles.toolSettings}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('stories.agentTools')}</Text>
           {agentToolState === 'loading' ? <Text style={[styles.stateText, { color: colors.textMuted }]}>{t('stories.agentToolsLoading')}</Text> : null}
           {agentToolState === 'unsupported' ? <Text style={[styles.stateText, { color: colors.textMuted }]}>{t('stories.agentToolsUnsupported')}</Text> : null}
@@ -316,68 +378,6 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
             <ToolSwitch label={t('stories.agentToolAutomations')} value={agentToolPolicy.automations} disabled={busy} onChange={(value) => setAgentTool('automations', value)} colors={colors} />
             <ToolSwitch label={t('stories.agentToolAiSessions')} value={agentToolPolicy.aiSessions} disabled={busy} onChange={(value) => setAgentTool('aiSessions', value)} colors={colors} />
           </> : null}
-        </View> : null}
-
-        {contextVisible || contextState === 'loading' ? <View style={[styles.contextSettings, { borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('stories.storyContext')}</Text>
-          {contextState === 'loading' ? <Text style={[styles.stateText, { color: colors.textMuted }]}>{t('stories.storyContextLoading')}</Text> : null}
-          {contextState === 'unavailable' ? <Text style={[styles.stateText, { color: colors.error }]}>{contextError || t('stories.storyContextUnavailable')}</Text> : null}
-          {contextState === 'ready' && contextVisible ? <View style={styles.contextBody}>
-            {contextCapabilities.projects ? <View style={styles.contextSection}>
-              <View style={styles.contextHeading}>
-                <Text style={[styles.contextHeadingText, { color: colors.text }]}>{t('stories.storyContextProjects')}</Text>
-                <Text style={[styles.contextCount, { color: colors.textMuted }]}>{projectFolderIds.length} / {STORY_CONTEXT_MAX_PROJECTS}</Text>
-              </View>
-              <Text style={[styles.contextNote, { color: colors.textMuted }]}>{t('stories.storyContextProjectsNote')}</Text>
-              {projectFolderIds.length ? <View style={[styles.projectList, { borderColor: colors.border }]}>
-                {projectFolderIds.map((folderId, index) => {
-                  const folder = folderById(folderId);
-                  const name = folder?.name || t('stories.storyContextProjectUnavailable');
-                  return <View key={folderId} style={[styles.projectRow, index > 0 && { borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth }]}>
-                    <Text style={[styles.projectIndex, { color: colors.textMuted }]}>{index + 1}</Text>
-                    <View style={styles.projectCopy}>
-                      <Text numberOfLines={1} style={[styles.projectName, { color: colors.text }]}>{name}</Text>
-                      <Text numberOfLines={1} style={[styles.projectPath, { color: colors.textMuted }]}>{folder?.path || folderId}</Text>
-                    </View>
-                    <Pressable accessibilityLabel={t('stories.storyContextMoveUp', { name })} accessibilityRole="button" accessibilityState={{ disabled: index === 0 || busy }} disabled={index === 0 || busy} onPress={() => moveProject(index, -1)} style={styles.projectAction}>
-                      <Icon color={colors.textMuted} name="chevron-up" size={16} />
-                    </Pressable>
-                    <Pressable accessibilityLabel={t('stories.storyContextMoveDown', { name })} accessibilityRole="button" accessibilityState={{ disabled: index === projectFolderIds.length - 1 || busy }} disabled={index === projectFolderIds.length - 1 || busy} onPress={() => moveProject(index, 1)} style={styles.projectAction}>
-                      <Icon color={colors.textMuted} name="chevron-down" size={16} />
-                    </Pressable>
-                    <Pressable accessibilityLabel={t('stories.storyContextRemoveProject', { name })} accessibilityRole="button" disabled={busy} onPress={() => removeProject(folderId)} style={styles.projectAction}>
-                      <Icon color={colors.textMuted} name="close" size={16} />
-                    </Pressable>
-                  </View>;
-                })}
-              </View> : <Text style={[styles.stateText, { color: colors.textMuted }]}>{t('stories.storyContextProjectsEmpty')}</Text>}
-              <NewSessionContextMenu
-                cancelLabel={t('common.cancel')}
-                disabled={!availableFolders.length || projectFolderIds.length >= STORY_CONTEXT_MAX_PROJECTS || busy}
-                onSelect={addProject}
-                options={availableFolders.map((folder) => ({ value: folder.id, label: folder.name, description: folder.path, systemImage: 'folder' }))}
-                selectedValue=""
-                title={t('stories.storyContextAddProject')}
-              >
-                {(onPress) => <ContextPill disabled={!availableFolders.length || projectFolderIds.length >= STORY_CONTEXT_MAX_PROJECTS || busy} icon="add-outline" label={availableFolders.length ? t('stories.storyContextAddProject') : t('stories.storyContextNoProjects')} onPress={onPress} />}
-              </NewSessionContextMenu>
-            </View> : null}
-            {contextCapabilities.sessionPrompting ? <View style={[styles.contextSection, contextCapabilities.projects && { borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 12 }]}>
-              <Text style={[styles.contextHeadingText, { color: colors.text }]}>{t('stories.storyContextPrompt')}</Text>
-              <TextInput
-                accessibilityLabel={t('stories.storyContextPrompt')}
-                maxLength={STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH}
-                multiline
-                onChangeText={setStoryContextPrompt}
-                placeholder={t('stories.storyContextPromptPlaceholder')}
-                placeholderTextColor={colors.textMuted}
-                style={[styles.input, styles.contextTextarea, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
-                value={storyContextPrompt}
-              />
-              <Text style={[styles.contextCount, { color: colors.textMuted }]}>{storyContextPrompt.length} / {STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH}</Text>
-            </View> : null}
-            <Text style={[styles.contextNote, { color: colors.textMuted }]}>{t('stories.storyContextOrder')}</Text>
-          </View> : null}
         </View> : null}
       </View> : null}
     </View>
@@ -414,18 +414,16 @@ const styles = StyleSheet.create({
   advancedTitle: { fontSize: 15, fontWeight: '500', lineHeight: 20 },
   advancedDescription: { fontSize: 12, lineHeight: 17 },
   advancedFields: { borderTopWidth: StyleSheet.hairlineWidth, gap: 16, padding: 14 },
-  toolSettings: { borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
-  contextSettings: { borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingBottom: 12 },
+  toolSettings: { paddingHorizontal: 0 },
+  contextSettings: { paddingHorizontal: 0, paddingBottom: 0 },
+  sectionHeader: { alignItems: 'baseline', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
   sectionTitle: { fontSize: 14, fontWeight: '500', paddingVertical: 12 },
   stateText: { fontSize: 13, lineHeight: 19, paddingBottom: 12 },
   contextBody: { gap: 12 },
-  contextSection: { gap: 8, minWidth: 0 },
-  contextHeading: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'space-between' },
-  contextHeadingText: { fontSize: 13, fontWeight: '500' },
   contextCount: { fontSize: 12, fontVariant: ['tabular-nums'] },
-  contextNote: { fontSize: 12, lineHeight: 18, margin: 0 },
-  projectList: { borderRadius: 7, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
-  projectRow: { alignItems: 'center', flexDirection: 'row', gap: 6, minHeight: 48, paddingHorizontal: 8, paddingVertical: 6 },
+  contextCountEnd: { alignSelf: 'flex-end' },
+  projectList: { borderRadius: 0, borderWidth: 0, overflow: 'visible' },
+  projectRow: { alignItems: 'center', flexDirection: 'row', gap: 6, minHeight: 48, paddingHorizontal: 0, paddingVertical: 6 },
   projectIndex: { fontSize: 12, textAlign: 'right', width: 20 },
   projectCopy: { flex: 1, gap: 2, minWidth: 0 },
   projectName: { fontSize: 13 },

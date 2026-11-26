@@ -56,6 +56,13 @@ BUILD_DATE=$(date +%Y%m%d)
 VERSION=${1:-}
 AUTO_VERSION=0
 
+next_version_suffix() {
+  awk -v prefix="$1" '
+    { position = index($0, prefix); if (!position) next; suffix = substr($0, position + length(prefix)); sub(/[^0-9].*/, "", suffix); if (suffix ~ /^[0-9]+$/) { value = suffix + 0; if (value > maximum) maximum = value } }
+    END { print maximum + 1 }
+  '
+}
+
 log() {
   printf '\n==> %s\n' "$*"
 }
@@ -194,10 +201,7 @@ if [ -z "$VERSION" ]; then
     find "$ARTIFACT_DIR" release/runtime-artifacts -maxdepth 1 -type f -name "*${VERSION_PREFIX}*" -print 2>/dev/null || true
     ssh "${SSH_ARGS[@]}" "$HOST" "find /usr/local/lib/node_modules/@task-handoff /tmp -maxdepth 1 -name '*${VERSION_PREFIX}*' -print 2>/dev/null; node -p 'require(\"/usr/local/lib/node_modules/@task-handoff/server/package.json\").version'"
   )
-  NEXT=$(printf '%s\n' "$CANDIDATES" | awk -v prefix="$VERSION_PREFIX" '
-    { position = index($0, prefix); if (!position) next; suffix = substr($0, position + length(prefix)); sub(/[^0-9].*/, "", suffix); if (suffix ~ /^[0-9]+$/ && suffix > maximum) maximum = suffix }
-    END { print maximum + 1 }
-  ')
+  NEXT=$(printf '%s\n' "$CANDIDATES" | next_version_suffix "$VERSION_PREFIX")
   VERSION="$VERSION_PREFIX$NEXT"
 fi
 

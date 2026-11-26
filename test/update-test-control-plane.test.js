@@ -9,6 +9,7 @@ const test = require("node:test");
 const root = path.resolve(__dirname, "..");
 const deployment = fs.readFileSync(path.join(root, "scripts", "update-test-control-plane.sh"), "utf8");
 const prepareFunction = deployment.match(/^build_remote_desktop_package\(\) \{\n[\s\S]*?^\}\n/m)?.[0];
+const nextVersionFunction = deployment.match(/^next_version_suffix\(\) \{\n[\s\S]*?^\}\n/m)?.[0];
 
 function fixture(t, options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-test-deploy-"));
@@ -80,6 +81,31 @@ test("test deployment verifies the running component comes from the installed pa
   assert.match(deployment, /for link in \/proc\/\[0-9\]\*\/exe/);
   assert.match(deployment, /&& running_binary_matches; then/);
   assert.match(deployment, /did not become ready from the installed package/);
+});
+
+test("test deployment version selection compares version suffixes numerically", t => {
+  assert.ok(nextVersionFunction, "next_version_suffix must remain available to the deployment script");
+  assert.match(deployment, /\| next_version_suffix "\$VERSION_PREFIX"/);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-test-version-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const script = path.join(directory, "next-version.sh");
+  fs.writeFileSync(script, `#!/usr/bin/env bash
+set -euo pipefail
+${nextVersionFunction}
+printf '%s\n' "$@" | next_version_suffix "0.0.25-local.20261126."
+`, { mode: 0o755 });
+  const result = spawnSync("bash", [script,
+    "release/runtime-artifacts/controlled-instance-runtime-0.0.25-local.20261126.9-linux-universal.tar.gz",
+    "release/npm/artifacts/task-handoff-server-0.0.25-local.20261126.17.tgz",
+    "/usr/local/lib/node_modules/@task-handoff/.server-0.0.25-local.20261126.29-backup-20261126130825",
+    "0.0.25-local.20261126.30",
+    "0.0.25-local.20261126.27",
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "31");
+  const empty = spawnSync("bash", [script], { encoding: "utf8" });
+  assert.equal(empty.status, 0, empty.stderr);
+  assert.equal(empty.stdout.trim(), "1");
 });
 
 test("test deployment does not embed component package metadata into runtime artifacts", () => {
