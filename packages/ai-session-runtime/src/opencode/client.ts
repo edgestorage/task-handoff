@@ -131,11 +131,16 @@ export class OpenCodeClient {
     return this.request(`/session/${encodeURIComponent(sessionID)}/abort`, OpenCodeBooleanSchema, { method: "POST", directory });
   }
 
-  async promptAsync(sessionID: string, directory: string, messageID: string, parts: OpenCodePromptPart[], model?: OpenCodeModelRef) {
+  async promptAsync(sessionID: string, directory: string, messageID: string, parts: OpenCodePromptPart[], model?: OpenCodeModelRef, system?: string) {
     await this.request(`/session/${encodeURIComponent(sessionID)}/prompt_async`, undefined, {
       method: "POST",
       directory,
-      body: { messageID, parts, ...(model ? { model: { providerID: model.providerID, modelID: model.modelID }, ...(model.variant ? { variant: model.variant } : {}) } : {}) },
+      body: {
+        messageID,
+        parts,
+        ...(system ? { system } : {}),
+        ...(model ? { model: { providerID: model.providerID, modelID: model.modelID }, ...(model.variant ? { variant: model.variant } : {}) } : {}),
+      },
     });
   }
 

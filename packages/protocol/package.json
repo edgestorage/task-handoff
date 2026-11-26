@@ -130,6 +130,10 @@
       "types": "./src/stories.ts",
       "default": "./src/stories.ts"
     },
+    "./story-context": {
+      "types": "./src/story-context.ts",
+      "default": "./src/story-context.ts"
+    },
     "./story-agent-tools": {
       "types": "./src/story-agent-tools.ts",
       "default": "./src/story-agent-tools.ts"

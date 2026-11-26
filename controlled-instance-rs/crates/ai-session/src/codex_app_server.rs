@@ -1602,6 +1602,16 @@ impl CodexAppServerClient {
         }
         params.insert("sessionStartSource".to_string(), json!("startup"));
         params.insert("threadSource".to_string(), json!("user"));
+        if let Some(instructions) = input
+            .appended_prompt
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            params.insert(
+                "developerInstructions".to_string(),
+                Value::String(instructions.to_string()),
+            );
+        }
         if self.supports_paginated_timeline() {
             params.insert("historyMode".to_string(), json!("paginated"));
         }
@@ -2949,6 +2959,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
                 steer: true,
                 interrupt: true,
                 archive: true,
+                history_resume: None,
                 delete: true,
                 // Node advertises the action from the adapter contract; the
                 // version-derived fork mode is enforced when the action runs.
@@ -3116,6 +3127,7 @@ impl AiSessionControlProvider for CodexAppServerProvider {
                 .and_then(|value| serde_json::from_value(value).ok()),
             reasoning_effort: source.reasoning_effort.clone(),
             story_agent_tools: input.story_agent_tools,
+            appended_prompt: None,
         };
         let snapshot = self
             .client
@@ -6305,6 +6317,13 @@ mod tests {
         CodexAppServerClient::with_command("missing-codex-for-notification-tests")
     }
 
+    fn story_context_parity() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../../test/fixtures/story-context-provider-parity.json"
+        ))
+        .expect("Story context provider parity fixture")
+    }
+
     async fn rpc_test_transport(client: &CodexAppServerClient) -> mpsc::Receiver<String> {
         let (writer, written) = mpsc::channel(4);
         *client.inner.connection.lock().await = Some(Connection {
@@ -6359,6 +6378,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn story_instructions_are_sent_only_on_thread_start() {
+        let parity = story_context_parity();
+        let appended_prompt = parity["appendedPrompt"].as_str().unwrap().to_string();
+        let user_message = parity["userMessage"].as_str().unwrap().to_string();
+        let responder_appended_prompt = appended_prompt.clone();
+        let responder_user_message = user_message.clone();
+        let client = test_client();
+        let mut written = rpc_test_transport(&client).await;
+        let server = client.clone();
+        let responder = tokio::spawn(async move {
+            let start: Value = serde_json::from_str(&written.recv().await.unwrap()).unwrap();
+            assert_eq!(start["method"], "thread/start");
+            assert_eq!(
+                start["params"]["developerInstructions"],
+                responder_appended_prompt
+            );
+            assert!(start["params"].get("input").is_none());
+            server
+                .inner
+                .pending
+                .lock()
+                .await
+                .remove(&start["id"].as_u64().unwrap())
+                .unwrap()
+                .send(Ok(json!({
+                    "thread": { "id": "thread-story", "cwd": "/tmp/workspace" },
+                    "model": "gpt-test",
+                    "modelProvider": "task-handoff",
+                    "reasoningEffort": "high"
+                })))
+                .unwrap();
+
+            let turn: Value = serde_json::from_str(&written.recv().await.unwrap()).unwrap();
+            assert_eq!(turn["method"], "turn/start");
+            assert!(turn["params"].get("developerInstructions").is_none());
+            assert_eq!(
+                turn["params"]["input"],
+                json!([{ "type": "text", "text": responder_user_message, "text_elements": [] }])
+            );
+            server
+                .inner
+                .pending
+                .lock()
+                .await
+                .remove(&turn["id"].as_u64().unwrap())
+                .unwrap()
+                .send(Ok(json!({ "turn": { "id": "turn-story" } })))
+                .unwrap();
+        });
+        let input = ProviderCreateInput {
+            cwd: PathBuf::from("/tmp/workspace"),
+            runtime_workspace_roots: Vec::new(),
+            permission_mode: None,
+            model_selection: None,
+            reasoning_effort: None,
+            story_agent_tools: None,
+            appended_prompt: Some(appended_prompt),
+        };
+        let thread = client.start_thread(&input).await.unwrap();
+        assert_eq!(thread.provider_session_id, "thread-story");
+        let mut session = test_session();
+        session.provider_session_id = Some(thread.provider_session_id.clone());
+        client
+            .start_turn(
+                &session,
+                &ProviderMessage {
+                    message: user_message,
+                    attachments: Vec::new(),
+                    references: Vec::new(),
+                    permission_mode: None,
+                    message_id: None,
+                    user_message_attachments: Vec::new(),
+                    story_agent_tools: None,
+                },
+            )
+            .await
+            .unwrap();
+        responder.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn unsupported_fork_disables_capability_and_further_requests() {
         let client = test_client();
         *client.inner.capability_version.write().unwrap() = Some("0.145.0".into());
@@ -6388,6 +6488,7 @@ mod tests {
             model_selection: None,
             reasoning_effort: None,
             story_agent_tools: None,
+            appended_prompt: None,
         };
         assert!(client.thread_fork_capabilities().full_history);
         for _ in 0..2 {

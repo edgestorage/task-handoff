@@ -883,6 +883,7 @@ mod tests {
             packages: vec!["@openai/codex".to_string()],
             managed: true,
             version: Some("0.165.0".to_string()),
+            bin_name: None,
         };
         let capabilities = FinalComputerCapabilities {
             platform: FinalComputerPlatform::Linux,

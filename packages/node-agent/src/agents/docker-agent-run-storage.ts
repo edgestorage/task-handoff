@@ -263,7 +263,16 @@ export class DockerAgentRunStorage implements WorkspaceMaterializer<PreparedDock
       });
       throw storageError("AGENT_RUN_RESOURCE_OWNERSHIP_UNPROVEN", "Refusing to remove an Agent Run workspace with a foreign generation marker.");
     }
-    await this.terminateMemberThread(expected.runId, expected.memberId);
+    // A member can fail before its provider thread is registered (for example when the
+    // controlled instance rejects session creation). Overlay cleanup is still required, but
+    // closing a thread that was never created would leave cleanup permanently retrying.
+    const providerThreadActive = this.resources.listForRun(expected.runId).some((resource) =>
+      resource.kind === "provider-thread"
+      && resource.memberId === expected.memberId
+      && resource.phase !== "deleted"
+      && resource.phase !== "manual-intervention"
+    );
+    if (providerThreadActive) await this.terminateMemberThread(expected.runId, expected.memberId);
     this.resources.transition(workspace.resourceId, "deleting");
     try {
       await this.runHelper(workspace.target, expected.runId, expected.memberId, expected.generationId, [

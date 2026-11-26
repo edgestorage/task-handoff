@@ -109,6 +109,25 @@ const knownApiErrors: Record<string, ErrorDescriptor> = {
     },
   },
   AGENT_DEFINITION_POLICY_UNSUPPORTED: { key: "errors.AGENT_DEFINITION_POLICY_UNSUPPORTED" },
+  STORY_CONTEXT_SETTINGS_UNSUPPORTED: { key: "errors.STORY_CONTEXT_SETTINGS_UNSUPPORTED" },
+  STORY_CONTEXT_UNAVAILABLE: { key: "errors.STORY_CONTEXT_UNAVAILABLE" },
+  STORY_CONTEXT_REVISION_CONFLICT: { key: "errors.STORY_CONTEXT_REVISION_CONFLICT" },
+  STORY_CONTEXT_DUPLICATE_PROJECT: {
+    key: "errors.STORY_CONTEXT_DUPLICATE_PROJECT",
+    detailVariant: {
+      key: "errors.STORY_CONTEXT_DUPLICATE_PROJECT_WITH_ID",
+      detailKey: "folderId",
+      parameter: "folderId",
+    },
+  },
+  STORY_CONTEXT_PROJECT_UNAVAILABLE: {
+    key: "errors.STORY_CONTEXT_PROJECT_UNAVAILABLE",
+    detailVariant: {
+      key: "errors.STORY_CONTEXT_PROJECT_UNAVAILABLE_WITH_ID",
+      detailKey: "folderId",
+      parameter: "folderId",
+    },
+  },
 
   NODE_OFFLINE: { key: "errors.NODE_OFFLINE" },
   NODE_NOT_FOUND: {

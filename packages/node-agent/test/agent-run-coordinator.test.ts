@@ -56,6 +56,7 @@ async function coordinatorFixture(status: "completed" | "running", cleanupFailur
   });
   const runs = new AgentRunService(state as never, definitions, orchestrations, database.repository.agents.runs, () => true);
   const actions: string[] = [];
+  const sessionInputs: any[] = [];
   const completedMembers = new Set<string>();
   const materializers = new WorkspaceMaterializerRegistry();
   materializers.register({ runtimeType: "docker", workspaceMaterializer: "overlay-copy-on-write", processSandbox: "instance" }, {
@@ -96,6 +97,7 @@ async function coordinatorFixture(status: "completed" | "running", cleanupFailur
   const sessions = {
     async create(_instance: unknown, input: any) {
       actions.push("session.create");
+      sessionInputs.push(input);
       assert.deepEqual(input.writableRoots, {
         workspace: { type: "runtime-path", path: input.cwd.path },
         shared: { type: "runtime-path", path: `/shared/${input.runId}` },
@@ -127,13 +129,14 @@ async function coordinatorFixture(status: "completed" | "running", cleanupFailur
     definition,
     coordinator,
     actions,
+    sessionInputs,
     retained: () => retained,
     completeMember: (memberId: string) => completedMembers.add(memberId),
   };
 }
 
-function createRun(fixture: Awaited<ReturnType<typeof coordinatorFixture>>, clientRequestId: string) {
-  return fixture.runs.create({
+async function createRun(fixture: Awaited<ReturnType<typeof coordinatorFixture>>, clientRequestId: string) {
+  return await fixture.runs.create({
     clientRequestId,
     orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
     input: { prompt: "Review this change" },
@@ -144,7 +147,7 @@ function createRun(fixture: Awaited<ReturnType<typeof coordinatorFixture>>, clie
 test("coordinator projects a successful member result and closes the thread before workspace disposal", async () => {
   const fixture = await coordinatorFixture("completed");
   try {
-    const run = createRun(fixture, "request_success");
+    const run = await createRun(fixture, "request_success");
     const result = await fixture.runs.waitForToolResult(run.runId, undefined, 5_000);
     assert.equal(result.status, "completed");
     assert.equal(result.result?.text, "completed result");
@@ -160,7 +163,7 @@ test("coordinator projects a successful member result and closes the thread befo
 test("coordinator cancellation converges through finalizing and still disposes in order", async () => {
   const fixture = await coordinatorFixture("running");
   try {
-    const run = createRun(fixture, "request_cancel");
+    const run = await createRun(fixture, "request_cancel");
     while (!fixture.actions.includes("session.create")) await new Promise((resolve) => setTimeout(resolve, 1));
     fixture.runs.cancel(run.runId, {});
     const result = await fixture.runs.waitForToolResult(run.runId, undefined, 5_000);
@@ -175,7 +178,7 @@ test("coordinator cancellation converges through finalizing and still disposes i
 test("periodic reconciliation does not recover a Run owned by the current coordinator", async () => {
   const fixture = await coordinatorFixture("running");
   try {
-    const run = createRun(fixture, "request_live_reconciliation");
+    const run = await createRun(fixture, "request_live_reconciliation");
     await waitUntil(
       () => fixture.runs.get(run.runId).status === "running",
       () => ({ run: fixture.runs.get(run.runId), actions: fixture.actions }),
@@ -197,8 +200,8 @@ test("periodic reconciliation does not recover a Run owned by the current coordi
 test("coordinator keeps cleanup failures in finalizing and retries until convergence", async () => {
   const fixture = await coordinatorFixture("completed", 1);
   try {
-    const run = createRun(fixture, "request_cleanup_retry");
-    while (!fixture.actions.includes("workspace.dispose.failed")) await new Promise((resolve) => setTimeout(resolve, 1));
+    const run = await createRun(fixture, "request_cleanup_retry");
+    while (fixture.runs.get(run.runId).cleanup?.status !== "retrying") await new Promise((resolve) => setTimeout(resolve, 1));
     const retrying = fixture.runs.get(run.runId);
     assert.equal(retrying.status, "finalizing");
     assert.equal(retrying.cleanup?.status, "retrying");
@@ -215,7 +218,7 @@ test("coordinator keeps cleanup failures in finalizing and retries until converg
 test("startup reconciliation resumes only a queued Run that never created resources", async () => {
   const fixture = await coordinatorFixture("completed", 0, false);
   try {
-    const run = createRun(fixture, "request_queued_recovery");
+    const run = await createRun(fixture, "request_queued_recovery");
     assert.equal(run.status, "queued");
     await fixture.coordinator.reconcile();
     const result = await fixture.runs.waitForToolResult(run.runId, undefined, 5_000);
@@ -230,7 +233,7 @@ test("startup reconciliation resumes only a queued Run that never created resour
 test("startup reconciliation never re-executes a Run that already started", async () => {
   const fixture = await coordinatorFixture("completed", 0, false);
   try {
-    const run = createRun(fixture, "request_running_recovery");
+    const run = await createRun(fixture, "request_running_recovery");
     fixture.runs.transitionRun(run.runId, { status: "preparing" });
     fixture.runs.transitionRun(run.runId, { status: "running" });
     fixture.runs.transitionMember(run.runId, run.rootMemberId, { status: "preparing" });
@@ -261,7 +264,7 @@ for (const interruptedStatus of ["preparing", "finalizing"] as const) {
   test(`startup reconciliation fails an interrupted ${interruptedStatus} Run without re-execution`, async () => {
     const fixture = await coordinatorFixture("completed", 0, false);
     try {
-      const run = createRun(fixture, `request_${interruptedStatus}_recovery`);
+      const run = await createRun(fixture, `request_${interruptedStatus}_recovery`);
       if (interruptedStatus === "preparing") fixture.runs.transitionRun(run.runId, { status: "preparing" });
       else {
         fixture.runs.transitionRun(run.runId, { status: "preparing" });
@@ -282,7 +285,7 @@ for (const interruptedStatus of ["preparing", "finalizing"] as const) {
 test("duplicate cancellation is idempotent while cleanup is finalizing", async () => {
   const fixture = await coordinatorFixture("running");
   try {
-    const run = createRun(fixture, "request_duplicate_cancel");
+    const run = await createRun(fixture, "request_duplicate_cancel");
     await waitUntil(() => fixture.actions.includes("session.create"), () => fixture.actions);
     const first = fixture.runs.cancel(run.runId, {});
     const repeated = fixture.runs.cancel(run.runId, {});
@@ -298,9 +301,9 @@ test("duplicate cancellation is idempotent while cleanup is finalizing", async (
 test("Story-level Run scheduling is FIFO with at most two active Runs per initiating session", async () => {
   const fixture = await coordinatorFixture("running");
   try {
-    const first = createRun(fixture, "request_fifo_first");
-    const second = createRun(fixture, "request_fifo_second");
-    const third = createRun(fixture, "request_fifo_third");
+    const first = await createRun(fixture, "request_fifo_first");
+    const second = await createRun(fixture, "request_fifo_second");
+    const third = await createRun(fixture, "request_fifo_third");
     await waitUntil(
       () => fixture.actions.filter((action) => action === "session.create").length >= 2,
       () => ({ actions: fixture.actions }),
@@ -320,6 +323,38 @@ test("Story-level Run scheduling is FIFO with at most two active Runs per initia
       fixture.runs.waitForToolResult(second.runId, undefined, 5_000),
       fixture.runs.waitForToolResult(third.runId, undefined, 5_000),
     ]);
+  } finally {
+    await fixture.coordinator.stop();
+    await fixture.close();
+  }
+});
+
+test("Story context reaches only the provider instruction input and never widens the member workspace", async () => {
+  const fixture = await coordinatorFixture("completed");
+  try {
+    const renderedContext = "## Attached projects (context only, not mounted)\n1. Secret files\n   Path: /host/private/secret";
+    fixture.runs.setStoryContextResolver(async ({ storyId }) => ({
+      protocolVersion: "2026-11-26",
+      storyId,
+      nodeId: "node_one",
+      purpose: "agent-run",
+      revision: 1,
+      renderedContext,
+      diagnostics: [],
+      omittedProjectCount: 0,
+      omittedSessionCount: 0,
+      sessionCandidateWindowOmittedCount: 0,
+    }));
+    const run = await createRun(fixture, "request_workspace_boundary");
+    await fixture.runs.waitForToolResult(run.runId, undefined, 5_000);
+    const input = fixture.sessionInputs[0];
+    assert.equal(input.prompt, "Review this change");
+    assert.equal(input.prompt.includes("Secret files"), false);
+    assert.equal(input.appendedPrompt, `Review carefully\n\n${renderedContext}`);
+    assert.equal(input.cwd.path.includes("/host/private/secret"), false);
+    assert.equal(input.writableRoots.workspace.path, input.cwd.path);
+    assert.equal(input.writableRoots.shared.path, `/shared/${run.runId}`);
+    assert.equal(Object.keys(input.writableRoots).sort().join(","), "shared,workspace");
   } finally {
     await fixture.coordinator.stop();
     await fixture.close();

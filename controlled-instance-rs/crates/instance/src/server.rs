@@ -37,7 +37,7 @@ use controlled_instance_protocol::{
     RepositoryPublishRequest, RepositoryPullRequest, RepositoryPushRequest,
     RepositoryRemoveWorktreeRequest, RepositoryRenameFileRequest, RepositoryRuntimePathInput,
     RepositorySessionKind, RepositoryStartAiSessionRequest, RepositoryWriteFileRequest,
-    StoryAutomationInstanceCreateResult, TriggerAction, TriggerAiSessionPhase,
+    StoryAutomationInstanceCreateResult, StoryContextPurpose, TriggerAction, TriggerAiSessionPhase,
     TriggerAiSessionStatus, TriggerCreateInput, TriggerDeploymentCreateInput,
     TriggerDeploymentOrigin, TriggerPatchInput, TriggerPolicyInput, TriggerRunInput,
     TriggerScheduleKind, TriggerSource, TriggerTarget, TriggerWhenBusy,
@@ -554,6 +554,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/internal/node-agent/story-ai-sessions/{id}",
             get(story_ai_session_read),
+        )
+        .route(
+            "/api/internal/node-agent/story-ai-sessions/closed-summaries",
+            post(story_context_closed_session_summaries),
         )
         .route(
             "/api/internal/node-agent/story-ai-sessions/{id}/turns/{turn_id}",
@@ -1530,6 +1534,9 @@ async fn create_workspace_ai_session(
         )
         .into());
     }
+    let options = story_context_managed_create_options(state, input.story_id.as_deref())
+        .await
+        .map_err(WorkspaceAiSessionCreateError::Provider)?;
     let source_cwd = authorized_workspace_cwd(
         state,
         &RepositoryRuntimePathInput {
@@ -1812,7 +1819,11 @@ async fn create_workspace_ai_session(
         )
         .into());
     }
-    match state.ai_session_controller.create_session(input).await {
+    match state
+        .ai_session_controller
+        .create_managed_session(input, options)
+        .await
+    {
         Ok(result) => Ok(result),
         Err(error) => {
             if let Some(worktree_id) = created_worktree_id.as_deref() {
@@ -1821,6 +1832,43 @@ async fn create_workspace_ai_session(
             Err(WorkspaceAiSessionCreateError::Provider(error))
         }
     }
+}
+
+async fn story_context_managed_create_options(
+    state: &AppState,
+    story_id: Option<&str>,
+) -> Result<
+    controlled_instance_ai_session::AiSessionManagedCreateOptions,
+    controlled_instance_ai_session::ProviderError,
+> {
+    let mut options = controlled_instance_ai_session::AiSessionManagedCreateOptions::default();
+    let Some(story_id) = story_id else {
+        return Ok(options);
+    };
+    if !state.node_agent_client.enabled()
+        || !state
+            .node_agent_client
+            .supports_story_context_prompting()
+            .await
+    {
+        return Ok(options);
+    }
+    let resolution = state
+        .node_agent_client
+        .resolve_story_context(story_id, StoryContextPurpose::SessionCreate)
+        .await
+        .map_err(|error| {
+            let status = error.status().map_or(502, |status| status.as_u16());
+            let code = match &error {
+                crate::node_agent_client::NodeAgentClientError::Response { code, .. } => code
+                    .clone()
+                    .unwrap_or_else(|| "STORY_CONTEXT_RESOLVE_FAILED".to_string()),
+                _ => "STORY_CONTEXT_RESOLVE_FAILED".to_string(),
+            };
+            controlled_instance_ai_session::ProviderError::new(code, error.to_string(), status)
+        })?;
+    options.appended_prompt = Some(resolution.rendered_context).filter(|value| !value.is_empty());
+    Ok(options)
 }
 
 enum WorkspaceAiSessionCreateError {
@@ -8487,7 +8535,7 @@ async fn ai_session_history(
         data: controlled_instance_protocol::AiSessionHistoryList {
             items: state
                 .ai_session_history
-                .list(Some(&requested))
+                .list((!requested.contains("*")).then_some(&requested))
                 .into_iter()
                 .filter(|item| !member_ids.contains(&item.id))
                 .map(|item| project_ai_session_history_item_for_consumer(item, subagents))
@@ -8524,6 +8572,123 @@ async fn ai_session_history_detail(
             "AI session history entry not found.",
         ),
     }
+}
+
+fn truncate_story_context_text(value: Option<&str>, max_length: usize) -> Option<String> {
+    let value = value.filter(|value| !value.is_empty())?;
+    if controlled_instance_core::text::utf16_len(value) <= max_length {
+        return Some(value.to_string());
+    }
+    let marker = "… [truncated]";
+    if max_length <= controlled_instance_core::text::utf16_len(marker) {
+        return Some(controlled_instance_core::text::truncate_utf16(
+            marker, max_length,
+        ));
+    }
+    Some(format!(
+        "{}{marker}",
+        controlled_instance_core::text::truncate_utf16(
+            value,
+            max_length - controlled_instance_core::text::utf16_len(marker),
+        )
+    ))
+}
+
+async fn story_context_closed_session_summaries(
+    State(state): State<AppState>,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Response {
+    let Json(body) = match payload {
+        Ok(payload) => payload,
+        Err(error) => return ai_session_body_error(error),
+    };
+    let input: controlled_instance_protocol::StoryContextClosedSessionRequest =
+        match serde_json::from_value(body) {
+            Ok(input) => input,
+            Err(error) => {
+                return fastify_body_error(
+                    StatusCode::BAD_REQUEST,
+                    "STORY_CONTEXT_CLOSED_SESSIONS_INVALID",
+                    &error.to_string(),
+                )
+            }
+        };
+    if let Err(message) = input.validate() {
+        return fastify_body_error(
+            StatusCode::BAD_REQUEST,
+            "STORY_CONTEXT_CLOSED_SESSIONS_INVALID",
+            &message,
+        );
+    }
+    let excluded = input
+        .exclude_session_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    let member_ids = state
+        .agent_run_bindings
+        .list()
+        .into_iter()
+        .map(|binding| binding.ai_session_id)
+        .collect::<std::collections::HashSet<_>>();
+    let mut eligible = state
+        .ai_session_history
+        .list(None)
+        .into_iter()
+        .filter(|item| item.story_id.as_deref() == Some(input.story_id.as_str()))
+        .filter(|item| {
+            item.lineage
+                .as_ref()
+                .and_then(|lineage| lineage.get("kind"))
+                .and_then(Value::as_str)
+                != Some("subagent")
+        })
+        .filter(|item| !excluded.contains(&item.id) && !member_ids.contains(&item.id))
+        .collect::<Vec<_>>();
+    eligible.sort_by(|left, right| {
+        right
+            .last_active_at
+            .cmp(&left.last_active_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let omitted_count = eligible.len().saturating_sub(input.limit);
+    let sessions = eligible
+        .into_iter()
+        .take(input.limit)
+        .map(
+            |item| controlled_instance_protocol::StoryContextSessionSummary {
+                instance_id: state.config.instance_id.clone(),
+                session_id: item.id,
+                title: truncate_story_context_text(
+                    item.title.as_deref(),
+                    controlled_instance_protocol::STORY_CONTEXT_SESSION_TITLE_MAX_LENGTH,
+                ),
+                agent: item.agent,
+                status: Some("closed".to_string()),
+                user_prompt: truncate_story_context_text(
+                    item.user_prompt.as_deref(),
+                    controlled_instance_protocol::STORY_CONTEXT_SESSION_USER_PROMPT_MAX_LENGTH,
+                ),
+                last_response: truncate_story_context_text(
+                    item.last_message.as_deref(),
+                    controlled_instance_protocol::STORY_CONTEXT_SESSION_LAST_RESPONSE_MAX_LENGTH,
+                ),
+                last_activity_at: item.last_active_at,
+            },
+        )
+        .collect();
+    Json(ApiEnvelope {
+        data: controlled_instance_protocol::StoryContextClosedSessionResult {
+            protocol_version:
+                controlled_instance_protocol::STORY_CONTEXT_CLOSED_SESSIONS_PROTOCOL_VERSION
+                    .to_string(),
+            story_id: input.story_id,
+            sessions,
+            omitted_count: omitted_count as u64,
+            diagnostics: Vec::new(),
+        },
+    })
+    .into_response()
 }
 
 fn project_history_attachment_turns(
@@ -9243,13 +9408,14 @@ fn validate_private_catalog_protocols(
     if values.is_empty() {
         issues.push(zod_too_small("array", path.clone(), 1));
     }
-    if values.len() > 3 {
-        issues.push(zod_too_big("array", path.clone(), 3));
+    if values.len() > 4 {
+        issues.push(zod_too_big("array", path.clone(), 4));
     }
     let allowed = [
         "openai-responses",
         "openai-chat-completions",
         "anthropic-messages",
+        "google-generative-ai",
     ];
     for (index, value) in values.iter().enumerate() {
         let path = path
@@ -9265,7 +9431,7 @@ fn validate_private_catalog_protocols(
             issues.push(zod_invalid_value(
                 path,
                 &allowed,
-                "Invalid option: expected one of \"openai-responses\"|\"openai-chat-completions\"|\"anthropic-messages\""
+                "Invalid option: expected one of \"openai-responses\"|\"openai-chat-completions\"|\"anthropic-messages\"|\"google-generative-ai\""
                     .to_string(),
             ));
         }
@@ -9350,6 +9516,7 @@ fn validate_private_catalog_routes(
                 "openai-responses",
                 "openai-chat-completions",
                 "anthropic-messages",
+                "google-generative-ai",
             ],
             &route_path,
             issues,
@@ -11657,7 +11824,16 @@ async fn create_ai_session(
             "A message, attachment, or reference is required; message must be at most 20000 characters.",
         );
     }
-    match state.ai_session_controller.create_session(request).await {
+    let options =
+        match story_context_managed_create_options(&state, request.story_id.as_deref()).await {
+            Ok(options) => options,
+            Err(error) => return ai_session_provider_error(error),
+        };
+    match state
+        .ai_session_controller
+        .create_managed_session(request, options)
+        .await
+    {
         Ok(result) => {
             state.publish_ai_session_snapshot("control-action");
             Json(ApiEnvelope {
@@ -11813,6 +11989,7 @@ async fn interrupt_ai_session(State(state): State<AppState>, Path(id): Path<Stri
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AiSessionApprovalRequest {
     decision: String,
+    approval_request_id: Option<String>,
 }
 
 async fn resolve_ai_session_approval(
@@ -11826,7 +12003,11 @@ async fn resolve_ai_session_approval(
     };
     match state
         .ai_session_controller
-        .resolve_approval(&id, &request.decision)
+        .resolve_approval_with_request(
+            &id,
+            &request.decision,
+            request.approval_request_id.as_deref(),
+        )
         .await
     {
         Ok(result) => {
@@ -14081,7 +14262,16 @@ async fn create_story_automation_ai_session(
             }
         }
     } else {
-        match state.ai_session_controller.create_session(input).await {
+        let options =
+            match story_context_managed_create_options(&state, input.story_id.as_deref()).await {
+                Ok(options) => options,
+                Err(error) => return ai_session_provider_error(error),
+            };
+        match state
+            .ai_session_controller
+            .create_managed_session(input, options)
+            .await
+        {
             Ok(result) => result,
             Err(error) => return ai_session_provider_error(error),
         }
@@ -14147,14 +14337,6 @@ async fn create_agent_run_member(
         Ok(permission_mode) => permission_mode,
         Err(error) => return repository_error(error),
     };
-    let message = if request.appended_prompt.trim().is_empty() {
-        request.prompt.clone()
-    } else {
-        format!(
-            "{}\n\nAdditional Agent instructions:\n{}",
-            request.prompt, request.appended_prompt
-        )
-    };
     let input = controlled_instance_ai_session::AiSessionCreateInput {
         agent: request.provider_id.clone(),
         cwd: controlled_instance_ai_session::AiSessionRuntimePathInput {
@@ -14171,7 +14353,7 @@ async fn create_agent_run_member(
         reasoning_effort: request.reasoning_effort.clone(),
         story_id: None,
         message: controlled_instance_ai_session::AiSessionMessageInput {
-            message,
+            message: request.prompt.clone(),
             mode: None,
             client_request_id: Some(request.client_request_id.clone()),
             attachments: Vec::new(),
@@ -14185,6 +14367,8 @@ async fn create_agent_run_member(
             PathBuf::from(&request.writable_roots.shared.path),
         ],
         agent_tools: Some(request.enabled_tools.clone()),
+        appended_prompt: Some(request.appended_prompt.clone())
+            .filter(|value| !value.trim().is_empty()),
         ..Default::default()
     };
     let result = match state
@@ -17186,6 +17370,197 @@ mod tests {
         assert_eq!(observations, expected);
     }
 
+    #[cfg(unix)]
+    struct EnvRestore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    #[cfg(unix)]
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn install_test_launcher(state: &AppState, app_id: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let definition = controlled_instance_app_runtime::find_builtin_managed_app(app_id)
+            .unwrap_or_else(|| panic!("{app_id} definition"));
+        let platform = controlled_instance_app_runtime::current_platform();
+        let launcher = controlled_instance_app_runtime::managed_app_launcher_path(
+            &state.config.storage_paths.data_dir.join("managed-apps"),
+            &definition,
+            platform,
+            controlled_instance_app_runtime::current_arch(),
+            controlled_instance_app_runtime::detect_managed_app_recipe_target(platform),
+        )
+        .unwrap_or_else(|| panic!("{app_id} launcher path"));
+        std::fs::create_dir_all(launcher.parent().expect("launcher parent"))
+            .expect("create launcher directory");
+        std::fs::write(&launcher, "#!/bin/sh\nexit 0\n").expect("create launcher");
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755))
+            .expect("make launcher executable");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn v0061_client_parses_rust_acp_status_history_and_future_capabilities() {
+        let baseline = std::env::var("TASK_HANDOFF_TEST_ACP_V0061_CHECKOUT").unwrap_or_default();
+        if baseline.trim().is_empty() {
+            return;
+        }
+        let baseline_head = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&baseline)
+            .output()
+            .expect("read baseline HEAD");
+        assert!(
+            baseline_head.status.success(),
+            "baseline checkout is a Git tree"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&baseline_head.stdout).trim(),
+            "8fbf265964a90304eacccff7c7cf197c8e110887",
+            "baseline checkout must be v0.0.61"
+        );
+        let baseline_status = std::process::Command::new("git")
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--",
+                "packages/ai-session-runtime",
+                "packages/app-runtime",
+                "packages/control-plane-client",
+                "packages/controlled-instance",
+                "packages/protocol",
+            ])
+            .current_dir(&baseline)
+            .output()
+            .expect("read baseline status");
+        assert!(baseline_status.status.success());
+        assert!(
+            baseline_status.stdout.is_empty(),
+            "baseline protocol packages must be clean: {}",
+            String::from_utf8_lossy(&baseline_status.stdout)
+        );
+
+        let flags = [
+            "TASK_HANDOFF_ACP_GEMINI_ENABLED",
+            "TASK_HANDOFF_ACP_COMMANDCODE_ENABLED",
+            "TASK_HANDOFF_ACP_DSH_ENABLED",
+        ];
+        let _env = EnvRestore(
+            flags
+                .iter()
+                .map(|name| (*name, std::env::var_os(name)))
+                .collect(),
+        );
+        for flag in flags {
+            std::env::set_var(flag, "1");
+        }
+
+        let (state, root) = test_state();
+        for app_id in [
+            "codex",
+            "claude",
+            "opencode",
+            "gemini",
+            "commandcode",
+            "dsh",
+        ] {
+            install_test_launcher(&state, app_id);
+        }
+        let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        for (index, agent) in [
+            "codex",
+            "claude",
+            "opencode",
+            "gemini",
+            "commandcode",
+            "dsh",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            state
+                .ai_session_history
+                .upsert(
+                    AiSessionHistoryItem {
+                        id: format!("ses_{:013}", index + 1),
+                        agent: agent.to_string(),
+                        creation_source: "ai-session".to_string(),
+                        provider_session_id: "shared-id".to_string(),
+                        lineage: None,
+                        model_selection: None,
+                        reasoning_effort: None,
+                        story_id: None,
+                        title: None,
+                        user_prompt: None,
+                        last_message: None,
+                        cwd: state.config.storage_paths.data_dir.display().to_string(),
+                        cwd_folder_id: None,
+                        last_active_at: timestamp.clone(),
+                        archived_at: timestamp.clone(),
+                    },
+                    &[],
+                )
+                .expect("seed history");
+        }
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind compatibility server");
+        let address = listener.local_addr().expect("compatibility address");
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state))
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+                .expect("compatibility server");
+        });
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../test/fixtures/acp-v0.0.61-http-client.cjs");
+        let output = tokio::process::Command::new("node")
+            .arg(script)
+            .arg(&baseline)
+            .arg(format!("http://{address}"))
+            .output()
+            .await
+            .expect("run v0.0.61 client");
+        let _ = stop.send(());
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), server).await;
+        assert!(
+            output.status.success(),
+            "v0.0.61 client failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("client output JSON");
+        assert_eq!(
+            result["providers"],
+            json!([
+                "claude",
+                "codex",
+                "commandcode",
+                "dsh",
+                "gemini",
+                "opencode"
+            ])
+        );
+        assert_eq!(result["history"].as_array().map(Vec::len), Some(6));
+        drop(root);
+    }
+
     fn test_state_with_control_mode(control_mode: ControlMode) -> (AppState, tempfile::TempDir) {
         let root = tempfile::tempdir().expect("tempdir");
         let ui = root.path().join("ui");
@@ -18038,7 +18413,8 @@ mod tests {
             json!([
                 "openai-responses",
                 "openai-chat-completions",
-                "anthropic-messages"
+                "anthropic-messages",
+                "google-generative-ai"
             ])
         );
         for route in ["/triggers", "/apps", "/unknown-ui-route"] {
@@ -18443,12 +18819,27 @@ mod tests {
     async fn provider_transient_events_keep_the_authoritative_session_identity() {
         let (state, _root) = test_state();
         let mut session = ai_session_record("ses_0000000000001", "app-session-1");
+        session.agent = "commandcode".to_string();
         session.creation_source = "ai-session".to_string();
         session.provider_session_id = Some("provider-live".to_string());
+        for (agent, id) in [
+            ("gemini", "ses_0000000000002"),
+            ("dsh", "ses_0000000000003"),
+        ] {
+            let mut other = session.clone();
+            other.id = id.to_string();
+            other.agent = agent.to_string();
+            other.app_session_id = None;
+            state
+                .ai_sessions
+                .save(other)
+                .expect("seed colliding session");
+        }
         state.ai_sessions.save(session).expect("seed session");
         let mut events = state.events.subscribe();
 
         state.publish_ai_session_transient_event(
+            "commandcode",
             controlled_instance_ai_session::ProviderEvent::AgentMessageDelta {
                 provider_session_id: "provider-live".to_string(),
                 turn_id: "turn-live".to_string(),
@@ -18470,7 +18861,29 @@ mod tests {
         assert_eq!(delta.payload["delta"], "hello");
         assert!(delta.payload.get("generatedAt").is_some());
 
+        for (agent, id) in [
+            ("gemini", "ses_0000000000002"),
+            ("dsh", "ses_0000000000003"),
+        ] {
+            state.publish_ai_session_transient_event(
+                agent,
+                controlled_instance_ai_session::ProviderEvent::AgentMessageDelta {
+                    provider_session_id: "provider-live".to_string(),
+                    turn_id: "turn-live".to_string(),
+                    item_id: "message-live".to_string(),
+                    delta: agent.to_string(),
+                },
+            );
+            let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(event.payload["sessionId"], id);
+            assert_eq!(event.payload["delta"], agent);
+        }
+
         state.publish_ai_session_transient_event(
+            "commandcode",
             controlled_instance_ai_session::ProviderEvent::TimelineItemDelta {
                 provider_session_id: "provider-live".to_string(),
                 turn_id: "turn-live".to_string(),
@@ -18490,6 +18903,7 @@ mod tests {
         assert_eq!(timeline_delta.payload["field"], "output");
 
         state.publish_ai_session_transient_event(
+            "commandcode",
             controlled_instance_ai_session::ProviderEvent::TimelineItem {
                 provider_session_id: "provider-live".to_string(),
                 item: controlled_instance_protocol::AiSessionTimelineItem::Activity {

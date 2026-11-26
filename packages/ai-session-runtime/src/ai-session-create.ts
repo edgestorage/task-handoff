@@ -21,6 +21,8 @@ import { isAiSessionStorageFailure } from "./ai-session/file-store";
 export type AiSessionCreateCoordinatorInput = {
   agent: AiAgentKind;
   cwd: string;
+  /** Provider-native instructions kept separate from the visible first user message. */
+  appendedPrompt?: string;
   /** Internal runtime roots for managed member sessions; never accepted from public wire input. */
   runtimeWorkspaceRoots?: string[];
   cwdFolderId?: string;
@@ -121,6 +123,7 @@ export class AiSessionCreateCoordinator {
     ));
     const created = await this.measure(input, "provider-create", () => provider.createSession!({
       cwd: input.cwd,
+      appendedPrompt: input.appendedPrompt,
       runtimeWorkspaceRoots: input.runtimeWorkspaceRoots,
       permissionMode: input.permissionMode,
       modelSelection,

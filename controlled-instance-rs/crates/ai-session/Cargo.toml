@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+agent-client-protocol = "=5.5.1"
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
@@ -21,8 +22,10 @@ sha1.workspace = true
 thiserror.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+tokio-util = { version = "0.7", features = ["compat"] }
 tokio-tungstenite.workspace = true
 tracing.workspace = true
+url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

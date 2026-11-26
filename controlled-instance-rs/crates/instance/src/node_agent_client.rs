@@ -2,7 +2,8 @@ use controlled_instance_core::reconnect::StandardReconnectBackoff;
 use controlled_instance_protocol::{
     GitCredentialHttpsResolveResponse, GitCredentialSshAgentResponse,
     GitCredentialSshPrepareResponse, InstanceStatusSnapshot, StoryAgentContentListResult,
-    StoryAgentPagination, StoryContentPageResult, StoryContentSetResult,
+    StoryAgentPagination, StoryContentPageResult, StoryContentSetResult, StoryContextCaller,
+    StoryContextPurpose, StoryContextResolution, StoryContextResolveInput,
     AI_SESSION_RENAME_PROTOCOL_VERSION, APP_PROFILES_PROTOCOL_VERSION,
     NODE_AGENT_PROTOCOL_VERSION_HEADER,
 };
@@ -100,6 +101,7 @@ struct ConnectionState {
     node_agent_url: Option<String>,
     registered_instance_id: Option<String>,
     node_agent_protocol_version: Option<String>,
+    story_context_prompting: Option<bool>,
     revision: u64,
 }
 
@@ -140,6 +142,7 @@ impl NodeAgentClient {
                     node_agent_url,
                     registered_instance_id: None,
                     node_agent_protocol_version: None,
+                    story_context_prompting: None,
                     revision: 0,
                 }),
                 operation: AsyncMutex::new(()),
@@ -228,6 +231,7 @@ impl NodeAgentClient {
         state.node_agent_url = Some(normalized.clone());
         state.registered_instance_id = None;
         state.node_agent_protocol_version = None;
+        state.story_context_prompting = None;
         state.revision = state.revision.wrapping_add(1);
         drop(state);
         self.inner.wake.notify_one();
@@ -468,6 +472,91 @@ impl NodeAgentClient {
             )
             .await?;
         response_data(response).await
+    }
+
+    pub async fn supports_story_context_prompting(&self) -> bool {
+        if let Some(value) = self
+            .inner
+            .connection
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .story_context_prompting
+        {
+            return value;
+        }
+        let supported = async {
+            let instance_id = self.required_instance_id()?;
+            let response = self
+                .request(
+                    Method::GET,
+                    &format!(
+                        "node-agent/instances/{}/capabilities",
+                        encode_path(&instance_id)
+                    ),
+                    None,
+                )
+                .await?;
+            let data = response_data(response).await?;
+            let context = data
+                .get("stories")
+                .and_then(|value| value.get("contextSettings"));
+            Ok::<bool, NodeAgentClientError>(
+                context
+                    .and_then(|value| value.get("settings"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                    && context
+                        .and_then(|value| value.get("sessionPrompting"))
+                        .and_then(Value::as_bool)
+                        == Some(true),
+            )
+        }
+        .await
+        .unwrap_or(false);
+        self.inner
+            .connection
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .story_context_prompting = Some(supported);
+        supported
+    }
+
+    pub async fn resolve_story_context(
+        &self,
+        story_id: &str,
+        purpose: StoryContextPurpose,
+    ) -> Result<StoryContextResolution, NodeAgentClientError> {
+        let instance_id = self.required_instance_id()?;
+        let body = serde_json::to_value(StoryContextResolveInput {
+            story_id: story_id.to_string(),
+            purpose,
+            caller: Some(StoryContextCaller {
+                instance_id: instance_id.clone(),
+                session_id: None,
+            }),
+            exclude_session_ids: Vec::new(),
+        })?;
+        let response = self
+            .request(
+                Method::POST,
+                &format!(
+                    "node-agent/instances/{}/stories/{}/context/resolve",
+                    encode_path(&instance_id),
+                    encode_path(story_id)
+                ),
+                Some(body),
+            )
+            .await?;
+        let resolution: StoryContextResolution =
+            serde_json::from_value(response_data(response).await?)?;
+        if resolution.validate().is_err() || resolution.story_id != story_id {
+            return Err(NodeAgentClientError::Response {
+                status: StatusCode::BAD_GATEWAY,
+                code: Some("STORY_CONTEXT_INVALID_RESPONSE".to_string()),
+                message: "Node agent returned an invalid Story context response.".to_string(),
+            });
+        }
+        Ok(resolution)
     }
 
     pub async fn invoke_story_agent_tool(
@@ -1025,7 +1114,7 @@ mod tests {
         extract::{Path, State},
         http::{HeaderMap, HeaderValue},
         response::IntoResponse,
-        routing::post,
+        routing::{get, post},
         Json, Router,
     };
     use controlled_instance_core::paths::StoragePaths;
@@ -1277,6 +1366,10 @@ mod tests {
         let app = Router::new()
             .route("/api/node-agent/instances/{id}/register", post(register))
             .route("/api/node-agent/instances/{id}/heartbeat", post(heartbeat))
+            .route(
+                "/api/node-agent/instances/{id}/capabilities",
+                get(instance_capabilities),
+            )
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1286,6 +1379,62 @@ mod tests {
             axum::serve(listener, app).await.expect("mock server");
         });
         (address, state, server)
+    }
+
+    async fn instance_capabilities(
+        State(state): State<MockState>,
+        Path(instance_id): Path<String>,
+        headers: HeaderMap,
+    ) -> impl IntoResponse {
+        state
+            .requests
+            .lock()
+            .expect("requests")
+            .push(ObservedRequest {
+                path: format!("/api/node-agent/instances/{instance_id}/capabilities"),
+                authorization: headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+                body: Value::Null,
+            });
+        if headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            != Some("Bearer registration-secret")
+        {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        Json(json!({
+            "data": {
+                "stories": {
+                    "contextSettings": {
+                        "settings": true,
+                        "projects": true,
+                        "sessionPrompting": true
+                    }
+                }
+            }
+        }))
+        .into_response()
+    }
+
+    #[tokio::test]
+    async fn story_context_capability_uses_the_instance_scoped_route() {
+        let (address, mock, server) = start_mock_node_agent().await;
+        let client = NodeAgentClient::new(config(format!("http://{address}")));
+
+        assert!(client.supports_story_context_prompting().await);
+        let requests = mock.requests.lock().expect("requests").clone();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0]
+            .path
+            .ends_with("/instances/ins_0000000000000/capabilities"));
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer registration-secret")
+        );
+        server.abort();
     }
 
     #[tokio::test]

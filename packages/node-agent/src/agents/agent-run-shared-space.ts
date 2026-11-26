@@ -96,7 +96,7 @@ export class AgentRunSharedSpaceService {
     try {
       const diagnostics = await this.backend.ensureRunDirectory({ ...input, runtimePath: binding.runtimePath });
       const active = this.repository.updateSharedSpace(input.runId, { state: "active", diagnostics, timestamp: input.timestamp });
-      this.repository.register({
+      const resource = this.repository.register({
         runId: input.runId,
         instanceId: input.instanceId,
         runtimeId: input.runtimeId,
@@ -106,6 +106,9 @@ export class AgentRunSharedSpaceService {
         metadata: { runtimePath: binding.runtimePath },
         timestamp: input.timestamp,
       });
+      if (resource.phase === "preparing") {
+        this.repository.transition(resource.resourceId, "ready", { timestamp: input.timestamp });
+      }
       return { space: active, binding };
     } catch (cause) {
       this.repository.updateSharedSpace(input.runId, {

@@ -264,6 +264,45 @@ test("Node tunnel translates Node Agent trust changes into the public Control Pl
   assert.deepEqual(published[0]?.scope, { nodeId: "node_one" });
 });
 
+test("Node tunnel routes Story changes to the stories invalidation topic without expanding the payload", () => {
+  const events = new ControlPlaneEventBus();
+  const published: any[] = [];
+  events.on((event) => published.push(event));
+  const router = new NodeTunnelEventRouter({ events });
+
+  router.handle("node_one", {
+    type: "node-agent.event.forwarded",
+    event: {
+      id: "event_story",
+      type: "story.changed",
+      createdAt: timestamp,
+      payload: { storyId: "story_one", nodeId: "node_one", change: "updated", appendedPrompt: "private" },
+    },
+  });
+
+  assert.equal(published[0]?.type, "story.changed");
+  assert.equal(published[0]?.topic, "stories");
+  assert.deepEqual(published[0]?.payload, { storyId: "story_one", nodeId: "node_one", change: "updated" });
+  assert.deepEqual(published[0]?.scope, { nodeId: "node_one" });
+});
+
+test("Node tunnel rejects Story changes that claim another Node", () => {
+  const events = new ControlPlaneEventBus();
+  const published: any[] = [];
+  events.on((event) => published.push(event));
+  const router = new NodeTunnelEventRouter({ events });
+
+  router.handle("node_one", {
+    type: "node-agent.event.forwarded",
+    event: {
+      type: "story.changed",
+      payload: { storyId: "story_one", nodeId: "node_two", change: "updated" },
+    },
+  });
+
+  assert.deepEqual(published, []);
+});
+
 test("Node tunnel forwards pin-only trust invalidations", () => {
   const events = new ControlPlaneEventBus();
   const published: any[] = [];

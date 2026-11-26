@@ -35,6 +35,8 @@ pub enum PrivateModelProtocol {
     OpenAiChatCompletions,
     #[serde(rename = "anthropic-messages")]
     AnthropicMessages,
+    #[serde(rename = "google-generative-ai")]
+    GoogleGenerativeAi,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -359,8 +361,8 @@ fn normalize_entity(
     model_names: &mut Vec<PrivateModelNameEntry>,
 ) -> Result<(), String> {
     trim_bounded(id, 120, "Private model entity id")?;
-    if protocols.is_empty() || protocols.len() > 3 {
-        return Err("Private model entity protocols must contain 1 to 3 entries.".to_string());
+    if protocols.is_empty() || protocols.len() > 4 {
+        return Err("Private model entity protocols must contain 1 to 4 entries.".to_string());
     }
     if model_names.is_empty() || model_names.len() > 256 {
         return Err("Private model entity names must contain 1 to 256 entries.".to_string());

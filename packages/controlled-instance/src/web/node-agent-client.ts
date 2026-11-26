@@ -32,6 +32,11 @@ import { aiSessionAgentToolNames, type AiSessionAgentToolName } from "@task-hand
 import { AgentInvocationRequestSchema, AgentInvocationToolInputSchema } from "@task-handoff/protocol/agent-invocation-tools";
 import { AgentRunToolResultSchema } from "@task-handoff/protocol/agent-runs";
 import { StoryToolPolicyCache } from "./story-tool-policy-cache.ts";
+import {
+  sanitizeStoryContextResolution,
+  type StoryContextPurpose,
+} from "@task-handoff/protocol/story-context";
+import { supportsNodeStorySessionPrompting } from "@task-handoff/protocol/node-agent-capabilities";
 
 export type NodeAgentRegistrationConfig = {
   controlMode: "standalone" | "controlled";
@@ -112,6 +117,7 @@ export class NodeAgentRegistrationClient {
   private readonly fetchImpl: typeof fetch;
   private readonly storyToolPolicies = new StoryToolPolicyCache();
   private storyToolPolicyCapability: "unknown" | "supported" = "unknown";
+  private storyContextPromptingCapability: "unknown" | "supported" | "unsupported" = "unknown";
 
   constructor(
     config: NodeAgentRegistrationConfig,
@@ -136,6 +142,7 @@ export class NodeAgentRegistrationClient {
     this.connectionRevision += 1;
     this.nodeAgentProtocolVersion = undefined;
     this.storyToolPolicyCapability = "unknown";
+    this.storyContextPromptingCapability = "unknown";
     this.storyToolPolicies.clear();
     this.registeredInstanceId = "";
     this.reconnectBackoff.reset();
@@ -288,6 +295,42 @@ export class NodeAgentRegistrationClient {
       storyId,
       `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/ai-sessions/${encodeURIComponent(sessionId)}/story-agent-tools`,
     );
+  }
+
+  async supportsStoryContextPrompting() {
+    if (this.storyContextPromptingCapability !== "unknown") {
+      return this.storyContextPromptingCapability === "supported";
+    }
+    try {
+      const capabilities = await this.request(
+        `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/capabilities`,
+        {},
+        "GET",
+      );
+      this.storyContextPromptingCapability = supportsNodeStorySessionPrompting(capabilities)
+        ? "supported"
+        : "unsupported";
+    } catch {
+      // An old or temporarily unavailable Node cannot resolve Story context.
+      // Keep the session path working without injecting partial instructions.
+      this.storyContextPromptingCapability = "unsupported";
+    }
+    return this.storyContextPromptingCapability === "supported";
+  }
+
+  async resolveStoryContext(storyId: string, purpose: StoryContextPurpose, caller?: { instanceId: string; sessionId?: string }) {
+    const result = await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/stories/${encodeURIComponent(storyId)}/context/resolve`,
+      { purpose, ...(caller ? { caller } : {}), excludeSessionIds: [] },
+    );
+    const resolution = sanitizeStoryContextResolution(result);
+    if (resolution.storyId !== storyId) {
+      throw Object.assign(new Error("Node agent returned Story context for another Story."), {
+        code: "STORY_CONTEXT_SCOPE_MISMATCH",
+        statusCode: 502,
+      });
+    }
+    return resolution;
   }
 
   cachedStoryAgentTools(storyId: string) {

@@ -66,6 +66,14 @@ import { AgentInvocationRequestSchema } from "@task-handoff/protocol/agent-invoc
 import { AgentRunToolResultSchema } from "@task-handoff/protocol/agent-runs";
 import type { AgentRunService } from "../agents/run-service.ts";
 import type { StoryDecisionCommandService } from "./decision-service.ts";
+import {
+  StoryContextResolveInputSchema,
+  StoryContextResolutionSchema,
+  StoryContextSettingsSchema,
+  StoryContextSettingsUpdateInputSchema,
+} from "@task-handoff/protocol/story-context";
+import type { StoryContextSettingsService } from "./context-settings-service.ts";
+import type { StoryContextResolutionService } from "./story-context-resolution-service.ts";
 
 type NodeStoryRouteOptions = {
   fetchImpl?: typeof fetch;
@@ -79,6 +87,8 @@ type NodeStoryRouteOptions = {
   aiSessionRead?: StoryAiSessionReadService;
   agentRuns?: AgentRunService;
   decisions?: StoryDecisionCommandService;
+  contextSettings?: StoryContextSettingsService;
+  contextResolution?: StoryContextResolutionService;
 };
 
 const StoryParamsSchema = z.object({ storyId: StoryIdSchema }).strict();
@@ -191,10 +201,34 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
     return { data: await store.retentionSettings(storyId) };
   });
 
+  app.get("/api/node-agent/stories/:storyId/settings/context", async (request) => {
+    const { storyId } = StoryParamsSchema.parse(request.params);
+    if (!options.contextSettings) throw Object.assign(new Error("Story context settings are unavailable."), { code: "STORY_CONTEXT_UNAVAILABLE", statusCode: 503 });
+    return { data: StoryContextSettingsSchema.parse(await options.contextSettings.get(storyId)) };
+  });
+
+  app.put("/api/node-agent/stories/:storyId/settings/context", async (request) => {
+    const { storyId } = StoryParamsSchema.parse(request.params);
+    if (!options.contextSettings) throw Object.assign(new Error("Story context settings are unavailable."), { code: "STORY_CONTEXT_UNAVAILABLE", statusCode: 503 });
+    const input = StoryContextSettingsUpdateInputSchema.parse(request.body);
+    return { data: StoryContextSettingsSchema.parse(await options.contextSettings.update(storyId, input)) };
+  });
+
   app.get("/api/node-agent/stories/:storyId/settings/agent-tools", async (request) => {
     const { storyId } = StoryParamsSchema.parse(request.params);
     if (!options.toolPolicy) throw Object.assign(new Error("Story Agent Tool policy is unavailable."), { code: "STORY_AGENT_TOOL_POLICY_UNAVAILABLE", statusCode: 503 });
     return { data: await options.toolPolicy.settings(storyId) };
+  });
+
+  app.post("/api/node-agent/instances/:id/stories/:storyId/context/resolve", async (request) => {
+    const { id, storyId } = z.object({
+      id: z.string().trim().min(1).max(120),
+      storyId: StoryIdSchema,
+    }).strict().parse(request.params);
+    state.authenticateInstance(id, bearerToken(request.headers));
+    if (!options.contextResolution) throw Object.assign(new Error("Story context resolution is unavailable."), { code: "STORY_CONTEXT_UNAVAILABLE", statusCode: 503 });
+    const input = StoryContextResolveInputSchema.omit({ storyId: true }).parse(request.body || {});
+    return { data: StoryContextResolutionSchema.parse(await options.contextResolution.resolve({ storyId, ...input })) };
   });
 
   app.post("/api/node-agent/stories/:storyId/actions/:actionId/run", async (request) => {
@@ -396,7 +430,7 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
     }
     const invocation = AgentInvocationRequestSchema.parse(request.body);
     const entry = await options.toolPolicy.assertAgentInvocation(story.id, invocation.input.agentId, invocation.input.orchestrationId);
-    const run = options.agentRuns.create({
+    const run = await options.agentRuns.create({
       clientRequestId: invocation.clientRequestId,
       orchestrationId: entry.orchestrationId,
       entryAgentId: entry.agentId,

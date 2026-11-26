@@ -48,6 +48,7 @@ import {
 import { AGENT_DEFINITION_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-definitions";
 import { AGENT_ORCHESTRATION_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-orchestrations";
 import { AGENT_RUN_CHANGED_EVENT_TYPE, AGENT_RUN_MEMBER_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-runs";
+import { StoryChangedEventSchema, StoryChangedEventType } from "@task-handoff/protocol/stories";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 
 const SESSION_EVENT_SCHEMAS = {
@@ -293,6 +294,24 @@ export class NodeTunnelEventRouter {
           eventType,
           error: error instanceof Error ? error.message : String(error),
         }, "node capability refresh failed");
+      });
+      return true;
+    }
+
+    if (eventType === StoryChangedEventType) {
+      const parsed = safeParseResponse(StoryChangedEventSchema, payload);
+      if (!parsed.success || parsed.data.nodeId !== nodeId) {
+        this.options.logger?.warn?.({ nodeId, eventType, reason: "invalid-payload" }, "story-event.transport.rejected");
+        return true;
+      }
+      this.options.events?.publish(eventType, parsed.data, {
+        topic: "stories",
+        scope: { nodeId },
+        sourceEvent: {
+          id: typeof event.id === "string" ? event.id : `forwarded_${Date.now().toString(36)}`,
+          createdAt: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString(),
+          ...(event.replay === true ? { replay: true as const } : {}),
+        },
       });
       return true;
     }

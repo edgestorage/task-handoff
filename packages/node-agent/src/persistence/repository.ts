@@ -18,6 +18,8 @@ export type StoryAutomationRunRecord = typeof schema.automationRuns.$inferSelect
 export type StoryFileMutationRecord = typeof schema.fileMutations.$inferSelect;
 export type StoryDeletionIntentRecord = typeof schema.deletionIntents.$inferSelect;
 export type StoryDecisionRecord = typeof schema.decisions.$inferSelect;
+export type StoryContextSettingsRecord = typeof schema.storyContextSettings.$inferSelect;
+export type StoryContextProjectRecord = typeof schema.storyContextProjects.$inferSelect;
 
 type NewStoryRecord = typeof schema.stories.$inferInsert;
 type NewStoryActionRecord = typeof schema.actions.$inferInsert;
@@ -77,6 +79,7 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     automations: ReturnType<typeof automationRepository>;
     runs: ReturnType<typeof runRepository>;
     decisions: ReturnType<typeof decisionRepository>;
+    storyContext: ReturnType<typeof storyContextRepository>;
     fileMutations: ReturnType<typeof fileMutationRepository>;
     deletionIntents: ReturnType<typeof deletionIntentRepository>;
     topology: ReturnType<typeof createTopologyRepositories>;
@@ -128,6 +131,7 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     automations: automationRepository(db, read, mutate),
     runs: runRepository(db, read, mutate),
     decisions: decisionRepository(db, read, mutate),
+    storyContext: storyContextRepository(db, read, mutate),
     fileMutations: fileMutationRepository(db, read, mutate),
     deletionIntents: deletionIntentRepository(db, read, mutate),
     topology,
@@ -172,6 +176,74 @@ function storyRepository(db: NodeSQLiteDatabase, read: Read, mutate: Mutate) {
     },
     async delete(id: string) {
       return mutate(async () => Number((await db.delete(schema.stories).where(eq(schema.stories.id, id))).changes) > 0);
+    },
+  };
+}
+
+function storyContextRepository(db: NodeSQLiteDatabase, read: Read, mutate: Mutate) {
+  return {
+    async get(storyId: string) {
+      return read(async () => {
+        const story = (await db.select({ updatedAt: schema.stories.updatedAt }).from(schema.stories).where(eq(schema.stories.id, storyId)).limit(1))[0];
+        if (!story) return undefined;
+        const settings = (await db.select().from(schema.storyContextSettings).where(eq(schema.storyContextSettings.storyId, storyId)).limit(1))[0];
+        const projects = await db.select().from(schema.storyContextProjects)
+          .where(eq(schema.storyContextProjects.storyId, storyId))
+          .orderBy(asc(schema.storyContextProjects.displayOrder));
+        return {
+          storyId,
+          revision: settings?.revision ?? 0,
+          appendedPrompt: settings?.appendedPrompt ?? "",
+          updatedAt: settings?.updatedAt ?? story.updatedAt,
+          projectFolderIds: projects.map((project) => project.folderId),
+        };
+      });
+    },
+    async replace(input: {
+      storyId: string;
+      expectedRevision: number;
+      projectFolderIds: string[];
+      appendedPrompt: string;
+      updatedAt: string;
+    }) {
+      return mutate(async () => {
+        const existing = (await db.select().from(schema.storyContextSettings)
+          .where(eq(schema.storyContextSettings.storyId, input.storyId))
+          .limit(1))[0];
+        const currentRevision = existing?.revision ?? 0;
+        if (currentRevision !== input.expectedRevision) {
+          throw Object.assign(new Error("Story context settings changed since they were read."), {
+            code: "STORY_CONTEXT_REVISION_CONFLICT",
+            statusCode: 409,
+            details: { currentRevision },
+          });
+        }
+        const revision = currentRevision + 1;
+        await db.insert(schema.storyContextSettings).values({
+          storyId: input.storyId,
+          appendedPrompt: input.appendedPrompt,
+          revision,
+          updatedAt: input.updatedAt,
+        }).onConflictDoUpdate({
+          target: schema.storyContextSettings.storyId,
+          set: { appendedPrompt: input.appendedPrompt, revision, updatedAt: input.updatedAt },
+        });
+        await db.delete(schema.storyContextProjects).where(eq(schema.storyContextProjects.storyId, input.storyId));
+        if (input.projectFolderIds.length) {
+          await db.insert(schema.storyContextProjects).values(input.projectFolderIds.map((folderId, displayOrder) => ({
+            storyId: input.storyId,
+            folderId,
+            displayOrder,
+          })));
+        }
+        return {
+          storyId: input.storyId,
+          revision,
+          appendedPrompt: input.appendedPrompt,
+          updatedAt: input.updatedAt,
+          projectFolderIds: [...input.projectFolderIds],
+        };
+      });
     },
   };
 }

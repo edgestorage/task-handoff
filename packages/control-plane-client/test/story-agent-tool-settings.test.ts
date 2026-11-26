@@ -51,6 +51,45 @@ test("Stories client rejects malformed Agent Tool settings", async () => {
   await assert.rejects(() => stories.agentToolSettings("story_one", "node_one"));
 });
 
+test("Stories client owns Story context settings routes and sanitizes unknown response fields", async () => {
+  const requests: Array<{ path: string; init?: RequestInit }> = [];
+  const timestamp = "2026-11-26T00:00:00.000Z";
+  const stories = createControlPlaneStoriesApi({
+    async request(path: string, schema: { parse(value: unknown): unknown }, init?: RequestInit) {
+      requests.push({ path, init });
+      return schema.parse({ data: {
+        storyId: "story_one",
+        revision: 4,
+        projectFolderIds: ["folder_one"],
+        appendedPrompt: "Keep context",
+        updatedAt: timestamp,
+        future: "ignored",
+      } });
+    },
+  } as never);
+
+  assert.deepEqual(await stories.contextSettings("story/one", "node one"), {
+    storyId: "story_one",
+    revision: 4,
+    projectFolderIds: ["folder_one"],
+    appendedPrompt: "Keep context",
+    updatedAt: timestamp,
+  });
+  assert.equal((await stories.updateContextSettings("story/one", "node one", {
+    expectedRevision: 4,
+    projectFolderIds: ["folder_two"],
+    appendedPrompt: "Updated",
+  })).revision, 4);
+
+  assert.equal(requests[0]?.path, "/api/stories/story%2Fone/settings/context?nodeId=node%20one");
+  assert.equal(requests[1]?.path, "/api/stories/story%2Fone/settings/context");
+  assert.equal(requests[1]?.init?.method, "PUT");
+  assert.deepEqual(JSON.parse(String(requests[1]?.init?.body)), {
+    nodeId: "node one",
+    input: { expectedRevision: 4, projectFolderIds: ["folder_two"], appendedPrompt: "Updated" },
+  });
+});
+
 test("Stories client runs a preset Action through its Story owner node", async () => {
   const requests: Array<{ path: string; init?: RequestInit }> = [];
   const stories = createControlPlaneStoriesApi({

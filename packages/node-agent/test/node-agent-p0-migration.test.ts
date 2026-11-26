@@ -60,6 +60,34 @@ test("v0.0.28 P0 JSON migrates atomically into SQLite and runtime projections", 
   assert.equal(state.gitCredentials.getWorkspaceProvisioning("instance_v028")?.operationId, "gitop_v028");
   assert.deepEqual(app.nodeAgentIdentityService?.listControlPlaneConnections().map((item) => item.url), ["https://control.example.test"]);
 
+  const instanceCapabilities = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/instances/instance_v028/capabilities",
+    headers: { authorization: "Bearer instance-secret-v028" },
+  });
+  assert.equal(instanceCapabilities.statusCode, 200, instanceCapabilities.body);
+  assert.equal(instanceCapabilities.json().data.stories.contextSettings.sessionPrompting, true);
+  const deniedCapabilities = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/instances/instance_v028/capabilities",
+    headers: { authorization: "Bearer wrong-secret" },
+  });
+  assert.notEqual(deniedCapabilities.statusCode, 200);
+  const instanceAgentRun = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/instance_v028/ai-sessions/ais_missing/agent-runs",
+    headers: { authorization: "Bearer instance-secret-v028" },
+    payload: { clientRequestId: "agent-run-auth-probe", input: { agentId: "agent_missing", prompt: "probe" } },
+  });
+  assert.notEqual(instanceAgentRun.json().error?.code, "NODE_AGENT_HMAC_SIGNATURE_REQUIRED");
+  const memberAgentRun = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/agent-runs/run_missing/members/member_missing/ai-sessions/ais_missing/agent-runs",
+    headers: { authorization: "Bearer instance-secret-v028" },
+    payload: { clientRequestId: "agent-run-member-auth-probe", input: { agentId: "agent_missing", prompt: "probe" } },
+  });
+  assert.notEqual(memberAgentRun.json().error?.code, "NODE_AGENT_HMAC_SIGNATURE_REQUIRED");
+
   const verify = new DatabaseSync(paths.databasePath, { readOnly: true });
   const migration = verify.prepare("SELECT details FROM na_migration_ledger WHERE id = ?").get("1000_import_v0_0_28_p0") as { details: string };
   assert.equal(JSON.stringify(migration).includes("git-secret-v028"), false);

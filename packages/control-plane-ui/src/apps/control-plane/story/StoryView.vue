@@ -431,6 +431,35 @@
       <div id="story-editor-advanced-settings" v-show="editorAdvancedOpen" class="story-editor-advanced-settings">
         <label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label>
         <label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label>
+        <fieldset v-if="storyContextVisible" class="story-agent-tool-settings story-context-settings" :disabled="saving || storyContextState !== 'ready'">
+          <legend>{{ t("stories.editor.storyContext") }}</legend>
+          <div v-if="storyContextState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.storyContextLoading") }}</div>
+          <div v-else-if="storyContextState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.storyContextUnsupported") }}</div>
+          <div v-else-if="storyContextState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ storyContextError || t("stories.editor.storyContextUnavailable") }}</div>
+          <template v-else-if="storyContextState === 'ready'">
+            <div v-if="draftStoryContextProjectsSupported" class="story-context-section">
+              <div class="story-context-section-heading"><span>{{ t("stories.editor.storyContextProjects") }}</span><span>{{ draftProjectFolderIds.length }} / {{ STORY_CONTEXT_MAX_PROJECTS }}</span></div>
+              <p class="story-context-note">{{ t("stories.editor.storyContextProjectsNote") }}</p>
+              <div v-if="draftProjectFolderIds.length" class="story-context-project-list">
+                <div v-for="(folderId, index) in draftProjectFolderIds" :key="folderId" class="story-context-project-row">
+                  <span class="story-context-project-index">{{ index + 1 }}</span>
+                  <span class="story-context-project-copy"><span>{{ storyContextFolder(folderId)?.name || t("stories.editor.storyContextProjectUnavailable") }}</span><small>{{ storyContextFolder(folderId)?.path || folderId }}</small></span>
+                  <span class="story-context-project-actions">
+                    <Button variant="ghost" size="icon-sm" :disabled="index === 0" :aria-label="t('stories.editor.storyContextMoveUp', { name: storyContextFolder(folderId)?.name || folderId })" :title="t('stories.editor.storyContextMoveUp', { name: storyContextFolder(folderId)?.name || folderId })" @click="moveStoryContextProject(index, -1)"><ArrowUp :size="13" /></Button>
+                    <Button variant="ghost" size="icon-sm" :disabled="index === draftProjectFolderIds.length - 1" :aria-label="t('stories.editor.storyContextMoveDown', { name: storyContextFolder(folderId)?.name || folderId })" :title="t('stories.editor.storyContextMoveDown', { name: storyContextFolder(folderId)?.name || folderId })" @click="moveStoryContextProject(index, 1)"><ArrowDown :size="13" /></Button>
+                    <Button variant="ghost" size="icon-sm" :aria-label="t('stories.editor.storyContextRemoveProject', { name: storyContextFolder(folderId)?.name || folderId })" :title="t('stories.editor.storyContextRemoveProject', { name: storyContextFolder(folderId)?.name || folderId })" @click="removeStoryContextProject(folderId)"><X :size="13" /></Button>
+                  </span>
+                </div>
+              </div>
+              <div v-else class="story-agent-tool-state">{{ t("stories.editor.storyContextProjectsEmpty") }}</div>
+              <ControlPlaneSelect :model-value="storyContextAddProjectId" :disabled="!availableStoryContextFolders.length || draftProjectFolderIds.length >= STORY_CONTEXT_MAX_PROJECTS" :placeholder="availableStoryContextFolders.length ? t('stories.editor.storyContextAddProject') : t('stories.editor.storyContextNoProjects')" :aria-label="t('stories.editor.storyContextAddProject')" @update:model-value="addStoryContextProject">
+                <ControlPlaneSelectItem v-for="folder in availableStoryContextFolders" :key="folder.id" :value="folder.id">{{ folder.name }} · {{ folder.path }}</ControlPlaneSelectItem>
+              </ControlPlaneSelect>
+            </div>
+            <label v-if="draftStoryContextPromptSupported" class="story-context-prompt">{{ t("stories.editor.storyContextPrompt") }}<Textarea v-model="draftStoryContextPrompt" :maxlength="STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH" :placeholder="t('stories.editor.storyContextPromptPlaceholder')" /><span class="story-context-budget">{{ draftStoryContextPrompt.length }} / {{ STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH }}</span></label>
+            <p class="story-context-note">{{ t("stories.editor.storyContextOrder") }}</p>
+          </template>
+        </fieldset>
         <fieldset v-if="agentToolSettingsState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || agentToolSettingsState !== 'ready'">
           <legend>{{ t("stories.editor.agentTools") }}</legend>
           <div v-if="agentToolSettingsState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.agentToolsLoading") }}</div>
@@ -531,8 +560,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, provide, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
-import { useQueries, useQueryClient } from "@tanstack/vue-query";
-import { Archive, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleHelp, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pause, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/vue-query";
+import { Archive, ArrowDown, ArrowUp, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleHelp, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pause, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -570,7 +599,19 @@ import { isFeatureEnabled } from "../../../lib/featureFlags";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, Node, NodeLocalFolder } from "../../../api/types";
 import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StoryAutomationRun, type StoryAutomationSchedule, type StoryAutomationStatus, type StoryDecision, type StorySessionPreset } from "@task-handoff/protocol/stories";
 import { DEFAULT_STORY_AGENT_TOOL_POLICY, type StoryAgentToolPolicy } from "@task-handoff/protocol/story-agent-tools";
-import { nodeAgentCapabilitiesFromPublicNode, nodeStoryAgentToolCapabilities } from "@task-handoff/protocol/node-agent-capabilities";
+import {
+  nodeAgentCapabilitiesFromPublicNode,
+  nodeStoryAgentToolCapabilities,
+  nodeStoryContextCapabilities,
+  supportsNodeStoryContextProjects,
+  supportsNodeStoryContextSettings,
+  supportsNodeStorySessionPrompting,
+} from "@task-handoff/protocol/node-agent-capabilities";
+import {
+  STORY_CONTEXT_APPENDED_PROMPT_MAX_LENGTH,
+  STORY_CONTEXT_MAX_PROJECTS,
+  type StoryContextSettings,
+} from "@task-handoff/protocol/story-context";
 import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
 import type { AgentRun, AgentRunMember } from "@task-handoff/protocol/agent-runs";
 import {
@@ -995,6 +1036,15 @@ const agentToolSettingsError = ref("");
 const storyAgentEntriesState = ref<StorySettingsState>("hidden");
 const storyAgentEntriesError = ref("");
 const storyAgentEntryRevision = ref("");
+const storyContextState = ref<StorySettingsState>("hidden");
+const storyContextError = ref("");
+const storyContextRevision = ref(0);
+const storyContextRevisionLoaded = ref(false);
+const draftProjectFolderIds = ref<string[]>([]);
+const savedProjectFolderIds = ref<string[]>([]);
+const draftStoryContextPrompt = ref("");
+const savedStoryContextPrompt = ref("");
+const storyContextLoadedKey = ref("");
 const storyAgentDefinitions = ref<AgentDefinition[]>([]);
 /** Story 入口是 (Agent, 编排) 对；缺省编排由 Agent 派生，UI 只在需要消歧时展示编排选择。 */
 type StoryAgentEntryDraft = { agentId: string; orchestrationId: string };
@@ -1004,6 +1054,39 @@ const missingStoryAgentIds = ref<string[]>([]);
 const storyAgentOrchestrations = ref<Array<{ id: string; name: string; agentIds: string[]; isDefault: boolean }>>([]);
 const draftStoryAgentIds = computed(() => draftStoryAgentEntries.value.map((entry) => entry.agentId));
 const nodeById = (nodeId: string) => props.nodes.find((node) => node.id === nodeId);
+const draftStoryContextCapabilities = computed(() => nodeStoryContextCapabilities(
+  nodeAgentCapabilitiesFromPublicNode(nodeById(draftNodeId.value)?.capabilities),
+));
+const storyContextVisible = computed(() => {
+  const capabilities = draftStoryContextCapabilities.value;
+  return capabilities.settings && (capabilities.projects || capabilities.sessionPrompting);
+});
+const draftStoryContextProjectsSupported = computed(() => supportsNodeStoryContextProjects(
+  nodeAgentCapabilitiesFromPublicNode(nodeById(draftNodeId.value)?.capabilities),
+));
+const draftStoryContextPromptSupported = computed(() => supportsNodeStorySessionPrompting(
+  nodeAgentCapabilitiesFromPublicNode(nodeById(draftNodeId.value)?.capabilities),
+));
+const storyContextStoryKey = computed(() => {
+  const story = selectedResource.value?.kind === "story" ? selectedResource.value.story : undefined;
+  return editing.value && story ? `${story.ownerNodeId}\u0000${story.id}` : "";
+});
+const storyContextStoryId = computed(() => selectedResource.value?.kind === "story" && editing.value ? selectedResource.value.story.id : "");
+const storyContextDirty = computed(() => draftStoryContextPrompt.value !== savedStoryContextPrompt.value
+  || JSON.stringify(draftProjectFolderIds.value) !== JSON.stringify(savedProjectFolderIds.value));
+const storyContextFolder = (folderId: string) => (props.nodeLocalFoldersByNodeId[draftNodeId.value] || []).find((folder) => folder.id === folderId);
+const availableStoryContextFolders = computed(() => (props.nodeLocalFoldersByNodeId[draftNodeId.value] || [])
+  .filter((folder) => !draftProjectFolderIds.value.includes(folder.id)));
+const storyContextAddProjectId = ref("");
+const storyContextSettingsQuery = useQuery({
+  queryKey: computed(() => controlPlaneQueryKeys.storyContextSettings(draftNodeId.value, storyContextStoryId.value)),
+  enabled: computed(() => Boolean(editorOpen.value
+    && editorAdvancedOpen.value
+    && editing.value
+    && storyContextStoryId.value
+    && storyContextVisible.value)),
+  queryFn: () => sharedControlPlaneClient.stories.contextSettings(storyContextStoryId.value, draftNodeId.value),
+});
 const storyAgentEntryCandidates = computed(() => {
   const definitions = new Map(storyAgentDefinitions.value.map((agent) => [agent.id, agent]));
   return [
@@ -1607,6 +1690,77 @@ function storyAgentEntriesStateForNode(ownerNode: Node | undefined, readyState: 
   if (ownerNode?.status !== "online") return "unavailable";
   return controlPlaneAgentCapabilities(ownerNode.capabilities).storyEntryAuthorization ? readyState : "unsupported";
 }
+function storyContextStateForNode(ownerNode: Node | undefined, readyState: "ready" | "loading"): StorySettingsState {
+  const capabilities = nodeStoryContextCapabilities(nodeAgentCapabilitiesFromPublicNode(ownerNode?.capabilities));
+  if (!capabilities.settings || (!capabilities.projects && !capabilities.sessionPrompting)) return "hidden";
+  if (ownerNode?.status !== "online") return "unavailable";
+  return readyState;
+}
+function resetStoryContextDraft(ownerNode: Node | undefined, readyState: "ready" | "loading") {
+  storyContextState.value = storyContextStateForNode(ownerNode, readyState);
+  storyContextError.value = "";
+  storyContextRevision.value = 0;
+  storyContextRevisionLoaded.value = false;
+  draftProjectFolderIds.value = [];
+  savedProjectFolderIds.value = [];
+  draftStoryContextPrompt.value = "";
+  savedStoryContextPrompt.value = "";
+  storyContextLoadedKey.value = "";
+  storyContextAddProjectId.value = "";
+}
+function applyStoryContextSettings(settings: StoryContextSettings) {
+  storyContextRevision.value = settings.revision;
+  storyContextRevisionLoaded.value = true;
+  draftProjectFolderIds.value = [...settings.projectFolderIds];
+  savedProjectFolderIds.value = [...settings.projectFolderIds];
+  draftStoryContextPrompt.value = settings.appendedPrompt;
+  savedStoryContextPrompt.value = settings.appendedPrompt;
+  storyContextLoadedKey.value = `${draftNodeId.value}\u0000${settings.storyId}`;
+  storyContextState.value = "ready";
+  storyContextError.value = "";
+}
+function addStoryContextProject(folderId: string) {
+  if (!folderId || draftProjectFolderIds.value.includes(folderId) || draftProjectFolderIds.value.length >= STORY_CONTEXT_MAX_PROJECTS) return;
+  draftProjectFolderIds.value = [...draftProjectFolderIds.value, folderId];
+  storyContextAddProjectId.value = "";
+}
+function moveStoryContextProject(index: number, offset: -1 | 1) {
+  const target = index + offset;
+  if (target < 0 || target >= draftProjectFolderIds.value.length) return;
+  const next = [...draftProjectFolderIds.value];
+  [next[index], next[target]] = [next[target], next[index]];
+  draftProjectFolderIds.value = next;
+}
+function removeStoryContextProject(folderId: string) {
+  draftProjectFolderIds.value = draftProjectFolderIds.value.filter((id) => id !== folderId);
+}
+watch([() => storyContextSettingsQuery.isEnabled.value, () => storyContextSettingsQuery.data.value], ([enabled, settings]) => {
+  if (!enabled || !settings) return;
+  if (storyContextLoadedKey.value === `${draftNodeId.value}\u0000${settings.storyId}` && storyContextDirty.value) return;
+  applyStoryContextSettings(settings);
+}, { flush: "sync", immediate: true });
+watch(() => storyContextSettingsQuery.isFetching.value, (fetching) => {
+  if (!storyContextSettingsQuery.isEnabled.value) return;
+  if (fetching) {
+    storyContextState.value = "loading";
+    storyContextError.value = "";
+    return;
+  }
+  const settings = storyContextSettingsQuery.data.value;
+  if (!settings) return;
+  if (storyContextLoadedKey.value === `${draftNodeId.value}\u0000${settings.storyId}` && storyContextDirty.value) {
+    storyContextState.value = "ready";
+    storyContextError.value = "";
+    return;
+  }
+  applyStoryContextSettings(settings);
+}, { flush: "sync" });
+watch(() => storyContextSettingsQuery.error.value, (error) => {
+  if (!error || !storyContextSettingsQuery.isEnabled.value) return;
+  const code = (error as { code?: unknown }).code;
+  storyContextState.value = code === "STORY_CONTEXT_SETTINGS_UNSUPPORTED" ? "unsupported" : "unavailable";
+  storyContextError.value = translateApiError(error, t, t("stories.editor.storyContextUnavailable"));
+}, { flush: "sync" });
 function openCreate() {
   editing.value = false;
   storyEditorError.value = "";
@@ -1626,6 +1780,7 @@ function openCreate() {
   storyAgentOrchestrations.value = [];
   const filteredOnlineNode = props.nodes.find((node) => node.status === "online" && nodeIsVisible(props.nodeFilter, node.id));
   draftNodeId.value = filteredOnlineNode?.id || props.nodes.find((node) => node.status === "online")?.id || "";
+  resetStoryContextDraft(props.nodes.find((node) => node.id === draftNodeId.value), "ready");
   editorOpen.value = true;
 }
 // 创建弹窗没有 Story 可以读取，设置以当前选中节点能力和默认策略为初值，保存时再落到新 Story 上。
@@ -1646,6 +1801,7 @@ function refreshCreateStoryAgentSettings() {
   storyAgentOrchestrations.value = [];
   agentToolSettingsState.value = agentToolSettingsStateForNode(ownerNode, "ready");
   storyAgentEntriesState.value = storyAgentEntriesStateForNode(ownerNode, "loading");
+  resetStoryContextDraft(ownerNode, "ready");
   if (storyAgentEntriesState.value === "loading" && ownerNode) void loadCreateStoryAgentEntries(ownerNode.id);
 }
 async function loadCreateStoryAgentEntries(nodeId: string) {
@@ -1685,6 +1841,7 @@ async function openEdit() {
   const ownerNode = props.nodes.find((node) => node.id === story.ownerNodeId);
   agentToolSettingsState.value = agentToolSettingsStateForNode(ownerNode, "loading");
   storyAgentEntriesState.value = storyAgentEntriesStateForNode(ownerNode, "loading");
+  resetStoryContextDraft(ownerNode, "loading");
   try {
     const settings = await getStoryRetentionSettings(story.id, story.ownerNodeId);
     draftMaxIdleAiSessions.value = settings.maxIdleAiSessions;
@@ -1974,6 +2131,19 @@ async function saveStory() {
         maxIdleAiSessions,
       });
       story = createdStory;
+    }
+    if (storyContextVisible.value && storyContextDirty.value) {
+      const expectedRevision = storyContextRevisionLoaded.value
+        ? storyContextRevision.value
+        : (await sharedControlPlaneClient.stories.contextSettings(story.id, story.ownerNodeId)).revision;
+      const settings = await sharedControlPlaneClient.stories.updateContextSettings(story.id, story.ownerNodeId, {
+        expectedRevision,
+        projectFolderIds: [...draftProjectFolderIds.value],
+        appendedPrompt: draftStoryContextPrompt.value,
+      });
+      applyStoryContextSettings(settings);
+      queryClient.setQueryData(controlPlaneQueryKeys.storyContextSettings(story.ownerNodeId, story.id), settings);
+      showControlPlaneToast(t("stories.editor.storyContextSaved"), "success");
     }
     const agentToolsChanged = agentToolSettingsState.value === "ready"
       && JSON.stringify(draftAgentToolPolicy.value) !== JSON.stringify(savedAgentToolPolicy.value);
@@ -2327,6 +2497,23 @@ onBeforeUnmount(() => {
 .story-agent-tool-option { display:flex !important; grid-template-columns:none !important; flex-direction:row; align-items:center; min-height:38px; gap:10px !important; color:var(--text-strong) !important; }
 .story-agent-tool-option + .story-agent-tool-option { border-top:1px solid var(--line); }
 .story-agent-tool-state,.story-editor-error { color:var(--text-muted); font-size:12px; line-height:1.5; padding:10px 0; }
+.story-context-settings { gap:12px; padding-bottom:12px; }
+.story-context-section { display:grid; gap:8px; min-width:0; }
+.story-context-section-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--text-strong); font-size:12px; font-weight:500; }
+.story-context-section-heading span:last-child { color:var(--text-muted); font-weight:400; }
+.story-context-note { margin:0; color:var(--text-muted); font-size:12px; line-height:1.5; }
+.story-context-project-list { display:grid; min-width:0; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+.story-context-project-row { display:flex; min-width:0; align-items:center; gap:8px; padding:7px 8px; }
+.story-context-project-row + .story-context-project-row { border-top:1px solid var(--line); }
+.story-context-project-index { flex:0 0 20px; color:var(--text-muted); font-size:12px; text-align:right; }
+.story-context-project-copy { display:grid; flex:1 1 auto; min-width:0; gap:2px; }
+.story-context-project-copy span,.story-context-project-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.story-context-project-copy span { color:var(--text-strong); font-size:12px; font-weight:400; }
+.story-context-project-copy small { color:var(--text-muted); font-size:12px; }
+.story-context-project-actions { display:flex; flex:0 0 auto; align-items:center; gap:2px; }
+.story-context-prompt { padding-top:10px; border-top:1px solid var(--line); }
+.story-context-prompt textarea { min-height:110px; }
+.story-context-budget { justify-self:end; color:var(--text-muted); font-size:12px; font-variant-numeric:tabular-nums; }
 .story-agent-entry-note { margin:4px 0 6px; color:var(--text-muted); font-size:12px; line-height:1.5; }
 .story-agent-entry-copy { display:grid; min-width:0; gap:2px; font-weight:400; }
 .story-agent-entry-copy small { display:flex; align-items:center; min-width:0; gap:5px; color:var(--status-warning); font-size:12px; font-weight:400; overflow-wrap:anywhere; }

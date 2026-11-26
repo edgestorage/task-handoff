@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AiSessionLineage, AiSessionStatus, AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
@@ -39,6 +40,8 @@ import {
 export type OpenCodeSessionBridgeOptions = {
   connection: () => OpenCodeConnection | Promise<OpenCodeConnection>;
   workspaceRoots: () => string[] | Promise<string[]>;
+  /** Provider-private, restart-persistent Story instruction snapshot path. */
+  instructionSnapshotPath?: string;
   onMessageDelta?: (event: { sessionId: string; providerSessionId: string; turnId: string; itemId: string; delta: string }) => void;
   onTimelineItemDelta?: (event: { sessionId: string; providerSessionId: string; turnId: string; itemId: string; field: "output"; delta: string }) => void;
   onEventSourceClose?: () => void;
@@ -86,6 +89,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private readonly projectionRefreshes = new Map<string, Promise<OpenCodeProjection>>();
   private readonly lineageBySession = new Map<string, AiSessionLineage>();
   private readonly pendingSettingsBySession = new Map<string, { modelSelection: AiSessionModelSelection; reasoningEffort?: AiSessionReasoningEffort }>();
+  private readonly instructionBySession = new Map<string, string>();
   private readonly pendingPartDeltas = new Map<string, Map<string, { partID: string; messageID: string; field: string; chunks: string[]; size: number }>>();
   private readonly retryWarningsBySession = new Map<string, { turnId: string; message: string }>();
   private readonly armedTitleSessions = new Set<string>();
@@ -102,6 +106,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private closed = false;
   constructor(private readonly registry: AiSessionRegistry, private readonly options: OpenCodeSessionBridgeOptions) {
     this.client = new OpenCodeClient(options.connection);
+    this.restoreInstructionSnapshots();
   }
 
   async ensureReady() {
@@ -156,6 +161,10 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     const model = input.modelSelection ? this.modelRef(input.modelSelection, input.reasoningEffort) : undefined;
     if (input.modelSelection && !model) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
     const created = await this.client.createSession(input.cwd, model, openCodeSessionPermissionRules(input.permissionMode, input.storyAgentTools));
+    if (input.appendedPrompt) {
+      this.instructionBySession.set(created.id, input.appendedPrompt);
+      this.persistInstructionSnapshots();
+    }
     this.armTitleGeneration(created.id);
     try {
       await this.reconcile(created.id, created.directory, created, "ai-session", { persistence: "strict" });
@@ -351,7 +360,14 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     const model = selection ? this.modelRef(selection, pending?.reasoningEffort || session.reasoningEffort) : undefined;
     // Compatibility for OpenCode v1.18.21: prompt_async persists prompts
     // submitted during an active run and promotes them in its next loop step.
-    await this.client.promptAsync(session.providerSessionId, session.cwd, input.messageId, parts, model);
+    await this.client.promptAsync(
+      session.providerSessionId,
+      session.cwd,
+      input.messageId,
+      parts,
+      model,
+      this.instructionBySession.get(session.providerSessionId),
+    );
     this.armedSuggestionSessions.add(session.providerSessionId);
     this.unsuggestableTurnBySession.delete(session.providerSessionId);
     this.scheduleReconcile(session.providerSessionId, session.cwd);
@@ -787,6 +803,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     this.projectionRefreshes.delete(providerSessionId);
     this.lineageBySession.delete(providerSessionId);
     this.pendingSettingsBySession.delete(providerSessionId);
+    if (this.instructionBySession.delete(providerSessionId)) this.persistInstructionSnapshots();
     this.pendingPartDeltas.delete(providerSessionId);
     this.retryWarningsBySession.delete(providerSessionId);
     this.armedTitleSessions.delete(providerSessionId);
@@ -795,6 +812,40 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     const timer = this.reconcileTimers.get(providerSessionId);
     if (timer) clearTimeout(timer);
     this.reconcileTimers.delete(providerSessionId);
+  }
+
+  private restoreInstructionSnapshots() {
+    const filePath = this.options.instructionSnapshotPath;
+    if (!filePath || !fs.existsSync(filePath)) return;
+    try {
+      const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as { version?: unknown; sessions?: unknown };
+      if (raw.version !== 1 || !raw.sessions || typeof raw.sessions !== "object" || Array.isArray(raw.sessions)) {
+        throw new Error("Unsupported OpenCode Story instruction snapshot.");
+      }
+      for (const [providerSessionId, instruction] of Object.entries(raw.sessions)) {
+        if (providerSessionId.trim() && typeof instruction === "string" && instruction) {
+          this.instructionBySession.set(providerSessionId, instruction);
+        }
+      }
+    } catch (error) {
+      this.options.onDiagnostic?.({ code: "OPENCODE_INSTRUCTION_SNAPSHOT_INVALID", error: errorText(error) });
+    }
+  }
+
+  private persistInstructionSnapshots() {
+    const filePath = this.options.instructionSnapshotPath;
+    if (!filePath) return;
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      const temporaryPath = `${filePath}.${process.pid}.tmp`;
+      fs.writeFileSync(temporaryPath, JSON.stringify({
+        version: 1,
+        sessions: Object.fromEntries(this.instructionBySession),
+      }, null, 2));
+      fs.renameSync(temporaryPath, filePath);
+    } catch (error) {
+      this.options.onDiagnostic?.({ code: "OPENCODE_INSTRUCTION_SNAPSHOT_WRITE_FAILED", error: errorText(error) });
+    }
   }
 
   private async discardSession(providerSessionId: string, disposition?: "closed" | "cleared") {

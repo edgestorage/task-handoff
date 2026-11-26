@@ -234,7 +234,7 @@ test("Injection failure rolls back and never falls back to the source directory"
       (error: any) => error.code === "AGENT_RUN_OVERLAY_INJECTION_FAILED",
     );
     assert.deepEqual(operations, ["inject", "rollback"]);
-    assert.equal(state.repository.agents.resources.listForRun(state.run.runId)[0].phase, "deleted");
+    assert.equal(state.repository.agents.resources.listForRun(state.run.runId).find((item) => item.kind === "overlay-mount")?.phase, "deleted");
   } finally { await state.close(); }
 });
 
@@ -281,12 +281,49 @@ test("Disposal stops the member first and retains EBUSY as retryable cleanup", a
       async () => { order.push("terminate"); },
     );
     const prepared = await storage.prepare(prepareInput(state.run.runId, state.run.rootMemberId));
+    const thread = state.repository.agents.resources.register({
+      runId: state.run.runId,
+      memberId: state.run.rootMemberId,
+      instanceId: "instance_one",
+      runtimeId: "runtime_one",
+      kind: "provider-thread",
+      generationId: "generation_one",
+      backendIdentity: "thread_one",
+    });
+    state.repository.agents.resources.transition(thread.resourceId, "ready");
     failDispose = true;
     await assert.rejects(() => storage.dispose(prepared, prepared.marker), (error: any) => error.code === "AGENT_RUN_OVERLAY_DISPOSE_FAILED");
     assert.deepEqual(order.slice(-2), ["terminate", "dispose"]);
     const resource = state.repository.agents.resources.get(prepared.resourceId)!;
     assert.equal(resource.phase, "delete-retrying");
     assert.equal(resource.cleanupAttempts, 1);
+  } finally { await state.close(); }
+});
+
+test("Disposal skips member termination when session creation never registered a provider thread", async () => {
+  const state = await fixture();
+  let terminateCalls = 0;
+  const operations: string[] = [];
+  const marker = { version: 1, runId: state.run.runId, memberId: state.run.rootMemberId, generationId: "generation_one", createdAt: timestamp };
+  const runCommand: CommandRunner = async (_command, args) => {
+    if (args[0] === "inspect") return { stdout: JSON.stringify(inspectedContainer()), stderr: "" };
+    const operation = args[args.indexOf(AGENT_RUN_OVERLAY_HELPER_IMAGE) + 1];
+    if (operation) operations.push(operation);
+    if (operation === "inspect") return { stdout: JSON.stringify({ mounted: true, marker }), stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+  try {
+    const storage = new DockerAgentRunStorage(
+      runCommand,
+      state.repository.agents.resources,
+      () => target(),
+      async () => { terminateCalls += 1; },
+    );
+    const prepared = await storage.prepare(prepareInput(state.run.runId, state.run.rootMemberId));
+    await storage.dispose(prepared, prepared.marker);
+    assert.equal(terminateCalls, 0);
+    assert.deepEqual(operations, ["inject", "inspect", "dispose"]);
+    assert.equal(state.repository.agents.resources.get(prepared.resourceId)?.phase, "deleted");
   } finally { await state.close(); }
 });
 
@@ -357,6 +394,16 @@ test("Reconciliation treats a replaced container mount as absent and cleans thro
       async () => { order.push("terminate"); },
     );
     await storage.prepare(prepareInput(state.run.runId, state.run.rootMemberId));
+    const thread = state.repository.agents.resources.register({
+      runId: state.run.runId,
+      memberId: state.run.rootMemberId,
+      instanceId: "instance_one",
+      runtimeId: "runtime_one",
+      kind: "provider-thread",
+      generationId: "generation_one",
+      backendIdentity: "thread_one",
+    });
+    state.repository.agents.resources.transition(thread.resourceId, "ready");
     containerId = "container_two";
     currentTarget = { ...target(), expectedContainerId: containerId };
     const result = await storage.reconcileInstance("instance_one");
@@ -440,7 +487,13 @@ test("Shared space is one run-level path, rejects cross-run paths and enforces r
     assert.equal(assertAgentRunSharedSpacePath(first.binding, `${first.binding.runtimePath}/artifact.txt`), `${first.binding.runtimePath}/artifact.txt`);
     const other = agentRunSharedSpaceBinding("run_other", "runtime_one", DOCKER_AGENT_RUN_SHARED_ROOT);
     assert.throws(() => assertAgentRunSharedSpacePath(first.binding, `${other.runtimePath}/secret.txt`), (error: any) => error.code === "AGENT_RUN_SHARED_PATH_OUTSIDE_RUN");
-    assert.equal(state.repository.agents.resources.listForRun(state.run.runId).filter((item) => item.kind === "shared-space-directory").length, 1);
+    const sharedResources = state.repository.agents.resources.listForRun(state.run.runId).filter((item) => item.kind === "shared-space-directory");
+    assert.equal(sharedResources.length, 1);
+    assert.equal(sharedResources[0].phase, "ready");
+    assert.equal(state.repository.agents.resources.getSharedSpace(state.run.runId)?.state, "active");
+    spaces.retain(state.run.runId, new Date(timestamp));
+    assert.equal(state.repository.agents.resources.get(sharedResources[0].resourceId)?.phase, "ready");
+    assert.equal(state.repository.agents.resources.getSharedSpace(state.run.runId)?.state, "retained");
   } finally { await state.close(); }
 });
 

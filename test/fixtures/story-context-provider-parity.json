@@ -1,0 +1,6 @@
+{
+  "agentPrompt": "Agent instructions",
+  "renderedContext": "## Story additional instructions\n- Keep this context private",
+  "appendedPrompt": "Agent instructions\n\n## Story additional instructions\n- Keep this context private",
+  "userMessage": "user request"
+}

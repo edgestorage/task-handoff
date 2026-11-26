@@ -528,6 +528,37 @@ const modelProviderCapabilities = `
 ALTER TABLE na_models ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{"image":false}';
 `;
 
+const storyContextDomain = `
+CREATE TABLE na_story_context_settings (
+  story_id TEXT PRIMARY KEY NOT NULL,
+  appended_prompt TEXT NOT NULL DEFAULT '',
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (story_id) REFERENCES na_stories(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE TABLE na_story_context_projects (
+  story_id TEXT NOT NULL,
+  folder_id TEXT NOT NULL,
+  display_order INTEGER NOT NULL CHECK(display_order >= 0),
+  PRIMARY KEY(story_id, folder_id),
+  FOREIGN KEY (story_id) REFERENCES na_stories(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE UNIQUE INDEX na_story_context_projects_order_uq ON na_story_context_projects(story_id, display_order);
+CREATE INDEX na_story_context_projects_story_idx ON na_story_context_projects(story_id, display_order);
+CREATE TABLE na_agent_run_story_context (
+  run_id TEXT PRIMARY KEY NOT NULL,
+  story_id TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK(revision >= 0),
+  rendered_context TEXT NOT NULL,
+  diagnostics_json TEXT NOT NULL DEFAULT '[]',
+  omitted_project_count INTEGER NOT NULL DEFAULT 0 CHECK(omitted_project_count >= 0),
+  omitted_session_count INTEGER NOT NULL DEFAULT 0 CHECK(omitted_session_count >= 0),
+  session_candidate_window_omitted_count INTEGER NOT NULL DEFAULT 0 CHECK(session_candidate_window_omitted_count >= 0),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES na_agent_runs(run_id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -552,4 +583,5 @@ export const nodeAgentMigrations = [
   migration("0019_initialization_markers", initializationMarkers),
   migration("0020_cloud_relay_origin_mode", cloudRelayOriginMode),
   migration("0021_model_provider_capabilities", modelProviderCapabilities),
+  migration("0022_story_context_domain", storyContextDomain),
 ] as const;

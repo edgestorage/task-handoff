@@ -22,6 +22,7 @@ import {
   type AgentRunTimelineEntry,
 } from "@task-handoff/protocol/agent-runs";
 import { defaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
+import type { StoryContextDiagnostic } from "@task-handoff/protocol/story-context";
 
 type Row = Record<string, unknown>;
 
@@ -38,7 +39,20 @@ export type CreateAgentRunInput = {
     executionSnapshot: AgentRunMemberExecutionSnapshot;
     input?: AgentRunInput;
   };
+  storyContext?: AgentRunStoryContextRecord;
   timestamp?: string;
+};
+
+/** Private, frozen Story context attached to an accepted Agent Run. */
+export type AgentRunStoryContextRecord = {
+  storyId: string;
+  revision: number;
+  renderedContext: string;
+  diagnostics: StoryContextDiagnostic[];
+  omittedProjectCount: number;
+  omittedSessionCount: number;
+  sessionCandidateWindowOmittedCount: number;
+  createdAt: string;
 };
 
 export type AddAgentRunMemberInput = {
@@ -160,6 +174,16 @@ export class AgentRunRepository {
         VALUES (?, ?, ?, ?, NULL, ?, ?, 'root', 0, 'queued', ?, ?, NULL, NULL, ?, ?, NULL)`)
         .run(rootMemberId, runId, input.clientRequestId, input.root.agentId, input.root.instanceId, input.root.aiSessionId ?? null,
           json(input.root.input ?? input.input), json(input.root.executionSnapshot), timestamp, timestamp);
+      if (input.storyContext) {
+        this.client.prepare(`INSERT INTO na_agent_run_story_context
+          (run_id, story_id, revision, rendered_context, diagnostics_json, omitted_project_count,
+           omitted_session_count, session_candidate_window_omitted_count, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(runId, input.storyContext.storyId, input.storyContext.revision, input.storyContext.renderedContext,
+            json(input.storyContext.diagnostics), input.storyContext.omittedProjectCount,
+            input.storyContext.omittedSessionCount, input.storyContext.sessionCandidateWindowOmittedCount,
+            input.storyContext.createdAt);
+      }
       return this.require(runId);
     });
   }
@@ -177,6 +201,28 @@ export class AgentRunRepository {
   getByClientRequestId(clientRequestId: string): AgentRun | undefined {
     const row = this.client.prepare("SELECT * FROM na_agent_runs WHERE client_request_id = ?").get(clientRequestId) as Row | undefined;
     return row ? this.runFromRow(row) : undefined;
+  }
+
+  getStoryContext(runId: string): AgentRunStoryContextRecord | undefined {
+    const row = this.client.prepare("SELECT * FROM na_agent_run_story_context WHERE run_id = ?").get(runId) as Row | undefined;
+    if (!row) return undefined;
+    return {
+      storyId: String(row.story_id),
+      revision: Number(row.revision),
+      renderedContext: String(row.rendered_context),
+      diagnostics: (parseJson(row.diagnostics_json) as StoryContextDiagnostic[] | undefined) || [],
+      omittedProjectCount: Number(row.omitted_project_count),
+      omittedSessionCount: Number(row.omitted_session_count),
+      sessionCandidateWindowOmittedCount: Number(row.session_candidate_window_omitted_count),
+      createdAt: String(row.created_at),
+    };
+  }
+
+  /** Session identities already owned by any Agent Run member are not Story context candidates. */
+  listAgentRunMemberSessionIds() {
+    return (this.client.prepare(
+      "SELECT DISTINCT ai_session_id FROM na_agent_run_members WHERE ai_session_id IS NOT NULL AND ai_session_id <> ''",
+    ).all() as Row[]).map((row) => String(row.ai_session_id));
   }
 
   addMember(input: AddAgentRunMemberInput): AgentRunMember {

@@ -110,7 +110,7 @@ export function registerNodeAgentRunRoutes(app: FastifyInstance, runs: AgentRunS
 
   app.post("/api/node-agent/agent-runs", async (request, reply) => {
     const input = AgentRunCreateInputSchema.parse(request.body);
-    return reply.code(201).send({ data: AgentRunSchema.parse(runs.create(input)) });
+    return reply.code(201).send({ data: AgentRunSchema.parse(await runs.create(input)) });
   });
 
   app.get("/api/node-agent/agent-runs/:runId", async (request) => {

@@ -16,7 +16,7 @@ import { codexPermissionOverrides } from "./codex-app-server/session/control";
 import { CodexAppServerSessionDiscovery } from "./codex-app-server/session/discovery";
 import { CodexAppServerSessionProjector } from "./codex-app-server/session/projector";
 import { CodexThreadTitleGenerator } from "./codex-app-server/session/title-generator";
-import { CodexTimelineStore } from "./codex-app-server/session/timeline-store";
+import { AiSessionTimelineStore as CodexTimelineStore } from "./ai-session/timeline-store";
 import { CodexAppServerMentions } from "./codex-app-server/mentions";
 import { codexItemTimeline, codexThreadTimeline, mergeCodexTimelineItems } from "./codex-app-server/protocol/timeline";
 import { AI_SESSION_NEXT_INPUT_OUTPUT_SCHEMA, AiSessionNextInputGenerationError } from "./ai-session-next-input";
@@ -437,6 +437,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       const requestedReasoningEffort = input.reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT;
       const thread = await client.startThread({
         cwd: input.cwd,
+        ...(input.appendedPrompt ? { developerInstructions: input.appendedPrompt } : {}),
         runtimeWorkspaceRoots: input.runtimeWorkspaceRoots || [input.cwd],
         ...this.options.threadStartDefaults,
         ...requestedModel,

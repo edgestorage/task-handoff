@@ -323,6 +323,14 @@ export class AppRuntimeManager extends EventEmitter {
     return this.catalogRepository.managedApps?.terminalEnvironment(base) || base;
   }
 
+  prepareManagedAgentLaunch(appId: string) {
+    this.requireAppLaunchAdmission(appId);
+    const executable = this.catalogRepository.managedApps?.target(appId);
+    const app = this.catalog().find((entry) => entry.id === appId && entry.command === executable);
+    if (!executable || !app) throw Object.assign(new Error(`${appId} is not installed in this instance.`), { code: "APP_DEPENDENCY_MISSING" });
+    return { executable, env: this.processEnvironment(definedEnvironment({ ...process.env, ...app.env, ...this.managedEnvironment })) };
+  }
+
   prepareShell(command: string, args: string[], env: NodeJS.ProcessEnv) {
     return this.catalogRepository.managedApps?.prepareShell(command, args, env) || { args, env };
   }

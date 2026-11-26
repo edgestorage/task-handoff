@@ -22,6 +22,7 @@ use reqwest::{Client, Method, StatusCode, Url};
 use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    fs,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -304,6 +305,7 @@ impl OpenCodeClient {
         message_id: &str,
         parts: Vec<Value>,
         model: Option<&OpenCodeModelRef>,
+        system: Option<&str>,
     ) -> Result<(), ProviderError> {
         let mut body = Map::new();
         body.insert("messageID".to_string(), json!(message_id));
@@ -316,6 +318,9 @@ impl OpenCodeClient {
                 model_body.insert("variant".to_string(), json!(variant));
             }
             body.insert("model".to_string(), Value::Object(model_body));
+        }
+        if let Some(system) = system.filter(|value| !value.is_empty()) {
+            body.insert("system".to_string(), Value::String(system.to_string()));
         }
         self.request(
             Method::POST,
@@ -515,6 +520,8 @@ pub struct OpenCodeSessionProvider {
     model_selection_resolver: RwLock<Option<Arc<dyn AiSessionModelSelectionResolver>>>,
     conversation_attachment_resolver: RwLock<Option<Arc<ConversationAttachmentResolver>>>,
     title_generator: RwLock<Option<Arc<dyn AiSessionTitleGenerator>>>,
+    story_instructions: RwLock<HashMap<String, String>>,
+    story_instruction_snapshot_path: RwLock<Option<PathBuf>>,
     closed_session_ids: RwLock<Option<OpenCodeClosedSessionIds>>,
     tracked_sessions: RwLock<Option<OpenCodeTrackedSessions>>,
     reconcile_tx: mpsc::UnboundedSender<(String, String)>,
@@ -541,6 +548,8 @@ impl OpenCodeSessionProvider {
             model_selection_resolver: RwLock::new(None),
             conversation_attachment_resolver: RwLock::new(None),
             title_generator: RwLock::new(None),
+            story_instructions: RwLock::new(HashMap::new()),
+            story_instruction_snapshot_path: RwLock::new(None),
             closed_session_ids: RwLock::new(None),
             tracked_sessions: RwLock::new(None),
             reconcile_tx,
@@ -607,6 +616,14 @@ impl OpenCodeSessionProvider {
             .title_generator
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(generator);
+    }
+
+    pub fn set_story_instruction_snapshot_path(&self, path: PathBuf) {
+        *self
+            .story_instruction_snapshot_path
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(path);
+        self.restore_story_instructions();
     }
 
     pub fn set_closed_session_ids(&self, source: OpenCodeClosedSessionIds) {
@@ -2097,6 +2114,12 @@ impl OpenCodeSessionProvider {
         let model = selection
             .as_ref()
             .and_then(|selection| self.model_ref(selection, effort));
+        let story_instruction = self
+            .story_instructions
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(provider_session_id)
+            .cloned();
         self.client
             .prompt_async(
                 provider_session_id,
@@ -2104,6 +2127,7 @@ impl OpenCodeSessionProvider {
                 &message_id,
                 parts,
                 model.as_ref(),
+                story_instruction.as_deref(),
             )
             .await?;
         let _ = self
@@ -2133,6 +2157,7 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                 steer: true,
                 interrupt: true,
                 archive: true,
+                history_resume: None,
                 delete: true,
                 fork: true,
                 rename: true,
@@ -2205,6 +2230,17 @@ impl AiSessionControlProvider for OpenCodeSessionProvider {
                 )
             })?
             .to_string();
+        if let Some(instruction) = input
+            .appended_prompt
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            self.story_instructions
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(provider_session_id.clone(), instruction.to_string());
+            self.persist_story_instructions();
+        }
         let directory = created
             .get("directory")
             .and_then(Value::as_str)
@@ -2751,6 +2787,15 @@ impl OpenCodeSessionProvider {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(provider_session_id);
+        let removed_instruction = self
+            .story_instructions
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(provider_session_id)
+            .is_some();
+        if removed_instruction {
+            self.persist_story_instructions();
+        }
         let mut aux = self
             .aux
             .write()
@@ -2763,6 +2808,72 @@ impl OpenCodeSessionProvider {
         *aux.title_generations
             .entry(provider_session_id.to_string())
             .or_insert(0) += 1;
+    }
+
+    fn restore_story_instructions(&self) {
+        let Some(path) = self
+            .story_instruction_snapshot_path
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        let Ok(raw) = fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+            tracing::warn!(path = %path.display(), "OpenCode Story instruction snapshot is invalid");
+            return;
+        };
+        if value.get("version").and_then(Value::as_u64) != Some(1) {
+            tracing::warn!(path = %path.display(), "OpenCode Story instruction snapshot version is unsupported");
+            return;
+        }
+        let Some(sessions) = value.get("sessions").and_then(Value::as_object) else {
+            tracing::warn!(path = %path.display(), "OpenCode Story instruction snapshot has no sessions");
+            return;
+        };
+        let mut instructions = self
+            .story_instructions
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (provider_session_id, instruction) in sessions {
+            if let Some(instruction) = instruction.as_str().filter(|value| !value.is_empty()) {
+                instructions.insert(provider_session_id.clone(), instruction.to_string());
+            }
+        }
+    }
+
+    fn persist_story_instructions(&self) {
+        let Some(path) = self
+            .story_instruction_snapshot_path
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        let sessions = self
+            .story_instructions
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let result = (|| -> Result<(), std::io::Error> {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let temporary_path = path.with_extension(format!("{}.tmp", std::process::id()));
+            fs::write(
+                &temporary_path,
+                serde_json::to_vec_pretty(&json!({ "version": 1, "sessions": sessions }))
+                    .map_err(std::io::Error::other)?,
+            )?;
+            fs::rename(temporary_path, &path)
+        })();
+        if let Err(error) = result {
+            tracing::warn!(path = %path.display(), %error, "OpenCode Story instruction snapshot could not be persisted");
+        }
     }
 }
 
@@ -4232,6 +4343,13 @@ mod tests {
         format!("http://{address}")
     }
 
+    fn story_context_parity() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../../test/fixtures/story-context-provider-parity.json"
+        ))
+        .expect("Story context provider parity fixture")
+    }
+
     fn fixture() -> FakeOpenCode {
         FakeOpenCode {
             session: json!({
@@ -4486,6 +4604,7 @@ mod tests {
                 "m1",
                 vec![json!({ "type": "text", "text": "hello" })],
                 Some(&model),
+                None,
             )
             .await
             .expect("prompt");
@@ -4529,6 +4648,114 @@ mod tests {
             .is_some_and(|query| query.contains("directory=%2Ftmp%2Fworkspace")));
     }
 
+    #[tokio::test]
+    async fn story_instructions_use_prompt_system_and_restore_from_the_private_snapshot() {
+        let parity = story_context_parity();
+        let appended_prompt = parity["appendedPrompt"].as_str().unwrap();
+        let user_message = parity["userMessage"].as_str().unwrap();
+        let root = tempfile::tempdir().expect("story instruction root");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let snapshot = root.path().join("opencode-story-instructions.json");
+        let mut fixture = fixture();
+        fixture.session["directory"] = json!(workspace.to_string_lossy());
+        fixture.response["directory"] = json!(workspace.to_string_lossy());
+        let endpoint = start_fake(fixture.clone()).await;
+        let connections = Arc::new(TestConnection {
+            endpoint,
+            roots: vec![root.path().to_path_buf()],
+        });
+        let provider = OpenCodeSessionProvider::new(connections.clone());
+        provider.set_story_instruction_snapshot_path(snapshot.clone());
+        let created = provider
+            .create_session(ProviderCreateInput {
+                cwd: workspace.clone(),
+                runtime_workspace_roots: vec![workspace.clone()],
+                permission_mode: None,
+                model_selection: None,
+                reasoning_effort: None,
+                story_agent_tools: None,
+                appended_prompt: Some(appended_prompt.to_string()),
+            })
+            .await
+            .expect("create Story OpenCode session");
+        assert_eq!(created.provider_session_id, "s1");
+        assert!(
+            snapshot.is_file(),
+            "the immutable instruction snapshot is persisted"
+        );
+
+        let session = opencode_session("s1", &workspace.to_string_lossy());
+        provider
+            .submit_message(
+                &session,
+                ProviderMessage {
+                    message: user_message.to_string(),
+                    attachments: Vec::new(),
+                    references: Vec::new(),
+                    permission_mode: None,
+                    message_id: Some("m1".to_string()),
+                    user_message_attachments: Vec::new(),
+                    story_agent_tools: None,
+                },
+            )
+            .await
+            .expect("send with Story instructions");
+        {
+            let requests = fixture
+                .requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let prompt = requests
+                .iter()
+                .find(|request| {
+                    request.method == "POST" && request.path == "/session/s1/prompt_async"
+                })
+                .expect("prompt request");
+            assert_eq!(prompt.body["system"], parity["appendedPrompt"]);
+            assert_eq!(prompt.body["parts"][0]["text"], user_message);
+            assert!(!prompt.body["parts"]
+                .as_array()
+                .expect("parts")
+                .iter()
+                .any(|part| part["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(appended_prompt))));
+        }
+        provider.close();
+
+        let restored = OpenCodeSessionProvider::new(connections);
+        restored.set_story_instruction_snapshot_path(snapshot);
+        restored
+            .submit_message(
+                &session,
+                ProviderMessage {
+                    message: "after restart".to_string(),
+                    attachments: Vec::new(),
+                    references: Vec::new(),
+                    permission_mode: None,
+                    message_id: Some("m2".to_string()),
+                    user_message_attachments: Vec::new(),
+                    story_agent_tools: None,
+                },
+            )
+            .await
+            .expect("send after restart");
+        let requests = fixture
+            .requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prompts = requests
+            .iter()
+            .filter(|request| {
+                request.method == "POST" && request.path == "/session/s1/prompt_async"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(prompts.len(), 2);
+        assert_eq!(prompts[1].body["system"], parity["appendedPrompt"]);
+        assert_eq!(prompts[1].body["parts"][0]["text"], "after restart");
+    }
+
     #[test]
     fn sse_parser_handles_lf_and_crlf_frames() {
         let mut buffer = b"data: one\n\ndata: two\r\n\r\npartial".to_vec();
@@ -4570,6 +4797,8 @@ mod tests {
             model_selection_resolver: RwLock::new(None),
             conversation_attachment_resolver: RwLock::new(None),
             title_generator: RwLock::new(None),
+            story_instructions: RwLock::new(HashMap::new()),
+            story_instruction_snapshot_path: RwLock::new(None),
             closed_session_ids: RwLock::new(None),
             tracked_sessions: RwLock::new(None),
             reconcile_tx,

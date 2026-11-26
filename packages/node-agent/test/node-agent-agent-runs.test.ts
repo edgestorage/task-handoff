@@ -249,7 +249,7 @@ test("callee scheduling preserves its own instance and fails when that authorita
       agentIds: [root.id, callee.id],
       edges: [{ fromAgentId: root.id, toAgentId: callee.id }],
     });
-    const run = fixture.runs.create({
+    const run = await fixture.runs.create({
       clientRequestId: "request_cross_instance",
       orchestrationId: defaultAgentOrchestrationId(root.id),
       input: { prompt: "Coordinate the work" },
@@ -323,7 +323,7 @@ test("Run and member transitions persist results, errors and cleanup diagnostics
 test("Member failure is isolated from completed sibling results", async () => {
   const fixture = await createRunApiFixture(true);
   try {
-    const run = fixture.runs.create({
+    const run = await fixture.runs.create({
       clientRequestId: "request_member_isolation",
       orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
       input: { prompt: "Review the requested change" },
@@ -536,7 +536,7 @@ test("Agent Run API reports structured target, capability, lookup, revision and 
 
   const fixture = await createRunApiFixture(true);
   try {
-    const run = fixture.runs.create({
+    const run = await fixture.runs.create({
       clientRequestId: "request_cancel",
       orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
       input: { prompt: "Review the requested change" },
@@ -579,5 +579,231 @@ test("Agent Run API reports structured target, capability, lookup, revision and 
       payload: {},
     });
     assert.equal(idempotentCancel.json().data.revision, run.revision + 1);
+  } finally { await fixture.close(); }
+});
+
+test("Agent Run freezes Story context privately and replays the same run for an idempotent retry", async () => {
+  const fixture = await createRunApiFixture();
+  try {
+    let revision = 3;
+    let renderedContext = "## Story additional instructions\nFirst frozen context";
+    fixture.runs.setStoryContextResolver(async ({ storyId }) => ({
+      protocolVersion: "2026-11-26",
+      storyId,
+      nodeId: "node_1",
+      purpose: "agent-run",
+      revision,
+      renderedContext,
+      diagnostics: [],
+      omittedProjectCount: 0,
+      omittedSessionCount: 0,
+      sessionCandidateWindowOmittedCount: 0,
+    }));
+    const payload = {
+      clientRequestId: "request_story_context",
+      orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
+      input: { prompt: "Review the requested change" },
+      provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
+      budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 2 },
+    };
+    const created = await fixture.app.inject({ method: "POST", url: "/api/node-agent/agent-runs", payload });
+    assert.equal(created.statusCode, 201);
+    const run = created.json().data;
+    assert.equal(run.members[0].executionSnapshot.appendedPrompt, "Original prompt");
+    assert.equal(run.storyContext, undefined);
+    assert.equal(JSON.stringify(run).includes("First frozen context"), false);
+    assert.equal(JSON.stringify(run).includes("renderedContext"), false);
+    assert.equal(fixture.repository.agents.runs.getStoryContext(run.runId)?.renderedContext,
+      "## Story additional instructions\nFirst frozen context");
+    assert.equal(fixture.repository.agents.runs.getStoryContext(run.runId)?.revision, 3);
+
+    revision = 9;
+    renderedContext = "## Story additional instructions\nSecond context";
+    const repeated = await fixture.app.inject({ method: "POST", url: "/api/node-agent/agent-runs", payload });
+    assert.equal(repeated.statusCode, 201);
+    assert.equal(repeated.json().data.runId, run.runId);
+    assert.equal(repeated.json().data.members[0].executionSnapshot.appendedPrompt, "Original prompt");
+    assert.equal(fixture.repository.agents.runs.list().length, 1);
+    assert.equal(fixture.repository.agents.runs.getStoryContext(run.runId)?.renderedContext,
+      "## Story additional instructions\nFirst frozen context");
+  } finally { await fixture.close(); }
+});
+
+test("Agent Run Story context survives a Node Agent restart with the original revision", async () => {
+  const fixture = await createStoryDatabaseFixture("task-handoff-agent-run-story-restart-");
+  let reopened: ReturnType<typeof createNodeAgentRepository> | undefined;
+  try {
+    const run = fixture.repository.agents.runs.create(createInput({
+      storyContext: {
+        storyId: "story_one",
+        revision: 4,
+        renderedContext: "## Story additional instructions\nPersisted context",
+        diagnostics: [],
+        omittedProjectCount: 0,
+        omittedSessionCount: 0,
+        sessionCandidateWindowOmittedCount: 0,
+        createdAt: t1,
+      },
+    }));
+    await fixture.repository.close();
+    const database = await openNodeAgentDatabase(fixture.paths);
+    reopened = createNodeAgentRepository(database);
+    assert.equal(reopened.agents.runs.getStoryContext(run.runId)?.renderedContext,
+      "## Story additional instructions\nPersisted context");
+    assert.equal(reopened.agents.runs.getStoryContext(run.runId)?.revision, 4);
+    assert.equal(reopened.agents.runs.get(run.runId)?.members?.[0].executionSnapshot.appendedPrompt, "Original prompt");
+  } finally {
+    await reopened?.close();
+    await fixture.close();
+  }
+});
+
+test("concurrent Agent Run creates with one clientRequestId resolve Story context once", async () => {
+  const fixture = await createRunApiFixture();
+  try {
+    let resolveCalls = 0;
+    let releaseResolution!: () => void;
+    const resolutionGate = new Promise<void>((resolve) => { releaseResolution = resolve; });
+    fixture.runs.setStoryContextResolver(async ({ storyId }) => {
+      resolveCalls += 1;
+      await resolutionGate;
+      return {
+        protocolVersion: "2026-11-26",
+        storyId,
+        nodeId: "node_1",
+        purpose: "agent-run",
+        revision: 1,
+        renderedContext: "## Story additional instructions\nShared context",
+        diagnostics: [],
+        omittedProjectCount: 0,
+        omittedSessionCount: 0,
+        sessionCandidateWindowOmittedCount: 0,
+      };
+    });
+    const payload = {
+      clientRequestId: "request_concurrent_context",
+      orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
+      input: { prompt: "Review the requested change" },
+      provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
+    };
+    const first = fixture.app.inject({ method: "POST", url: "/api/node-agent/agent-runs", payload });
+    const second = fixture.app.inject({ method: "POST", url: "/api/node-agent/agent-runs", payload });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(resolveCalls, 1);
+    releaseResolution();
+    const responses = await Promise.all([first, second]);
+    assert.equal(responses[0]!.statusCode, 201, responses[0]!.body);
+    assert.equal(responses[1]!.statusCode, 201, responses[1]!.body);
+    assert.equal(responses[0]!.json().data.runId, responses[1]!.json().data.runId);
+    assert.equal(fixture.repository.agents.runs.list().length, 1);
+    assert.equal(resolveCalls, 1);
+  } finally { await fixture.close(); }
+});
+
+test("callee members reuse the Run frozen Story context without inheriting the parent Agent prompt", async () => {
+  const fixture = await createRunApiFixture();
+  try {
+    const callee = fixture.definitions.create({
+      name: "Worker",
+      appendedPrompt: "Callee prompt",
+      targetInstanceId: "instance_one",
+      cwdFolderId: "folder_one",
+      providerId: "codex",
+    });
+    fixture.orchestrations.update(defaultAgentOrchestrationId(fixture.definition.id), {
+      expectedRevision: fixture.orchestrations.get(defaultAgentOrchestrationId(fixture.definition.id)).revision,
+      agentIds: [fixture.definition.id, callee.id],
+      edges: [{ fromAgentId: fixture.definition.id, toAgentId: callee.id }],
+    });
+    const definitionRevision = fixture.definitions.get(fixture.definition.id).revision;
+    const renderedContext = "## Story additional instructions\nFrozen for every member";
+    let resolveCalls = 0;
+    fixture.runs.setStoryContextResolver(async ({ storyId }) => {
+      resolveCalls += 1;
+      return {
+        protocolVersion: "2026-11-26",
+        storyId,
+        nodeId: "node_1",
+        purpose: "agent-run",
+        revision: 2,
+        renderedContext,
+        diagnostics: [],
+        omittedProjectCount: 0,
+        omittedSessionCount: 0,
+        sessionCandidateWindowOmittedCount: 0,
+      };
+    });
+    const payload = {
+      clientRequestId: "request_member_context",
+      orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
+      input: { prompt: "Coordinate the work" },
+      provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
+      budget: { maxMembers: 3, maxDepth: 2, maxConcurrency: 1 },
+    };
+    const created = await fixture.app.inject({ method: "POST", url: "/api/node-agent/agent-runs", payload });
+    assert.equal(created.statusCode, 201, created.body);
+    const run = created.json().data;
+    assert.equal(run.members[0].executionSnapshot.appendedPrompt, "Original prompt");
+    assert.equal(JSON.stringify(run).includes(renderedContext), false);
+    fixture.runs.transitionRun(run.runId, { status: "preparing" });
+    fixture.runs.transitionRun(run.runId, { status: "running" });
+    fixture.runs.transitionMember(run.runId, run.rootMemberId, { status: "preparing" });
+    fixture.runs.transitionMember(run.runId, run.rootMemberId, { status: "running" });
+    const member = fixture.runs.addMember({
+      runId: run.runId,
+      parentMemberId: run.rootMemberId,
+      clientRequestId: "callee_context",
+      agentId: callee.id,
+      input: { prompt: "Implement the change" },
+    });
+    assert.equal(member.executionSnapshot.appendedPrompt, "Callee prompt");
+    assert.equal(member.executionSnapshot.appendedPrompt.includes("Original prompt"), false);
+    assert.equal(member.executionSnapshot.appendedPrompt.includes(renderedContext), false);
+    assert.equal(member.input?.prompt, "Implement the change");
+    assert.equal(member.executionSnapshot.appendedPrompt.includes("Implement the change"), false);
+    assert.equal(resolveCalls, 1);
+    assert.equal(fixture.repository.agents.runs.getStoryContext(run.runId)?.renderedContext, renderedContext);
+    assert.equal(fixture.definitions.get(fixture.definition.id).revision, definitionRevision);
+  } finally { await fixture.close(); }
+});
+
+test("accepted Agent Run context is isolated from a later Run for another Story", async () => {
+  const fixture = await createRunApiFixture();
+  try {
+    const contexts: Record<string, string> = {
+      story_one: "## Story additional instructions\nFirst Story",
+      story_two: "## Story additional instructions\nSecond Story",
+    };
+    fixture.runs.setStoryContextResolver(async ({ storyId }) => ({
+      protocolVersion: "2026-11-26",
+      storyId,
+      nodeId: "node_1",
+      purpose: "agent-run",
+      revision: 1,
+      renderedContext: contexts[storyId] || "",
+      diagnostics: [],
+      omittedProjectCount: 0,
+      omittedSessionCount: 0,
+      sessionCandidateWindowOmittedCount: 0,
+    }));
+    const base = {
+      orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
+      input: { prompt: "Review the requested change" },
+    };
+    const first = await fixture.runs.create({
+      ...base,
+      clientRequestId: "request_story_one",
+      provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_one", storyId: "story_one" },
+    });
+    const second = await fixture.runs.create({
+      ...base,
+      clientRequestId: "request_story_two",
+      provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_two", storyId: "story_two" },
+    });
+    assert.notEqual(first.runId, second.runId);
+    assert.equal(fixture.repository.agents.runs.getStoryContext(first.runId)?.renderedContext, contexts.story_one);
+    assert.equal(fixture.repository.agents.runs.getStoryContext(second.runId)?.renderedContext, contexts.story_two);
+    assert.equal(fixture.runs.get(first.runId).members?.[0].executionSnapshot.appendedPrompt, "Original prompt");
+    assert.equal(fixture.runs.get(second.runId).members?.[0].executionSnapshot.appendedPrompt, "Original prompt");
   } finally { await fixture.close(); }
 });

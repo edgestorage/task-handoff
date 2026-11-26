@@ -1,7 +1,10 @@
 import { INSTANCE_CAPABILITIES_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/remote-desktop";
 import { DesktopService } from "../remote-desktop/service";
 import { registerDesktopRoutes } from "../remote-desktop/routes";
-import { DESKTOP_COMPONENT_APP_ID, readManagedDesktopPackage, removeLegacyManagedDesktopPackage } from "@task-handoff/app-runtime";
+import { DESKTOP_COMPONENT_APP_ID, managedAcpAgents, readManagedDesktopPackage, removeLegacyManagedDesktopPackage } from "@task-handoff/app-runtime";
+import { AcpSessionProvider, invalidateAcpSession } from "@task-handoff/ai-session-runtime/acp";
+import { acpPermissionModes } from "@task-handoff/ai-session-runtime/acp-model";
+import { AiSessionTimelineStore } from "@task-handoff/ai-session-runtime/ai-session/timeline-store";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -60,6 +63,8 @@ import {
   syncAiSessionTimelineItems,
   aiSessionTurnBodyRevision,
   aiSessionTurnsRevision,
+  aiSessionCreateRequestFingerprint,
+  aiSessionNextInputPrompt,
   AI_SESSION_NEXT_INPUT_OUTPUT_SCHEMA,
   classifyAiSessionStorageFailure,
   type AiSessionRegistry,
@@ -188,10 +193,20 @@ import {
   AiSessionQueuePauseInputSchema,
   AiSessionResumeInputSchema,
   AiSessionResumeResultSchema,
+  type AiSessionCreateResult,
   isAiSessionInlineImageMime,
 } from "@task-handoff/protocol/ai-sessions";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { StoryIdSchema } from "@task-handoff/protocol/stories";
+import {
+  STORY_CONTEXT_CLOSED_SESSIONS_PROTOCOL_VERSION,
+  STORY_CONTEXT_SESSION_CANDIDATE_LIMIT,
+  STORY_CONTEXT_SESSION_LAST_RESPONSE_MAX_LENGTH,
+  STORY_CONTEXT_SESSION_TITLE_MAX_LENGTH,
+  STORY_CONTEXT_SESSION_USER_PROMPT_MAX_LENGTH,
+  StoryContextClosedSessionRequestSchema,
+  StoryContextClosedSessionResultSchema,
+} from "@task-handoff/protocol/story-context";
 import {
   APP_SESSION_DELTA_RETENTION_MS,
   AppSessionDeltaResponseSchema,
@@ -710,6 +725,14 @@ function tailTextFile(filePath: string, maxLines = 200) {
   };
 }
 
+function boundedStoryContextText(value: string | undefined, maxLength: number) {
+  if (!value) return undefined;
+  if (value.length <= maxLength) return value;
+  const marker = "… [truncated]";
+  if (maxLength <= marker.length) return value.slice(0, maxLength);
+  return `${value.slice(0, maxLength - marker.length)}${marker}`;
+}
+
 function withoutAgentRunMemberSessions(snapshot: AiSessionsSnapshot, bindings: AgentRunMemberBindingStore): AiSessionsSnapshot {
   const sessions = snapshot.sessions.filter((session) => !bindings.getBySession(session.id));
   return {
@@ -804,6 +827,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   }]]);
   app.addHook("onClose",()=>desktopService.close());
+  const acpProviders = new Map<string, AcpSessionProvider>();
   const appManagement = options.appManagement || new AppManagementManager({
     packageLifecycle:(appId)=>packageLifecycles.get(appId),
     stateDir: appManagementStateDir,
@@ -813,7 +837,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       ...appRuntime.listSessions(),
       ...aiSessions.list().filter((session) => session.activeTurnId).map((session) => ({ id: session.id, appId: session.agent, status: "running" })),
     ],
-    stopAppRuntime: (appId) => appRuntime.stopSharedResource(appId),
+    stopAppRuntime: async (appId) => {
+      appRuntime.stopSharedResource(appId);
+      await acpProviders.get(appId)?.close();
+    },
     publish: (event) => {
       events.publish("app.management", event);
       if(event.job?.appId===DESKTOP_COMPONENT_APP_ID)queueMicrotask(desktopChanged);
@@ -882,6 +909,19 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     desktopService.status(),
     browserControl.capabilities(),
   ));
+  const resolveStoryCreateAppendedPrompt = async (storyId?: string) => {
+    if (!storyId || !nodeAgentClient.enabled() || !(await nodeAgentClient.supportsStoryContextPrompting())) return undefined;
+    try {
+      const resolution = await nodeAgentClient.resolveStoryContext(storyId, "session-create", { instanceId });
+      return resolution.renderedContext || undefined;
+    } catch (cause) {
+      throw Object.assign(new Error("Story context could not be resolved for this AI Session."), {
+        code: "AI_SESSION_STORY_CONTEXT_UNAVAILABLE",
+        statusCode: 502,
+        cause,
+      });
+    }
+  };
   const agentRunMembers = new AgentRunMemberBindingStore(storagePaths.runtimeDir);
   const storyAgentTools = new StoryAgentToolService(
     nodeAgentClient,
@@ -1079,6 +1119,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     onSuccessfulTurn: (sessionId, providerTurnId) => aiSessionNextInputSuggestions?.observeSuccessfulTurn(sessionId, providerTurnId),
   });
   const openCode = new OpenCodeSessionBridge(aiSessions, {
+    instructionSnapshotPath: path.join(storagePaths.dataDir, "opencode-story-instructions.json"),
     resolveModelSelection: (selection) => {
       const resolved = resolveControlledPrivateModelSelection(privateModelCatalog, "opencode", selection);
       // Same as Codex: the request model is the stable upstream name, so a
@@ -1310,6 +1351,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     discoveryProvider: claudeControlSock,
     capability: {
       agent: "claude",
+      // Claude Story creation is intentionally unavailable. Do not fake it by
+      // appending Story context to a user message: if creation is added later,
+      // use the CLI's native --append-system-prompt(-file) channel.
       actions: { create: false, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: false, fork: false, rename: false, approvalDecisions: [] },
       permissionModes: [],
       timeline: { sessionRead: false, turnRead: false, liveItems: false },
@@ -1361,8 +1405,53 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       hierarchy: { subagents: true, nextInputSuggestion: true },
     },
   });
+  for (const { id, acpArgs, loadSession } of managedAcpAgents) {
+    for (const session of aiSessions.all()) {
+      if (session.agent === id && session.providerSessionId) invalidateAcpSession(aiSessions, session);
+    }
+    const provider = new AcpSessionProvider(id, aiSessions, () => {
+      const launch = appRuntime.prepareManagedAgentLaunch(id);
+      return { executable: launch.executable, args: [...acpArgs], env: launch.env };
+    }, (delta) => {
+      aiSessionMessageDeltas.push(AiSessionMessageDeltaEventSchema.parse({
+        instanceId, nodeId: process.env.TASK_HANDOFF_NODE_ID, ...delta, generatedAt: new Date().toISOString(),
+      }));
+    }, new AiSessionTimelineStore(path.join(storagePaths.dataDir, "ai-session-timeline", id)), loadSession, {
+      instructionSnapshotPath: path.join(storagePaths.dataDir, `acp-story-instructions-${id}.json`),
+    });
+    acpProviders.set(id, provider);
+    aiSessionProviders.register({
+      agent: id,
+      controlProvider: provider,
+      resume: (item) => provider.restore(item.providerSessionId, item.cwd, item.modelSelection, item.reasoningEffort),
+      capability: () => ({
+        agent: id,
+        actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: false, historyResume: provider.historyResume, delete: false, fork: false, rename: true, approvalDecisions: ["allow", "deny"] },
+        permissionModes: acpPermissionModes(id),
+        timeline: { sessionRead: true, turnRead: true, liveItems: true },
+        modelSelection: {
+          selectModelAtCreate: true,
+          selectProviderAtCreate: true,
+          selectModelAtResume: true,
+          selectProviderAtResume: true,
+          switchModelWithinProvider: true,
+          switchProviderDuringSession: id !== "gemini",
+          stableIdentity: true,
+        },
+        reasoningEffort: id === "gemini"
+          ? { selectAtCreate: false, updateDuringSession: false }
+          : { selectAtCreate: true, updateDuringSession: true },
+      }),
+    });
+  }
   const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory, (agent) => Boolean(aiSessionProviders.get(agent)));
   const unsubscribeTimelineItems = aiSessionController.subscribeTimelineItems((timelineItem) => {
+    if (timelineItem.item.type === "ai-message") aiSessionMessageDeltas.flush({
+      instanceId,
+      sessionId: timelineItem.sessionId,
+      turnId: timelineItem.item.turnId,
+      itemId: timelineItem.item.id,
+    }, "authoritative-event");
     aiSessionTimelineItemDeltas.flush({
       instanceId,
       sessionId: timelineItem.sessionId,
@@ -1436,6 +1525,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     appRuntime,
     aiSessions,
     aiSessionCreate,
+    resolveStoryCreateAppendedPrompt,
     managedWorktreesRoot: process.env.TASK_HANDOFF_MANAGED_WORKTREES_ROOT || path.join(storagePaths.dataDir, "managed-worktrees"),
     workspaceRoots: repositoryWorkspaceRootsFromEnv(),
   });
@@ -1876,6 +1966,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     codexAppServer.stop();
     claudeControlSock.stop();
     openCode.close();
+    await Promise.all([...acpProviders.values()].map((provider) => provider.close()));
   });
   app.addHook("preClose", async () => {
     // Provider sessions are durable user state, not process-owned resources.
@@ -1885,6 +1976,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     appRuntime.beginDrain();
     codexAppServer.stop();
     openCode.close();
+    await Promise.all([...acpProviders.values()].map((provider) => provider.close()));
     aiSessionMessageDeltas.close("service-close");
     aiSessionTimelineItemDeltas.close("service-close");
   });
@@ -2022,14 +2114,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.post<{ Body: unknown }>("/api/internal/node-agent/story-automation/ai-sessions", nodeAgentProcessRoute, async (request, reply) => {
     try {
       const body = StoryAutomationInstanceCreateInputSchema.parse(request.body || {});
-      const result = body.gitSelection || body.workspaceSelection
-        ? await repositoryAiSessionWorkspace.createAiSessionWorkspace({ ...body, attachments: [], references: [] })
-        : await aiSessionCreate.create({
-            ...body,
-            cwd: body.cwd.path,
-            attachments: [],
-            references: [],
-          });
+      let result: AiSessionCreateResult;
+      if (body.gitSelection || body.workspaceSelection) {
+        result = await repositoryAiSessionWorkspace.createAiSessionWorkspace({ ...body, attachments: [], references: [] });
+      } else {
+        const appendedPrompt = await resolveStoryCreateAppendedPrompt(body.storyId);
+        result = await aiSessionCreate.create({
+          ...body,
+          ...(appendedPrompt ? { appendedPrompt } : {}),
+          cwd: body.cwd.path,
+          attachments: [],
+          references: [],
+          idempotencyFingerprint: aiSessionCreateRequestFingerprint(body),
+        });
+      }
       publishAiSessionSnapshot("control-action");
       return { data: StoryAutomationInstanceCreateResultSchema.parse({ disposition: result.disposition, aiSessionId: result.aiSessionId }) };
     } catch (error: unknown) {
@@ -2050,9 +2148,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         agent: body.providerId,
         cwd: body.cwd.path,
         runtimeWorkspaceRoots: [body.writableRoots.workspace.path, body.writableRoots.shared.path],
-        message: body.appendedPrompt.trim()
-          ? `${body.prompt}\n\nAdditional Agent instructions:\n${body.appendedPrompt}`
-          : body.prompt,
+        message: body.prompt,
+        appendedPrompt: body.appendedPrompt,
         permissionMode: body.permissionMode,
         clientRequestId: body.clientRequestId,
         modelSelection: body.modelSelection,
@@ -2160,6 +2257,40 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
           bodyRevision: aiSessionTurnBodyRevision(turn),
         })),
       },
+    }) };
+  });
+
+  app.post<{ Body: unknown }>("/api/internal/node-agent/story-ai-sessions/closed-summaries", nodeAgentProcessRoute, async (request) => {
+    const input = StoryContextClosedSessionRequestSchema.parse(request.body || {});
+    const excluded = new Set(input.excludeSessionIds);
+    const eligible = aiSessionHistory.list()
+      .filter((item) => item.storyId === input.storyId)
+      .filter((item) => item.lineage?.kind !== "subagent")
+      .filter((item) => !excluded.has(item.id))
+      .filter((item) => !agentRunMembers.getBySession(item.id))
+      .sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt) || left.id.localeCompare(right.id));
+    const limited = eligible.slice(0, Math.min(input.limit, STORY_CONTEXT_SESSION_CANDIDATE_LIMIT));
+    return { data: StoryContextClosedSessionResultSchema.parse({
+      protocolVersion: STORY_CONTEXT_CLOSED_SESSIONS_PROTOCOL_VERSION,
+      storyId: input.storyId,
+      sessions: limited.map((item) => ({
+        instanceId,
+        sessionId: item.id,
+        ...(boundedStoryContextText(item.title, STORY_CONTEXT_SESSION_TITLE_MAX_LENGTH)
+          ? { title: boundedStoryContextText(item.title, STORY_CONTEXT_SESSION_TITLE_MAX_LENGTH) }
+          : {}),
+        agent: item.agent,
+        status: "closed",
+        ...(boundedStoryContextText(item.userPrompt, STORY_CONTEXT_SESSION_USER_PROMPT_MAX_LENGTH)
+          ? { userPrompt: boundedStoryContextText(item.userPrompt, STORY_CONTEXT_SESSION_USER_PROMPT_MAX_LENGTH) }
+          : {}),
+        ...(boundedStoryContextText(item.lastMessage, STORY_CONTEXT_SESSION_LAST_RESPONSE_MAX_LENGTH)
+          ? { lastResponse: boundedStoryContextText(item.lastMessage, STORY_CONTEXT_SESSION_LAST_RESPONSE_MAX_LENGTH) }
+          : {}),
+        lastActivityAt: item.lastActiveAt,
+      })),
+      omittedCount: Math.max(0, eligible.length - limited.length),
+      diagnostics: [],
     }) };
   });
 
@@ -2437,7 +2568,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     const hierarchy = { subagents: request.query.hierarchy === "subagents" };
     return { data: AiSessionHistoryListSchema.parse({
       items: aiSessionHistory.list()
-        .filter((item) => agents.has(item.agent) && !agentRunMembers.getBySession(item.id))
+        .filter((item) => (agents.has("*") || agents.has(item.agent)) && !agentRunMembers.getBySession(item.id))
         .map((item) => projectAiSessionHistoryItemForConsumer(item, hierarchy)),
     }) };
   });
@@ -2601,11 +2732,14 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const draftAttachmentIds = (referenced.success ? referenced.data.attachments : [])
         .filter((attachment) => attachment.source.type === "upload-ref")
         .map((attachment) => attachment.id);
+      const appendedPrompt = await resolveStoryCreateAppendedPrompt(body.storyId);
       const result = AiSessionCreateResultSchema.parse(await aiSessionCreate.create({
         ...body,
+        ...(appendedPrompt ? { appendedPrompt } : {}),
         cwd: body.cwd.path,
         attachments,
         ...(draftAttachmentIds.length ? { draftAttachmentIds, draftScopeType: "create-request", draftScopeId: body.clientRequestId } : {}),
+        ...(body.storyId ? { idempotencyFingerprint: aiSessionCreateRequestFingerprint(body) } : {}),
       }));
       publishAiSessionSnapshot("control-action");
       return { data: result };
@@ -3103,7 +3237,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/approval", async (request, reply) => {
     try {
       const body = AiSessionApprovalInputSchema.parse(request.body || {});
-      const result = AiSessionActionResultSchema.parse(await aiSessionController.resolveApproval(request.params.id, body.decision));
+      const result = AiSessionActionResultSchema.parse(await aiSessionController.resolveApproval(request.params.id, body.decision, body.approvalRequestId));
       publishAiSessionSnapshot("control-action");
       return { data: projectAiSessionActionResponse(result) };
     } catch (error: unknown) {

@@ -33,6 +33,7 @@ import type { AgentRunMemberTransition } from "../persistence/agent-run-reposito
 import type { NodeAgentState } from "../state.ts";
 import type { AgentDefinitionService, AgentDefinitionChangePublisher } from "./service.ts";
 import type { AgentOrchestrationService } from "./orchestration-service.ts";
+import type { StoryContextResolution } from "@task-handoff/protocol/story-context";
 
 export type AgentRunExecutionSupport = (input: {
   targetInstanceId: string;
@@ -47,6 +48,12 @@ export type AgentRunExecutionCoordinator = {
   cancel?(runId: string): void;
 };
 
+export type AgentRunStoryContextResolver = (input: {
+  storyId: string;
+  initiatingInstanceId: string;
+  initiatingAiSessionId?: string;
+}) => Promise<StoryContextResolution>;
+
 /**
  * Accepts and snapshots Agent Runs. Process scheduling is intentionally a later boundary: a run is
  * persisted only after the current definition target and a registered execution combination resolve.
@@ -60,6 +67,8 @@ export class AgentRunService {
   private readonly publish?: AgentDefinitionChangePublisher;
   private readonly resources?: AgentRunResourceRepository;
   private coordinator?: AgentRunExecutionCoordinator;
+  private storyContextResolver?: AgentRunStoryContextResolver;
+  private readonly pendingCreates = new Map<string, { input: AgentRunCreateInput; promise: Promise<AgentRun> }>();
 
   constructor(
     state: NodeAgentState,
@@ -81,6 +90,10 @@ export class AgentRunService {
 
   setCoordinator(coordinator: AgentRunExecutionCoordinator) {
     this.coordinator = coordinator;
+  }
+
+  setStoryContextResolver(resolver: AgentRunStoryContextResolver | undefined) {
+    this.storyContextResolver = resolver;
   }
 
   list(): AgentRun[] {
@@ -152,24 +165,53 @@ export class AgentRunService {
     return orchestration;
   }
 
-  create(input: AgentRunCreateInput): AgentRun {
+  async create(input: AgentRunCreateInput): Promise<AgentRun> {
     const parsed = AgentRunCreateInputSchema.parse(input);
     const existing = this.runs.getByClientRequestId(parsed.clientRequestId);
     if (existing) {
-      const root = existing.members?.find((member) => member.memberId === existing.rootMemberId);
-      const sameRequest = existing.orchestrationId === parsed.orchestrationId
-        && (parsed.entryAgentId === undefined || root?.agentId === parsed.entryAgentId)
-        && isDeepStrictEqual(existing.input, parsed.input)
-        && isDeepStrictEqual(existing.provenance, parsed.provenance)
-        && isDeepStrictEqual(existing.budget, effectiveAgentRunBudget(parsed.budget));
-      if (sameRequest) return this.withSharedSpace(existing);
-      throw agentRunServiceError(
-        "AGENT_RUN_IDEMPOTENCY_CONFLICT",
-        "The client request id is already associated with a different Agent Run request.",
-        409,
-        { clientRequestId: parsed.clientRequestId, runId: existing.runId },
-      );
+      return this.idempotentExisting(existing, parsed);
     }
+
+    const active = this.pendingCreates.get(parsed.clientRequestId);
+    if (active) {
+      if (!isDeepStrictEqual(active.input, parsed)) {
+        throw agentRunServiceError(
+          "AGENT_RUN_IDEMPOTENCY_CONFLICT",
+          "The client request id is already associated with a different Agent Run request.",
+          409,
+          { clientRequestId: parsed.clientRequestId },
+        );
+      }
+      return active.promise;
+    }
+    const promise = this.performCreate(parsed).finally(() => {
+      if (this.pendingCreates.get(parsed.clientRequestId)?.promise === promise) {
+        this.pendingCreates.delete(parsed.clientRequestId);
+      }
+    });
+    this.pendingCreates.set(parsed.clientRequestId, { input: parsed, promise });
+    return promise;
+  }
+
+  private idempotentExisting(existing: AgentRun, parsed: AgentRunCreateInput): AgentRun {
+    const root = existing.members?.find((member) => member.memberId === existing.rootMemberId);
+    const sameRequest = existing.orchestrationId === parsed.orchestrationId
+      && (parsed.entryAgentId === undefined || root?.agentId === parsed.entryAgentId)
+      && isDeepStrictEqual(existing.input, parsed.input)
+      && isDeepStrictEqual(existing.provenance, parsed.provenance)
+      && isDeepStrictEqual(existing.budget, effectiveAgentRunBudget(parsed.budget));
+    if (sameRequest) return this.withSharedSpace(existing);
+    throw agentRunServiceError(
+      "AGENT_RUN_IDEMPOTENCY_CONFLICT",
+      "The client request id is already associated with a different Agent Run request.",
+      409,
+      { clientRequestId: parsed.clientRequestId, runId: existing.runId },
+    );
+  }
+
+  private async performCreate(parsed: AgentRunCreateInput): Promise<AgentRun> {
+    const existing = this.runs.getByClientRequestId(parsed.clientRequestId);
+    if (existing) return this.idempotentExisting(existing, parsed);
 
     if (parsed.provenance.source !== "control-plane" && !this.state.controlledInstances.get(parsed.provenance.initiatingInstanceId)) {
       throw agentRunServiceError(
@@ -203,6 +245,14 @@ export class AgentRunService {
       );
     }
 
+    const storyProvenance = parsed.provenance.source === "control-plane" ? undefined : parsed.provenance;
+    const storyContext = storyProvenance && this.storyContextResolver
+      ? await this.storyContextResolver({
+          storyId: storyProvenance.storyId,
+          initiatingInstanceId: storyProvenance.initiatingInstanceId,
+          initiatingAiSessionId: storyProvenance.initiatingAiSessionId,
+        })
+      : undefined;
     const run = this.runs.create({
       clientRequestId: parsed.clientRequestId,
       orchestrationId: orchestration.id,
@@ -227,6 +277,18 @@ export class AgentRunService {
         },
         input: parsed.input,
       },
+      ...(storyContext ? {
+        storyContext: {
+          storyId: storyContext.storyId,
+          revision: storyContext.revision,
+          renderedContext: storyContext.renderedContext,
+          diagnostics: storyContext.diagnostics,
+          omittedProjectCount: storyContext.omittedProjectCount,
+          omittedSessionCount: storyContext.omittedSessionCount,
+          sessionCandidateWindowOmittedCount: storyContext.sessionCandidateWindowOmittedCount,
+          createdAt: new Date().toISOString(),
+        },
+      } : {}),
     });
     this.publishRun(run);
     const rootMember = run.members?.find((member) => member.memberId === run.rootMemberId);
@@ -313,6 +375,10 @@ export class AgentRunService {
     this.publishMember(updatedRun, member);
     if (member.status === "queued") this.coordinator?.accept(run.runId, member.memberId);
     return member;
+  }
+
+  storyContext(runId: string) {
+    return this.runs.getStoryContext(runId);
   }
 
   transitionRun(runId: string, transition: {

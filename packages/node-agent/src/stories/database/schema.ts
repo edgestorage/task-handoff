@@ -35,6 +35,26 @@ export const stories = sqliteTable("na_stories", {
   index("na_stories_created_idx").on(table.createdAt),
 ]);
 
+export const storyContextSettings = sqliteTable("na_story_context_settings", {
+  storyId: text("story_id").primaryKey().notNull().references(() => stories.id, { onDelete: "cascade" }),
+  appendedPrompt: text("appended_prompt").notNull().default(""),
+  revision: integer("revision").notNull().default(0),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  check("na_story_context_settings_revision_check", sql`${table.revision} >= 0`),
+]);
+
+export const storyContextProjects = sqliteTable("na_story_context_projects", {
+  storyId: text("story_id").notNull().references(() => stories.id, { onDelete: "cascade" }),
+  folderId: text("folder_id").notNull(),
+  displayOrder: integer("display_order").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.storyId, table.folderId] }),
+  uniqueIndex("na_story_context_projects_order_uq").on(table.storyId, table.displayOrder),
+  index("na_story_context_projects_story_idx").on(table.storyId, table.displayOrder),
+  check("na_story_context_projects_order_check", sql`${table.displayOrder} >= 0`),
+]);
+
 export const decisions = sqliteTable("na_story_decisions", {
   id: text("id").primaryKey(),
   storyId: text("story_id").notNull().references(() => stories.id, { onDelete: "cascade" }),

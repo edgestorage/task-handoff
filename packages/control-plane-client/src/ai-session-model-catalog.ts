@@ -32,10 +32,13 @@ export type AiSessionModelGroup = {
   models: AiSessionModelOption[];
 };
 
-const agentProtocol: Record<string, string> = {
-  codex: "openai-responses",
-  claude: "anthropic-messages",
-  opencode: "openai-chat-completions",
+const agentProtocols: Record<string, readonly string[]> = {
+  codex: ["openai-responses"],
+  claude: ["anthropic-messages"],
+  opencode: ["openai-chat-completions"],
+  gemini: ["google-generative-ai"],
+  commandcode: ["openai-chat-completions", "openai-responses", "anthropic-messages"],
+  dsh: ["openai-chat-completions", "openai-responses", "anthropic-messages", "google-generative-ai"],
 };
 
 export function assignedModelEntityIds(assignment: AiSessionCatalogAssignment): string[] {
@@ -122,9 +125,9 @@ function entityAvailable(entity: AiSessionCatalogModelEntity, nodeId: string) {
 }
 
 function entitySupportsAgent(entity: AiSessionCatalogModelEntity, agent: string) {
-  const protocol = agentProtocol[agent];
-  if (!protocol) return false;
-  if (entity.protocols?.length) return entity.protocols.includes(protocol);
+  const protocols = agentProtocols[agent];
+  if (!protocols?.length) return false;
+  if (entity.protocols?.length) return protocols.some((protocol) => entity.protocols!.includes(protocol));
   // Compatibility for v0.0.23 model records: app was the only compatibility marker.
   return entity.app === agent;
 }

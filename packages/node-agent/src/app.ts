@@ -88,6 +88,8 @@ import { StoryToolPolicyService } from "./stories/tool-policy-service.ts";
 import { StoryToolPolicyInvalidationNotifier } from "./stories/tool-policy-invalidation.ts";
 import { StoryActionExecutionService } from "./stories/action-execution-service.ts";
 import { StoryAiSessionReadService } from "./stories/ai-session-read-service.ts";
+import { StoryContextSettingsService } from "./stories/context-settings-service.ts";
+import { StoryContextResolutionService } from "./stories/story-context-resolution-service.ts";
 import { StoryAiSessionCloseService } from "./stories/ai-session-close-service.ts";
 import { StoryDecisionCommandService } from "./stories/decision-service.ts";
 import { openNodeAgentDatabase } from "./persistence/database.ts";
@@ -346,11 +348,14 @@ function isUnixSocketRequest(request: { ip?: string; socket: { remoteAddress?: s
 
 function isInstanceReportRoute(url: string) {
   const path = url.split("?")[0];
-  return /^\/api\/node-agent\/instances\/[^/]+\/(register|heartbeat)$/.test(path)
+  return /^\/api\/node-agent\/instances\/[^/]+\/(register|heartbeat|capabilities)$/.test(path)
     || /^\/api\/node-agent\/instances\/[^/]+\/git-credentials\//.test(path)
+    || /^\/api\/node-agent\/instances\/[^/]+\/stories\/[^/]+\/context\/resolve$/.test(path)
     || /^\/api\/node-agent\/instances\/[^/]+\/story-agent-tools$/.test(path)
     || /^\/api\/node-agent\/instances\/[^/]+\/ai-sessions\/[^/]+\/story-agent-tools$/.test(path)
     || /^\/api\/node-agent\/instances\/[^/]+\/ai-sessions\/[^/]+\/story-agent-tools\/[^/]+$/.test(path)
+    || /^\/api\/node-agent\/instances\/[^/]+\/ai-sessions\/[^/]+\/agent-runs$/.test(path)
+    || /^\/api\/node-agent\/agent-runs\/[^/]+\/members\/[^/]+\/ai-sessions\/[^/]+\/agent-runs$/.test(path)
     || /^\/api\/node-agent\/instances\/[^/]+\/ai-sessions\/[^/]+\/story-content(?:\/|$)/.test(path);
 }
 
@@ -1362,6 +1367,32 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const storyActionExecution = new StoryActionExecutionService(state, stories, fetchImpl, resolveInstanceWeb);
   const storyAiSessionRead = new StoryAiSessionReadService(state, fetchImpl, resolveInstanceWeb);
   const storyAiSessionCloser = new StoryAiSessionCloseService(fetchImpl, resolveInstanceWeb);
+  const storyContextSettings = new StoryContextSettingsService(
+    storyRepository,
+    state.node.id,
+    state,
+    async (storyId) => {
+      const story = await stories.get(storyId);
+      if (story) stories.notifyUpdated(story);
+    },
+    (storyId, error) => app.log.warn({ storyId, error }, "Story context changed event delivery failed after commit"),
+  );
+  const storyContextResolution = new StoryContextResolutionService({
+    state,
+    settings: storyContextSettings,
+    fetchImpl,
+    resolveInstanceWeb,
+    listAgentRunMemberSessionIds: () => storyRepository.agents.runs.listAgentRunMemberSessionIds(),
+  });
+  agentRuns.setStoryContextResolver(({ storyId, initiatingInstanceId, initiatingAiSessionId }) => storyContextResolution.resolve({
+    storyId,
+    purpose: "agent-run",
+    caller: {
+      instanceId: initiatingInstanceId,
+      ...(initiatingAiSessionId ? { sessionId: initiatingAiSessionId } : {}),
+    },
+    excludeSessionIds: [],
+  }));
   const storyDecisions = new StoryDecisionCommandService(
     state,
     storyRepository,
@@ -1876,6 +1907,58 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     await wslProvisioner?.prefetchBaseTemplate();
   });
 
+  const nodeAgentCapabilityDocument = () => ({
+    modelEndpointProbe: true,
+    managedModels: {
+      multiEntityAssignment: true,
+      privateModelCatalog: true,
+      stableModelIdentity: true,
+      requestMappings: true,
+      providerCapabilities: true,
+      // Protocol capabilities follow the registered adapters: the switch is
+      // node configuration and deliberately not part of this document.
+      modelRelay: (() => {
+        const protocols = modelRelay.protocolCapabilities();
+        return { protocols, streaming: protocols.length > 0, unknownModelPolicy: true, imagePruning: true };
+      })(),
+    },
+    aiSessionHistoryLimit: true,
+    aiSessionAttachmentRetention: true,
+    aiSessionFileAttachmentLimit: true,
+    aiSessionNextInputSuggestion: true,
+    aiSessionNextInputSuggestionReasoningEffort: true,
+    aiSessionNextInputSuggestionModelSelection: true,
+    codexManagedSettings: true,
+    controlPlaneTrust: true,
+    folderPlaces: true,
+    localFolderNameUpdate: true,
+    managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false, wsl: runtimeAdapters.has("wsl") } },
+    stories: {
+      enabled: true,
+      agentTools: true,
+      agentToolCapabilities: { policy: true, actions: true, automations: true, aiSessionRead: true, decisions: true },
+      contextSettings: { settings: true, projects: true, sessionPrompting: true },
+      sessionRetention: true,
+      maxFileBytes: 32 * 1024 * 1024,
+      maxBatchPaths: 20,
+    },
+    agentExecution: (() => {
+      const combinations = [agentRunExecutionCombination];
+      return {
+        definitions: true,
+        runs: true,
+        orchestration: {
+          storyEntryAuthorization: true,
+          orchestrations: true,
+          runMembers: true,
+          manualRuns: true,
+        },
+        sharedSpace: { enabled: true, runtimes: ["docker" as const] },
+        combinations,
+      };
+    })(),
+  });
+
   app.get("/api/node-agent/health", async () => {
     const hostname = os.hostname().trim();
     return {
@@ -1895,62 +1978,22 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         platform: finalComputerPlatform(platform),
         arch: process.arch,
         protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
-        capabilities: {
-          modelEndpointProbe: true,
-          managedModels: {
-            multiEntityAssignment: true,
-            privateModelCatalog: true,
-            stableModelIdentity: true,
-            requestMappings: true,
-            providerCapabilities: true,
-            // Protocol capabilities follow the registered adapters: the switch is
-            // node configuration and deliberately not part of this document.
-            modelRelay: (() => {
-              const protocols = modelRelay.protocolCapabilities();
-              return { protocols, streaming: protocols.length > 0, unknownModelPolicy: true, imagePruning: true };
-            })(),
-          },
-          aiSessionHistoryLimit: true,
-          aiSessionAttachmentRetention: true,
-          aiSessionFileAttachmentLimit: true,
-          aiSessionNextInputSuggestion: true,
-          aiSessionNextInputSuggestionReasoningEffort: true,
-          aiSessionNextInputSuggestionModelSelection: true,
-          codexManagedSettings: true,
-          controlPlaneTrust: true,
-          folderPlaces: true,
-          localFolderNameUpdate: true,
-          managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false, wsl: runtimeAdapters.has("wsl") } },
-          stories: {
-            enabled: true,
-            agentTools: true,
-            agentToolCapabilities: { policy: true, actions: true, automations: true, aiSessionRead: true, decisions: true },
-            sessionRetention: true,
-            maxFileBytes: 32 * 1024 * 1024,
-            maxBatchPaths: 20,
-          },
-          agentExecution: (() => {
-            const combinations = [agentRunExecutionCombination];
-            return {
-              definitions: true,
-              runs: true,
-              orchestration: {
-                storyEntryAuthorization: true,
-                orchestrations: true,
-                runMembers: true,
-                manualRuns: true,
-              },
-              sharedSpace: { enabled: true, runtimes: ["docker" as const] },
-              combinations,
-            };
-          })(),
-        },
+        capabilities: nodeAgentCapabilityDocument(),
         build: buildInfo("node-agent"),
         instanceProxy: { ...instanceProxyMetrics },
         eventTransport: eventForwarder.eventTransportHealth(),
         serverTime: new Date().toISOString(),
       },
     };
+  });
+
+  // Controlled instances authenticate with their registration credential. The
+  // machine-wide health endpoint also requires node pairing HMAC, so instances
+  // cannot use it for capability discovery.
+  app.get("/api/node-agent/instances/:id/capabilities", async (request) => {
+    const { id } = z.object({ id: z.string().trim().min(1).max(120) }).strict().parse(request.params);
+    state.authenticateInstance(id, bearerToken(request.headers));
+    return { data: nodeAgentCapabilityDocument() };
   });
 
   const requireListenerManager = (request: { ip?: string; socket: { remoteAddress?: string; remoteFamily?: string } }) => {
@@ -2059,6 +2102,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     toolPolicy: storyToolPolicy,
     actionExecution: storyActionExecution,
     aiSessionRead: storyAiSessionRead,
+    contextSettings: storyContextSettings,
+    contextResolution: storyContextResolution,
     decisions: storyDecisions,
     agentRuns,
     onToolPolicyInvalidated: (event) => storyToolPolicyInvalidation.notify(event),

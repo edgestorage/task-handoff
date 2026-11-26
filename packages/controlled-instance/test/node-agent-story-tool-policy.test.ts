@@ -75,3 +75,74 @@ test("registration client keeps a structured missing Story in the same fail-clos
   assert.equal(access.source, "fail-closed");
   assert.deepEqual(access.enabledTools, []);
 });
+
+test("registration client resolves Story context only when the Node advertises session prompting", async () => {
+  const requests: Array<{ url: string; method: string; body: any }> = [];
+  const registration = client((async (url: string | URL | Request, init?: RequestInit) => {
+    requests.push({ url: String(url), method: String(init?.method || "GET"), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (String(url).endsWith("/node-agent/instances/inst_one/capabilities")) {
+      return Response.json({ data: { stories: { enabled: true, contextSettings: { settings: true, projects: true, sessionPrompting: true } } } });
+    }
+    return Response.json({ data: {
+      protocolVersion: "2026-11-26",
+      storyId: "story_one",
+      nodeId: "node_one",
+      purpose: "session-create",
+      revision: 2,
+      renderedContext: "## Story additional instructions\nKeep it",
+      diagnostics: [],
+      omittedProjectCount: 0,
+      omittedSessionCount: 0,
+      sessionCandidateWindowOmittedCount: 0,
+      future: "ignored",
+    } });
+  }) as typeof fetch);
+
+  assert.equal(await registration.supportsStoryContextPrompting(), true);
+  assert.match(requests[0]!.url, /\/node-agent\/instances\/inst_one\/capabilities$/);
+  assert.equal(requests[0]!.method, "GET");
+  const resolved = await registration.resolveStoryContext("story_one", "session-create", { instanceId: "inst_one", sessionId: "session_one" });
+  assert.equal(resolved.renderedContext, "## Story additional instructions\nKeep it");
+  assert.match(requests[1]!.url, /\/instances\/inst_one\/stories\/story_one\/context\/resolve$/);
+  assert.equal(requests[1]!.method, "POST");
+  assert.deepEqual(requests[1]!.body, {
+    purpose: "session-create",
+    caller: { instanceId: "inst_one", sessionId: "session_one" },
+    excludeSessionIds: [],
+  });
+});
+
+test("registration client keeps the session path usable when the Node lacks Story context capability", async () => {
+  let resolveCalls = 0;
+  const registration = client((async (url: string | URL | Request) => {
+    if (String(url).endsWith("/node-agent/instances/inst_one/capabilities")) return Response.json({ data: { stories: { enabled: true } } });
+    resolveCalls += 1;
+    return Response.json({ data: {} });
+  }) as typeof fetch);
+
+  assert.equal(await registration.supportsStoryContextPrompting(), false);
+  assert.equal(await registration.supportsStoryContextPrompting(), false);
+  assert.equal(resolveCalls, 0);
+});
+
+test("registration client rejects corrupted or cross-Story context responses", async () => {
+  let response: unknown = {
+    protocolVersion: "2026-11-26",
+    storyId: "story_other",
+    nodeId: "node_one",
+    purpose: "session-create",
+    revision: 1,
+    renderedContext: "wrong",
+    diagnostics: [],
+    omittedProjectCount: 0,
+    omittedSessionCount: 0,
+    sessionCandidateWindowOmittedCount: 0,
+  };
+  const registration = client((async () => Response.json({ data: response })) as typeof fetch);
+  await assert.rejects(
+    () => registration.resolveStoryContext("story_one", "session-create"),
+    (error: any) => error.code === "STORY_CONTEXT_SCOPE_MISMATCH" && error.statusCode === 502,
+  );
+  response = { storyId: "story_one", revision: "invalid" };
+  await assert.rejects(() => registration.resolveStoryContext("story_one", "session-create"));
+});

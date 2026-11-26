@@ -33,7 +33,15 @@ import {
   StoryAgentActionRunInputSchema,
   sanitizeStoryAgentToolPolicySettings,
 } from "@task-handoff/protocol/story-agent-tools";
-import { nodeAgentCapabilitiesFromPublicNode } from "@task-handoff/protocol/node-agent-capabilities";
+import {
+  nodeAgentCapabilitiesFromPublicNode,
+  supportsNodeStoryContextSettings,
+} from "@task-handoff/protocol/node-agent-capabilities";
+import {
+  sanitizeStoryContextSettings,
+  StoryContextSettingsSchema,
+  StoryContextSettingsUpdateInputSchema,
+} from "@task-handoff/protocol/story-context";
 import type { ControlPlaneService } from "../application/service.ts";
 import { nodeStoryJson, projectNodeAgentStory } from "./node-agent-story.ts";
 import { nodeJson } from "./node-agent-request.ts";
@@ -115,6 +123,42 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
     await requireStoryOnNode(service, storyId, nodeId);
     const data = await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/settings/agent-tools`);
     return { data: StoryAgentToolPolicySettingsSchema.parse(sanitizeStoryAgentToolPolicySettings(data)) };
+  });
+
+  const requireStoryContextSettingsSupport = (nodeId: string) => {
+    const node = service.requireNode(nodeId);
+    if (!supportsNodeStoryContextSettings(nodeAgentCapabilitiesFromPublicNode(node.capabilities))) {
+      throw Object.assign(new Error("This node does not support Story context settings."), {
+        statusCode: 409,
+        code: "STORY_CONTEXT_SETTINGS_UNSUPPORTED",
+      });
+    }
+    return node;
+  };
+
+  app.get<{ Params: { storyId: string } }>("/api/stories/:storyId/settings/context", async (request) => {
+    const { storyId } = StoryRouteSchema.parse(request.params);
+    const { nodeId } = StoryRouteQuerySchema.parse(request.query);
+    await requireStoryOnNode(service, storyId, nodeId);
+    requireStoryContextSettingsSupport(nodeId);
+    const data = await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/settings/context`);
+    return { data: StoryContextSettingsSchema.parse(sanitizeStoryContextSettings(data)) };
+  });
+
+  app.put<{ Params: { storyId: string } }>("/api/stories/:storyId/settings/context", async (request) => {
+    const { storyId } = StoryRouteSchema.parse(request.params);
+    const body = z.object({
+      nodeId: z.string().trim().min(1).max(120),
+      input: StoryContextSettingsUpdateInputSchema,
+    }).strict().parse(request.body);
+    await requireStoryOnNode(service, storyId, body.nodeId);
+    requireStoryContextSettingsSupport(body.nodeId);
+    const data = await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/settings/context`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body.input),
+    });
+    return { data: StoryContextSettingsSchema.parse(sanitizeStoryContextSettings(data)) };
   });
 
   app.put<{ Params: { storyId: string } }>("/api/stories/:storyId/settings/agent-tools", async (request) => {

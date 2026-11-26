@@ -38,6 +38,12 @@ import {
   type StoryAgentToolPolicy,
   StoryAgentActionRunInputSchema,
 } from "@task-handoff/protocol/story-agent-tools";
+import {
+  sanitizeStoryContextSettings,
+  StoryContextSettingsSchema,
+  StoryContextSettingsUpdateInputSchema,
+  type StoryContextSettingsUpdateInput,
+} from "@task-handoff/protocol/story-context";
 import { jsonRequest } from "./json-request.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).passthrough();
@@ -60,6 +66,15 @@ export function createControlPlaneStoriesApi(transport: ControlPlaneClientTransp
       const input = StoryAgentToolPolicyUpdateInputSchema.parse({ policy });
       const data = await requestData(`/api/stories/${encodeURIComponent(storyId)}/settings/agent-tools`, z.unknown(), jsonRequest("PUT", { nodeId, input }));
       return StoryAgentToolPolicySettingsSchema.parse(sanitizeStoryAgentToolPolicySettings(data));
+    },
+    async contextSettings(storyId: string, nodeId: string, signal?: AbortSignal) {
+      const data = await requestData(`/api/stories/${encodeURIComponent(storyId)}/settings/context?nodeId=${encodeURIComponent(nodeId)}`, z.unknown(), { signal });
+      return StoryContextSettingsSchema.parse(sanitizeStoryContextSettings(data));
+    },
+    async updateContextSettings(storyId: string, nodeId: string, input: StoryContextSettingsUpdateInput) {
+      const parsed = StoryContextSettingsUpdateInputSchema.parse(input);
+      const data = await requestData(`/api/stories/${encodeURIComponent(storyId)}/settings/context`, z.unknown(), jsonRequest("PUT", { nodeId, input: parsed }));
+      return StoryContextSettingsSchema.parse(sanitizeStoryContextSettings(data));
     },
     listDecisions(storyId: string, nodeId: string, signal?: AbortSignal) {
       return requestData(`/api/stories/${encodeURIComponent(storyId)}/decisions?nodeId=${encodeURIComponent(nodeId)}`, StoryDecisionListSchema, { signal });

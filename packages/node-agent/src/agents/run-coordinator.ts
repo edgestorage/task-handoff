@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { SchedulerExecutionRuntime, type SchedulerSkipReason } from "@task-handoff/core/core/scheduler-runtime";
 import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
 import { AGENT_RUN_TERMINAL_STATUSES, type AgentRun, type AgentRunError, type AgentRunMember } from "@task-handoff/protocol/agent-runs";
+import { composeAgentRunAppendedPrompt } from "@task-handoff/protocol/story-context";
 import type { NodeAgentState } from "../state.ts";
 import type { AgentRunResourceRepository } from "../persistence/agent-run-resource-repository.ts";
 import { resolveInstanceFolder } from "../instances/instance-folder.ts";
@@ -267,6 +268,7 @@ export class AgentRunCoordinator implements AgentRunExecutionCoordinator {
           }
         : undefined;
       if (!member.input) throw Object.assign(new Error("The Agent Run member has no frozen input."), { code: "AGENT_RUN_MEMBER_INPUT_MISSING" });
+      const storyContext = this.options.runs.storyContext(run.runId)?.renderedContext || "";
       const created = await this.options.sessions.create(instance, {
         runId: run.runId,
         memberId: member.memberId,
@@ -278,7 +280,7 @@ export class AgentRunCoordinator implements AgentRunExecutionCoordinator {
           shared: { type: "runtime-path", path: pathPolicy.writableRoots[1] },
         },
         prompt: member.input.prompt,
-        appendedPrompt: member.executionSnapshot.appendedPrompt,
+        appendedPrompt: composeAgentRunAppendedPrompt(member.executionSnapshot.appendedPrompt, storyContext),
         // An unspecified Agent preset still uses the registered workspace sandbox. Full access is
         // never accepted because it would invalidate write-root isolation.
         permissionMode: (member.executionSnapshot.permissionMode || "auto-review") as never,
@@ -339,6 +341,15 @@ export class AgentRunCoordinator implements AgentRunExecutionCoordinator {
     let cleanupError: AgentRunError | undefined;
     const initialMember = this.options.runs.getMember(event.runId, event.memberId);
     const memberAlreadyTerminal = AGENT_RUN_TERMINAL_STATUSES.has(initialMember.status);
+    // The Run stops accepting members before runtime cleanup starts. Keeping it
+    // "running" while the root member is already finalizing exposes a state that
+    // callers can observe but never transition out of safely.
+    if (event.root) {
+      const current = this.options.runs.get(event.runId);
+      if (!AGENT_RUN_TERMINAL_STATUSES.has(current.status) && current.status !== "finalizing") {
+        this.options.runs.transitionRun(event.runId, { status: "finalizing" });
+      }
+    }
     try {
       if (!memberAlreadyTerminal && initialMember.status !== "finalizing") {
         this.options.runs.transitionMember(event.runId, event.memberId, { status: "finalizing" });

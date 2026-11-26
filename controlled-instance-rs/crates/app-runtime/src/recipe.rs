@@ -106,6 +106,7 @@ fn artifact_stream_error(error: reqwest::Error) -> AppRecipeExecutionError {
 
 #[derive(Clone, Copy)]
 struct NodePackageOptions<'a> {
+    bin_name: Option<&'a str>,
     managed: bool,
     version: Option<&'a str>,
     privilege: AppInstallPrivilege,
@@ -280,6 +281,7 @@ impl AppRecipeExecutor {
                 packages,
                 managed,
                 version,
+                bin_name,
                 privilege,
                 ..
             } => {
@@ -288,6 +290,7 @@ impl AppRecipeExecutor {
                     *installer,
                     packages,
                     NodePackageOptions {
+                        bin_name: bin_name.as_deref(),
                         managed: *managed,
                         version: version.as_deref(),
                         privilege: privilege.unwrap_or(AppInstallPrivilege::User),
@@ -481,6 +484,7 @@ impl AppRecipeExecutor {
         source_policy: Option<&AppInstallExecutionPolicy>,
     ) -> Result<String, AppRecipeExecutionError> {
         let NodePackageOptions {
+            bin_name,
             managed,
             version,
             privilege: recipe_privilege,
@@ -580,7 +584,9 @@ impl AppRecipeExecutor {
                     return Err(error);
                 }
             };
-            if let Err(error) = verify_managed_node_package(&staging, packages, &context.app_id) {
+            if let Err(error) =
+                verify_managed_node_package(&staging, packages, bin_name.unwrap_or(&context.app_id))
+            {
                 let _ = fs::remove_dir_all(&staging);
                 return Err(error);
             }

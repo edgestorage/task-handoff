@@ -13,6 +13,7 @@ export type CodexTurnPermissionOverrides = {
 
 export type CodexThreadStartOptions = {
   cwd: string;
+  developerInstructions?: string;
   historyMode?: "paginated";
   model?: string;
   modelProvider?: string;

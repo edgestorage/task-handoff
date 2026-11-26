@@ -162,7 +162,7 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       const query = new URLSearchParams({ hierarchy: "subagents", nextInputSuggestion: "1" });
       return requestData(`/api/ai-sessions/sync?${query}`, AiSessionsSyncResponseSchema, jsonRequest("POST", { instances: [...instances] }, signal));
     },
-    history(instanceId: string, signal?: AbortSignal, agents: readonly string[] = ["codex", "claude", "opencode"]) {
+    history(instanceId: string, signal?: AbortSignal, agents: readonly string[] = ["*", "codex", "claude", "opencode"]) {
       const query = new URLSearchParams({ hierarchy: "subagents" });
       if (agents.length) query.set("agents", agents.join(","));
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history?${query}`, AiSessionHistoryListSchema, { signal });

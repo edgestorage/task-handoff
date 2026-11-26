@@ -77,11 +77,19 @@ export const NodeAgentStoryAgentToolCapabilitiesSchema = z.object({
   decisions: z.boolean().default(false),
 }).strip();
 
+export const NodeAgentStoryContextCapabilitiesSchema = z.object({
+  settings: z.boolean().default(false),
+  projects: z.boolean().default(false),
+  sessionPrompting: z.boolean().default(false),
+}).strip();
+
 export const NodeAgentStoryCapabilitiesSchema = z.object({
   enabled: z.boolean().default(false),
   // Compatibility for v0.0.32: this only advertises the original Content tools.
   agentTools: z.boolean().default(false),
   agentToolCapabilities: NodeAgentStoryAgentToolCapabilitiesSchema.optional(),
+  // Additive capability: absence only disables Story context settings/prompting.
+  contextSettings: NodeAgentStoryContextCapabilitiesSchema.optional(),
   sessionRetention: z.boolean().default(false),
   maxFileBytes: z.number().int().positive().default(32 * 1024 * 1024),
   maxBatchPaths: z.number().int().min(1).max(100).default(20),
@@ -164,12 +172,27 @@ export function normalizeNodeAgentCapabilities(capabilities: unknown): NodeAgent
   agentExecution: z.infer<typeof NodeAgentAgentExecutionCapabilitiesSchema>;
   stories: z.infer<typeof NodeAgentStoryCapabilitiesSchema> & {
     agentToolCapabilities: z.infer<typeof NodeAgentStoryAgentToolCapabilitiesSchema>;
+    contextSettings: z.infer<typeof NodeAgentStoryContextCapabilitiesSchema>;
   };
 } {
   const source = capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
     ? capabilities as Record<string, unknown>
     : {};
-  const parsed = NodeAgentCapabilitiesSchema.safeParse({ ...source, agentExecution: undefined });
+  // A malformed additive context capability must only close its own feature
+  // domain. Sanitize it before parsing the top-level document so one bad
+  // subfield cannot discard unrelated Story or Node capabilities.
+  const rawStories = source.stories && typeof source.stories === "object" && !Array.isArray(source.stories)
+    ? source.stories as Record<string, unknown>
+    : undefined;
+  const parsedContextSettings = NodeAgentStoryContextCapabilitiesSchema.safeParse(rawStories?.contextSettings);
+  const contextSettings = parsedContextSettings.success
+    ? parsedContextSettings.data
+    : NodeAgentStoryContextCapabilitiesSchema.parse({});
+  const parsed = NodeAgentCapabilitiesSchema.safeParse({
+    ...source,
+    ...(rawStories ? { stories: { ...rawStories, contextSettings } } : {}),
+    agentExecution: undefined,
+  });
   const current = parsed.success ? parsed.data : {};
   const agentExecution = NodeAgentAgentExecutionCapabilitiesConsumerSchema.safeParse(source.agentExecution);
   const normalizedAgentExecution = agentExecution.success
@@ -195,8 +218,27 @@ export function normalizeNodeAgentCapabilities(capabilities: unknown): NodeAgent
     stories: {
       ...NodeAgentStoryCapabilitiesSchema.parse(current.stories || {}),
       agentToolCapabilities: NodeAgentStoryAgentToolCapabilitiesSchema.parse(current.stories?.agentToolCapabilities || {}),
+      contextSettings,
     },
   };
+}
+
+export function nodeStoryContextCapabilities(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).stories.contextSettings;
+}
+
+export function supportsNodeStoryContextSettings(capabilities: unknown) {
+  return nodeStoryContextCapabilities(capabilities).settings;
+}
+
+export function supportsNodeStoryContextProjects(capabilities: unknown) {
+  const context = nodeStoryContextCapabilities(capabilities);
+  return context.settings && context.projects;
+}
+
+export function supportsNodeStorySessionPrompting(capabilities: unknown) {
+  const context = nodeStoryContextCapabilities(capabilities);
+  return context.settings && context.sessionPrompting;
 }
 
 export function supportsNodeMultiEntityModelAssignment(capabilities: unknown) {

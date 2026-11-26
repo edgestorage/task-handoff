@@ -345,6 +345,7 @@ export class CodexAppServerClient extends EventEmitter {
       cwd: options.cwd,
       runtimeWorkspaceRoots: options.runtimeWorkspaceRoots || [options.cwd],
       ...(options.permissions || {}),
+      ...(options.developerInstructions ? { developerInstructions: options.developerInstructions } : {}),
       ephemeral: false,
       ...(options.historyMode ? { historyMode: options.historyMode } : {}),
       ...codexThreadConfigParam(options.reasoningEffort, options.storyAgentTools),

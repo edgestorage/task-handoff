@@ -95,6 +95,7 @@ pub enum InstallRecipe {
         packages: Vec<String>,
         managed: bool,
         version: Option<String>,
+        bin_name: Option<String>,
     },
     NativePackage {
         platforms: Vec<FinalComputerPlatform>,
@@ -329,6 +330,7 @@ fn node_recipe_with_version(
         packages: vec![package.to_string()],
         managed,
         version: version.map(ToString::to_string),
+        bin_name: None,
     }
 }
 
@@ -381,6 +383,54 @@ fn launcher(
     }
 }
 
+pub struct ManagedAcpAgent {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub package: &'static str,
+    pub version: &'static str,
+    pub bin_name: &'static str,
+    pub load_session: bool,
+    pub acp_args: &'static [&'static str],
+}
+
+pub const MANAGED_ACP_AGENTS: &[ManagedAcpAgent] = &[
+    ManagedAcpAgent {
+        id: "gemini",
+        name: "Gemini CLI",
+        description: "Google Gemini CLI agent over ACP.",
+        package: "@google/gemini-cli",
+        version: "0.71.1",
+        bin_name: "gemini",
+        load_session: true,
+        acp_args: &["--acp"],
+    },
+    ManagedAcpAgent {
+        id: "commandcode",
+        name: "Command Code",
+        description: "Command Code agent over ACP.",
+        package: "command-code",
+        version: "1.93.2",
+        bin_name: "cmd",
+        load_session: true,
+        acp_args: &["acp"],
+    },
+    ManagedAcpAgent {
+        id: "dsh",
+        name: "DeepSeek Harness",
+        description: "DeepSeek Harness agent over ACP.",
+        package: "@deepseek-ai/dsh",
+        version: "0.2.2-rc.5",
+        bin_name: "dsh",
+        load_session: false,
+        acp_args: &["acp"],
+    },
+];
+
+// ACP Agents publish Node CLI packages with JavaScript bin entries. Their
+// native artifacts are optional npm dependencies, so NodePackage must resolve
+// the dependency graph. NativePackage only handles one directly executable
+// platform artifact and intentionally skips npm and lifecycle scripts.
 pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
     let mut definitions = vec![
         ManagedAppDefinition {
@@ -836,6 +886,29 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
         ],
     });
+    definitions.extend(MANAGED_ACP_AGENTS.iter().map(|agent| ManagedAppDefinition {
+        launcher: launcher(
+            agent.id,
+            agent.name,
+            AppKind::Tty,
+            agent.description,
+            agent.id.to_string(),
+            None,
+        ),
+        launchable: true,
+        hidden_from_app_management: false,
+        detection: launcher_detection(),
+        recipes: vec![InstallRecipe::NodePackage {
+            platforms: vec![FinalComputerPlatform::Linux, FinalComputerPlatform::Darwin],
+            arches: Some(vec![FinalComputerArch::X64, FinalComputerArch::Arm64]),
+            privilege: Some(AppInstallPrivilege::User),
+            installer: AppInstaller::Npm,
+            packages: vec![agent.package.to_string()],
+            managed: true,
+            version: Some(agent.version.to_string()),
+            bin_name: Some(agent.bin_name.to_string()),
+        }],
+    }));
     definitions.push(crate::remote_desktop::definition());
     if let Some(claude) = definitions
         .iter_mut()
@@ -995,12 +1068,16 @@ pub fn managed_app_launcher_path(
                     launch_path,
                 ))
             }
-            InstallRecipe::NodePackage { managed: true, .. } => Some(
+            InstallRecipe::NodePackage {
+                managed: true,
+                bin_name,
+                ..
+            } => Some(
                 root.join("node-package")
                     .join(&definition.launcher.id)
                     .join("node_modules")
                     .join(".bin")
-                    .join(&definition.launcher.id),
+                    .join(bin_name.as_deref().unwrap_or(&definition.launcher.id)),
             ),
             _ => None,
         })
@@ -2032,6 +2109,55 @@ pub fn validate_managed_definition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acp_apps_use_private_roots_with_package_bin_names() {
+        let definitions = builtin_managed_app_definitions();
+        let root = Path::new("/private/apps");
+        for (id, bin_name, package, version) in [
+            ("gemini", "gemini", "@google/gemini-cli", "0.71.1"),
+            ("commandcode", "cmd", "command-code", "1.93.2"),
+            ("dsh", "dsh", "@deepseek-ai/dsh", "0.2.2-rc.5"),
+        ] {
+            let definition = definitions
+                .iter()
+                .find(|definition| definition.launcher.id == id)
+                .unwrap();
+            assert!(definition
+                .launcher
+                .description
+                .as_deref()
+                .is_some_and(|description| description.ends_with("ACP.")));
+            assert!(matches!(
+                &definition.recipes[0],
+                InstallRecipe::NodePackage {
+                    packages,
+                    version: Some(installed_version),
+                    managed: true,
+                    bin_name: Some(installed_bin),
+                    ..
+                } if packages == &vec![package.to_string()]
+                    && installed_version == version
+                    && installed_bin == bin_name
+            ));
+            let target = ManagedAppRecipeTarget { libc: None };
+            assert_eq!(
+                managed_app_launcher_path(
+                    root,
+                    definition,
+                    FinalComputerPlatform::Linux,
+                    FinalComputerArch::X64,
+                    target
+                ),
+                Some(
+                    root.join("node-package")
+                        .join(id)
+                        .join("node_modules/.bin")
+                        .join(bin_name)
+                )
+            );
+        }
+    }
 
     #[cfg(unix)]
     #[test]

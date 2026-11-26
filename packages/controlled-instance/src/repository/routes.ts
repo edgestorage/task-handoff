@@ -56,6 +56,7 @@ type RegisterRepositoryRoutesOptions = {
   appRuntime: AppRuntimeManager;
   aiSessions: AiSessionRegistry;
   aiSessionCreate: AiSessionCreateCoordinator;
+  resolveStoryCreateAppendedPrompt?: (storyId?: string) => Promise<string | undefined>;
   managedWorktreesRoot: string;
   workspaceRoots: string[];
 };
@@ -122,7 +123,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       return await active.promise;
     }
     const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
-    const launch = createWorkspaceAiSession(servicesForWorkspace(cwd), options.aiSessionCreate, body, fingerprint, (durationMs) => {
+    const launch = createWorkspaceAiSession(servicesForWorkspace(cwd), options.aiSessionCreate, body, fingerprint, options.resolveStoryCreateAppendedPrompt, (durationMs) => {
       app.log.info({ traceId: body.clientRequestId, clientRequestId: body.clientRequestId, stage: "workspace-prepare", durationMs }, "ai-session.create.workspace");
     })
       .finally(() => workspaceLaunches.delete(body.clientRequestId));
@@ -596,6 +597,7 @@ async function createWorkspaceAiSession(
   coordinator: AiSessionCreateCoordinator,
   body: z.infer<typeof RepositoryWorkspaceAiSessionCreateSchema> | z.infer<typeof RepositoryWorkspaceAiSessionCreateRefSchema>,
   idempotencyFingerprint: string,
+  resolveStoryCreateAppendedPrompt?: (storyId?: string) => Promise<string | undefined>,
   onPrepared?: (durationMs: number) => void,
 ) {
   const startedAt = performance.now();
@@ -678,9 +680,11 @@ async function createWorkspaceAiSession(
       if (attachment.source.type === "upload-ref") draftAttachmentIds.push(attachment.id);
       else attachments.push(AiSessionMessageAttachmentSchema.parse(attachment));
     }
+    const appendedPrompt = await resolveStoryCreateAppendedPrompt?.(body.storyId);
     onPrepared?.(performance.now() - startedAt);
     return await coordinator.create({
       ...input,
+      ...(appendedPrompt ? { appendedPrompt } : {}),
       cwd: workspace,
       attachments,
       ...(draftAttachmentIds.length ? {

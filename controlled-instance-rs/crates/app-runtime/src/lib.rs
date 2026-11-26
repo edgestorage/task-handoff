@@ -37,7 +37,7 @@ pub use managed::{
     managed_app_launcher_path, managed_app_projection, select_install_recipe,
     select_install_recipe_with_target, validate_managed_definition, InstallRecipe,
     InstallRecipeSelection, ManagedAppDefinition, ManagedAppDetectionResult,
-    ManagedAppDetectionRule, ManagedAppOwnership, ManagedAppOwnershipContext,
+    ManagedAppDetectionRule, ManagedAppOwnership, ManagedAppOwnershipContext, MANAGED_ACP_AGENTS,
 };
 pub use managed_node_apps::ManagedNodeApps;
 pub use management::{

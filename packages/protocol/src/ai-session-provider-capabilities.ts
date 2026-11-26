@@ -46,6 +46,7 @@ export const AiSessionProviderCapabilitySchema = z.object({
     steer: z.boolean().default(false),
     interrupt: z.boolean().default(false),
     archive: z.boolean().default(false),
+    historyResume: z.boolean().optional(),
     delete: z.boolean().default(false),
     fork: z.boolean().default(false),
     // Compatibility for v0.0.31: absence means provider-native rename is unsupported.
@@ -120,4 +121,11 @@ export function supportsAiSessionConsumerNextInputSuggestion(value: unknown) {
 export function supportsAiSessionProviderRename(capability: unknown) {
   const parsed = AiSessionProviderCapabilitySchema.safeParse(capability);
   return parsed.success && parsed.data.actions.rename;
+}
+
+export function supportsAiSessionHistoryResume(agent: string, capability: unknown) {
+  const parsed = AiSessionProviderCapabilitySchema.safeParse(capability);
+  if (parsed.success && parsed.data.actions.historyResume !== undefined) return parsed.data.actions.historyResume;
+  // Compatibility for v0.0.61: the three native providers had history resume without an explicit capability.
+  return ["codex", "claude", "opencode"].includes(agent);
 }

@@ -31,6 +31,7 @@ export * from "./managed-git-credentials.ts";
 export * from "./repository.ts";
 export * from "./workspace-git.ts";
 export * from "./stories.ts";
+export * from "./story-context.ts";
 export * from "./triggers.ts";
 export * from "./websocket-bridge.ts";
 
