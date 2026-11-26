@@ -15,6 +15,8 @@ mod provider_snapshot;
 mod timeline;
 mod title;
 
+pub use acp::{AcpLaunch, AcpSessionHome, AcpSessionProvider};
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_core::atomic::write_atomic;
@@ -1913,4 +1915,3 @@ mod tests {
         ));
     }
 }
-pub use acp::{AcpLaunch, AcpSessionHome, AcpSessionProvider};

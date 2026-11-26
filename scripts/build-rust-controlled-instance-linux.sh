@@ -20,6 +20,12 @@ FALLBACK_IMAGE=${TASK_HANDOFF_RUST_CONTROLLED_INSTANCE_FALLBACK_DOCKER_IMAGE:-ru
 CARGO_REGISTRY_DIR=${CARGO_REGISTRY_DIR:-${CARGO_HOME:-$HOME/.cargo}/registry}
 OFFLINE=${TASK_HANDOFF_RUST_BUILD_OFFLINE:-1}
 
+if [ "$OFFLINE" = 1 ]; then
+  CARGO_NET_OFFLINE=true
+else
+  CARGO_NET_OFFLINE=false
+fi
+
 if [ "$OFFLINE" = 1 ] && [ ! -d "$CARGO_REGISTRY_DIR" ]; then
   printf 'Cargo registry cache is unavailable for an offline build: %s\n' "$CARGO_REGISTRY_DIR" >&2
   exit 1
@@ -76,10 +82,10 @@ for arch in "${REQUESTED_ARCHS[@]}"; do
     --platform "linux/$docker_arch" \
     -v "$ROOT:/workspace" \
     -v "$OUTPUT_DIR:/out" \
-    "${extra_mounts[@]}" \
+    ${extra_mounts[@]+"${extra_mounts[@]}"} \
     -w /workspace/controlled-instance-rs \
     -e CARGO_TARGET_DIR="target/linux-$arch" \
-    -e CARGO_NET_OFFLINE="$OFFLINE" \
+    -e CARGO_NET_OFFLINE="$CARGO_NET_OFFLINE" \
     -e RUST_TOOLCHAIN="$rust_target" \
     "$image" \
     bash -c '

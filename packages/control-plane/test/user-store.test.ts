@@ -40,6 +40,7 @@ test("database setup uses canonical ordered cp-prefixed migrations per dialect",
       "0011_cloud_device_trust_revision_bigint",
       "0012_cloud_device_trust_authorization_revision_bigint",
       "0013_model_pending_node_edits",
+      "0014_model_provider_capabilities",
     ]);
     assert.doesNotMatch(migrations[0]!.sql, /control_plane_/);
     assert.match(migrations[0]!.sql, /CREATE TABLE cp_user_access_grants/);

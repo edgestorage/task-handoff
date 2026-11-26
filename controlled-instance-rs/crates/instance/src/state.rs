@@ -546,6 +546,12 @@ impl AppState {
         let ai_session_acp: BTreeMap<_, _> = MANAGED_ACP_AGENTS
             .iter()
             .filter_map(|agent| {
+                if !env_flag(
+                    &format!("TASK_HANDOFF_ACP_{}_ENABLED", agent.id.to_ascii_uppercase()),
+                    false,
+                ) {
+                    return None;
+                }
                 let runtime = app_runtime.clone();
                 let controlled_models = controlled_models.clone();
                 let acp_config_dir = config.storage_paths.data_dir.join("acp-session-config");

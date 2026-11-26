@@ -10,6 +10,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import AiAgentIcon from "../AiAgentIcon.vue";
+import { isAiAgentId, type AiAgentId } from "../aiAgentIcon";
 import AiSessionOriginMark from "./AiSessionOriginMark.vue";
 
 const props = defineProps<{
@@ -18,9 +19,7 @@ const props = defineProps<{
   showAgent?: boolean;
 }>();
 
-const brandedAgent = computed<"codex" | "claude" | "opencode" | undefined>(() => (
-  props.agent === "codex" || props.agent === "claude" || props.agent === "opencode" ? props.agent : undefined
-));
+const brandedAgent = computed<AiAgentId | undefined>(() => isAiAgentId(props.agent) ? props.agent : undefined);
 </script>
 
 <style scoped>

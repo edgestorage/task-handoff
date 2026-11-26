@@ -90,6 +90,7 @@ import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { aiSessionRetentionCandidates, aiSessionRootNode, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
 import { ControlledPrivateModelCatalogSchema, readControlledPrivateAiSessionNextInputSuggestionEnabled, readControlledPrivateAiSessionNextInputSuggestionModelSelection, readControlledPrivateAiSessionNextInputSuggestionReasoningEffort, readControlledPrivateCodexSettings, readControlledPrivateModelCatalog, readControlledPrivateModelCatalogSource, resolveControlledNextInputSuggestionModelSelection, resolveControlledPrivateModelSelection, type ControlledPrivateModelCatalogSource } from "./private-model-catalog";
+import { prepareAcpLaunchConfig } from "./acp-model-config";
 import { requestControlledAiSessionStructuredModel, requestControlledAiSessionTitle } from "./session-title-model";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
 import { GitCredentialBroker, installGitBrokerEnvironment } from "./git-credential-broker";
@@ -1407,11 +1408,30 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
   for (const { id, acpArgs, loadSession } of managedAcpAgents) {
     for (const session of aiSessions.all()) {
-      if (session.agent === id && session.providerSessionId) invalidateAcpSession(aiSessions, session);
+      if (session.agent === id && session.providerSessionId && (session.actions?.send !== false || session.actions?.approval || session.status === "running" || session.status === "waiting")) {
+        invalidateAcpSession(aiSessions, session);
+      }
     }
-    const provider = new AcpSessionProvider(id, aiSessions, () => {
+    if (!envFlag(`TASK_HANDOFF_ACP_${id.toUpperCase()}_ENABLED`)) continue;
+    fs.mkdirSync(path.join(storagePaths.dataDir, "acp-session-config"), { recursive: true, mode: 0o700 });
+    const provider = new AcpSessionProvider(id, aiSessions, ({ cwd, modelSelection, providerSessionId }) => {
       const launch = appRuntime.prepareManagedAgentLaunch(id);
-      return { executable: launch.executable, args: [...acpArgs], env: launch.env };
+      const config = prepareAcpLaunchConfig({
+        agent: id,
+        catalog: privateModelCatalog,
+        instanceCredential: process.env.TASK_HANDOFF_REGISTRATION_TOKEN?.trim(),
+        modelSelection,
+        dataDir: path.join(storagePaths.dataDir, "acp-session-config"),
+        providerSessionId,
+        cwd,
+      });
+      return {
+        executable: launch.executable,
+        args: [...acpArgs, ...config.args],
+        env: { ...launch.env, ...config.env },
+        cleanupDir: config.cleanupDir,
+        persistSessionHome: config.persistSessionHome,
+      };
     }, (delta) => {
       aiSessionMessageDeltas.push(AiSessionMessageDeltaEventSchema.parse({
         instanceId, nodeId: process.env.TASK_HANDOFF_NODE_ID, ...delta, generatedAt: new Date().toISOString(),

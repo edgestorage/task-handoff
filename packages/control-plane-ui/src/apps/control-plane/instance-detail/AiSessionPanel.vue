@@ -521,7 +521,7 @@
             <Button v-if="selectedHistoryItem" variant="ghost" size="sm" @click="selectHistoryItem(selectedHistoryItem)">{{ t("sessions.panel.retry") }}</Button>
           </div>
           <section v-else-if="historyDetail" class="session-ai-detail-content">
-            <div v-if="!detailOnly" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
+            <div v-if="!detailOnly && historyCanResume" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
               <button
                 type="button"
                 class="session-ai-history-continue"
@@ -563,7 +563,7 @@
         >
           <MarkdownContent :content="timelineStickyUserMessage.text" :code-tools="markdownCodeTools" />
         </article>
-        <template v-if="historyDetail">
+        <template v-if="historyDetail && historyCanResume">
           <div class="session-ai-compose-gradient" aria-hidden="true" />
           <AiSessionComposer
             ref="composerEl"
@@ -1454,6 +1454,7 @@ import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionSt
 import AiSessionGoalBadge from "../../../components/ai-session/AiSessionGoalBadge.vue";
 import AiSessionStickyContext from "../../../components/ai-session/AiSessionStickyContext.vue";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
+import { isAiAgentId, type AiAgentId } from "../../../components/aiAgentIcon";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { bindAiSessionTrigger, checkoutAiSessionWorkspaceBranch, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, listNodeLocalFolders, markAiSessionRead, markAiSessionUnread, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, setAiSessionQueuePaused, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
@@ -1469,7 +1470,7 @@ import {
   flattenAiSessionForest,
 } from "@task-handoff/protocol/ai-session-hierarchy";
 import type { StorySessionPreset } from "@task-handoff/protocol/stories";
-import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
+import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities, supportsAiSessionHistoryResume } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch, RepositoryWorktree } from "@task-handoff/protocol/repository";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 import { supportsAiSessionAttachmentOnlyMessages, supportsAiSessionQueuePause, supportsAiSessionWorkspaceCheckout } from "@task-handoff/protocol/control-plane";
@@ -2061,9 +2062,9 @@ const instanceActionMenu = computed(() => {
 });
 const selectedSessionInstanceName = computed(() => props.instance.name || props.instance.id);
 const selectedSessionNodeName = computed(() => props.instance.node?.name || props.instance.nodeId);
-const selectedSessionAgentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {
+const selectedSessionAgentIcon = computed<AiAgentId | undefined>(() => {
   const agent = selectedSession.value?.agent;
-  return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
+  return isAiAgentId(agent) ? agent : undefined;
 });
 
 async function setTimelineViewMode(value: unknown) {
@@ -2465,6 +2466,10 @@ const historyLoading = ref(false);
 const historyError = ref("");
 const selectedHistoryId = ref("");
 const historyDetail = ref<AiSessionHistoryDetail>();
+const historyCanResume = computed(() => {
+  const agent = historyDetail.value?.item.agent;
+  return agent ? supportsAiSessionHistoryResume(agent, directoryAiSessionProviderCapability(props.instance.capabilities?.features, agent)) : false;
+});
 const historyDetailLoading = ref(false);
 const historyDetailError = ref("");
 const resumingHistoryId = ref("");
@@ -3375,7 +3380,7 @@ async function resumeHistorySession(item: AiSessionHistoryItem) {
 
 async function continueHistoryConversation() {
   const item = historyDetail.value?.item;
-  if (!item || resumingHistoryId.value) return;
+  if (!item || !historyCanResume.value || resumingHistoryId.value) return;
   resumingHistoryId.value = item.id;
   const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
@@ -3392,6 +3397,7 @@ async function continueHistoryConversation() {
 }
 
 async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
+  if (!historyCanResume.value) return;
   const item = historyDetail.value?.item;
   const message = historyMessageDraft.value.trim();
   if (!item || resumingHistoryId.value || (!message && !historyMessageAttachments.value.length)) return;
@@ -3989,12 +3995,12 @@ function approvalDecisions(session: AiSessionSummary): Array<"allow" | "deny" | 
   return aiSessionApprovalDecisions(session, props.instance.capabilities?.features);
 }
 
-function agentIcon(agent: string): "codex" | "claude" | "opencode" {
-  return agent === "claude" || agent === "opencode" ? agent : "codex";
+function agentIcon(agent: string): AiAgentId | undefined {
+  return isAiAgentId(agent) ? agent : undefined;
 }
 
 function agentDisplayName(agent: string) {
-  return agent === "codex" || agent === "claude" || agent === "opencode" ? t(`common.products.${agent}`) : agent;
+  return isAiAgentId(agent) ? t(`common.products.${agent}`) : agent;
 }
 
 async function refreshBoard() {
@@ -4304,7 +4310,7 @@ async function resolveApproval(session: AiSessionSummary, decision: "allow" | "d
   }
   aiSessionActionBusy.value = true;
   try {
-    await resolveAiSessionApproval(props.instance.id, session.id, decision);
+    await resolveAiSessionApproval(props.instance.id, session.id, decision, session.actions?.approvalRequest?.id);
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")), "error");
   } finally {

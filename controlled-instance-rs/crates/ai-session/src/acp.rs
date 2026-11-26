@@ -1964,6 +1964,7 @@ mod story_prompt_tests {
             counters: Default::default(),
             queue: Default::default(),
             next_input_suggestion: None,
+            next_input_suggestion_error: None,
             unread: false,
         }
     }

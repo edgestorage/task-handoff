@@ -625,6 +625,7 @@ import { normalizeManualStoryOrder, reorderStoryKeys, reuseEqualStoryActivityTim
 import { isStoryOnline, isStorySessionOnline } from "./storyAvailability";
 import { useAiSessionTriggers } from "../useAiSessionTriggers";
 import { allNodesVisible, controlPlaneAgentCapabilities, latestStorySessionForCreation, nodeIsVisible, storySessionAttentionByKey, storySessionRootsInForest, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
+import { isAiAgentId } from "../../../components/aiAgentIcon";
 import type { AgentDefinition } from "@task-handoff/protocol/agent-definitions";
 import { defaultAgentOrchestrationId, isDefaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 import type { StoryAgentEntrySet } from "@task-handoff/protocol/story-agent-authorization";
@@ -1273,7 +1274,7 @@ function shortHash(value: string) { return value.length > 14 ? `${value.slice(0,
 function storyOwnerNodeName(nodeId: string) { return props.nodes.find((node) => node.id === nodeId)?.name || nodeId; }
 function actionTargetName(story: Story, action: StoryAction) { const id = action.targetInstanceId; const instance = id && instancesForStory(story).find((item) => item.id === id); return instance?.name || id || t("stories.defaultTarget"); }
 function actionAgentLabel(agent: string) {
-  return ["codex", "claude", "opencode"].includes(agent) ? t(`common.products.${agent}`) : agent;
+  return isAiAgentId(agent) ? t(`common.products.${agent}`) : agent;
 }
 function actionSessionPresetSummary(action: StoryAction) {
   const preset = action.sessionPreset;

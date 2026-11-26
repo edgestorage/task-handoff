@@ -237,7 +237,7 @@ export function controlledInstanceCapabilities(
       // The v2 relay private catalog and node-derived routes are consumed for
       // every supported wire protocol; the node agent owns upstream routing.
       modelRelay: {
-        protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages"],
+        protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages", "google-generative-ai"],
         streaming: true,
       },
       // The running instance accepts the structured OpenCode provider config on

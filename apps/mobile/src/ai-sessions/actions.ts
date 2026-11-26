@@ -58,8 +58,8 @@ export class MobileAiSessionActionCoordinator {
     if (result.disposition === 'accepted' || result.disposition === 'failed') this.sendRequestIds.delete(key);
     return result;
   }
-  approval(instanceId: string, sessionId: string, decision: 'allow' | 'deny' | 'skip') {
-    return this.run(instanceId, sessionId, 'approval', undefined, () => this.client.aiSessions.approval(instanceId, sessionId, decision));
+  approval(instanceId: string, sessionId: string, decision: 'allow' | 'deny' | 'skip', approvalRequestId?: string) {
+    return this.run(instanceId, sessionId, 'approval', undefined, () => this.client.aiSessions.approval(instanceId, sessionId, decision, approvalRequestId));
   }
   interrupt(instanceId: string, sessionId: string) {
     return this.run(instanceId, sessionId, 'interrupt', undefined, () => this.client.aiSessions.interrupt(instanceId, sessionId));

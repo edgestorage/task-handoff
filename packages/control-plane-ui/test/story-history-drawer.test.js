@@ -24,7 +24,8 @@ test("Story history opens one conversation in a right-side drawer", () => {
   assert.match(storyView, /@media \(max-width:820px\) \{ \.story-history-drawer-close \{ top:12px; left:max\(10px,calc\(10px \+ var\(--native-titlebar-controls-left-width\)\)\);/);
   assert.match(appStyles, /--control-plane-titlebar-height: 56px;/);
   assert.match(storyView, /\.story-history-panel > \.story-history-ai-session-panel \{ --session-ai-scrollbar-outset:0px; \}/);
-  assert.match(aiSessionPanel, /v-else-if="historyDetail"[\s\S]*?<div v-if="!detailOnly" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">/);
+  assert.match(aiSessionPanel, /v-else-if="historyDetail"[\s\S]*?<div v-if="!detailOnly && historyCanResume" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">/);
+  assert.match(aiSessionPanel, /const historyCanResume = computed\(\(\) => \{[\s\S]*?supportsAiSessionHistoryResume\(agent, directoryAiSessionProviderCapability\(props\.instance\.capabilities\?\.features, agent\)\)/);
   assert.match(aiSessionPanelStyles, /\.session-ai-workspace\.detail-only \.session-ai-history-detail \{\s*--session-ai-detail-left-inset: 0px;\s*\}/);
   assert.doesNotMatch(aiSessionPanelStyles, /\.session-ai-workspace\.detail-only \.session-ai-detail \{/);
   assert.doesNotMatch(storyView, /story-history-dialog/);

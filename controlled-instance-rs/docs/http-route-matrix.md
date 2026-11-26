@@ -247,7 +247,7 @@ This section freezes 202 explicit Node registrations at tag `v0.0.47`, including
 
 ## Target-current Node extensions after `v0.0.47`
 
-These 45 registrations are outside the pinned `v0.0.47` release snapshot.
+These 46 registrations are outside the pinned `v0.0.47` release snapshot.
 
 | Method | Path | Auth | Transport | Success / notes |
 | --- | --- | --- | --- | --- |
@@ -260,6 +260,7 @@ These 45 registrations are outside the pinned `v0.0.47` release snapshot.
 | `GET` | `/api/ai-sessions/:id/turns/:turnId/tool-activity` | Web | JSON | 200 |
 | `POST` | `/api/ai-sessions/:id/unread` | Web | JSON | 200 |
 | `PUT` | `/api/internal/ai-session-next-input-suggestion-settings` | Node Agent | JSON | 200 |
+| `POST` | `/api/internal/node-agent/story-ai-sessions/closed-summaries` | Node Agent | JSON | 200 |
 | `DELETE` | `/api/browser-control/access` | Browser control proxy | JSON | 200 |
 | `DELETE` | `/api/browser-control/creation-context` | Browser control proxy | JSON | 200 |
 | `DELETE` | `/api/browser-control/sources/:sourceRef` | Browser control proxy | JSON | 200 |
@@ -314,7 +315,7 @@ These 45 registrations are outside the pinned `v0.0.47` release snapshot.
 - HTTP, WebSocket, Node Agent, private model/config, agent-tool, App Runtime, repository, Trigger, Config Sync, Story and Git credential domains have Rust handlers and contract tests in their owning crates.
 - AI Session message and Timeline deltas use the same 20-50ms coalescing window (32ms default), insertion order, authoritative-event flush and `event-source-close` behavior as Node. Diagnostics expose the live coalescer counters instead of placeholders.
 - Non-`/api` paths use the frozen UI's `index.html` with HTTP `200` for SPA route refreshes; unmatched `/api/*` paths remain structured `404` responses.
-- Tests compare the pinned release snapshot, the 247-route target-current matrix, and the Node/Rust registrations. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
+- Tests compare the pinned release snapshot, the 248-route target-current matrix, and the Node/Rust registrations. Compatibility fixtures still need a separate per-route body/error corpus; registration parity alone is not a behavioral differential proof.
 
 ## Remaining fixture work
 

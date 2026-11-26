@@ -93,7 +93,8 @@ test("waiting approval actions float at the bottom left independently from card 
   assert.doesNotMatch(card, /<div class="ai-board-card-tools"[^>]*>[\s\S]*?<span v-if="approvalDecisions\.length"/);
   assert.match(card, /\.ai-board-approval-actions\s*\{[^}]*position: absolute;[^}]*bottom: 8px;[^}]*left: 14px;/s);
   assert.match(board, /return aiSessionApprovalDecisions\(session, instance\.capabilities\?\.features\)\.length > 0/);
-  assert.doesNotMatch(board, /actions\?\.approval/);
+  assert.doesNotMatch(board, /actions\?\.approval(?!Request)/);
+  assert.match(board, /resolveAiSessionApproval\(card\.instance\.id, card\.session\.id, decision, card\.session\.actions\?\.approvalRequest\?\.id\)/);
 });
 
 test("ai session board card previews do not open an expanded overlay", () => {

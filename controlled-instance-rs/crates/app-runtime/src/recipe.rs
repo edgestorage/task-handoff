@@ -50,6 +50,22 @@ const DEFAULT_NPM_REGISTRIES: [&str; 2] = [
     "https://registry.npmjs.org",
     "https://registry.npmmirror.com",
 ];
+const RETRYABLE_NPM_ERROR_CODES: [&str; 14] = [
+    "EAI_AGAIN",
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "ENOTFOUND",
+    "EPIPE",
+    "ERR_SOCKET_TIMEOUT",
+    "ETIMEDOUT",
+    "FETCH_ERROR",
+    "E500",
+    "E502",
+    "E503",
+    "E504",
+];
 const PACKAGE_COMMAND_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MANAGED_NODE_PACKAGE_DIR: &str = "node-package";
 
@@ -190,6 +206,8 @@ pub struct AppRecipeExecutor {
     install_environment: Option<AppInstallEnvironmentManager>,
     #[cfg(test)]
     archive_fixture: Option<Vec<u8>>,
+    #[cfg(test)]
+    npm_source_probe: Option<Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>>,
 }
 
 #[async_trait::async_trait]
@@ -215,6 +233,8 @@ impl AppRecipeExecutor {
             install_environment: None,
             #[cfg(test)]
             archive_fixture: None,
+            #[cfg(test)]
+            npm_source_probe: None,
         }
     }
 
@@ -230,6 +250,30 @@ impl AppRecipeExecutor {
     pub(crate) fn with_archive_fixture(mut self, artifact: Vec<u8>) -> Self {
         self.archive_fixture = Some(artifact);
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_npm_source_probe(
+        mut self,
+        probe: Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>,
+    ) -> Self {
+        self.npm_source_probe = Some(probe);
+        self
+    }
+
+    async fn probe_node_package_source(
+        &self,
+        registry: &str,
+        packages: &[String],
+        version: &str,
+    ) -> Result<(), AppRecipeExecutionError> {
+        #[cfg(test)]
+        if let Some(probe) = self.npm_source_probe.as_ref() {
+            return probe(registry).map_err(|message| {
+                AppRecipeExecutionError::new("npm_registry_unavailable", message, true)
+            });
+        }
+        probe_npm_package_version(registry, packages, version).await
     }
 
     pub async fn execute(
@@ -551,24 +595,79 @@ impl AppRecipeExecutor {
                 }
             }
             let staging = managed_node_package_staging(&self.install_base_dir, &context.app_id)?;
-            let _ = fs::remove_dir_all(&staging);
-            fs::create_dir_all(&staging).map_err(|error| {
-                AppRecipeExecutionError::new("storage_error", error.to_string(), false)
-            })?;
-            let command = node_package_command(
-                operation,
-                packages,
-                version,
-                Some(&staging),
-                recipe_privilege,
-                &context.capabilities,
-                &npm_env,
-            )?;
-            let result = self.run_command(command, context).await;
-            let result = match result {
-                Ok(result) if result.exit_code == 0 => result,
-                Ok(result) => {
+            let pinned_version = version.unwrap_or_default();
+            let attempts = node_package_registry_attempts(
+                source_policy.and_then(|policy| policy.effective.npm_registry.as_deref()),
+                &self.env,
+            );
+            let mut failures: Vec<String> = Vec::new();
+            let mut fallback = false;
+            for (index, registry) in attempts.iter().enumerate() {
+                if let Some(registry) = registry {
+                    match self
+                        .probe_node_package_source(registry, packages, pinned_version)
+                        .await
+                    {
+                        Ok(()) => write_recipe_log(
+                            context,
+                            "stdout",
+                            &format!(
+                                "{} {registry}",
+                                if fallback {
+                                    "Using fallback npm source"
+                                } else {
+                                    "Using npm source"
+                                }
+                            ),
+                        ),
+                        Err(error) => {
+                            write_recipe_log(
+                                context,
+                                "stderr",
+                                &format!("npm source {registry} unavailable: {}", error.message),
+                            );
+                            failures.push(format!("{registry}: {}", error.message));
+                            fallback = true;
+                            continue;
+                        }
+                    }
+                }
+                let _ = fs::remove_dir_all(&staging);
+                fs::create_dir_all(&staging).map_err(|error| {
+                    AppRecipeExecutionError::new("storage_error", error.to_string(), false)
+                })?;
+                let attempt_env = with_npm_registry(&npm_env, registry.as_deref());
+                let command = node_package_command(
+                    operation,
+                    packages,
+                    version,
+                    Some(&staging),
+                    recipe_privilege,
+                    &context.capabilities,
+                    &attempt_env,
+                )?;
+                let result = match self.run_command(command, context).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let _ = fs::remove_dir_all(&staging);
+                        return Err(error);
+                    }
+                };
+                if result.exit_code != 0 {
+                    let retry =
+                        index + 1 < attempts.len() && npm_failure_is_network(&result.stderr);
                     let _ = fs::remove_dir_all(&staging);
+                    if retry {
+                        let failed = registry.as_deref().unwrap_or("npm configuration");
+                        write_recipe_log(
+                            context,
+                            "stderr",
+                            &format!("npm source {failed} failed: {}", bounded(&result.stderr)),
+                        );
+                        failures.push(format!("{failed}: {}", bounded(&result.stderr)));
+                        fallback = true;
+                        continue;
+                    }
                     return Err(AppRecipeExecutionError::new(
                         "package_manager_failed",
                         bounded(if result.stderr.is_empty() {
@@ -579,37 +678,44 @@ impl AppRecipeExecutor {
                         true,
                     ));
                 }
-                Err(error) => {
+                if let Err(error) = verify_managed_node_package(
+                    &staging,
+                    packages,
+                    bin_name.unwrap_or(&context.app_id),
+                ) {
                     let _ = fs::remove_dir_all(&staging);
                     return Err(error);
                 }
-            };
-            if let Err(error) =
-                verify_managed_node_package(&staging, packages, bin_name.unwrap_or(&context.app_id))
-            {
-                let _ = fs::remove_dir_all(&staging);
-                return Err(error);
+                if let Err(error) = write_managed_node_package_manifest(
+                    &staging,
+                    &context.app_id,
+                    packages,
+                    pinned_version,
+                ) {
+                    let _ = fs::remove_dir_all(&staging);
+                    return Err(error);
+                }
+                if let Err(error) =
+                    replace_managed_node_package(&self.install_base_dir, &context.app_id, &staging)
+                {
+                    let _ = fs::remove_dir_all(&staging);
+                    return Err(error);
+                }
+                return Ok(bounded(if result.stdout.is_empty() {
+                    &result.stderr
+                } else {
+                    &result.stdout
+                }));
             }
-            if let Err(error) = write_managed_node_package_manifest(
-                &staging,
-                &context.app_id,
-                packages,
-                version.unwrap_or_default(),
-            ) {
-                let _ = fs::remove_dir_all(&staging);
-                return Err(error);
-            }
-            if let Err(error) =
-                replace_managed_node_package(&self.install_base_dir, &context.app_id, &staging)
-            {
-                let _ = fs::remove_dir_all(&staging);
-                return Err(error);
-            }
-            return Ok(bounded(if result.stdout.is_empty() {
-                &result.stderr
-            } else {
-                &result.stdout
-            }));
+            return Err(AppRecipeExecutionError::new(
+                "npm_registry_unavailable",
+                format!(
+                    "No npm source responded for {}@{pinned_version}: {}",
+                    packages.join(", "),
+                    failures.join("; ")
+                ),
+                true,
+            ));
         }
         let command = node_package_command(
             operation,
@@ -1225,6 +1331,84 @@ fn npm_registry_candidates(preferred: Option<&str>, env: &BTreeMap<String, Strin
         }
     }
     candidates
+}
+
+/// Managed Node packages need their full dependency tree, so npm has to run
+/// once per source. Keep the configured source first, let npm use its own
+/// configuration when nothing is configured, then fall back to the public
+/// mirrors that the native package installer already trusts.
+fn node_package_registry_attempts(
+    preferred: Option<&str>,
+    env: &BTreeMap<String, String>,
+) -> Vec<Option<String>> {
+    let preferred = preferred
+        .and_then(normalized_npm_registry)
+        .or_else(|| npm_registry_from_env(env).and_then(normalized_npm_registry));
+    let mut attempts = vec![preferred];
+    for candidate in DEFAULT_NPM_REGISTRIES {
+        if !attempts.iter().flatten().any(|value| value == candidate) {
+            attempts.push(Some(candidate.to_string()));
+        }
+    }
+    attempts
+}
+
+fn npm_package_version_url(registry: &str, package: &str, version: &str) -> Option<String> {
+    normalized_npm_registry(registry).map(|base| format!("{base}/{package}/{version}"))
+}
+
+fn with_npm_registry(
+    env: &BTreeMap<String, String>,
+    registry: Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut env = env.clone();
+    if let Some(registry) = registry {
+        env.insert("npm_config_registry".to_string(), registry.to_string());
+        env.insert("NPM_CONFIG_REGISTRY".to_string(), registry.to_string());
+    }
+    env
+}
+
+fn npm_failure_is_network(stderr: &str) -> bool {
+    if stderr.lines().any(|line| {
+        line.strip_prefix("npm ERR! code ")
+            .map(str::trim)
+            .is_some_and(|code| RETRYABLE_NPM_ERROR_CODES.contains(&code))
+    }) {
+        return true;
+    }
+    let stderr = stderr.to_ascii_lowercase();
+    [
+        "network request to",
+        "network timeout",
+        "socket hang up",
+        "getaddrinfo",
+        "econnrefused",
+        "econnreset",
+        "eai_again",
+        "enetunreach",
+        "etimedout",
+    ]
+    .iter()
+    .any(|needle| stderr.contains(needle))
+}
+
+async fn probe_npm_package_version(
+    registry: &str,
+    packages: &[String],
+    version: &str,
+) -> Result<(), AppRecipeExecutionError> {
+    for package in packages {
+        let url = npm_package_version_url(registry, package, version).ok_or_else(|| {
+            AppRecipeExecutionError::new(
+                "invalid_builtin_recipe",
+                "The npm registry must use HTTPS.",
+                false,
+            )
+        })?;
+        probe_npm_package_url(&url).await?;
+    }
+    Ok(())
 }
 
 fn write_recipe_log(context: &AppRecipeExecutionContext, stream: &str, message: &str) {
@@ -3143,6 +3327,8 @@ mod tests {
         .expect("command");
         assert!(!command.args.iter().any(|arg| arg == "--global"));
         assert!(command.args.iter().any(|arg| arg == "--prefix"));
+        assert!(command.args.iter().any(|arg| arg == "--no-save"));
+        assert!(command.args.iter().any(|arg| arg == "--include=optional"));
         assert!(command
             .args
             .iter()
@@ -3225,5 +3411,305 @@ mod tests {
         fs::remove_file(&bin).expect("remove link");
         symlink("../@openai/codex/cli.js", &bin).expect("owned link");
         verify_managed_node_package(&stage, &packages, "codex").expect("valid private launcher");
+    }
+
+    #[test]
+    fn managed_node_package_sources_prefer_configuration_then_public_mirrors() {
+        let env = BTreeMap::new();
+        assert_eq!(
+            node_package_registry_attempts(Some("https://registry.example.test/npm/"), &env),
+            vec![
+                Some("https://registry.example.test/npm".to_string()),
+                Some("https://registry.npmjs.org".to_string()),
+                Some("https://registry.npmmirror.com".to_string()),
+            ]
+        );
+        assert_eq!(
+            node_package_registry_attempts(Some("https://registry.npmmirror.com"), &env),
+            vec![
+                Some("https://registry.npmmirror.com".to_string()),
+                Some("https://registry.npmjs.org".to_string()),
+            ]
+        );
+        assert_eq!(
+            node_package_registry_attempts(None, &env),
+            vec![
+                None,
+                Some("https://registry.npmjs.org".to_string()),
+                Some("https://registry.npmmirror.com".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn managed_node_package_sources_use_the_environment_registry() {
+        let env = BTreeMap::from([(
+            "npm_config_registry".to_string(),
+            "https://registry.example.test/team/".to_string(),
+        )]);
+        assert_eq!(
+            node_package_registry_attempts(None, &env),
+            vec![
+                Some("https://registry.example.test/team".to_string()),
+                Some("https://registry.npmjs.org".to_string()),
+                Some("https://registry.npmmirror.com".to_string()),
+            ]
+        );
+        assert_eq!(
+            npm_package_version_url(
+                "https://registry.example.test/npm/",
+                "@openai/codex",
+                "0.165.0"
+            ),
+            Some("https://registry.example.test/npm/@openai/codex/0.165.0".to_string())
+        );
+        assert_eq!(
+            npm_package_version_url("http://registry.example.test", "codex", "1.0.0"),
+            None
+        );
+    }
+
+    #[test]
+    fn npm_transport_failures_are_retryable_but_package_failures_are_not() {
+        for diagnostic in [
+            "npm ERR! code ETIMEDOUT\nnpm ERR! network request to https://registry.example.test failed",
+            "npm ERR! code EAI_AGAIN\nnpm ERR! network timeout at: https://registry.example.test",
+            "npm ERR! code ECONNREFUSED",
+            "npm ERR! code E503",
+        ] {
+            assert!(npm_failure_is_network(diagnostic), "{diagnostic}");
+        }
+        for diagnostic in [
+            "npm ERR! code E404\nnpm ERR! 404 Not Found",
+            "npm ERR! code EINTEGRITY",
+            "npm ERR! code EPERM",
+            "npm ERR! code ENOTEMPTY",
+            "npm ERR! code ETARGET",
+            "",
+        ] {
+            assert!(!npm_failure_is_network(diagnostic), "{diagnostic}");
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_fake_npm(root: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).expect("fake npm dir");
+        let npm = bin.join("npm");
+        fs::write(
+            &npm,
+            r#"#!/bin/sh
+printf '%s\n' "${npm_config_registry:-unset}" >> "$FAKE_NPM_LOG"
+if [ "${npm_config_registry:-}" = "https://unreachable.example.test" ]; then
+  printf 'npm ERR! code ETIMEDOUT\nnpm ERR! network request to https://unreachable.example.test/@openai/codex failed, reason: connect ETIMEDOUT\n' >&2
+  exit 1
+fi
+if [ "${npm_config_registry:-}" = "https://broken.example.test" ]; then
+  printf 'npm ERR! code E404\nnpm ERR! 404 Not Found - GET https://broken.example.test/@openai/codex\n' >&2
+  exit 1
+fi
+prefix=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--prefix" ]; then prefix="$arg"; fi
+  previous="$arg"
+done
+mkdir -p "$prefix/node_modules/@openai/codex/bin" "$prefix/node_modules/.bin"
+printf '{"bin":{"codex":"bin/codex.js"}}\n' > "$prefix/node_modules/@openai/codex/package.json"
+printf '#!/bin/sh\nexit 0\n' > "$prefix/node_modules/@openai/codex/bin/codex.js"
+chmod 755 "$prefix/node_modules/@openai/codex/bin/codex.js"
+ln -sfn "../@openai/codex/bin/codex.js" "$prefix/node_modules/.bin/codex"
+echo installed
+"#,
+        )
+        .expect("fake npm");
+        fs::set_permissions(&npm, fs::Permissions::from_mode(0o755)).expect("chmod");
+        bin
+    }
+
+    #[cfg(unix)]
+    fn managed_node_context(
+        output: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
+    ) -> AppRecipeExecutionContext {
+        AppRecipeExecutionContext {
+            app_id: "codex".into(),
+            capabilities: FinalComputerCapabilities {
+                platform: FinalComputerPlatform::Linux,
+                arch: FinalComputerArch::X64,
+                installers: vec![AppInstaller::Npm],
+                privilege: AppInstallPrivilege::User,
+                installer_access: None,
+            },
+            on_phase: None,
+            on_command: None,
+            on_output: output,
+        }
+    }
+
+    #[cfg(unix)]
+    fn managed_node_recipe() -> InstallRecipe {
+        InstallRecipe::NodePackage {
+            platforms: vec![FinalComputerPlatform::Linux],
+            arches: Some(vec![FinalComputerArch::X64]),
+            privilege: Some(AppInstallPrivilege::User),
+            installer: AppInstaller::Npm,
+            packages: vec!["@openai/codex".to_string()],
+            managed: true,
+            version: Some("0.165.0".to_string()),
+            bin_name: Some("codex".to_string()),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_node_package_falls_back_after_a_transport_failure() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let bin = write_fake_npm(root.path());
+        let log = root.path().join("npm.log");
+        let mut executor =
+            AppRecipeExecutor::new(root.path().join("apps"), root.path().join("state"))
+                .with_npm_source_probe(Arc::new(|_registry: &str| Ok(())));
+        executor.env.insert(
+            "PATH".to_string(),
+            format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()),
+        );
+        executor.env.insert(
+            "npm_config_registry".to_string(),
+            "https://unreachable.example.test".to_string(),
+        );
+        executor.env.insert(
+            "NPM_CONFIG_REGISTRY".to_string(),
+            "https://unreachable.example.test".to_string(),
+        );
+        executor
+            .env
+            .insert("FAKE_NPM_LOG".to_string(), log.display().to_string());
+        let output = Arc::new(std::sync::Mutex::new(String::new()));
+        let captured = output.clone();
+        let context = managed_node_context(Some(Arc::new(move |_, chunk: &str| {
+            captured.lock().expect("output").push_str(chunk);
+        })));
+
+        executor
+            .execute(
+                AppManagementOperation::Install,
+                &managed_node_recipe(),
+                &context,
+            )
+            .await
+            .expect("fallback install");
+
+        let registries = fs::read_to_string(&log).expect("npm log");
+        assert_eq!(
+            registries.lines().collect::<Vec<_>>(),
+            vec![
+                "https://unreachable.example.test",
+                "https://registry.npmjs.org"
+            ]
+        );
+        assert!(root
+            .path()
+            .join("apps/node-package/codex/node_modules/@openai/codex/package.json")
+            .exists());
+        let output = output.lock().expect("output").clone();
+        assert!(output.contains("Using fallback npm source https://registry.npmjs.org"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_node_package_keeps_the_source_for_package_content_failures() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let bin = write_fake_npm(root.path());
+        let log = root.path().join("npm.log");
+        let mut executor =
+            AppRecipeExecutor::new(root.path().join("apps"), root.path().join("state"))
+                .with_npm_source_probe(Arc::new(|_registry: &str| Ok(())));
+        executor.env.insert(
+            "PATH".to_string(),
+            format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()),
+        );
+        executor.env.insert(
+            "npm_config_registry".to_string(),
+            "https://broken.example.test".to_string(),
+        );
+        executor.env.insert(
+            "NPM_CONFIG_REGISTRY".to_string(),
+            "https://broken.example.test".to_string(),
+        );
+        executor
+            .env
+            .insert("FAKE_NPM_LOG".to_string(), log.display().to_string());
+
+        let error = executor
+            .execute(
+                AppManagementOperation::Install,
+                &managed_node_recipe(),
+                &managed_node_context(None),
+            )
+            .await
+            .expect_err("package content failure");
+
+        assert_eq!(error.code, "package_manager_failed");
+        assert_eq!(
+            fs::read_to_string(&log)
+                .expect("npm log")
+                .lines()
+                .collect::<Vec<_>>(),
+            vec!["https://broken.example.test"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_node_package_reports_unreachable_sources_and_preserves_the_previous_install() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let bin = write_fake_npm(root.path());
+        let log = root.path().join("npm.log");
+        let target = root.path().join("apps/node-package/codex");
+        fs::create_dir_all(&target).expect("previous install");
+        fs::write(
+            target.join("managed-app.json"),
+            r#"{"appId":"codex","packages":{"@openai/codex":"0.164.0"}}"#,
+        )
+        .expect("previous manifest");
+        let mut executor =
+            AppRecipeExecutor::new(root.path().join("apps"), root.path().join("state"))
+                .with_npm_source_probe(Arc::new(|registry: &str| {
+                    Err(format!("unreachable {registry}"))
+                }));
+        executor.env.insert(
+            "PATH".to_string(),
+            format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()),
+        );
+        executor.env.insert(
+            "npm_config_registry".to_string(),
+            "https://unreachable.example.test".to_string(),
+        );
+        executor.env.insert(
+            "NPM_CONFIG_REGISTRY".to_string(),
+            "https://unreachable.example.test".to_string(),
+        );
+        executor
+            .env
+            .insert("FAKE_NPM_LOG".to_string(), log.display().to_string());
+
+        let error = executor
+            .execute(
+                AppManagementOperation::Update,
+                &managed_node_recipe(),
+                &managed_node_context(None),
+            )
+            .await
+            .expect_err("offline sources");
+
+        assert_eq!(error.code, "npm_registry_unavailable");
+        assert!(error.retryable);
+        assert!(error.message.contains("https://registry.npmjs.org"));
+        assert!(error.message.contains("https://registry.npmmirror.com"));
+        assert!(!log.exists(), "npm must not run without a reachable source");
+        assert!(fs::read_to_string(target.join("managed-app.json"))
+            .expect("previous manifest")
+            .contains("0.164.0"));
     }
 }

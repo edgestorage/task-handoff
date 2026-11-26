@@ -2,9 +2,8 @@ use chrono::{SecondsFormat, Utc};
 use controlled_instance_ai_session::{
     AcpSessionHome, AiSessionModelSelection, AiSessionModelSelectionIntent,
     AiSessionModelSelectionResolver, AiSessionNextInputSuggestionReasoningEffort,
-    AiSessionStructuredMessage,
-    AiSessionStructuredModelGenerator, AiSessionStructuredModelInput, AiSessionTitleGenerator,
-    AiSessionTitleInput, OpenCodeModelSelectionProjector, ProviderError,
+    AiSessionStructuredMessage, AiSessionStructuredModelGenerator, AiSessionStructuredModelInput,
+    AiSessionTitleGenerator, AiSessionTitleInput, OpenCodeModelSelectionProjector, ProviderError,
 };
 use controlled_instance_app_runtime::AppRuntime;
 use controlled_instance_core::{
@@ -3359,7 +3358,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn suggestion_model_selection_reads_projection_and_private_config() {
         let selection = AiSessionModelSelection {
             model_entity_id: "model-primary".to_string(),

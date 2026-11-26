@@ -24,6 +24,10 @@ const NPM_REGISTRY_PROBE_TIMEOUT_MS = 3_000;
 const DOWNLOAD_TOTAL_TIMEOUT_MS = 10 * 60_000;
 const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 const DEFAULT_NPM_REGISTRIES = ["https://registry.npmjs.org", "https://registry.npmmirror.com"] as const;
+const RETRYABLE_NPM_ERROR_CODES = new Set([
+  "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND",
+  "EPIPE", "ERR_SOCKET_TIMEOUT", "ETIMEDOUT", "FETCH_ERROR", "E500", "E502", "E503", "E504",
+]);
 const PACKAGE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9+._:@/-]{0,199}$/;
 const NODE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]{0,99}\/)?[a-z0-9][a-z0-9._-]{0,99}$/i;
 const NODE_PACKAGE_VERSION = /^[a-zA-Z0-9][a-zA-Z0-9+._-]{0,120}$/;
@@ -186,6 +190,7 @@ function nodePackageCommand(
   managedPrefix: string | undefined,
   policy: AppInstallExecutionPolicy | undefined,
   npmCacheDir: string,
+  registry?: string,
 ): AppRecipeCommand {
   if (!recipe.packages.length || recipe.packages.some((item) => !NODE_PACKAGE_NAME.test(item))) {
     throw new AppRecipeExecutionError("invalid_builtin_recipe", "The built-in Node package recipe contains an invalid package name.");
@@ -208,6 +213,10 @@ function nodePackageCommand(
     ...(policy ? policy.nodeEnvironment(env) : env),
     npm_config_cache: npmCacheDir,
   };
+  if (registry) {
+    commandEnv.npm_config_registry = registry;
+    commandEnv.NPM_CONFIG_REGISTRY = registry;
+  }
   const invocation = commandInvocation(recipe.installer, args, {
     env: commandEnv,
     platform: capabilities.platform as NodeJS.Platform,
@@ -717,7 +726,7 @@ function managedNodePackageStaging(installBaseDir: string, appId: string) {
 }
 
 function verifyManagedNodePackage(staging: string, recipe: NodePackageInstallRecipe, appId: string) {
-  const command = path.join(staging, "node_modules", ".bin", appId);
+  const command = path.join(staging, "node_modules", ".bin", recipe.binName ?? appId);
   const resolved = resolveExecutable(command);
   if (!resolved || !pathInsideRoot(fs.realpathSync(resolved.executable), fs.realpathSync(staging))) {
     throw new AppRecipeExecutionError("postcondition_failed", "The staged package has no executable managed launcher inside its install root.");
@@ -843,6 +852,42 @@ async function selectNpmPackageSource(
     `No npm source responded within ${NPM_REGISTRY_PROBE_TIMEOUT_MS}ms: ${failures.join("; ")}`,
     true,
   );
+}
+
+function npmPackageVersionUrl(registry: string, packageName: string, packageVersion: string) {
+  const base = normalizedNpmRegistry(registry);
+  if (!base) throw new AppRecipeExecutionError("invalid_builtin_recipe", "The npm registry must use HTTPS.");
+  return `${base}/${packageName}/${packageVersion}`;
+}
+
+/**
+ * Managed Node packages need the whole dependency tree, so npm must run once
+ * per source. Keep the configured source first, let npm use its own
+ * configuration when nothing is configured, then fall back to the public
+ * mirrors that the native package installer already trusts.
+ */
+function nodePackageRegistryAttempts(primary: string | undefined, env: NodeJS.ProcessEnv): Array<string | undefined> {
+  const preferred = normalizedNpmRegistry(primary)
+    || normalizedNpmRegistry(env.npm_config_registry)
+    || normalizedNpmRegistry(env.NPM_CONFIG_REGISTRY);
+  const attempts: Array<string | undefined> = [preferred];
+  for (const value of DEFAULT_NPM_REGISTRIES) {
+    if (!attempts.includes(value)) attempts.push(value);
+  }
+  return attempts;
+}
+
+async function probeNpmPackageVersion(registry: string, packages: string[], packageVersion: string, fetcher: typeof fetch) {
+  for (const packageName of packages) {
+    await probeNpmPackageUrl(npmPackageVersionUrl(registry, packageName, packageVersion), fetcher);
+  }
+}
+
+function npmFailureIsRetryable(result: AppRecipeCommandResult) {
+  if (result.exitCode === 0) return false;
+  const code = /(?:^|\n)npm (?:ERR!|error) code (\S+)/.exec(result.stderr)?.[1];
+  if (code && RETRYABLE_NPM_ERROR_CODES.has(code)) return true;
+  return /(?:network request to|network timeout|socket hang up|getaddrinfo|ECONNREFUSED|ECONNRESET|EAI_AGAIN|ENETUNREACH|ETIMEDOUT)/i.test(result.stderr);
 }
 
 function validateNativeRecipe(recipe: NativePackageInstallRecipe) {
@@ -1066,16 +1111,46 @@ export function createAppRecipeExecutor(options: AppRecipeExecutorOptions) {
           return { log: "" };
         }
         const staging = managedNodePackageStaging(resolved.installBaseDir, context.appId);
-        fs.rmSync(staging, { recursive: true, force: true });
-        fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+        const attempts = nodePackageRegistryAttempts(sourcePolicy?.npmRegistry, resolved.env);
+        const failures: string[] = [];
+        let fallback = false;
         try {
-          const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env, staging, sourcePolicy, npmCacheDir);
-          const result = await runCommand(command);
-          if (result.exitCode !== 0) throw new AppRecipeExecutionError("package_manager_failed", bounded(result.stderr) || "The Node package manager failed.", true);
-          verifyManagedNodePackage(staging, recipe, context.appId);
-          writeManagedNodePackageManifest(staging, context.appId, recipe);
-          replaceManagedNodePackage(resolved.installBaseDir, context.appId, staging);
-          return { log: bounded(result.stdout || result.stderr) };
+          for (const [index, registry] of attempts.entries()) {
+            if (registry) {
+              try {
+                await probeNpmPackageVersion(registry, recipe.packages, recipe.version, resolved.fetcher);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                failures.push(`${registry}: ${message}`);
+                context.onOutput?.("stderr", `npm source ${registry} unavailable: ${message}\n`);
+                fallback = true;
+                continue;
+              }
+              context.onOutput?.("stdout", `${fallback ? "Using fallback npm source" : "Using npm source"} ${registry}\n`);
+            }
+            fs.rmSync(staging, { recursive: true, force: true });
+            fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+            const command = nodePackageCommand(recipe, operation, context.capabilities, resolved.env, staging, sourcePolicy, npmCacheDir, registry);
+            const result = await runCommand(command);
+            if (result.exitCode !== 0) {
+              if (index < attempts.length - 1 && npmFailureIsRetryable(result)) {
+                failures.push(`${registry ?? "npm configuration"}: ${bounded(result.stderr)}`);
+                context.onOutput?.("stderr", `npm source ${registry ?? "npm configuration"} failed: ${bounded(result.stderr)}\n`);
+                fallback = true;
+                continue;
+              }
+              throw new AppRecipeExecutionError("package_manager_failed", bounded(result.stderr) || "The Node package manager failed.", true);
+            }
+            verifyManagedNodePackage(staging, recipe, context.appId);
+            writeManagedNodePackageManifest(staging, context.appId, recipe);
+            replaceManagedNodePackage(resolved.installBaseDir, context.appId, staging);
+            return { log: bounded(result.stdout || result.stderr) };
+          }
+          throw new AppRecipeExecutionError(
+            "npm_registry_unavailable",
+            `No npm source responded for ${recipe.packages.join(", ")}@${recipe.version}: ${failures.join("; ")}`,
+            true,
+          );
         } catch (error) {
           fs.rmSync(staging, { recursive: true, force: true });
           throw error;

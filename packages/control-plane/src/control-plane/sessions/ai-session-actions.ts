@@ -187,8 +187,8 @@ export class AiSessionActionService {
     this.options = options;
   }
 
-  async resolveApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip"): Promise<AiSessionActionResponse> {
-    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision }));
+  async resolveApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip", approvalRequestId?: string): Promise<AiSessionActionResponse> {
+    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision, ...(approvalRequestId ? { approvalRequestId } : {}) }));
   }
 
   async listHistory(instanceId: string, agents?: readonly string[]): Promise<AiSessionHistoryList> {

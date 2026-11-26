@@ -5,5 +5,10 @@ import { z } from "zod";
  * the control-plane/node-agent model records and by both capability documents
  * of the model-relay boundary; it stays independent from the consuming app.
  */
-export const ModelProtocolSchema = z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"]);
+export const ModelProtocolSchema = z.enum([
+  "openai-responses",
+  "openai-chat-completions",
+  "anthropic-messages",
+  "google-generative-ai",
+]);
 export type ModelProtocol = z.infer<typeof ModelProtocolSchema>;

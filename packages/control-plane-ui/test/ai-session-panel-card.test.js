@@ -178,7 +178,8 @@ test("AI session cards show the agent mark beside the optional terminal-origin m
   assert.match(originMark, /opacity: 0\.38;/);
   assert.match(cardMarks, /<AiAgentIcon :agent="brandedAgent" :size="14"/);
   assert.match(cardMarks, /showAgent !== false && brandedAgent/);
-  assert.match(cardMarks, /props\.agent === "codex" \|\| props\.agent === "claude" \|\| props\.agent === "opencode" \? props\.agent : undefined/);
+  assert.match(cardMarks, /import \{ isAiAgentId, type AiAgentId \} from "\.\.\/aiAgentIcon";/);
+  assert.match(cardMarks, /const brandedAgent = computed<AiAgentId \| undefined>\(\(\) => isAiAgentId\(props\.agent\) \? props\.agent : undefined\);/);
   assert.match(cardMarks, /<AiSessionOriginMark :creation-source="creationSource"/);
   assert.match(cardMarks, /\.ai-session-card-marks \{[\s\S]*?opacity: 0;[\s\S]*?transition: opacity 140ms ease;/);
   assert.match(panel, /<AiSessionCardMarks :agent="session\.agent" :creation-source="session\.creationSource"/);
@@ -323,7 +324,8 @@ test("waiting approval actions float at the bottom left of instance AI session c
   assert.match(styles, /\.session-ai-card-approval-actions\s*\{[^}]*position: absolute;[^}]*bottom: 8px;[^}]*left: 14px;/s);
   assert.match(panel, /async function resolveApproval\(session: AiSessionSummary, decision:/);
   assert.match(panel, /return isAiSessionApprovalPending\(session\)/);
-  assert.doesNotMatch(panel, /actions\?\.approval/);
+  assert.doesNotMatch(panel, /actions\?\.approval(?!Request)/);
+  assert.match(panel, /resolveAiSessionApproval\(props\.instance\.id, session\.id, decision, session\.actions\?\.approvalRequest\?\.id\)/);
 });
 
 test("instance AI session card previews do not open an expanded overlay", () => {

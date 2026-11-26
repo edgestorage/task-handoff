@@ -57,8 +57,18 @@ function apiKeyCredential(headers: Record<string, unknown>) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function googleApiKeyCredential(headers: Record<string, unknown>) {
+  const value = headers["x-goog-api-key"];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function protocolCredential(headers: Record<string, unknown>, protocol: ModelProtocol) {
-  return protocol === "anthropic-messages" ? apiKeyCredential(headers) : bearerCredential(headers);
+  if (protocol === "anthropic-messages") return apiKeyCredential(headers);
+  if (protocol === "google-generative-ai") {
+    const apiKey = headers["x-goog-api-key"];
+    return typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : bearerCredential(headers);
+  }
+  return bearerCredential(headers);
 }
 
 function countedStream(source: Readable, onBytes: (count: number) => void) {
@@ -383,7 +393,9 @@ export class ModelRelayService {
     }
     // Authentication happens before any switch/assignment lookup so an
     // unauthenticated caller cannot observe relay state.
-    const candidate = bearerCredential(request.headers) ?? apiKeyCredential(request.headers);
+    const candidate = bearerCredential(request.headers)
+      ?? apiKeyCredential(request.headers)
+      ?? googleApiKeyCredential(request.headers);
     if (!candidate || !modelRelayCredentialMatches(candidate, instance.registrationToken)) {
       throw modelRelayError(401, MODEL_RELAY_ERROR_CODES.unauthorized, "Model relay credentials are invalid for this instance.");
     }

@@ -13,6 +13,7 @@ import {
   type AiSessionNextInputSuggestionReasoningEffort,
 } from "@task-handoff/protocol/ai-sessions";
 import { parseCodexInstanceSettings } from "@task-handoff/protocol/control-plane";
+import { acpAgentProtocols } from "@task-handoff/ai-session-runtime/acp-model";
 
 export const ControlledPrivateModelCatalogSchema = InstancePrivateModelCatalogSchema;
 export type ControlledPrivateModelCatalog = InstancePrivateModelCatalog;
@@ -130,10 +131,11 @@ export function resolveControlledPrivateModelSelection(
   requested?: AiSessionModelSelection,
   options: { intent?: ControlledPrivateModelSelectionIntent } = {},
 ) {
-  const protocol = agent === "codex" ? "openai-responses"
-    : agent === "claude" ? "anthropic-messages"
-      : agent === "opencode" ? "openai-chat-completions" : undefined;
-  if (!protocol) return undefined;
+  const protocols: readonly string[] = agent === "codex" ? ["openai-responses"]
+    : agent === "claude" ? ["anthropic-messages"]
+      : agent === "opencode" ? ["openai-chat-completions"]
+        : acpAgentProtocols(agent);
+  if (!protocols.length) return undefined;
   if (!catalog) {
     if (requested) throw Object.assign(new Error("The model configuration is not loaded by this instance. Restart the instance to apply the latest model configuration."), {
       code: "AI_SESSION_MODEL_CATALOG_UNAVAILABLE",
@@ -141,7 +143,7 @@ export function resolveControlledPrivateModelSelection(
     });
     return undefined;
   }
-  const entities = catalog.entities.filter((entity) => entity.protocols.includes(protocol));
+  const entities = catalog.entities.filter((entity) => protocols.some((protocol) => (entity.protocols as readonly string[]).includes(protocol)));
   const entity = requested
     ? entities.find((candidate) => candidate.id === requested.modelEntityId)
     : entities[0];

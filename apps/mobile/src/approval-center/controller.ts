@@ -381,7 +381,7 @@ export class MobileApprovalCenterController {
     switch (item.type) {
       case 'ai-session-approval': {
         if (input.decision !== 'allow' && input.decision !== 'deny' && input.decision !== 'skip') throw new Error('Unsupported approval decision.');
-        await this.client.aiSessions.approval(item.instanceId, item.session.id, input.decision);
+        await this.client.aiSessions.approval(item.instanceId, item.session.id, input.decision, item.session.actions?.approvalRequest?.id);
         this.syncAiSessions();
         return true;
       }

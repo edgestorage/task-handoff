@@ -18,6 +18,7 @@ import {
   supportsControlledInstanceModelRelay,
   supportsControlledInstanceModelRelayProtocol,
   type ControlledInstance,
+  type ModelProtocol,
   type NodeModelAssignment,
   type NodeModelConfig,
   type NodeModelPublicRecord,
@@ -391,7 +392,7 @@ export class NodeModelRegistry {
       this.validateEntityRef(id);
       return model;
     });
-    const routeBaseUrl = (model: NodeModelConfig, protocol: "openai-responses" | "openai-chat-completions" | "anthropic-messages") => (
+    const routeBaseUrl = (model: NodeModelConfig, protocol: ModelProtocol) => (
       supportsControlledInstanceModelRelayProtocol(instance.capabilities, protocol) && origin
         ? modelRelayRouteBaseUrl(origin, instance.id, model.id, protocol)
         : undefined

@@ -55,7 +55,7 @@ export const NodeAgentManagedModelCapabilitiesSchema = z.object({
   // mapping deployment disabled; the relay switch is node configuration and
   // is deliberately not part of the capability document.
   modelRelay: z.object({
-    protocols: z.array(ModelProtocolSchema).max(3).default([]),
+    protocols: z.array(ModelProtocolSchema).max(4).default([]),
     streaming: z.boolean().default(false),
     // Additive capability: the node persists and honors the relay
     // unknown-model policy. Absence (v0.0.34 and earlier) means the node

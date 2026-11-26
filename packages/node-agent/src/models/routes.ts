@@ -20,7 +20,7 @@ const NodeModelDiscoveryInputSchema = z.object({
 const NodeModelTestInputSchema = NodeModelDiscoveryInputSchema.extend({
   model: z.string().trim().min(1).max(240),
   app: z.enum(["codex", "claude", "opencode"]).optional(),
-  protocol: z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"]).optional(),
+  protocol: z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages", "google-generative-ai"]).optional(),
 }).strict().refine((input) => Boolean(input.protocol || input.app), { message: "A model protocol is required.", path: ["protocol"] });
 
 export function registerNodeModelRoutes(

@@ -136,7 +136,7 @@ test("instance capabilities are projected from available inventory items", () =>
   assert.equal(capabilities.features.codexManagedSettings, true);
   assert.equal(capabilities.features.nodeAgentConnectionUpdate, true);
   assert.deepEqual(capabilities.features.modelRelay, {
-    protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages"],
+    protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages", "google-generative-ai"],
     streaming: true,
   });
   assert.equal(supportsControlledInstanceModelRelay(capabilities), true);

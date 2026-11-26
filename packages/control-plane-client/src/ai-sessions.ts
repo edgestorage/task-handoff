@@ -262,8 +262,8 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       });
       return requestData(`${sessionRoute(instanceId, sessionId)}/messages`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", body));
     },
-    approval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/approval`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", AiSessionApprovalInputSchema.parse({ decision })));
+    approval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip", approvalRequestId?: string) {
+      return requestData(`${sessionRoute(instanceId, sessionId)}/approval`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", AiSessionApprovalInputSchema.parse({ decision, approvalRequestId })));
     },
     interrupt(instanceId: string, sessionId: string) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/interrupt`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", {}));

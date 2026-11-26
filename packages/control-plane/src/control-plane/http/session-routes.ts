@@ -804,7 +804,7 @@ export function registerSessionRoutes({
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/approval", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     const parsed = AiSessionApprovalInputSchema.parse(request.body || {});
-    const result = await service.resolveAiSessionApproval(params.id, params.sessionId, parsed.decision);
+    const result = await service.resolveAiSessionApproval(params.id, params.sessionId, parsed.decision, parsed.approvalRequestId);
     events.publish("instance.ai-session.approval-resolved", { instanceId: params.id, sessionId: params.sessionId, decision: parsed.decision });
     return { data: result };
   });

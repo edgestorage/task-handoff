@@ -1,5 +1,6 @@
 import type { ModelRelayAdapter } from "../types.ts";
 import { createAnthropicMessagesAdapter } from "./anthropic-messages.ts";
+import { createGoogleGenerativeAiAdapter } from "./google-generative-ai.ts";
 import { createOpenAiChatCompletionsAdapter } from "./openai-chat-completions.ts";
 import { createOpenAiResponsesAdapter } from "./openai-responses.ts";
 
@@ -9,5 +10,6 @@ export function createModelRelayAdapters(): ModelRelayAdapter[] {
     createOpenAiResponsesAdapter(),
     createOpenAiChatCompletionsAdapter(),
     createAnthropicMessagesAdapter(),
+    createGoogleGenerativeAiAdapter(),
   ];
 }

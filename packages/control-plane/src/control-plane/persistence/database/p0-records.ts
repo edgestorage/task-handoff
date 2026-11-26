@@ -73,7 +73,7 @@ export const ModelRecordSchema = z.object({
     order: z.number().int().nonnegative(),
   }).strict()).max(64).default([]),
   capabilities: z.object({ image: z.boolean().default(false) }).default({ image: false }),
-  protocols: z.array(z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"])).max(3),
+  protocols: z.array(z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages", "google-generative-ai"])).max(4),
   app: z.enum(["codex", "claude", "opencode"]),
   enabled: z.boolean(),
   order: z.number().int().nonnegative(),

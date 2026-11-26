@@ -9,6 +9,9 @@ test("launcher icons follow inventory kind, automation, and agent identity", () 
   assert.equal(appLaunchIconKind({ id: "vscode-web", kind: "web" }), "web");
   assert.equal(appLaunchIconKind({ id: "codex", kind: "tty", agent: true }), "agent");
   assert.equal(appLaunchIconKind({ id: "codex", kind: "tty" }), "agent");
+  assert.equal(appLaunchIconKind({ id: "gemini", kind: "tty" }), "agent");
+  assert.equal(appLaunchIconKind({ id: "commandcode", kind: "tty" }), "agent");
+  assert.equal(appLaunchIconKind({ id: "dsh", kind: "tty" }), "agent");
   assert.equal(appLaunchIconKind({ id: "embedded-browser" }), "browser");
   assert.equal(appLaunchIconKind({ id: "custom-app" }), "generic");
 });

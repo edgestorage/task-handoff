@@ -410,7 +410,7 @@ const pendingMerge = ref<{ model: ModelConfig; target: ModelConfig }>();
 const refreshModels = () => invalidateControlPlaneDomains(queryClient, ["models"]);
 const translateError = (error: unknown) => translateApiError(error, t, error instanceof Error ? error.message : String(error));
 const { addMapping, addModelName, applyMappingPreset, canDeleteModelEverywhere, canDiscoverModels, canInheritCopyCredential, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, imageInputEditable, mappingsEditable, mergeCandidates, mergeModelInto, mergingModelId, modelDraftDirty, moveMapping, moveModel, moveModelName, reorderMapping, reorderModelName, removeMapping, removeModel, removeModelEverywhere, removeModelName, requestMappingInactive, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, staleLocations, syncModelLocations, syncingModelId, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
-const modelProtocols = ["openai-responses", "openai-chat-completions", "anthropic-messages"] as const;
+const modelProtocols = ["openai-responses", "openai-chat-completions", "anthropic-messages", "google-generative-ai"] as const;
 const mappingPresets = MODEL_REQUEST_MAPPING_PRESETS;
 const requestMappingLimit = 64;
 const mappingTargetPlaceholder = computed(() => {

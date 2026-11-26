@@ -26,7 +26,8 @@ test("Agent view reuses the Story workspace layout language", () => {
 test("Agent detail head keeps runtime identity in the shared meta-line language", () => {
   assert.match(agentView, /<div class="agent-detail-runtime">[\s\S]*?<AiAgentIcon v-if="providerBrand"[\s\S]*?agent-detail-runtime-item[\s\S]*?selectedAgent\.provider[\s\S]*?agent-detail-runtime-separator[\s\S]*?selectedAgent\.model/);
   assert.match(agentView, /import AiAgentIcon from "@\/components\/AiAgentIcon\.vue";/);
-  assert.match(agentView, /providerId === "codex" \|\| providerId === "claude" \|\| providerId === "opencode" \? providerId : undefined/);
+  assert.match(agentView, /import \{ isAiAgentId, type AiAgentId \} from "@\/components\/aiAgentIcon";/);
+  assert.match(agentView, /const providerBrand = computed<AiAgentId \| undefined>\(\(\) => \{[\s\S]*return isAiAgentId\(providerId\) \? providerId : undefined;[\s\S]*\}\);/);
   assert.match(agentView, /\.agent-detail-runtime \{[^}]*color:var\(--text-muted\);[^}]*font-size:12px;[^}]*font-weight:400;/);
 });
 

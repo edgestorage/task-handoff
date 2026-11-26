@@ -1,5 +1,5 @@
 export type ModelEndpointApp = "codex" | "claude" | "opencode";
-export type ModelEndpointProtocol = "openai-responses" | "openai-chat-completions" | "anthropic-messages";
+export type ModelEndpointProtocol = "openai-responses" | "openai-chat-completions" | "anthropic-messages" | "google-generative-ai";
 
 export type DiscoveredModel = {
   id: string;
@@ -90,7 +90,17 @@ export async function testModelEndpoint(fetchImpl: FetchImpl, input: {
         },
         body: JSON.stringify({ model: input.model, messages: [{ role: "user", content: "Reply with OK." }], max_tokens: 32, stream: false }),
       })
-      : await endpointFetch(fetchImpl, appendAnthropicMessagesPath(input.endpoint), {
+      : protocol === "google-generative-ai"
+        ? await endpointFetch(fetchImpl, appendGoogleGenerateContentPath(input.endpoint, input.model), {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            "x-goog-api-key": input.key,
+          },
+          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "Reply with OK." }] }], generationConfig: { maxOutputTokens: 32 } }),
+        })
+        : await endpointFetch(fetchImpl, appendAnthropicMessagesPath(input.endpoint), {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -131,6 +141,13 @@ function appendAnthropicMessagesPath(endpoint: string) {
   if (/\/messages\/?$/.test(url.pathname)) return url.toString();
   const lastSegment = url.pathname.split("/").filter(Boolean).at(-1) || "";
   return appendEndpointPath(url.toString(), /^v\d+$/.test(lastSegment) ? "messages" : "v1/messages");
+}
+
+function appendGoogleGenerateContentPath(endpoint: string, model: string) {
+  const url = parseEndpoint(endpoint);
+  const versioned = /\/v1beta\/?$/.test(url.pathname);
+  const base = versioned ? url.toString() : appendEndpointPath(url.toString(), "v1beta");
+  return `${base.replace(/\/+$/, "")}/models/${encodeURIComponent(model)}:generateContent`;
 }
 
 function appendModelOperationPath(endpoint: string, suffix: "responses" | "chat/completions") {

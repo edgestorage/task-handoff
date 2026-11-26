@@ -28,6 +28,27 @@ test("derives resume choices independently from active-session switching", () =>
   assert.deepEqual(groups.map((group) => group.modelEntityId), ["one", "two"]);
 });
 
+test("derives concrete ACP choices from each agent's supported protocols", () => {
+  const acpEntities = [
+    { id: "google", name: "Google", model: "gemini", enabled: true, order: 1, protocols: ["google-generative-ai"], locations: [{ type: "node" as const, nodeId: "node-1", enabled: true }] },
+    { id: "chat", name: "Chat", model: "chat", enabled: true, order: 2, protocols: ["openai-chat-completions"], locations: [{ type: "node" as const, nodeId: "node-1", enabled: true }] },
+    { id: "responses", name: "Responses", model: "responses", enabled: true, order: 3, protocols: ["openai-responses"], locations: [{ type: "node" as const, nodeId: "node-1", enabled: true }] },
+    { id: "anthropic", name: "Anthropic", model: "claude", enabled: true, order: 4, protocols: ["anthropic-messages"], locations: [{ type: "node" as const, nodeId: "node-1", enabled: true }] },
+  ];
+  const capability = { selectModelAtCreate: true, selectProviderAtCreate: true };
+  const groups = (agent: string) => deriveAiSessionModelGroups({
+    entities: acpEntities,
+    assignment: { modelEntityIds: acpEntities.map((entity) => entity.id) },
+    agent,
+    nodeId: "node-1",
+    mode: "create",
+    capability,
+  }).map((group) => group.modelEntityId);
+  assert.deepEqual(groups("gemini"), ["google"]);
+  assert.deepEqual(groups("commandcode"), ["chat", "responses", "anthropic"]);
+  assert.deepEqual(groups("dsh"), ["google", "chat", "responses", "anthropic"]);
+});
+
 test("resolves a node replica under the same stable entity id on every node", () => {
   const replicated = [{
     id: "mdl_stable", name: "Replicated", model: "replicated-model", enabled: true, order: 1,

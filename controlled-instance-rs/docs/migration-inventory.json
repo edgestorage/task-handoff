@@ -126,7 +126,7 @@
       ]
     },
     {
-      "source": "packages/controlled-instance/src/web/{claude-model-config,codex-model-config,private-model-catalog,session-title-model}.ts",
+      "source": "packages/controlled-instance/src/web/{acp-model-config,claude-model-config,codex-model-config,private-model-catalog,session-title-model}.ts",
       "rust": [
         "controlled-instance-rs/crates/instance/src/private_model.rs",
         "controlled-instance-rs/crates/protocol/src/model_config.rs",
@@ -223,8 +223,12 @@
       ]
     },
     {
-      "source": "packages/ai-session-runtime/src/{ai-session-attachment-draft-streams,ai-session-attachments,ai-session-close,ai-session-control,ai-session-conversation-attachment-store,ai-session-create,ai-session-discovery,ai-session-fork,ai-session-history-lifecycle,ai-session-history-store,ai-session-next-input,ai-session-open-app,ai-session-persistence-settings,ai-session-provider-registry,ai-session-registry,ai-session-resume,ai-session-title,ai-session-tool-activity-window,ai-session-turns,claude-control-sock,codex-app-server-protocol,codex-app-server,index,opencode,session-history,session-title-coordinator}.ts",
+      "source": "packages/ai-session-runtime/src/{acp,acp-connection,acp-model,acp-timeline,ai-session-attachment-draft-streams,ai-session-attachments,ai-session-close,ai-session-control,ai-session-conversation-attachment-store,ai-session-create,ai-session-discovery,ai-session-fork,ai-session-history-lifecycle,ai-session-history-store,ai-session-next-input,ai-session-open-app,ai-session-persistence-settings,ai-session-provider-registry,ai-session-registry,ai-session-resume,ai-session-title,ai-session-tool-activity-window,ai-session-turns,claude-control-sock,codex-app-server-protocol,codex-app-server,index,opencode,session-history,session-title-coordinator}.ts",
       "rust": [
+        "controlled-instance-rs/crates/ai-session/src/acp.rs",
+        "controlled-instance-rs/crates/ai-session/src/acp_connection.rs",
+        "controlled-instance-rs/crates/ai-session/src/acp_model.rs",
+        "controlled-instance-rs/crates/ai-session/src/acp_timeline.rs",
         "controlled-instance-rs/crates/ai-session/src/lib.rs",
         "controlled-instance-rs/crates/ai-session/src/history.rs",
         "controlled-instance-rs/crates/ai-session/src/timeline.rs",
@@ -235,6 +239,9 @@
         "controlled-instance-rs/crates/ai-session/src/provider_snapshot.rs"
       ],
       "tests": [
+        "controlled-instance-rs/crates/ai-session/src/acp.rs",
+        "controlled-instance-rs/crates/ai-session/src/acp_connection.rs",
+        "controlled-instance-rs/crates/ai-session/src/acp_model.rs",
         "controlled-instance-rs/crates/ai-session/src/lib.rs",
         "controlled-instance-rs/crates/ai-session/src/history.rs",
         "controlled-instance-rs/crates/ai-session/src/timeline.rs",
@@ -502,20 +509,22 @@
       ]
     },
     {
-      "source": "packages/protocol/src/{agent-invocation-tools,agent-run-instance,agent-runs,ai-session-agent-tools,ai-session-hierarchy,ai-session-provider-capabilities,ai-sessions,app-profiles,app-sessions,browser-tunnel,client-request-id,config-sync,control-plane,events,instance-shell,internal/text-schemas,managed-git-credentials,model-protocol,repository,response-validation,stories,story-agent-authorization,story-agent-tools,story-automation-instance,story-id,triggers,websocket-bridge,workspace-git}.ts",
+      "source": "packages/protocol/src/{agent-invocation-tools,agent-run-instance,agent-runs,ai-session-agent-tools,ai-session-hierarchy,ai-session-provider-capabilities,ai-sessions,app-profiles,app-sessions,browser-tunnel,client-request-id,config-sync,control-plane,events,instance-shell,internal/text-schemas,managed-git-credentials,model-protocol,repository,response-validation,stories,story-agent-authorization,story-agent-tools,story-automation-instance,story-context,story-id,triggers,websocket-bridge,workspace-git}.ts",
       "rust": [
         "controlled-instance-rs/crates/protocol/src/lib.rs",
         "controlled-instance-rs/crates/protocol/src/event.rs",
         "controlled-instance-rs/crates/protocol/src/status.rs",
         "controlled-instance-rs/crates/protocol/src/ai_session.rs",
-        "controlled-instance-rs/crates/protocol/src/repository.rs"
+        "controlled-instance-rs/crates/protocol/src/repository.rs",
+        "controlled-instance-rs/crates/protocol/src/story_context.rs"
       ],
       "tests": [
         "controlled-instance-rs/crates/protocol/src/lib.rs",
         "controlled-instance-rs/crates/protocol/src/event.rs",
         "controlled-instance-rs/crates/protocol/src/status.rs",
         "controlled-instance-rs/crates/protocol/src/ai_session.rs",
-        "controlled-instance-rs/crates/protocol/src/repository.rs"
+        "controlled-instance-rs/crates/protocol/src/repository.rs",
+        "controlled-instance-rs/crates/protocol/src/story_context.rs"
       ],
       "status": "implemented",
       "verification": "unit-and-contract-tested",

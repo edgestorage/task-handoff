@@ -6,6 +6,9 @@ export const common = {
   products: {
     codex: "Codex",
     claude: "Claude",
+    commandcode: "Command Code",
+    dsh: "DeepSeek Harness",
+    gemini: "Gemini CLI",
     opencode: "OpenCode",
   },
   imageCapabilities: {

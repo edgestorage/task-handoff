@@ -1087,7 +1087,7 @@ async function resolveSelectedApproval(decision: "allow" | "deny" | "skip") {
   }
   aiSessionActionBusy.value = true;
   try {
-    await resolveAiSessionApproval(card.instance.id, card.session.id, decision);
+    await resolveAiSessionApproval(card.instance.id, card.session.id, decision, card.session.actions?.approvalRequest?.id);
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")), "error");
   } finally {

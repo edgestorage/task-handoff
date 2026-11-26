@@ -715,6 +715,7 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     aiSessionPersistenceSettings: false,
     aiSessionNextInputSuggestion: false,
     aiSessionNextInputSuggestionReasoningEffort: false,
+    aiSessionNextInputSuggestionModelSelection: false,
     privateModelCatalog: false,
     codexManagedSettings: false,
     nodeAgentConnectionUpdate: false,

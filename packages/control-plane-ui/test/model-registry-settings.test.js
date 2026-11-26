@@ -160,7 +160,7 @@ test("model settings discovers models into an ordered name list with real endpoi
 test("model settings owns endpoint protocols independently from consuming apps", () => {
   const section = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
   const state = read("src/apps/control-plane/settings/useModelSettings.ts");
-  assert.match(section, /modelProtocols = \["openai-responses", "openai-chat-completions", "anthropic-messages"\]/);
+  assert.match(section, /modelProtocols = \["openai-responses", "openai-chat-completions", "anthropic-messages", "google-generative-ai"\]/);
   assert.match(section, /settings\.fields\.endpoint[\s\S]*class="model-protocol-field" role="group"[\s\S]*settings\.fields\.apiKey/);
   assert.match(section, /<ToggleGroup class="model-protocol-options" type="multiple"/);
   assert.match(section, /<ToggleGroupItem v-for="protocol in modelProtocols"/);
