@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { moveBrowserPageToSlot, type BrowserTabSlot } from "../src/apps/control-plane/instance-detail/browserPageTabs.ts";
+import { ensureBrowserPageSlot, type BrowserTabSlot } from "../src/apps/control-plane/instance-detail/browserPageTabs.ts";
 
 function slots(): BrowserTabSlot[] {
   return [
@@ -9,36 +9,31 @@ function slots(): BrowserTabSlot[] {
   ];
 }
 
-test("moving a page re-points the target slot without touching tab identity", () => {
+test("opening a page that already has a tab selects that slot without creating another host", () => {
   const current = slots();
-  const result = moveBrowserPageToSlot(current, "tab-a", "page-b");
-  assert.equal(result.ok, true);
-  if (!result.ok) return;
-  assert.equal(result.replacedPageKey, "page-a");
-  assert.deepEqual(result.sourceSlot, current[1]);
-  assert.deepEqual(current, [
-    { key: "tab-a", pageKey: "page-b" },
-    { key: "tab-b", pageKey: "page-b" },
-  ]);
-  // The caller replaces the source slot with a fresh blank page, so both
-  // slots stay bound to distinct page hosts.
-  result.sourceSlot.pageKey = "page-blank";
-  assert.deepEqual(current, [
-    { key: "tab-a", pageKey: "page-b" },
-    { key: "tab-b", pageKey: "page-blank" },
-  ]);
-  assert.equal(new Set(current.map((slot) => slot.pageKey)).size, current.length);
+  const result = ensureBrowserPageSlot(current, "page-b", "tab-new");
+  assert.deepEqual(result, { slot: current[1], created: false });
+  assert.deepEqual(current, slots());
 });
 
-test("moving a page is a no-op for the same slot, unknown keys, or a shared page", () => {
+test("opening a page without a tab appends a new slot bound to the existing page host", () => {
   const current = slots();
-  assert.deepEqual(moveBrowserPageToSlot(current, "tab-a", "page-a"), { ok: false });
-  assert.deepEqual(moveBrowserPageToSlot(current, "missing", "page-b"), { ok: false });
-  assert.deepEqual(moveBrowserPageToSlot(current, "tab-a", "missing"), { ok: false });
-  const shared: BrowserTabSlot[] = [
-    { key: "tab-a", pageKey: "page-a" },
-    { key: "tab-b", pageKey: "page-a" },
-  ];
-  assert.equal(moveBrowserPageToSlot(shared, "tab-a", "page-a").ok, false);
+  const result = ensureBrowserPageSlot(current, "page-external", "tab-new");
+  assert.equal(result?.created, true);
+  assert.deepEqual(result?.slot, { key: "tab-new", pageKey: "page-external" });
+  assert.deepEqual(current, [
+    ...slots(),
+    { key: "tab-new", pageKey: "page-external" },
+  ]);
+  // The newly opened page gets its own tab while the current page stays bound
+  // to its original slot.
+  assert.equal(current[0]?.pageKey, "page-a");
+});
+
+test("invalid or duplicate slot identities are ignored", () => {
+  const current = slots();
+  assert.equal(ensureBrowserPageSlot(current, "", "tab-new"), undefined);
+  assert.equal(ensureBrowserPageSlot(current, "page-c", ""), undefined);
+  assert.equal(ensureBrowserPageSlot(current, "page-c", "tab-a"), undefined);
   assert.deepEqual(current, slots());
 });

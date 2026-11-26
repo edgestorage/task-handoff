@@ -183,41 +183,55 @@ test("an authoritative tab close is matched by opaque tabRef and removes the own
   assert.match(workbench, /function closeCombinedBrowserTab\(instanceId: string, sessionKey: string\)[\s\S]*?storyResourceSidebar\.removeBrowser\(storyResource\)[\s\S]*?stopSelectedAppSession\(instance, session\)/);
 });
 
-test("moving an open page adopts its live guest and blanks the source tab", () => {
+test("opening an open page keeps the current tab and gives the page its own tab", () => {
   const browser = source("instance-detail/EmbeddedBrowserTab.vue");
   const layer = source("instance-detail/EmbeddedBrowserSurfaceLayer.vue");
   const workbench = source("ControlPlaneWorkbench.vue");
   const sessions = source("instance-detail/useActiveInstanceSessions.ts");
   const pageTabs = source("instance-detail/browserPageTabs.ts");
-  // The page host is identified independently from the tab slot so the
-  // <webview> element is never re-ordered or re-mounted by the move.
+  // The page host is identified independently from the tab slot so opening it
+  // in a tab never re-orders or re-mounts the live <webview>.
   assert.match(layer, /v-for="pageKey in stablePages\[instanceId\] \|\| \[\]"/);
   assert.match(layer, /:data-browser-page-key="pageKey"/);
   assert.match(layer, /:page-key="pageKey"/);
-  assert.match(sessions, /import \{ moveBrowserPageToSlot, type BrowserPageSurface, type BrowserTabSlot \} from "\.\/browserPageTabs"/);
+  assert.match(sessions, /import \{ ensureBrowserPageSlot, type BrowserPageSurface, type BrowserTabSlot \} from "\.\/browserPageTabs"/);
   assert.match(sessions, /browserTabSlots = reactive<Record<string, BrowserTabSlot\[\]>>\(\{\}\)/);
-  assert.match(pageTabs, /export function moveBrowserPageToSlot\(/);
-  assert.match(pageTabs, /target\.pageKey = sourcePageKey;/);
-  assert.match(sessions, /function moveBrowserPageToTab\(instanceId: string, targetSlotKey: string, sourcePageKey: string\)/);
-  assert.match(sessions, /removeBrowserPageIfUnused\(instanceId, moved\.replacedPageKey\)/);
-  assert.match(sessions, /const blankPage = createBrowserPage\(instanceId, \{\s*title: t\("sessions\.tabs\.embeddedBrowser"\),\s*status: "running",\s*\}\);\s*moved\.sourceSlot\.pageKey = blankPage\.key;/);
-  assert.match(browser, /emit\("movePage", pageKey\)/);
-  assert.match(layer, /@move-page="\(targetPageKey\) => \$emit\('moveBrowserPage', instanceId, hostTabKey\(instanceId, pageKey\) \|\| '', targetPageKey\)"/);
-  assert.match(workbench, /function moveCombinedBrowserPage\(instanceId: string, targetSlotKey: string, sourcePageKey: string\)/);
-  assert.match(workbench, /if \(moveBrowserPageToTab\(instanceId, targetSlotKey, sourcePageKey\)\)/);
+  assert.match(pageTabs, /export function ensureBrowserPageSlot\(/);
+  assert.match(pageTabs, /return \{ slot: existing, created: false \}/);
+  assert.match(pageTabs, /slots\.push\(slot\)/);
+  assert.match(sessions, /function openBrowserPageTab\(/);
+  assert.match(sessions, /ensureBrowserPageSlot\(slots, pageKey/);
+  assert.match(browser, /emit\("openPage", page\)/);
+  assert.match(layer, /@open-page="\(page\) => \$emit\('openBrowserPage', instanceId, page\)"/);
+  assert.match(workbench, /async function openCombinedBrowserPage\(instanceId: string, page:/);
+  assert.match(workbench, /const sessionKey = openBrowserPageTab\(instanceId, metadata\)/);
+  assert.match(workbench, /const instanceChanged = activeInstanceId\.value !== instanceId;[\s\S]*?if \(instanceChanged \|\| workbenchView\.value !== "instance"\) \{[\s\S]*?await nextTick\(\);/);
+  assert.match(workbench, /selectSession\(sessionKey\)/);
 });
 
-test("page moves work in both directions between instance tabs and Story resources", () => {
+test("page rows close the owning tab or Story resource directly", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  const layer = source("instance-detail/EmbeddedBrowserSurfaceLayer.vue");
+  const workbench = source("ControlPlaneWorkbench.vue");
+  assert.match(browser, /class="embedded-browser-page-close"[\s\S]*?@click\.stop="closePage\(page\.key\)"/);
+  assert.match(browser, /function closePage\(pageKey: string\)[\s\S]*?emit\("closePage", pageKey\)/);
+  assert.match(layer, /@close-page="\(targetPageKey\) => \$emit\('closeBrowserPage', instanceId, targetPageKey\)"/);
+  assert.match(workbench, /function closeCombinedBrowserPage\(instanceId: string, pageKey: string\)/);
+  assert.match(workbench, /const localTab = browserSessionTabs\.value\[instanceId\]\?\.find\(\(tab\) => tab\.source\?\.pageKey === pageKey\)/);
+  assert.match(workbench, /void stopSelectedAppSession\(instance, localTab\)/);
+  assert.match(workbench, /storyResourceSidebar\.browserPageKeyOf\(resource\) === pageKey[\s\S]*?storyResourceSidebar\.removeBrowser\(storyResource\)/);
+});
+
+test("page opening moves a page across instance tabs and Story resources without replacing the current tab", () => {
   const workbench = source("ControlPlaneWorkbench.vue");
   const sidebar = source("story/useStoryResourceSidebar.ts");
-  // Both cross-boundary branches adopt the live page first, then blank the
-  // source. Reversing that order would unmount the <webview> for a render.
-  assert.match(sidebar, /function adoptBrowserPage\(/);
-  assert.match(sidebar, /function blankBrowserPageResource\(/);
-  assert.match(workbench, /const targetStoryResource = storyResources\.find\(\(resource\) => storyResourceKey\(resource\) === targetSlotKey\)/);
-  assert.match(workbench, /const targetLocalTab = browserSessionTabs\.value\[instanceId\]\?\.find\(\(tab\) => tab\.key === targetSlotKey\)/);
-  assert.match(workbench, /if \(targetStoryResource && sourceLocalTab\) \{[\s\S]*?storyResourceSidebar\.adoptBrowserPage\(targetSlotKey, sourcePageKey, sourcePage\)[\s\S]*?blankLocalBrowserSlot\(instanceId, sourceLocalTab\.key\)/);
-  assert.match(workbench, /if \(targetLocalTab && sourceStoryResource\) \{[\s\S]*?bindLocalBrowserSlotToPage\(instanceId, targetSlotKey, sourcePageKey, sourceStoryResource\)[\s\S]*?storyResourceSidebar\.blankBrowserPageResource\(sourceStoryResource\)/);
+  // Both cross-context branches bind the live page into the new target first,
+  // then remove the source tab. Reversing that order would unmount the <webview>.
+  assert.match(sidebar, /function openBrowserPageForAiSession\(/);
+  assert.match(sidebar, /browserPageKeyByResource\[storyResourceKey\(resource\)\] = pageKey/);
+  assert.match(workbench, /const resource = storyResourceSidebar\.openBrowserPageForAiSession\(instanceId, storyResourceTargetAiSessionId\.value, pageKey, metadata\)[\s\S]*?if \(sourceStory\) \{[\s\S]*?storyResourceSidebar\.removeBrowser\(sourceStory\)/);
+  assert.match(workbench, /const sessionKey = openBrowserPageTab\(instanceId, metadata\)[\s\S]*?if \(sourceStory\) storyResourceSidebar\.removeBrowser\(sourceStory\)/);
+  assert.doesNotMatch(workbench, /moveCombinedBrowserPage|moveBrowserPageToTab/);
 });
 
 test("the browser session tab projection is consumed as a computed ref", () => {

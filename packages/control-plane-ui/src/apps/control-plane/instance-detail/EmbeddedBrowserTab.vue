@@ -111,19 +111,32 @@
             </div>
             <ScrollArea class="embedded-browser-pages-scroll" :horizontal="false">
               <div class="embedded-browser-pages-list">
-                <button
+                <div
                   v-for="page in openPages"
                   :key="page.key"
-                  type="button"
                   class="embedded-browser-page-row"
                   :class="{ active: page.key === currentPageKey }"
-                  :aria-current="page.key === currentPageKey ? 'page' : undefined"
-                  @click="activatePage(page.key)"
                 >
-                  <Globe2 :size="14" />
-                  <span class="embedded-browser-page-copy"><span>{{ pageTitle(page) }}</span><small>{{ pageAddress(page) }}</small></span>
-                  <span v-if="page.key === currentPageKey" class="embedded-browser-page-current">{{ t("sessions.browser.currentPage") }}</span>
-                </button>
+                  <button
+                    type="button"
+                    class="embedded-browser-page-open"
+                    :aria-current="page.key === currentPageKey ? 'page' : undefined"
+                    @click="openPage(page)"
+                  >
+                    <Globe2 :size="14" />
+                    <span class="embedded-browser-page-copy"><span>{{ pageTitle(page) }}</span><small>{{ pageAddress(page) }}</small></span>
+                    <span v-if="page.key === currentPageKey" class="embedded-browser-page-current">{{ t("sessions.browser.currentPage") }}</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="embedded-browser-page-close"
+                    :title="t('sessions.browser.closePage')"
+                    :aria-label="t('sessions.browser.closePage')"
+                    @click.stop="closePage(page.key)"
+                  >
+                    <X :size="13" />
+                  </button>
+                </div>
               </div>
             </ScrollArea>
           </section>
@@ -319,17 +332,26 @@
         <section v-if="openPages.length" class="embedded-browser-start-section">
           <div class="embedded-browser-start-heading"><h2>{{ t("sessions.browser.openPages") }}</h2><span class="embedded-browser-start-count">{{ openPages.length }}</span></div>
           <div class="embedded-browser-start-list">
-            <button
+            <div
               v-for="page in openPages"
               :key="`start:${page.key}`"
-              type="button"
-              class="embedded-browser-recent-item embedded-browser-open-page-row"
+              class="embedded-browser-open-page-row"
               :class="{ active: page.key === currentPageKey }"
-              @click="activatePage(page.key)"
             >
-              <span>{{ pageTitle(page) }}<em v-if="page.key === currentPageKey" class="embedded-browser-open-page-current">{{ t("sessions.browser.currentPage") }}</em></span>
-              <small>{{ pageAddress(page) }}</small>
-            </button>
+              <button type="button" class="embedded-browser-open-page-main" @click="openPage(page)">
+                <span>{{ pageTitle(page) }}<em v-if="page.key === currentPageKey" class="embedded-browser-open-page-current">{{ t("sessions.browser.currentPage") }}</em></span>
+                <small>{{ pageAddress(page) }}</small>
+              </button>
+              <button
+                type="button"
+                class="embedded-browser-page-close embedded-browser-open-page-close"
+                :title="t('sessions.browser.closePage')"
+                :aria-label="t('sessions.browser.closePage')"
+                @click.stop="closePage(page.key)"
+              >
+                <X :size="13" />
+              </button>
+            </div>
           </div>
         </section>
         <section class="embedded-browser-start-section">
@@ -437,7 +459,8 @@ const props = defineProps<{ instanceId: string; pageKey?: string; initialUrl?: s
 const emit = defineEmits<{
   updateTab: [patch: { title?: string; url?: string; status?: string }];
   closeTab: [];
-  movePage: [pageKey: string];
+  openPage: [page: BrowserOpenPage];
+  closePage: [pageKey: string];
 }>();
 const { t } = useI18n();
 const guest = ref<GuestWebView>();
@@ -916,15 +939,21 @@ function pageAddress(page: BrowserOpenPage) {
   return page.url?.trim() || t("sessions.browser.newTab");
 }
 
-function activatePage(pageKey: string) {
+function openPage(page: BrowserOpenPage) {
   pagesOpen.value = false;
-  if (!pageKey) return;
-  if (pageKey === currentPageKey.value) {
-    logDesktopBrowserDiagnostic("browser page activate ignored current", props.instanceId);
+  if (!page.key) return;
+  if (page.key === currentPageKey.value) {
+    logDesktopBrowserDiagnostic("browser page open ignored current", props.instanceId);
     return;
   }
-  logDesktopBrowserDiagnostic(`browser page move requested target=${pageKey.slice(0, 160)}`, props.instanceId);
-  emit("movePage", pageKey);
+  logDesktopBrowserDiagnostic(`browser page open requested target=${page.key.slice(0, 160)}`, props.instanceId);
+  emit("openPage", page);
+}
+
+function closePage(pageKey: string) {
+  if (!pageKey) return;
+  logDesktopBrowserDiagnostic(`browser page close requested target=${pageKey.slice(0, 160)}`, props.instanceId);
+  emit("closePage", pageKey);
 }
 
 function stopContextHeartbeat() {
@@ -1482,9 +1511,14 @@ async function revokeCreationContextForOwnPanel(panel: EmbeddedBrowserCreationPa
 .embedded-browser-pages-menu-head strong { color: var(--text); font-size: 13px; font-weight: 500; }
 .embedded-browser-pages-scroll { min-height: 0; flex: 1 1 auto; }
 .embedded-browser-pages-list { display: grid; gap: 2px; padding: 0 5px 5px; }
-.embedded-browser-page-row { display: flex; min-height: 46px; align-items: center; width: 100%; min-width: 0; gap: 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; padding: 7px 8px; text-align: left; }
+.embedded-browser-page-row { display: flex; min-height: 46px; align-items: center; width: 100%; min-width: 0; border-radius: 6px; background: transparent; color: var(--text); }
 .embedded-browser-page-row:hover, .embedded-browser-page-row.active { background: var(--surface-hover); }
-.embedded-browser-page-row > svg { flex: 0 0 auto; color: var(--text-muted); }
+.embedded-browser-page-open { display: flex; min-width: 0; flex: 1; align-self: stretch; align-items: center; gap: 9px; border: 0; background: transparent; color: inherit; cursor: pointer; padding: 7px 4px 7px 8px; text-align: left; }
+.embedded-browser-page-open > svg { flex: 0 0 auto; color: var(--text-muted); }
+.embedded-browser-page-close { display: grid; flex: 0 0 26px; width: 26px; height: 26px; margin-right: 5px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; opacity: .6; }
+.embedded-browser-page-row:hover .embedded-browser-page-close, .embedded-browser-page-row:focus-within .embedded-browser-page-close, .embedded-browser-open-page-row:hover .embedded-browser-page-close, .embedded-browser-open-page-row:focus-within .embedded-browser-page-close { opacity: 1; }
+.embedded-browser-page-close:hover { background: var(--surface-active); color: var(--text); }
+.embedded-browser-page-open:focus-visible, .embedded-browser-page-close:focus-visible, .embedded-browser-open-page-main:focus-visible { outline: 2px solid var(--brand-accent); outline-offset: -2px; }
 .embedded-browser-page-copy { display: grid; min-width: 0; flex: 1; gap: 1px; }
 .embedded-browser-page-copy > span, .embedded-browser-page-copy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .embedded-browser-page-copy > span { font-size: 13px; line-height: 18px; }
@@ -1574,7 +1608,7 @@ async function revokeCreationContextForOwnPanel(panel: EmbeddedBrowserCreationPa
 .embedded-browser-add { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 6px; }
 .embedded-browser-clear { font-size: 12px; }
 .embedded-browser-start-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
-.embedded-browser-start-item, .embedded-browser-recent-item { position: relative; display: flex; min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-inset); color: var(--text); cursor: pointer; text-align: left; }
+.embedded-browser-start-item, .embedded-browser-recent-item, .embedded-browser-open-page-row { position: relative; display: flex; min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-inset); color: var(--text); cursor: pointer; text-align: left; }
 .embedded-browser-start-item { align-items: center; gap: 9px; min-height: 52px; padding: 8px 30px 8px 10px; }
 .embedded-browser-start-icon { display: grid; flex: 0 0 30px; width: 30px; height: 30px; place-items: center; border-radius: 6px; background: var(--brand-accent-soft); color: var(--brand-accent); font-size: 13px; font-weight: 500; }
 .embedded-browser-start-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
@@ -1583,6 +1617,12 @@ async function revokeCreationContextForOwnPanel(panel: EmbeddedBrowserCreationPa
 .embedded-browser-recent-item { flex-direction: column; gap: 3px; padding: 9px 11px; }
 .embedded-browser-recent-item span { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .embedded-browser-recent-item small { overflow: hidden; max-width: 100%; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.embedded-browser-open-page-row { align-items: stretch; padding: 0; }
+.embedded-browser-open-page-main { display: grid; min-width: 0; flex: 1; gap: 3px; border: 0; background: transparent; color: inherit; cursor: pointer; padding: 9px 4px 9px 11px; text-align: left; }
+.embedded-browser-open-page-main span, .embedded-browser-open-page-main small { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }
+.embedded-browser-open-page-main span { font-size: 13px; }
+.embedded-browser-open-page-main small { color: var(--text-muted); font-size: 12px; }
+.embedded-browser-open-page-close { align-self: center; margin-right: 5px; }
 .embedded-browser-open-page-row.active { border-color: var(--brand-accent); background: var(--brand-accent-soft); }
 .embedded-browser-open-page-current { margin-left: 6px; color: var(--brand-accent); font-size: 11px; font-style: normal; }
 .embedded-browser-start-empty { margin: 0; color: var(--text-muted); font-size: 12px; }

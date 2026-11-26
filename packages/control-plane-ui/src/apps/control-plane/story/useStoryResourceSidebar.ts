@@ -190,6 +190,33 @@ export function useStoryResourceSidebar(input: {
     openBrowserForAiSession(instanceId, aiSessionId, initialUrl, options);
   }
 
+  /**
+   * Opens an existing page host as a new Story resource tab. The resource owns
+   * its own browserTabId while `browserPageKeyByResource` keeps the live page
+   * host identity, so no <webview> is recreated during the move.
+   */
+  function openBrowserPageForAiSession(
+    instanceId: string,
+    aiSessionId: string,
+    pageKey: string,
+    metadata: { title?: string; status?: string; initialUrl?: string; currentUrl?: string; creationRef?: string } = {},
+  ) {
+    if (!instanceId || !aiSessionId || !pageKey) return undefined;
+    const resource: StoryEmbeddedBrowserResourceRef = {
+      kind: "embedded-browser",
+      aiSessionId,
+      instanceId,
+      browserTabId: `story-browser:${createBrowserUuid()}`,
+      ...browserMetadataFields(metadata),
+      status: metadata.status?.trim() || "running",
+    };
+    const resourceContextKey = aiSessionResourceContextKey(instanceId, aiSessionId);
+    browserPageKeyByResource[storyResourceKey(resource)] = pageKey;
+    browserByAiSession[resourceContextKey] = [...(browserByAiSession[resourceContextKey] || []), resource];
+    if (resourceContextKey === contextKey.value) select(resource);
+    return resource;
+  }
+
   function browserResourceKeyOf(resource: StoryEmbeddedBrowserResourceRef) {
     return storyResourceKey(resource);
   }
@@ -215,72 +242,6 @@ export function useStoryResourceSidebar(input: {
       ...(resource.currentUrl ? { currentUrl: resource.currentUrl } : {}),
       ...(resource.creationRef ? { creationRef: resource.creationRef } : {}),
     };
-  }
-
-  function replaceBrowserResource(resource: StoryEmbeddedBrowserResourceRef, next: StoryEmbeddedBrowserResourceRef) {
-    const resourceContextKey = aiSessionResourceContextKey(resource.instanceId, resource.aiSessionId);
-    const current = browserByAiSession[resourceContextKey] || [];
-    const key = browserResourceKeyOf(resource);
-    const index = current.findIndex((candidate) => browserResourceKeyOf(candidate) === key);
-    if (index < 0) return;
-    const copy = [...current];
-    copy[index] = next;
-    browserByAiSession[resourceContextKey] = copy;
-  }
-
-  function browserResourceByStoryKey(resourceKey: string) {
-    return allBrowserResourceList().find((resource) => browserResourceKeyOf(resource) === resourceKey);
-  }
-
-  /**
-   * Adopts an existing page host into a Story browser resource. The resource
-   * identity (AI Session + browserTabId) stays fixed; only the page it displays
-   * changes. Callers that take the page away from a local tab must blank that
-   * source only after this returns.
-   */
-  function adoptBrowserPage(
-    targetResourceKey: string,
-    pageKey: string,
-    metadata: { title?: string; status?: string; initialUrl?: string; currentUrl?: string; creationRef?: string } = {},
-  ) {
-    if (!pageKey) return false;
-    const target = browserResourceByStoryKey(targetResourceKey);
-    if (!target || browserPageKeyOf(target) === pageKey) return false;
-    browserPageKeyByResource[targetResourceKey] = pageKey;
-    replaceBrowserResource(target, {
-      kind: "embedded-browser",
-      aiSessionId: target.aiSessionId,
-      instanceId: target.instanceId,
-      browserTabId: target.browserTabId,
-      ...browserMetadataFields(metadata),
-    });
-    return true;
-  }
-
-  function blankBrowserPageResource(resource: StoryEmbeddedBrowserResourceRef) {
-    browserPageKeyByResource[browserResourceKeyOf(resource)] = `story-browser-page:${createBrowserUuid()}`;
-    replaceBrowserResource(resource, {
-      kind: "embedded-browser",
-      aiSessionId: resource.aiSessionId,
-      instanceId: resource.instanceId,
-      browserTabId: resource.browserTabId,
-      status: "running",
-    });
-  }
-
-  /**
-   * Moves a live Story browser page into another Story browser resource. The
-   * source resource receives a fresh blank page after the target has adopted
-   * the live page host, so the <webview> is never removed during the move.
-   */
-  function moveBrowserPage(targetResourceKey: string, sourcePageKey: string) {
-    const target = browserResourceByStoryKey(targetResourceKey);
-    const source = browserResourceForPage(sourcePageKey);
-    if (!target || !source) return false;
-    if (browserResourceKeyOf(target) === browserResourceKeyOf(source)) return false;
-    if (!adoptBrowserPage(targetResourceKey, browserPageKeyOf(source), browserMetadataFields(source))) return false;
-    blankBrowserPageResource(source);
-    return true;
   }
 
   function updateBrowserPage(pageKey: string, patch: { title?: string; url?: string; status?: string }) {
@@ -379,9 +340,7 @@ export function useStoryResourceSidebar(input: {
     updateBrowser,
     updateBrowserPage,
     removeBrowser,
-    moveBrowserPage,
-    adoptBrowserPage,
-    blankBrowserPageResource,
+    openBrowserPageForAiSession,
     browserPageKeyOf,
     browserResourceForPage,
     browserPageSurfaces,

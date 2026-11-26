@@ -25,7 +25,7 @@ import { createBrowserUuid } from "../../../lib/random-id";
 import { ApiError } from "../../../api/client";
 import { remoteDesktopAvailable } from "../remoteDesktopCapability";
 import { CLOSE_SESSION_REMOTE_DESKTOP_EVENT, OPEN_SESSION_REMOTE_DESKTOP_EVENT, type CloseSessionRemoteDesktopDetail, type OpenSessionRemoteDesktopDetail } from "./sessionRemoteDesktopEvents";
-import { moveBrowserPageToSlot, type BrowserPageSurface, type BrowserTabSlot } from "./browserPageTabs";
+import { ensureBrowserPageSlot, type BrowserPageSurface, type BrowserTabSlot } from "./browserPageTabs";
 export type { BrowserPageSurface } from "./browserPageTabs";
 import {
   removeSessionRemoteDesktopLink,
@@ -735,6 +735,48 @@ export function useActiveInstanceSessions({
     rememberSessionKey(instanceId, key);
   }
 
+  /**
+   * Opens an existing page host in its own tab. If another tab already owns the
+   * page, that tab is selected instead of repointing the current tab; the live
+   * <webview> never moves between slots.
+   */
+  function openBrowserPageTab(
+    instanceId: string,
+    page: { key: string; title?: string; url?: string; status?: string; initialUrl?: string; currentUrl?: string; creationRef?: string },
+  ) {
+    const pageKey = page.key?.trim();
+    if (!instanceId || !pageKey) return "";
+    const pages = browserPages[instanceId] ||= reactive<BrowserPageRecord[]>([]);
+    let record = pages.find((candidate) => candidate.key === pageKey);
+    if (!record) {
+      record = {
+        key: pageKey,
+        title: page.title?.trim() || t("sessions.tabs.embeddedBrowser"),
+        status: page.status?.trim() || "running",
+        ...(page.initialUrl ? { initialUrl: page.initialUrl } : {}),
+        ...(page.currentUrl || page.url ? { currentUrl: page.currentUrl || page.url } : {}),
+        ...(page.creationRef ? { creationRef: page.creationRef } : {}),
+      };
+      pages.push(record);
+    }
+    const slots = browserTabSlots[instanceId] ||= reactive<BrowserTabSlot[]>([]);
+    const opened = ensureBrowserPageSlot(slots, pageKey, `${BROWSER_TAB_SLOT_PREFIX}${createBrowserUuid()}`);
+    if (!opened) return "";
+    const key = opened.slot.key;
+    const pane = opened.created
+      ? (focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left")
+      : (rightPaneSessionKeys[instanceId]?.[key] ? "right" : "left");
+    if (pane === "right") {
+      ensurePaneAssignments(instanceId)[key] = true;
+      rightSelectedSessionKeys[instanceId] = key;
+    } else {
+      selectedSessionKeys[instanceId] = key;
+    }
+    focusedSessionPanes[instanceId] = pane;
+    rememberSessionKey(instanceId, key);
+    return key;
+  }
+
   function browserPageKeyOf(session: SessionTab) {
     return typeof session.source?.pageKey === "string" ? session.source.pageKey : "";
   }
@@ -760,63 +802,6 @@ export function useActiveInstanceSessions({
     if (!pages) return;
     const index = pages.findIndex((page) => page.key === pageKey);
     if (index >= 0) pages.splice(index, 1);
-  }
-
-  /**
-   * Moves a live page host into another tab slot without re-mounting its
-   * <webview>. The destination's previous page is released and the source slot
-   * receives a fresh blank page, matching "move, do not swap".
-   */
-  function moveBrowserPageToTab(instanceId: string, targetSlotKey: string, sourcePageKey: string) {
-    const slots = browserTabSlots[instanceId];
-    if (!slots) return false;
-    const moved = moveBrowserPageToSlot(slots, targetSlotKey, sourcePageKey);
-    if (!moved.ok) return false;
-    removeBrowserPageIfUnused(instanceId, moved.replacedPageKey);
-    const blankPage = createBrowserPage(instanceId, {
-      title: t("sessions.tabs.embeddedBrowser"),
-      status: "running",
-    });
-    moved.sourceSlot.pageKey = blankPage.key;
-    return true;
-  }
-
-  function bindLocalBrowserSlotToPage(
-    instanceId: string,
-    slotKey: string,
-    pageKey: string,
-    input: { title?: string; status?: string; currentUrl?: string; initialUrl?: string; creationRef?: string } = {},
-  ) {
-    const slot = browserTabSlots[instanceId]?.find((candidate) => candidate.key === slotKey);
-    if (!slot || !pageKey) return false;
-    const previousPageKey = slot.pageKey;
-    slot.pageKey = pageKey;
-    if (!(browserPages[instanceId] || []).some((page) => page.key === pageKey)) {
-      const pages = browserPages[instanceId] ||= reactive<BrowserPageRecord[]>([]);
-      pages.push({
-        key: pageKey,
-        title: input.title?.trim() || t("sessions.tabs.embeddedBrowser"),
-        status: input.status?.trim() || "running",
-        ...(input.initialUrl ? { initialUrl: input.initialUrl } : {}),
-        ...(input.currentUrl ? { currentUrl: input.currentUrl } : {}),
-        ...(input.creationRef ? { creationRef: input.creationRef } : {}),
-      });
-    }
-    if (previousPageKey !== pageKey) removeBrowserPageIfUnused(instanceId, previousPageKey);
-    return true;
-  }
-
-  function blankLocalBrowserSlot(instanceId: string, slotKey: string) {
-    const slot = browserTabSlots[instanceId]?.find((candidate) => candidate.key === slotKey);
-    if (!slot) return false;
-    const previousPageKey = slot.pageKey;
-    const blankPage = createBrowserPage(instanceId, {
-      title: t("sessions.tabs.embeddedBrowser"),
-      status: "running",
-    });
-    slot.pageKey = blankPage.key;
-    removeBrowserPageIfUnused(instanceId, previousPageKey);
-    return true;
   }
 
   function openRemoteDesktopTab(instanceId: string, aiSessionId?: string) {
@@ -955,9 +940,7 @@ export function useActiveInstanceSessions({
     leftSessionKey,
     moveSessionTab,
     moveSessionToPane,
-    moveBrowserPageToTab,
-    bindLocalBrowserSlotToPage,
-    blankLocalBrowserSlot,
+    openBrowserPageTab,
     openAiSessionApp,
     openBrowserTab,
     pruneBrowserInstances,

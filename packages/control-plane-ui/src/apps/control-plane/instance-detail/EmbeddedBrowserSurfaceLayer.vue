@@ -23,7 +23,8 @@
           :open-pages="openPagesFor(instanceId)"
           @update-tab="(patch) => $emit('updateBrowserTab', instanceId, pageKey, patch)"
           @close-tab="$emit('closeBrowserTab', instanceId, hostTabKey(instanceId, pageKey) || pageKey)"
-          @move-page="(targetPageKey) => $emit('moveBrowserPage', instanceId, hostTabKey(instanceId, pageKey) || '', targetPageKey)"
+          @open-page="(page) => $emit('openBrowserPage', instanceId, page)"
+          @close-page="(targetPageKey) => $emit('closeBrowserPage', instanceId, targetPageKey)"
         />
       </div>
     </div>
@@ -63,7 +64,8 @@ const props = defineProps<{
 defineEmits<{
   updateBrowserTab: [instanceId: string, pageKey: string, patch: { title?: string; url?: string; status?: string }];
   closeBrowserTab: [instanceId: string, slotKey: string];
-  moveBrowserPage: [instanceId: string, targetSlotKey: string, sourcePageKey: string];
+  openBrowserPage: [instanceId: string, page: { key: string; title?: string; url?: string; status?: string }];
+  closeBrowserPage: [instanceId: string, pageKey: string];
 }>();
 
 const host = ref<HTMLElement>();

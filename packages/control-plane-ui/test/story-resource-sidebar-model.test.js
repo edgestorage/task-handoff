@@ -312,7 +312,7 @@ test("browser resources survive AI Session switches and remain session scoped", 
   delete globalThis.window;
 });
 
-test("Story browser page moves adopt the live page host and leave the source blank", async () => {
+test("Story browser pages open in a new resource while reusing the live page host", async () => {
   const storage = localStorageWindow();
   globalThis.window = storage.window;
   const scope = effectScope();
@@ -330,39 +330,31 @@ test("Story browser page moves adopt the live page host and leave the source bla
   const target = resources.find((resource) => resource.initialUrl === "https://example.com/a");
   const source = resources.find((resource) => resource.initialUrl === "https://example.com/b");
   assert.ok(target && source);
-  const targetKey = storyResourceKey(target);
   const sourceKey = storyResourceKey(source);
   const movedPageKey = sidebar.browserPageKeyOf(source);
 
-  assert.equal(sidebar.moveBrowserPage(targetKey, movedPageKey), true);
+  const opened = sidebar.openBrowserPageForAiSession("instance-a", "ai-a", movedPageKey, {
+    title: "Moved page",
+    currentUrl: "https://example.com/b",
+    status: "ready",
+  });
+  assert.ok(opened);
   await nextTick();
 
-  const nextTarget = sidebar.allBrowserResources.value.find((resource) => storyResourceKey(resource) === targetKey);
-  const nextSource = sidebar.allBrowserResources.value.find((resource) => storyResourceKey(resource) === sourceKey);
-  assert.ok(nextTarget && nextSource);
-  assert.equal(sidebar.browserPageKeyOf(nextTarget), movedPageKey);
-  assert.equal(nextTarget.initialUrl, "https://example.com/b");
-  assert.notEqual(sidebar.browserPageKeyOf(nextSource), movedPageKey);
-  assert.match(sidebar.browserPageKeyOf(nextSource), /^story-browser-page:/);
-  assert.equal(nextSource.initialUrl, undefined);
-  assert.equal(nextSource.currentUrl, undefined);
+  const openedKey = storyResourceKey(opened);
+  assert.equal(sidebar.browserPageKeyOf(opened), movedPageKey);
+  assert.equal(opened.title, "Moved page");
+  assert.equal(opened.currentUrl, "https://example.com/b");
+  sidebar.removeBrowser(source);
+  await nextTick();
+  assert.equal(sidebar.allBrowserResources.value.some((resource) => storyResourceKey(resource) === sourceKey), false);
+  const moved = sidebar.allBrowserResources.value.find((resource) => storyResourceKey(resource) === openedKey);
+  assert.ok(moved);
+  assert.equal(sidebar.browserPageKeyOf(moved), movedPageKey);
   assert.deepEqual(
     sidebar.browserPageSurfaces.value["instance-a"]?.map((page) => page.key).sort(),
-    [sidebar.browserPageKeyOf(nextTarget), sidebar.browserPageKeyOf(nextSource)].sort(),
+    sidebar.allBrowserResources.value.map((resource) => sidebar.browserPageKeyOf(resource)).sort(),
   );
-
-  const adoptedPageKey = "embedded-browser-page:from-instance";
-  assert.equal(sidebar.adoptBrowserPage(storyResourceKey(nextTarget), adoptedPageKey, {
-    title: "Instance page",
-    currentUrl: "https://example.com/instance",
-    status: "ready",
-  }), true);
-  sidebar.blankBrowserPageResource(nextSource);
-  await nextTick();
-  const adopted = sidebar.allBrowserResources.value.find((resource) => storyResourceKey(resource) === targetKey);
-  assert.equal(sidebar.browserPageKeyOf(adopted), adoptedPageKey);
-  assert.equal(adopted.title, "Instance page");
-  assert.equal(adopted.currentUrl, "https://example.com/instance");
   scope.stop();
   delete globalThis.window;
 });

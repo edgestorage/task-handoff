@@ -625,7 +625,8 @@
         :browser-surface-state="combinedBrowserSurfaceState"
         @update-browser-tab="updateCombinedBrowserTab"
         @close-browser-tab="closeCombinedBrowserTab"
-        @move-browser-page="moveCombinedBrowserPage"
+        @open-browser-page="openCombinedBrowserPage"
+        @close-browser-page="closeCombinedBrowserPage"
       />
       <RemoteDesktopSurfaceLayer
         :active-instance-id="storyMode || settingsMode || agentMode || boardMode ? '' : activeInstanceId"
@@ -744,7 +745,7 @@ import type { StorySelection } from "./story/storySelection";
 import { storyDecisionSessionInstance } from "./story/storyDecisionSession";
 import { inSessionDisplayedDecisionIds } from "./story/sessionDecisionDisplay";
 import StoryResourceSidebar from "./story/StoryResourceSidebar.vue";
-import { closeStoryResourceTarget, repositoryResource, storyBrowserSessionSelection, storyResourceKey, storySessionSelectionForAiSession, type StoryRepositoryPage } from "./story/storyResources";
+import { closeStoryResourceTarget, repositoryResource, storyResourceKey, storySessionSelectionForAiSession, type StoryRepositoryPage } from "./story/storyResources";
 import { storyResourceSidebarKeyboardWidth, storyResourceSidebarMaxWidth, storyResourceSidebarMode, storyResourceSidebarProportionalWidth } from "./story/storyResourceLayout";
 import { STORY_RESOURCE_SIDEBAR_MIN_WIDTH, normalizeStoryResourceSidebarWidth, useStoryResourceSidebar } from "./story/useStoryResourceSidebar";
 import type { NodeLoadState } from "./shared/nodeQueryLoad";
@@ -1836,9 +1837,7 @@ const {
   remoteDesktopSessionTabs,
   updateBrowserTab,
   browserPages,
-  moveBrowserPageToTab,
-  bindLocalBrowserSlotToPage,
-  blankLocalBrowserSlot,
+  openBrowserPageTab,
 } = useActiveInstanceSessions({
   activeInstance: activeInstanceWithAiSessions,
   routeSessionRemoteDesktop: routeStoryRemoteDesktop,
@@ -1944,71 +1943,85 @@ function closeCombinedBrowserTab(instanceId: string, sessionKey: string) {
   if (session && instance) void stopSelectedAppSession(instance, session);
 }
 
-async function activateCombinedBrowserTab(instanceId: string, pageKey: string) {
-  const storyResource = storyResourceSidebar.allBrowserResources.value.find((resource) => (
-    resource.instanceId === instanceId
-    && (storyResourceKey(resource) === pageKey || storyResourceSidebar.browserPageKeyOf(resource) === pageKey)
-  ));
-  if (storyResource) {
-    const selection = storyBrowserSessionSelection(storyResource, boardInstancesWithAiSessions.value);
-    if (selection) {
-      const currentSelection = storySelection.value;
-      if (currentSelection?.kind !== "session"
-        || currentSelection.instanceId !== selection.instanceId
-        || currentSelection.sessionId !== selection.sessionId) {
-        storySelection.value = selection;
-      }
-    }
-    storyResourceSidebar.visible.value = true;
-    storyResourceSidebar.select(storyResource);
-    desktopBridge?.logBrowserDiagnostic?.({ message: `browser page activated story session=${storyResource.aiSessionId}`, instanceId });
-    return;
-  }
-  const sessionKey = browserSessionTabs.value[instanceId]?.find((tab) => tab.source?.pageKey === pageKey)?.key || pageKey;
-  if (activeInstanceId.value !== instanceId) {
-    setActiveInstance(instanceId);
-    workbenchView.value = "instance";
-  }
-  await nextTick();
-  if (!sessionTabs.value.some((session) => session.key === sessionKey)) {
-    desktopBridge?.logBrowserDiagnostic?.({ message: `browser page activation target unavailable sessionKey=${sessionKey.slice(0, 160)}`, instanceId });
-    return;
-  }
-  selectSession(sessionKey);
-  desktopBridge?.logBrowserDiagnostic?.({ message: `browser page activated instance sessionKey=${sessionKey.slice(0, 160)}`, instanceId });
+function combinedBrowserPageMetadata(instanceId: string, page: { key: string; title?: string; url?: string; status?: string }) {
+  const surface = combinedBrowserPages.value[instanceId]?.find((candidate) => candidate.key === page.key);
+  return {
+    key: page.key,
+    title: page.title?.trim() || surface?.title,
+    status: page.status?.trim() || surface?.status,
+    url: page.url?.trim() || surface?.currentUrl || surface?.initialUrl,
+    initialUrl: surface?.initialUrl,
+    currentUrl: page.url?.trim() || surface?.currentUrl,
+    creationRef: surface?.creationRef,
+  };
 }
 
-function moveCombinedBrowserPage(instanceId: string, targetSlotKey: string, sourcePageKey: string) {
-  if (moveBrowserPageToTab(instanceId, targetSlotKey, sourcePageKey)) {
-    desktopBridge?.logBrowserDiagnostic?.({ message: `browser page moved into tab=${targetSlotKey.slice(0, 160)} page=${sourcePageKey.slice(0, 160)}`, instanceId });
-    return;
-  }
-  if (storyResourceSidebar.moveBrowserPage(targetSlotKey, sourcePageKey)) {
-    desktopBridge?.logBrowserDiagnostic?.({ message: `browser story page moved into resource=${targetSlotKey.slice(0, 160)} page=${sourcePageKey.slice(0, 160)}`, instanceId });
-    return;
-  }
-  const storyResources = storyResourceSidebar.allBrowserResources.value.filter((resource) => resource.instanceId === instanceId);
-  const targetStoryResource = storyResources.find((resource) => storyResourceKey(resource) === targetSlotKey);
-  const sourceStoryResource = storyResources.find((resource) => storyResourceSidebar.browserPageKeyOf(resource) === sourcePageKey);
-  const targetLocalTab = browserSessionTabs.value[instanceId]?.find((tab) => tab.key === targetSlotKey);
-  const sourceLocalTab = browserSessionTabs.value[instanceId]?.find((tab) => tab.source?.pageKey === sourcePageKey);
-  if (targetStoryResource && sourceLocalTab) {
-    const sourcePage = browserPages[instanceId]?.find((page) => page.key === sourcePageKey);
-    if (storyResourceSidebar.adoptBrowserPage(targetSlotKey, sourcePageKey, sourcePage)) {
-      blankLocalBrowserSlot(instanceId, sourceLocalTab.key);
-      desktopBridge?.logBrowserDiagnostic?.({ message: `browser instance page moved into story resource=${targetSlotKey.slice(0, 160)} page=${sourcePageKey.slice(0, 160)}`, instanceId });
+async function openCombinedBrowserPage(instanceId: string, page: { key: string; title?: string; url?: string; status?: string }) {
+  const pageKey = page.key?.trim();
+  if (!pageKey) return;
+  const metadata = combinedBrowserPageMetadata(instanceId, page);
+  const sourceStory = storyResourceSidebar.allBrowserResources.value.find((resource) => (
+    resource.instanceId === instanceId && storyResourceSidebar.browserPageKeyOf(resource) === pageKey
+  ));
+  const sourceLocalTab = browserSessionTabs.value[instanceId]?.find((tab) => tab.source?.pageKey === pageKey);
+  if (storyMode.value && storyResourceTargetAiSessionId.value && storyResourceTargetInstanceId.value === instanceId) {
+    if (sourceStory && sourceStory.aiSessionId === storyResourceTargetAiSessionId.value) {
+      storyResourceSidebar.visible.value = true;
+      storyResourceSidebar.select(sourceStory);
+      desktopBridge?.logBrowserDiagnostic?.({ message: `browser page opened existing story resource=${storyResourceKey(sourceStory).slice(0, 160)} page=${pageKey.slice(0, 160)}`, instanceId });
       return;
     }
-  }
-  if (targetLocalTab && sourceStoryResource) {
-    if (bindLocalBrowserSlotToPage(instanceId, targetSlotKey, sourcePageKey, sourceStoryResource)) {
-      storyResourceSidebar.blankBrowserPageResource(sourceStoryResource);
-      desktopBridge?.logBrowserDiagnostic?.({ message: `browser story page moved into instance tab=${targetSlotKey.slice(0, 160)} page=${sourcePageKey.slice(0, 160)}`, instanceId });
-      return;
+    const resource = storyResourceSidebar.openBrowserPageForAiSession(instanceId, storyResourceTargetAiSessionId.value, pageKey, metadata);
+    if (!resource) return;
+    if (sourceStory) {
+      storyResourceSidebar.removeBrowser(sourceStory);
+    } else if (sourceLocalTab) {
+      const sourceInstance = sortedInstances.value.find((candidate) => candidate.id === instanceId) || (activeInstance.value?.id === instanceId ? activeInstance.value : undefined);
+      if (sourceInstance) void stopSelectedAppSession(sourceInstance, sourceLocalTab);
     }
+    desktopBridge?.logBrowserDiagnostic?.({ message: `browser page opened new story resource=${storyResourceKey(resource).slice(0, 160)} page=${pageKey.slice(0, 160)}`, instanceId });
+    return;
   }
-  void activateCombinedBrowserTab(instanceId, sourcePageKey);
+  const sessionKey = openBrowserPageTab(instanceId, metadata);
+  if (!sessionKey) {
+    desktopBridge?.logBrowserDiagnostic?.({ message: `browser page open failed page=${pageKey.slice(0, 160)}`, instanceId });
+    return;
+  }
+  const instanceChanged = activeInstanceId.value !== instanceId;
+  if (instanceChanged) {
+    setActiveInstance(instanceId);
+  }
+  if (instanceChanged || workbenchView.value !== "instance") {
+    workbenchView.value = "instance";
+    await nextTick();
+  }
+  selectSession(sessionKey);
+  if (sourceStory) storyResourceSidebar.removeBrowser(sourceStory);
+  desktopBridge?.logBrowserDiagnostic?.({ message: `browser page opened instance sessionKey=${sessionKey.slice(0, 160)} page=${pageKey.slice(0, 160)}`, instanceId });
 }
+
+function closeCombinedBrowserPage(instanceId: string, pageKey: string) {
+  if (!pageKey) return;
+  const localTab = browserSessionTabs.value[instanceId]?.find((tab) => tab.source?.pageKey === pageKey);
+  if (localTab) {
+    const instance = sortedInstances.value.find((candidate) => candidate.id === instanceId) || (activeInstance.value?.id === instanceId ? activeInstance.value : undefined);
+    if (instance) {
+      void stopSelectedAppSession(instance, localTab);
+      desktopBridge?.logBrowserDiagnostic?.({ message: `browser page closed instance sessionKey=${localTab.key.slice(0, 160)} page=${pageKey.slice(0, 160)}`, instanceId });
+      return;
+    }
+  }
+  const storyResource = storyResourceSidebar.allBrowserResources.value.find((resource) => (
+    resource.instanceId === instanceId && storyResourceSidebar.browserPageKeyOf(resource) === pageKey
+  ));
+  if (storyResource) {
+    storyResourceSidebar.removeBrowser(storyResource);
+    desktopBridge?.logBrowserDiagnostic?.({ message: `browser page closed story resource=${storyResourceKey(storyResource).slice(0, 160)} page=${pageKey.slice(0, 160)}`, instanceId });
+    return;
+  }
+  desktopBridge?.logBrowserDiagnostic?.({ message: `browser page close target unavailable page=${pageKey.slice(0, 160)}`, instanceId });
+}
+
 const authoritativeInstanceIds = computed<ReadonlySet<string> | undefined>(() => {
   if (standaloneMode.value) {
     return instanceDirectory.isSuccess.value
