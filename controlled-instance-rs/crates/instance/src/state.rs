@@ -101,6 +101,70 @@ impl AppPackageLifecycle for AcpPackageLifecycle {
     }
 }
 
+struct CodexPackageLifecycle {
+    runtime: Arc<AppRuntime>,
+    sessions: Arc<CodexAppServerProvider>,
+}
+
+#[async_trait::async_trait]
+impl AppPackageLifecycle for CodexPackageLifecycle {
+    async fn before_change(
+        &self,
+        operation: AppManagementOperation,
+    ) -> Result<(), AppRecipeExecutionError> {
+        if operation != AppManagementOperation::Install {
+            self.sessions.client().stop().await;
+            if !self.runtime.stop_shared_resource("codex").await {
+                return Err(AppRecipeExecutionError::new(
+                    "app_process_stop_timeout",
+                    "The codex backend did not exit before the package change deadline.",
+                    true,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn changed(
+        &self,
+        _operation: AppManagementOperation,
+        _succeeded: bool,
+    ) -> Result<(), AppRecipeExecutionError> {
+        Ok(())
+    }
+}
+
+struct OpenCodePackageLifecycle {
+    runtime: Arc<AppRuntime>,
+}
+
+#[async_trait::async_trait]
+impl AppPackageLifecycle for OpenCodePackageLifecycle {
+    async fn before_change(
+        &self,
+        operation: AppManagementOperation,
+    ) -> Result<(), AppRecipeExecutionError> {
+        if operation != AppManagementOperation::Install {
+            if !self.runtime.stop_shared_resource("opencode").await {
+                return Err(AppRecipeExecutionError::new(
+                    "app_process_stop_timeout",
+                    "The opencode backend did not exit before the package change deadline.",
+                    true,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn changed(
+        &self,
+        _operation: AppManagementOperation,
+        _succeeded: bool,
+    ) -> Result<(), AppRecipeExecutionError> {
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 struct AppRuntimeOpenCodeConnectionProvider {
     app_runtime: Arc<AppRuntime>,
@@ -766,6 +830,17 @@ impl AppState {
                 Arc::new(AcpPackageLifecycle(provider.clone())) as Arc<dyn AppPackageLifecycle>,
             )
         }));
+        package_hooks.entry("codex").or_insert_with(|| {
+            Arc::new(CodexPackageLifecycle {
+                runtime: app_runtime.clone(),
+                sessions: ai_session_codex.clone(),
+            }) as Arc<dyn AppPackageLifecycle>
+        });
+        package_hooks.entry("opencode").or_insert_with(|| {
+            Arc::new(OpenCodePackageLifecycle {
+                runtime: app_runtime.clone(),
+            }) as Arc<dyn AppPackageLifecycle>
+        });
         let app_management = Arc::new(
             AppManagementManager::new_with_runtime_hook_and_install_environment(
                 app_management_state_dir,
@@ -827,8 +902,7 @@ impl AppState {
                         });
                     }
                 },
-                move |app_id| {
-                    app_management_runtime.stop_shared_resource(app_id);
+                move |_app_id| {
                     app_management_runtime.invalidate_catalog();
                 },
                 install_environment.clone(),

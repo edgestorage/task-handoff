@@ -56,3 +56,8 @@ signing. Never store a PFX password or private key in the repository.
 
 The local acceptance result for version 0.0.46 is recorded in
 `remote-desktop-rs/crates/desktop-streaming/evidence/windows-local/`.
+
+The npm release workflow builds this executable with `+crt-static` and `/MT`
+and rejects any artifact that imports `VCRUNTIME*.dll`, `MSVCP*.dll`,
+`CONCRT*.dll`, `UCRTBASE.dll`, or the UCRT API-set DLLs. The component must run
+without a separately installed Visual C++ Redistributable.

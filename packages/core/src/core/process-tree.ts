@@ -6,7 +6,7 @@ export type ManagedProcessTree = {
   child?: Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "kill">;
   pty?: Pick<PtyProcess, "pid" | "processGroupLeader" | "kill">;
   rootExited: boolean;
-  stopPromise?: Promise<void>;
+  stopPromise?: Promise<boolean>;
 };
 
 export type ManagedProcessTreeRegistryOptions = {
@@ -112,24 +112,31 @@ export class ManagedProcessTreeRegistry {
     signal: NodeJS.Signals,
     child?: ManagedProcessTree["child"],
     pty?: ManagedProcessTree["pty"],
-  ) {
-    if (!pid) return;
+  ): Promise<boolean> {
+    if (!pid) return Promise.resolve(true);
     const processTree = this.trees.get(pid);
     this.signal(pid, signal, child, pty);
-    if (!processTree || processTree.stopPromise) return;
+    if (!processTree) return Promise.resolve(true);
+    if (processTree.stopPromise) return processTree.stopPromise;
     processTree.stopPromise = (async () => {
-      let remaining = signal === "SIGKILL"
-        ? [processTree]
-        : await this.wait([processTree], this.stopTimeoutMs);
-      if (remaining.length > 0 && signal !== "SIGKILL") {
-        this.signal(pid, "SIGKILL", child, pty);
+      try {
+        let remaining = signal === "SIGKILL"
+          ? [processTree]
+          : await this.wait([processTree], this.stopTimeoutMs);
+        if (remaining.length > 0 && signal !== "SIGKILL") {
+          this.signal(pid, "SIGKILL", child, pty);
+        }
+        if (remaining.length > 0) {
+          remaining = await this.wait(remaining, this.killTimeoutMs);
+        }
+        if (remaining.length === 0) this.forgetTree(processTree);
+        return remaining.length === 0;
+      } catch {
+        return false;
       }
-      if (remaining.length > 0) {
-        remaining = await this.wait(remaining, this.killTimeoutMs);
-      }
-      if (remaining.length === 0) this.forgetTree(processTree);
     })();
     void processTree.stopPromise.catch(() => {});
+    return processTree.stopPromise;
   }
 
   async wait(processTrees: ManagedProcessTree[], timeoutMs: number) {

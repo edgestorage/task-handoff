@@ -21,7 +21,8 @@ export type ManagedAppRuntimeHost = {
    * the invocation and lookup environment are written ahead of the child output.
    */
   spawnLogged(command: string, args: string[], env: NodeJS.ProcessEnv, logDir: string, logName: string, cwd?: string, logHeader?: string): ChildProcessWithoutNullStreams;
-  stopProcessTree(child: ChildProcessWithoutNullStreams, signal?: NodeJS.Signals): void;
+  /** Resolves true once the owned process tree has exited, or false when it survived the kill deadline. */
+  stopProcessTree(child: ChildProcessWithoutNullStreams, signal?: NodeJS.Signals): Promise<boolean>;
   waitForUnixSocket(socketPath: string, timeoutMs: number, getError?: () => Error | undefined): void;
   waitForHttp(url: string, headers: Record<string, string>, timeoutMs: number, getError?: () => Error | undefined): void;
   patchSession(sessionId: string, patch: { ai: AppSession["ai"] }): void;
@@ -112,7 +113,8 @@ export type ManagedAppRuntimeExtension = {
   prepareGuiArgs?(input: ManagedAppGuiLaunchInput): string[];
   prepareWebSession?(input: ManagedAppWebLaunchInput): void;
   managedEnvironmentChanged?(): void;
-  stopAll?(): void;
+  /** Stops the extension's shared backend and reports whether its process tree exited. */
+  stopAll?(): void | Promise<boolean>;
   sharedResource?: ManagedAppSharedResource;
   profiles?: ManagedAppProfilesRuntime;
 };

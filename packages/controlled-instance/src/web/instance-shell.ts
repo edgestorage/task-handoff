@@ -384,7 +384,7 @@ export class InstanceShellRuntime {
         // The socket may already be closed; process-tree cleanup below remains authoritative.
       }
     }
-    const stops = new Set<Promise<void>>();
+    const stops = new Set<Promise<boolean>>();
     for (const processTree of this.processTrees.values()) {
       if (!processTree.stopPromise) {
         this.processTrees.requestStop(processTree.pid, "SIGTERM", processTree.child, processTree.pty);

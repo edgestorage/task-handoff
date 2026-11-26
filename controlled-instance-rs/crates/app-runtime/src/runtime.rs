@@ -137,6 +137,48 @@ async fn stop_process_groups_with_escalation(pids: Vec<u32>) -> Vec<u32> {
     .unwrap_or(fallback)
 }
 
+async fn wait_for_child_exit(child: &mut Child, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            Ok(None) | Err(_) => return false,
+        }
+    }
+}
+
+/// Stops a shared backend's whole process tree and returns only after the root
+/// has been reaped and no descendant remains in its group. A package directory
+/// must not be removed while any of those processes can still hold its files.
+async fn stop_shared_child_tree(child: &mut Child) -> bool {
+    let Some(pid) = child.id() else {
+        return true;
+    };
+    request_stop_process_groups(&[pid]);
+    let mut exited = wait_for_child_exit(child, PROCESS_STOP_TIMEOUT).await;
+    if !exited {
+        kill_process_groups(&[pid]);
+        exited = wait_for_child_exit(child, PROCESS_KILL_TIMEOUT).await;
+    }
+    if !exited {
+        return false;
+    }
+    let remaining = tokio::task::spawn_blocking(move || {
+        let remaining = wait_process_groups(&[pid], PROCESS_KILL_TIMEOUT);
+        if remaining.is_empty() {
+            return remaining;
+        }
+        kill_process_groups(&remaining);
+        wait_process_groups(&remaining, PROCESS_KILL_TIMEOUT)
+    })
+    .await
+    .unwrap_or_else(|_| vec![pid]);
+    remaining.is_empty()
+}
+
 fn invoke_command(
     command: &str,
     args: &[String],
@@ -1052,11 +1094,14 @@ impl AppRuntime {
         }
     }
 
-    pub fn stop_shared_resource(&self, app_id: &str) {
+    /// Stops an app's shared backend before its package files change. Returns
+    /// false when the process tree survived both the graceful and forced stop
+    /// deadlines, so the caller must leave the package untouched.
+    pub async fn stop_shared_resource(&self, app_id: &str) -> bool {
         match app_id {
-            "codex" => self.stop_shared_codex(),
-            "opencode" => self.stop_shared_opencode(),
-            _ => {}
+            "codex" => self.stop_shared_codex_and_wait().await,
+            "opencode" => self.stop_shared_opencode_and_wait().await,
+            _ => true,
         }
     }
 
@@ -1065,16 +1110,28 @@ impl AppRuntime {
     }
 
     pub fn stop_shared_codex(&self) {
-        let server = self
-            .inner
-            .shared_codex
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
+        let server = self.take_shared_codex();
         if let Some(server) = server {
             server.stop();
             remove_upstream_artifacts(&server.upstream);
         }
+    }
+
+    async fn stop_shared_codex_and_wait(&self) -> bool {
+        let Some(server) = self.take_shared_codex() else {
+            return true;
+        };
+        let stopped = server.stop_and_wait().await;
+        remove_upstream_artifacts(&server.upstream);
+        stopped
+    }
+
+    fn take_shared_codex(&self) -> Option<SharedCodexAppServer> {
+        self.inner
+            .shared_codex
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
     }
 
     async fn acquire_shared_codex(
@@ -1366,15 +1423,25 @@ impl AppRuntime {
     }
 
     pub fn stop_shared_opencode(&self) {
-        let server = self
-            .inner
-            .shared_opencode
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
+        let server = self.take_shared_opencode();
         if let Some(server) = server {
             server.stop();
         }
+    }
+
+    async fn stop_shared_opencode_and_wait(&self) -> bool {
+        let Some(server) = self.take_shared_opencode() else {
+            return true;
+        };
+        server.stop_and_wait().await
+    }
+
+    fn take_shared_opencode(&self) -> Option<SharedOpenCodeServer> {
+        self.inner
+            .shared_opencode
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
     }
 
     async fn acquire_shared_opencode(
@@ -4665,6 +4732,18 @@ impl SharedCodexAppServer {
             let _ = child.start_kill();
         }
     }
+
+    async fn stop_and_wait(&self) -> bool {
+        let child = self
+            .child
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let Some(mut child) = child else {
+            return true;
+        };
+        stop_shared_child_tree(&mut child).await
+    }
 }
 
 impl SharedOpenCodeServer {
@@ -4699,6 +4778,18 @@ impl SharedOpenCodeServer {
             }
             let _ = child.start_kill();
         }
+    }
+
+    async fn stop_and_wait(&self) -> bool {
+        let child = self
+            .child
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let Some(mut child) = child else {
+            return true;
+        };
+        stop_shared_child_tree(&mut child).await
     }
 }
 
@@ -5655,6 +5746,26 @@ fn prepare_vscode_web_session(session_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shared_backend_stop_waits_for_the_process_group_to_exit() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "while :; do sleep 1; done"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        command.process_group(0);
+        let mut child = command.spawn().expect("spawn process group");
+        let pid = child.id().expect("child pid");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        assert!(stop_shared_child_tree(&mut child).await);
+        assert!(child.try_wait().expect("child status").is_some());
+        assert!(!crate::process_group_exists(pid));
+    }
 
     #[cfg(unix)]
     mod codex_shared_owner_parity {

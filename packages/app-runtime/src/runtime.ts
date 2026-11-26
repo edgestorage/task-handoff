@@ -106,6 +106,15 @@ const CLEANABLE_SESSION_STATUSES = new Set<AppSessionStatus>(["stopped", "exited
 const DEFAULT_SESSION_RETENTION_DAYS = 7;
 const MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+export class AppProcessStopTimeoutError extends Error {
+  readonly code = "APP_PROCESS_STOP_TIMEOUT";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "AppProcessStopTimeoutError";
+  }
+}
+
 export class AppRuntimeManager extends EventEmitter {
   private readonly paths: TaskHandoffStoragePaths;
   private readonly registry: ManagedAppRegistry;
@@ -335,8 +344,11 @@ export class AppRuntimeManager extends EventEmitter {
     return this.catalogRepository.managedApps?.prepareShell(command, args, env) || { args, env };
   }
 
-  stopSharedResource(appId: string) {
-    this.appRuntimeExtensions.get(appId)?.stopAll?.();
+  async stopSharedResource(appId: string) {
+    const stopped = await this.appRuntimeExtensions.get(appId)?.stopAll?.();
+    if (stopped === false) {
+      throw new AppProcessStopTimeoutError(`The ${appId} backend did not exit before the package change deadline.`);
+    }
   }
 
   ensureSharedResource(appId: string) {
@@ -1488,7 +1500,7 @@ export class AppRuntimeManager extends EventEmitter {
     for (const displayId of Array.from(this.sharedDisplays.keys())) {
       this.stopSharedDisplay(displayId);
     }
-    for (const extension of this.appRuntimeExtensions.values()) extension.stopAll?.();
+    await Promise.all([...this.appRuntimeExtensions.values()].map((extension) => extension.stopAll?.()));
     this.sessions.clear();
     const processTrees = Array.from(this.managedProcessTrees.values());
     for (const processTree of processTrees) this.managedProcessTrees.signal(processTree.pid, "SIGTERM", processTree.child, processTree.pty);

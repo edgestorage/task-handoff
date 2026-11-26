@@ -150,10 +150,46 @@ jobs:
         shell: pwsh
         env:
           TASK_HANDOFF_REMOTE_DESKTOP_VERSION: ${{ needs.verify.outputs.version }}
+          RUSTFLAGS: "-C target-feature=+crt-static"
+          CFLAGS_x86_64_pc_windows_msvc: "/MT"
+          CXXFLAGS_x86_64_pc_windows_msvc: "/MT"
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           cargo +1.95.0 build --locked --release --manifest-path remote-desktop-rs/Cargo.toml `
             -p desktop-streaming --bin task-handoff-desktop-streaming
+
+      - name: Verify Windows component uses the static CRT
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $binary = Join-Path $env:GITHUB_WORKSPACE "remote-desktop-rs/target/release/task-handoff-desktop-streaming.exe"
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+            throw "The Windows component was not built at $binary."
+          }
+          $dumpbin = (Get-Command dumpbin.exe -ErrorAction SilentlyContinue).Source
+          if (-not $dumpbin) {
+            $vsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+            if (Test-Path -LiteralPath $vsWhere) {
+              $installation = (& $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+              if ($installation) {
+                $dumpbin = Get-ChildItem -LiteralPath (Join-Path $installation "VC/Tools/MSVC") -Directory -ErrorAction SilentlyContinue |
+                  Sort-Object Name -Descending |
+                  ForEach-Object { Join-Path $_.FullName "bin/Hostx64/x64/dumpbin.exe" } |
+                  Where-Object { Test-Path -LiteralPath $_ } |
+                  Select-Object -First 1
+              }
+            }
+          }
+          if (-not $dumpbin) {
+            throw "dumpbin.exe was not found; the Windows component CRT import check cannot run."
+          }
+          $dependencies = (& $dumpbin /nologo /dependents $binary) -join "`n"
+          if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin failed with exit code $LASTEXITCODE."
+          }
+          if ($dependencies -match '(?i)\b(?:VCRUNTIME\d*|MSVCP\d*|CONCRT\d*|UCRTBASE)\.dll\b|api-ms-win-crt-') {
+            throw "The Windows component imports the dynamic MSVC runtime and cannot be published:`n$dependencies"
+          }
 
       - name: Pack the native npm artifact
         shell: bash

@@ -839,7 +839,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       ...aiSessions.list().filter((session) => session.activeTurnId).map((session) => ({ id: session.id, appId: session.agent, status: "running" })),
     ],
     stopAppRuntime: async (appId) => {
-      appRuntime.stopSharedResource(appId);
+      if (appId === "codex") codexAppServer.stop();
+      await appRuntime.stopSharedResource(appId);
       await acpProviders.get(appId)?.close();
     },
     publish: (event) => {

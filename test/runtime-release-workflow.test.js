@@ -92,6 +92,11 @@ test("remote desktop components publish independently from runtime releases", ()
   assert.match(workflow, /runner: macos-26-intel\s+platform: darwin\s+arch: x64/);
   assert.match(workflow, /runner: macos-26\s+platform: darwin\s+arch: arm64/);
   assert.match(workflow, /runner: windows-latest\s+platform: win32\s+arch: x64/);
+  assert.match(workflow, /RUSTFLAGS: "-C target-feature=\+crt-static"/);
+  assert.match(workflow, /CFLAGS_x86_64_pc_windows_msvc: "\/MT"/);
+  assert.match(workflow, /CXXFLAGS_x86_64_pc_windows_msvc: "\/MT"/);
+  assert.match(workflow, /Verify Windows component uses the static CRT/);
+  assert.match(workflow, /VCRUNTIME\\d\*\|MSVCP\\d\*\|CONCRT\\d\*\|UCRTBASE/);
   assert.doesNotMatch(workflow, /runner: macos-15(?:-intel)?\s/);
   const normalized = workflow.toLowerCase();
   assert.ok(normalized.indexOf("publish all five packages") < normalized.indexOf("promote latest only after every target is published"));

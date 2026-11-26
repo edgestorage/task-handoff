@@ -68,9 +68,9 @@ export class OpenCodeRuntimeExtension implements ManagedAppRuntimeExtension {
 
   stopAll() {
     const server = this.shared;
-    if (!server) return;
+    if (!server) return Promise.resolve(true);
     this.shared = undefined;
-    this.host.stopProcessTree(server.child);
+    return this.host.stopProcessTree(server.child);
   }
 
   private acquire(command: string, cwd: string, env: NodeJS.ProcessEnv, consumerId: string) {

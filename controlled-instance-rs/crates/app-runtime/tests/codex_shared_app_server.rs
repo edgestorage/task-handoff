@@ -914,12 +914,15 @@ async fn ws_shared_server_uses_generations_and_old_watchers_do_not_stop_new_chil
     );
 
     second_health.abort();
-    runtime.stop_shared_codex();
+    assert!(
+        runtime.stop_shared_resource("codex").await,
+        "the shared Codex backend must exit before its package can change"
+    );
     if let Some(pid) = second.pid {
-        wait_until("second ws app-server process group exit", || {
-            !process_group_exists(pid)
-        })
-        .await;
+        assert!(
+            !process_group_exists(pid),
+            "the shared Codex process group must be gone when stop_shared_resource returns"
+        );
     }
     runtime.stop_all().await;
 }

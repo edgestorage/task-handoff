@@ -7,6 +7,7 @@ import {
   type AppManagementEvent,
   type AppManagementJob,
   type AppManagementOperation,
+  type AppManagementProgress,
   type AppManagementSnapshot,
   type FinalComputerCapabilities,
   type ManagedAppManagementSource,
@@ -27,6 +28,7 @@ import {
   resolveApp,
   resolveRegistryNativePackage,
   selectInstallRecipe,
+  AppProcessStopTimeoutError,
 } from "@task-handoff/app-runtime";
 import type { ManagedAppOwnershipResult, ManagedAppRecipeTarget } from "@task-handoff/app-runtime";
 import type { InstallRecipe, ManagedAppDefinition, ManagedAppDetectionResult } from "@task-handoff/app-runtime/types";
@@ -39,7 +41,15 @@ import { recoverArchiveTransactions } from "./archive-transaction";
 
 const ACTIVE_STATES = new Set<AppManagementJob["state"]>(["queued", "running"]);
 const JOB_LOG_LIMIT = 32_768;
+const JOB_PROGRESS_PERSIST_INTERVAL_MS = 250;
 const JOB_FIELDS = new Set(["id", "requestId", "appId", "operation", "state", "phase", "progress", "command", "logTail", "logTruncated", "error", "requestedAt", "startedAt", "finishedAt", "updatedAt"]);
+
+function progressReachedTotal(progress: AppManagementProgress | undefined) {
+  return progress?.current !== undefined
+    && progress.total !== undefined
+    && progress.total > 0
+    && progress.current >= progress.total;
+}
 
 function commandArgument(value: string) {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : JSON.stringify(value);
@@ -115,8 +125,32 @@ export class AppManagementJobStore {
 
   save(job: AppManagementJob) {
     const parsed = AppManagementJobSchema.parse(job);
+    const prior = this.jobs.get(parsed.id);
     this.jobs.set(parsed.id, parsed);
-    this.flush();
+    try {
+      this.flush();
+    } catch (error) {
+      if (prior) this.jobs.set(prior.id, prior);
+      else this.jobs.delete(parsed.id);
+      throw error;
+    }
+    return parsed;
+  }
+
+  saveBestEffort(job: AppManagementJob) {
+    const parsed = AppManagementJobSchema.parse(job);
+    this.jobs.set(parsed.id, parsed);
+    try {
+      this.flush();
+    } catch (error) {
+      this.warn(`App management job store could not be written: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return parsed;
+  }
+
+  updateInMemory(job: AppManagementJob) {
+    const parsed = AppManagementJobSchema.parse(job);
+    this.jobs.set(parsed.id, parsed);
     return parsed;
   }
 
@@ -141,7 +175,7 @@ export class AppManagementJobStore {
           this.warn(`App management job ${String(record.id || "unknown")} is invalid and was ignored.`);
           continue;
         }
-        this.jobs.set(parsed.data.id, parsed.data);
+        this.jobs.set(parsed.data.id, { ...parsed.data, progress: undefined });
       }
     } catch (error) {
       this.warn(`App management job store could not be read: ${error instanceof Error ? error.message : String(error)}`);
@@ -149,7 +183,13 @@ export class AppManagementJobStore {
   }
 
   private flush() {
-    const payload: StoredJobs = { schemaVersion: 1, jobs: this.list() };
+    const payload: StoredJobs = {
+      schemaVersion: 1,
+      jobs: this.list().map((job) => {
+        const { progress: _progress, ...lifecycle } = job;
+        return lifecycle;
+      }),
+    };
     atomicWriteJsonSync(this.filePath, payload);
   }
 }
@@ -441,16 +481,25 @@ export class AppManagementManager {
     }
     const installPolicy = this.installEnvironment?.createExecutionPolicy();
     const timestamp = this.now();
-    const job = this.store.save({
-      id: `appjob_${crypto.randomUUID().replaceAll("-", "")}`,
-      ...(requestId ? { requestId } : {}),
-      ...(installPolicy ? { installSourceRevision: installPolicy.revision } : {}),
-      appId,
-      operation,
-      state: "queued",
-      requestedAt: timestamp,
-      updatedAt: timestamp,
-    });
+    let job: AppManagementJob;
+    try {
+      job = this.store.save({
+        id: `appjob_${crypto.randomUUID().replaceAll("-", "")}`,
+        ...(requestId ? { requestId } : {}),
+        ...(installPolicy ? { installSourceRevision: installPolicy.revision } : {}),
+        appId,
+        operation,
+        state: "queued",
+        requestedAt: timestamp,
+        updatedAt: timestamp,
+      });
+    } catch (error) {
+      throw new AppManagementRequestError(
+        "app_job_store_write_failed",
+        `The app management job store could not be written: ${error instanceof Error ? error.message : String(error)}`,
+        500,
+      );
+    }
     this.emit(job, true);
     this.queue = this.queue.then(() => this.run(job.id, definition, operationRecipe, installPolicy)).catch(() => undefined);
     return job;
@@ -495,6 +544,7 @@ export class AppManagementManager {
       this.store.save({
         ...job,
         state: "interrupted",
+        progress: undefined,
         error: { code: "controlled_instance_restarted", message: "The controlled instance restarted before the operation completed.", retryable: true },
         finishedAt: timestamp,
         updatedAt: timestamp,
@@ -516,7 +566,7 @@ export class AppManagementManager {
       const output = pendingOutput;
       pendingOutput = "";
       const current = this.getJob(jobId);
-      const updated = this.store.save({ ...current, ...appendJobLog(current, output), updatedAt: this.now() });
+      const updated = this.store.saveBestEffort({ ...current, ...appendJobLog(current, output), updatedAt: this.now() });
       this.emit(updated);
     };
     const scheduleOutputFlush = () => {
@@ -525,8 +575,9 @@ export class AppManagementManager {
       outputTimer.unref?.();
     };
     const startedAt = this.now();
-    job = this.store.save({ ...job, state: "running", phase: "starting", startedAt, updatedAt: startedAt });
+    job = this.store.saveBestEffort({ ...job, state: "running", phase: "starting", startedAt, updatedAt: startedAt });
     this.emit(job, true);
+    const progressPersist = { phase: job.phase ?? "starting", persistedAt: Date.now() };
     const lifecycle = this.packageLifecycle?.(job.appId);
     try {
       const capabilities = this.capabilities();
@@ -548,20 +599,35 @@ export class AppManagementManager {
         }
       }
       await lifecycle?.beforeChange?.(job.operation);
-      if (job.operation !== "install") await this.stopAppRuntime(job.appId);
+      if (job.operation !== "install") {
+        try {
+          await this.stopAppRuntime(job.appId);
+        } catch (error) {
+          if (error instanceof AppProcessStopTimeoutError) {
+            throw new AppRecipeExecutionError("app_process_stop_timeout", error.message, true);
+          }
+          throw error;
+        }
+      }
       await this.execute!(job.operation, executableRecipe, {
         appId: job.appId,
         capabilities,
         onPhase: (phase, progress) => {
+          const now = Date.now();
+          const phaseChanged = progressPersist.phase !== phase;
+          if (!phaseChanged && !progressReachedTotal(progress) && now - progressPersist.persistedAt < JOB_PROGRESS_PERSIST_INTERVAL_MS) return;
+          progressPersist.phase = phase;
+          progressPersist.persistedAt = now;
           flushOutput();
           const current = this.getJob(jobId);
-          const updated = this.store.save({ ...current, phase, progress, updatedAt: this.now() });
+          const next = { ...current, phase, progress, updatedAt: this.now() };
+          const updated = phaseChanged ? this.store.saveBestEffort(next) : this.store.updateInMemory(next);
           this.emit(updated);
         },
         onCommand: (command) => {
           flushOutput();
           const current = this.getJob(jobId);
-          const updated = this.store.save({
+          const updated = this.store.saveBestEffort({
             ...current,
             command,
             ...appendJobLog(current, `${current.logTail && !current.logTail.endsWith("\n") ? "\n" : ""}$ ${commandLine(command)}\n`),
@@ -581,14 +647,14 @@ export class AppManagementManager {
       await this.refreshOwnership(definition, detection, await this.ensureCapabilities(true));
       await lifecycle?.changed?.(job.operation, true);
       const finishedAt = this.now();
-      job = this.store.save({ ...this.getJob(jobId), state: "succeeded", phase: "verify", progress: undefined, finishedAt, updatedAt: finishedAt });
+      job = this.store.saveBestEffort({ ...this.getJob(jobId), state: "succeeded", phase: "verify", progress: undefined, finishedAt, updatedAt: finishedAt });
     } catch (error) {
       flushOutput();
       try { await lifecycle?.changed?.(job.operation, false); } catch { this.warn("App failure cleanup did not complete."); }
       const finishedAt = this.now();
       const code = error instanceof AppRecipeExecutionError ? error.code : "app_operation_failed";
       const retryable = error instanceof AppRecipeExecutionError ? error.retryable : true;
-      job = this.store.save({
+      job = this.store.saveBestEffort({
         ...this.getJob(jobId),
         state: "failed",
         progress: undefined,

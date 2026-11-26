@@ -171,10 +171,10 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
 
   stopAll() {
     const appServer = this.shared;
-    if (!appServer) return;
+    if (!appServer) return Promise.resolve(true);
     this.shared = undefined;
-    this.host.stopProcessTree(appServer.child);
     removeCodexAppServerArtifacts(appServer);
+    return this.host.stopProcessTree(appServer.child);
   }
 
   acquire(command: string, cwd: string, env: NodeJS.ProcessEnv, appSessionId: string) {

@@ -37,6 +37,7 @@ const ACTIVE_STATES: [AppManagementJobState; 2] = [
     AppManagementJobState::Running,
 ];
 const JOB_LOG_LIMIT: usize = 32_768;
+const JOB_PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(250);
 const JOB_FIELDS: [&str; 16] = [
     "id",
     "requestId",
@@ -55,6 +56,55 @@ const JOB_FIELDS: [&str; 16] = [
     "finishedAt",
     "updatedAt",
 ];
+
+#[derive(Debug, PartialEq, Eq)]
+enum ProgressUpdate {
+    Ignore,
+    Memory,
+    Lifecycle,
+}
+
+struct ProgressUpdateGate {
+    phase: String,
+    updated_at: Instant,
+}
+
+impl ProgressUpdateGate {
+    fn new(phase: impl Into<String>) -> Self {
+        Self {
+            phase: phase.into(),
+            updated_at: Instant::now(),
+        }
+    }
+
+    fn next_action(
+        &mut self,
+        phase: &str,
+        progress: Option<&controlled_instance_protocol::AppManagementProgress>,
+        now: Instant,
+    ) -> ProgressUpdate {
+        let phase_changed = self.phase != phase;
+        let reached_total = progress.is_some_and(|progress| {
+            matches!(
+                (progress.current, progress.total),
+                (Some(current), Some(total)) if total > 0 && current >= total
+            )
+        });
+        if !phase_changed
+            && !reached_total
+            && now.saturating_duration_since(self.updated_at) < JOB_PROGRESS_PERSIST_INTERVAL
+        {
+            return ProgressUpdate::Ignore;
+        }
+        self.phase = phase.to_string();
+        self.updated_at = now;
+        if phase_changed {
+            ProgressUpdate::Lifecycle
+        } else {
+            ProgressUpdate::Memory
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppManagementRequestError {
@@ -662,7 +712,14 @@ impl AppManagementManager {
             updated_at: timestamp,
         };
         state.jobs.insert(job.id.clone(), job.clone());
-        persist_jobs(&self.state_dir, &state.jobs, &self.warn);
+        if let Err(error) = persist_jobs(&self.state_dir, &state.jobs) {
+            state.jobs.remove(&job.id);
+            return Err(AppManagementRequestError::new(
+                "app_job_store_write_failed",
+                format!("The app management job store could not be written: {error}"),
+                500,
+            ));
+        }
         self.emit_locked(&mut state, Some(&job), true);
         drop(state);
         let manager = self.clone();
@@ -760,13 +817,27 @@ impl AppManagementManager {
                 let manager = self.clone();
                 let job_id = job_id.clone();
                 let pending_output = pending_output.clone();
+                let progress_gate = Arc::new(Mutex::new(ProgressUpdateGate::new("starting")));
                 Arc::new(move |phase, progress| {
+                    let action = progress_gate
+                        .lock()
+                        .map(|mut gate| gate.next_action(phase, progress.as_ref(), Instant::now()))
+                        .unwrap_or(ProgressUpdate::Lifecycle);
+                    if action == ProgressUpdate::Ignore {
+                        return;
+                    }
                     manager.flush_output(&job_id, &pending_output);
-                    if let Some(job) = manager.update_job(&job_id, |job| {
+                    let update = |job: &mut AppManagementJob| {
                         job.phase = Some(phase.to_string());
                         job.progress = progress.clone();
                         job.updated_at = now();
-                    }) {
+                    };
+                    let job = match action {
+                        ProgressUpdate::Ignore => unreachable!("ignored progress returned above"),
+                        ProgressUpdate::Memory => manager.update_job_in_memory(&job_id, update),
+                        ProgressUpdate::Lifecycle => manager.update_job(&job_id, update),
+                    };
+                    if let Some(job) = job {
                         manager.emit(Some(&job), false);
                     }
                 })
@@ -967,8 +1038,19 @@ impl AppManagementManager {
         let job = state.jobs.get_mut(job_id)?;
         update(job);
         let job = job.clone();
-        persist_jobs(&self.state_dir, &state.jobs, &self.warn);
+        persist_jobs_best_effort(&self.state_dir, &state.jobs, &self.warn);
         Some(job)
+    }
+
+    fn update_job_in_memory(
+        &self,
+        job_id: &str,
+        update: impl FnOnce(&mut AppManagementJob),
+    ) -> Option<AppManagementJob> {
+        let mut state = self.lock();
+        let job = state.jobs.get_mut(job_id)?;
+        update(job);
+        Some(job.clone())
     }
 
     fn flush_output(&self, job_id: &str, pending: &Arc<Mutex<String>>) {
@@ -1038,6 +1120,7 @@ impl AppManagementManager {
         for id in active {
             if let Some(job) = state.jobs.get_mut(&id) {
                 job.state = AppManagementJobState::Interrupted;
+                job.progress = None;
                 job.error = Some(AppManagementError {
                     code: "controlled_instance_restarted".to_string(),
                     message: "The controlled instance restarted before the operation completed."
@@ -1049,7 +1132,7 @@ impl AppManagementManager {
                 job.updated_at = timestamp.clone();
             }
         }
-        persist_jobs(&self.state_dir, &state.jobs, &self.warn);
+        persist_jobs_best_effort(&self.state_dir, &state.jobs, &self.warn);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ManagerState> {
@@ -1327,7 +1410,8 @@ fn load_jobs(state_dir: &Path, warn: &Warning) -> BTreeMap<String, AppManagement
             .collect::<serde_json::Map<_, _>>();
         let parsed = serde_json::from_value::<AppManagementJob>(Value::Object(sanitized));
         match parsed {
-            Ok(job) => {
+            Ok(mut job) => {
+                job.progress = None;
                 jobs.insert(job.id.clone(), job);
             }
             Err(_) => warn(&format!(
@@ -1338,14 +1422,32 @@ fn load_jobs(state_dir: &Path, warn: &Warning) -> BTreeMap<String, AppManagement
     jobs
 }
 
-fn persist_jobs(state_dir: &Path, jobs: &BTreeMap<String, AppManagementJob>, warn: &Warning) {
-    let mut values = jobs.values().cloned().collect::<Vec<_>>();
+fn persist_jobs(
+    state_dir: &Path,
+    jobs: &BTreeMap<String, AppManagementJob>,
+) -> std::io::Result<()> {
+    let mut values = jobs
+        .values()
+        .cloned()
+        .map(|mut job| {
+            job.progress = None;
+            job
+        })
+        .collect::<Vec<_>>();
     values.sort_by(|left, right| right.requested_at.cmp(&left.requested_at));
     let stored = StoredJobs {
         schema_version: 1,
         jobs: values,
     };
-    if let Err(error) = write_json_atomic(&jobs_path(state_dir), &stored, Some(0o600)) {
+    write_json_atomic(&jobs_path(state_dir), &stored, Some(0o600))
+}
+
+fn persist_jobs_best_effort(
+    state_dir: &Path,
+    jobs: &BTreeMap<String, AppManagementJob>,
+    warn: &Warning,
+) {
+    if let Err(error) = persist_jobs(state_dir, jobs) {
         warn(&format!(
             "App management job store could not be written: {error}"
         ));
@@ -1395,6 +1497,91 @@ mod tests {
                 privilege: None,
             }],
         }
+    }
+
+    #[test]
+    fn progress_updates_are_throttled_and_kept_outside_the_lifecycle_store() {
+        let started = Instant::now();
+        let mut gate = ProgressUpdateGate {
+            phase: "download".to_string(),
+            updated_at: started,
+        };
+        let partial = controlled_instance_protocol::AppManagementProgress {
+            current: Some(50),
+            total: Some(100),
+            unit: Some("bytes".to_string()),
+        };
+
+        assert_eq!(
+            gate.next_action(
+                "download",
+                Some(&partial),
+                started + Duration::from_millis(100)
+            ),
+            ProgressUpdate::Ignore
+        );
+        assert_eq!(
+            gate.next_action(
+                "download",
+                Some(&partial),
+                started + JOB_PROGRESS_PERSIST_INTERVAL
+            ),
+            ProgressUpdate::Memory
+        );
+        assert_eq!(
+            gate.next_action(
+                "download",
+                Some(&controlled_instance_protocol::AppManagementProgress {
+                    current: Some(100),
+                    total: Some(100),
+                    unit: Some("bytes".to_string()),
+                }),
+                started + JOB_PROGRESS_PERSIST_INTERVAL + Duration::from_millis(1)
+            ),
+            ProgressUpdate::Memory
+        );
+        assert_eq!(
+            gate.next_action(
+                "inspect",
+                None,
+                started + JOB_PROGRESS_PERSIST_INTERVAL + Duration::from_millis(2)
+            ),
+            ProgressUpdate::Lifecycle
+        );
+    }
+
+    #[test]
+    fn persisted_jobs_omit_runtime_progress() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let job = AppManagementJob {
+            id: "appjob_0000000000000".to_string(),
+            request_id: None,
+            install_source_revision: None,
+            app_id: "codex".to_string(),
+            operation: AppManagementOperation::Install,
+            state: AppManagementJobState::Running,
+            phase: Some("download".to_string()),
+            progress: Some(controlled_instance_protocol::AppManagementProgress {
+                current: Some(50),
+                total: Some(100),
+                unit: Some("bytes".to_string()),
+            }),
+            command: None,
+            log_tail: None,
+            log_truncated: None,
+            error: None,
+            requested_at: now(),
+            started_at: None,
+            finished_at: None,
+            updated_at: now(),
+        };
+        let jobs = BTreeMap::from([(job.id.clone(), job)]);
+
+        persist_jobs(temporary.path(), &jobs).expect("persist jobs");
+
+        let stored: Value = read_json(&jobs_path(temporary.path())).expect("read jobs");
+        assert_eq!(stored["jobs"][0]["phase"], "download");
+        assert!(stored["jobs"][0].get("progress").is_none());
     }
 
     struct RetryRecipeRunner {
@@ -2532,6 +2719,7 @@ mod tests {
             "appId": "terminal-tty",
             "operation": "install",
             "state": "running",
+            "progress": { "current": 50, "total": 100, "unit": "bytes" },
             "requestedAt": "2026-11-03T00:00:00.000Z",
             "updatedAt": "2026-11-03T00:00:01.000Z"
         });
@@ -2580,6 +2768,7 @@ mod tests {
                 "appjob_valid_00000000000".to_string()
             ]
         );
+        assert!(jobs["appjob_valid_00000000000"].progress.is_none());
         let warnings = warnings.lock().expect("warnings").join("\n");
         assert!(warnings.contains("unknown top-level fields"));
         assert!(warnings.contains("appjob_unknown_00000000 contains unknown fields"));

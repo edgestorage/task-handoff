@@ -20,6 +20,7 @@ const { AppManagementManager, AppManagementRequestError } = require("../packages
 const { AppRecipeExecutionError, createAppRecipeExecutor } = require("../packages/controlled-instance/src/web/app-recipe-executor.ts");
 const { AppInstallEnvironmentManager } = require("../packages/controlled-instance/src/web/app-install-environment.ts");
 const { createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
+const { AppProcessStopTimeoutError } = require("../packages/app-runtime/src/runtime.ts");
 
 const capabilities = { platform: "linux", arch: "x64", installers: ["apt"], privilege: "root" };
 function app(id = "tool") {
@@ -56,6 +57,44 @@ test("jobs are persisted before execution and finish only after authoritative de
   assert.deepEqual(events.map((event) => event.job.state), ["queued", "running", "running", "succeeded"]);
   assert.equal(events.at(-1).snapshot.apps[0].state, "installed");
   assert.equal(events.every((event) => event.streamId === manager.snapshot().streamId), true);
+});
+
+test("download progress stays in memory while lifecycle state remains durable", async () => {
+  const dirs = stateDirs("task-handoff-app-progress-throttle-");
+  let state = "not-installed";
+  const events = [];
+  let persistedDuringDownload;
+  const manager = new AppManagementManager({
+    ...dirs,
+    definitions: () => [app()],
+    capabilities: () => capabilities,
+    detection: () => ({ state, executablePaths: state === "installed" ? ["/bin/tool"] : [] }),
+    execute: async (_operation, _recipe, context) => {
+      context.onPhase("download");
+      for (let current = 1; current <= 100; current += 1) {
+        context.onPhase("download", { current, total: 100, unit: "bytes" });
+      }
+      persistedDuringDownload = JSON.parse(fs.readFileSync(path.join(dirs.stateDir, "jobs.json"), "utf8"));
+      state = "installed";
+      context.onPhase("verify");
+    },
+    publish: (event) => events.push(event),
+  });
+
+  const queued = manager.request("tool", "install");
+  await manager.waitForIdle();
+
+  const downloadProgress = events
+    .map((event) => event.job)
+    .filter((job) => job?.phase === "download" && job.progress);
+  assert.ok(downloadProgress.length <= 5, `expected bounded progress updates, got ${downloadProgress.length}`);
+  assert.equal(downloadProgress.at(-1).progress.current, 100);
+  assert.equal(persistedDuringDownload.jobs[0].phase, "download");
+  assert.equal(persistedDuringDownload.jobs[0].progress, undefined);
+  assert.equal(manager.getJob(queued.id).state, "succeeded");
+  const persisted = JSON.parse(fs.readFileSync(path.join(dirs.stateDir, "jobs.json"), "utf8"));
+  assert.equal(persisted.jobs[0].state, "succeeded");
+  assert.equal(persisted.jobs[0].progress, undefined);
 });
 
 test("app jobs freeze the install source policy when the request is accepted", async () => {
@@ -685,6 +724,7 @@ test("restart sanitizes stored jobs, interrupts active work, and re-detects with
     futureTopLevel: true,
     jobs: [{
       id: "job_old", appId: "tool", operation: "install", state: "running",
+      progress: { current: 50, total: 100, unit: "bytes" },
       requestedAt: "2026-07-16T00:00:00.000Z", updatedAt: "2026-07-16T00:00:00.000Z", futureField: true,
     }],
   }));
@@ -699,7 +739,9 @@ test("restart sanitizes stored jobs, interrupts active work, and re-detects with
     warn: (message) => warnings.push(message),
   });
   assert.equal(manager.getJob("job_old").state, "interrupted");
+  assert.equal(manager.getJob("job_old").progress, undefined);
   assert.equal(manager.getJob("job_old").error.code, "controlled_instance_restarted");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dirs.stateDir, "jobs.json"), "utf8")).jobs[0].progress, undefined);
   assert.equal(detections, 1);
   assert.equal(executions, 0);
   assert.equal(warnings.some((message) => message.includes("unknown")), true);
@@ -1079,4 +1121,49 @@ test("failed provider drain never mutates package files or bypasses failure clea
   });
   const job=manager.request("tool","install"); await manager.waitForIdle();
   assert.equal(manager.getJob(job.id).state,"failed"); assert.equal(executed,false); assert.equal(cleaned,true);
+});
+
+test("package changes wait for the app runtime stop before mutating package files", async () => {
+  const dirs = stateDirs("task-handoff-app-stop-order-");
+  let state = "installed";
+  const order = [];
+  let releaseStop; const stopGate = new Promise((resolve) => { releaseStop = resolve; });
+  let stopEntered; const stopping = new Promise((resolve) => { stopEntered = resolve; });
+  const recipe = { type: "system-package", platforms: ["linux"], installer: "apt", packages: ["tool"], privilege: "root" };
+  const manager = new AppManagementManager({
+    ...dirs, definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state, executablePaths: state === "installed" ? ["/bin/tool"] : [] }),
+    ownership: async () => ({ source: "recipe", recipe }),
+    stopAppRuntime: async () => { order.push("stop-start"); stopEntered(); await stopGate; order.push("stop-done"); },
+    execute: async () => { order.push("mutate"); state = "not-installed"; },
+  });
+  await manager.refreshSnapshot();
+  const job = manager.request("tool", "uninstall");
+  await stopping;
+  assert.deepEqual(order, ["stop-start"], "package files must not change while the runtime is still stopping");
+  releaseStop();
+  await manager.waitForIdle();
+  assert.equal(manager.getJob(job.id).state, "succeeded");
+  assert.deepEqual(order, ["stop-start", "stop-done", "mutate"]);
+});
+
+test("a process stop timeout fails the job before the package executor runs", async () => {
+  const dirs = stateDirs("task-handoff-app-stop-timeout-");
+  let executed = false;
+  const recipe = { type: "system-package", platforms: ["linux"], installer: "apt", packages: ["tool"], privilege: "root" };
+  const manager = new AppManagementManager({
+    ...dirs, definitions: () => [app()], capabilities: () => capabilities,
+    detection: () => ({ state: "installed", executablePaths: ["/bin/tool"] }),
+    ownership: async () => ({ source: "recipe", recipe }),
+    stopAppRuntime: async () => { throw new AppProcessStopTimeoutError("The tool backend did not exit."); },
+    execute: async () => { executed = true; },
+  });
+  await manager.refreshSnapshot();
+  const job = manager.request("tool", "uninstall");
+  await manager.waitForIdle();
+  const failed = manager.getJob(job.id);
+  assert.equal(failed.state, "failed");
+  assert.equal(failed.error.code, "app_process_stop_timeout");
+  assert.equal(failed.error.retryable, true);
+  assert.equal(executed, false);
 });
