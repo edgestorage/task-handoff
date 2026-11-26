@@ -8,14 +8,20 @@ const reasoningEfforts = fs.readFileSync(new URL("../src/components/ai-session/a
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const agentEditor = fs.readFileSync(new URL("../src/apps/control-plane/agent/AgentEditor.vue", import.meta.url), "utf8");
 
-test("shared model menu appends the reasoning effort submenu after provider models", () => {
+test("shared model menu keeps reasoning effort visible below the scrollable provider list", () => {
+  const scrollStart = modelMenu.indexOf("<ScrollArea");
   const providers = modelMenu.indexOf('v-for="group in modelGroups"');
-  const separator = modelMenu.indexOf('<DropdownMenuSeparator v-if="modelGroups.length" />', providers);
-  const reasoning = modelMenu.indexOf('t("sessions.composer.reasoningEffort")', separator);
+  const scrollEnd = modelMenu.indexOf("</ScrollArea>", providers);
+  const reasoning = modelMenu.indexOf('t("sessions.composer.reasoningEffort")', scrollEnd);
 
-  assert.ok(providers >= 0);
-  assert.ok(separator > providers);
-  assert.ok(reasoning > separator);
+  assert.ok(scrollStart >= 0);
+  assert.ok(providers > scrollStart);
+  assert.ok(scrollEnd > providers);
+  assert.ok(reasoning > scrollEnd);
+  assert.match(modelMenu, /<ScrollArea\s+type="scroll"/);
+  assert.match(modelMenu, /\.ai-session-model-menu__scroll\) \{\s*display: flex;[\s\S]*?flex: 1 1 auto;[\s\S]*?min-height: 0;/);
+  assert.match(modelMenu, /\.ai-session-model-menu__scroll > \[data-reka-scroll-area-viewport\]\) \{\s*height: auto;[\s\S]*?min-height: 0;[\s\S]*?flex: 1 1 auto;/);
+  assert.match(modelMenu, /<DropdownMenuSeparator v-if="showFollowSession \|\| noModelConfigured \|\| modelGroups.length" \/>/);
   assert.match(modelMenu, /reasoningEffort === effort/);
   assert.match(modelMenu, /DropdownMenuSubContent/);
   // 档位枚举只在协议 schema 里定义一次，UI 不复写列表。

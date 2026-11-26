@@ -100,8 +100,35 @@
               <div class="instance-settings-control-surface instance-settings-surface">
                 <div class="instance-settings-general-controls">
                   <label class="instance-settings-checkbox"><Checkbox :model-value="aiSessionNextInputSuggestionEnabled" :disabled="savingGeneral || !nextInputSuggestionSupported" @update:model-value="aiSessionNextInputSuggestionEnabled = $event === true" /><span><strong>{{ t("instances.settings.aiSessionNextInputSuggestion") }}</strong><small>{{ nextInputSuggestionSupported ? t("instances.settings.aiSessionNextInputSuggestionDescription") : t("instances.settings.aiSessionNextInputSuggestionUnsupported") }}</small></span></label>
-                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.aiSessionNextInputSuggestionReasoning") }}</strong><small>{{ nextInputSuggestionReasoningEffortSupported ? t("instances.settings.aiSessionNextInputSuggestionReasoningDescription") : t("instances.settings.aiSessionNextInputSuggestionReasoningUnsupported") }}</small></span><ControlPlaneSelect v-model="aiSessionNextInputSuggestionReasoningEffort" :disabled="savingGeneral || !nextInputSuggestionReasoningEffortSupported"><ControlPlaneSelectItem value="session">{{ t("instances.settings.aiSessionNextInputSuggestionFollowSession") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-for="effort in AI_SESSION_REASONING_EFFORTS" :key="effort" :value="effort">{{ t(`instances.settings.codexReasoning.${effort}`) }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.aiSessionNextInputSuggestionModel") }}</strong><small>{{ nextInputSuggestionModelSelectionSupported ? t("instances.settings.aiSessionNextInputSuggestionModelDescription") : t("instances.settings.aiSessionNextInputSuggestionModelUnsupported") }}</small></span><ControlPlaneSelect v-model="aiSessionNextInputSuggestionModelValue" :disabled="savingGeneral || !nextInputSuggestionModelSelectionSupported"><ControlPlaneSelectItem value="session">{{ t("instances.settings.aiSessionNextInputSuggestionFollowSession") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-for="option in aiSessionNextInputSuggestionModelOptions" :key="option.value" :value="option.value">{{ option.label }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <div class="instance-settings-select-control">
+                    <span><strong>{{ t("instances.settings.aiSessionNextInputSuggestionModel") }}</strong><small>{{ nextInputSuggestionSettingsSupported ? t("instances.settings.aiSessionNextInputSuggestionModelDescription") : t("instances.settings.aiSessionNextInputSuggestionModelUnsupported") }}</small></span>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger as-child>
+                        <button type="button" class="instance-settings-model-trigger" :disabled="savingGeneral || !nextInputSuggestionSettingsSupported" :aria-label="t('instances.settings.aiSessionNextInputSuggestionModel')">
+                          <span>{{ aiSessionNextInputSuggestionModelTriggerLabel }}</span>
+                          <ChevronDown :size="14" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <AiSessionModelMenu
+                        side="bottom"
+                        align="end"
+                        :model-groups="nextInputSuggestionModelSelectionSupported ? aiSessionNextInputSuggestionModelGroups : []"
+                        :model-selection="aiSessionNextInputSuggestionModelSelection"
+                        :reasoning-effort="aiSessionNextInputSuggestionReasoningEffort"
+                        :reasoning-efforts="AI_SESSION_REASONING_EFFORTS"
+                        :reasoning-effort-enabled="nextInputSuggestionReasoningEffortSupported"
+                        :show-follow-session="nextInputSuggestionSettingsSupported"
+                        :follow-session-selected="nextInputSuggestionFollowsSession"
+                        :follow-session-label="t('instances.settings.aiSessionNextInputSuggestionFollowSession')"
+                        :follow-session-description="t('instances.settings.aiSessionNextInputSuggestionFollowSessionDescription')"
+                        :reasoning-follow-session-label="t('instances.settings.aiSessionNextInputSuggestionFollowSession')"
+                        @select-follow-session="selectNextInputSuggestionFollowSession"
+                        @select-model="selectNextInputSuggestionModel"
+                        @select-reasoning-effort="selectNextInputSuggestionReasoningEffort"
+                        @select-reasoning-follow-session="selectNextInputSuggestionReasoningFollowSession"
+                      />
+                    </DropdownMenu>
+                  </div>
                   <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionFileAttachmentLimit") }}</strong><small>{{ fileAttachmentLimitSupported ? t("instances.settings.aiSessionFileAttachmentLimitDescription") : t("instances.settings.aiSessionFileAttachmentLimitUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionMaxFileAttachmentKiB" type="number" min="1" :max="AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024" step="1" :disabled="savingGeneral || !fileAttachmentLimitSupported" /></label>
                   <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionAttachmentRetention") }}</strong><small>{{ attachmentRetentionSupported ? t("instances.settings.aiSessionAttachmentRetentionDescription") : t("instances.settings.aiSessionAttachmentRetentionUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionAttachmentRetentionDays" type="number" min="0" :max="AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS" step="1" :disabled="savingGeneral || !attachmentRetentionSupported" /></label>
                   <p v-if="attachmentRetentionWillShorten" class="instance-settings-help instance-settings-row-note">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
@@ -471,7 +498,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Accessibility, Bot, Boxes, ChevronRight, Clock3, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import { Accessibility, Bot, Boxes, ChevronDown, ChevronRight, Clock3, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT, type AiSessionModelSelection, type AiSessionNextInputSuggestionReasoningEffort, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import { controlledInstanceAppInstallEnvironmentCapabilities, supportsAiSessionFileSizeLimitSettings, supportsAiSessionNextInputSuggestion, supportsAiSessionNextInputSuggestionModelSelection, supportsAiSessionNextInputSuggestionReasoningEffort, supportsControlledInstanceAppInstallEnvironment, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeAiSessionNextInputSuggestion, supportsNodeAiSessionNextInputSuggestionModelSelection, supportsNodeAiSessionNextInputSuggestionReasoningEffort, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
@@ -481,7 +508,9 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AI_SESSION_REASONING_EFFORTS } from "../../../components/ai-session/aiSessionReasoningEfforts";
+import AiSessionModelMenu from "../../../components/ai-session/AiSessionModelMenu.vue";
 import { sameModelSelectionRef } from "../../../components/ai-session/modelSelectionRef";
+import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
@@ -803,23 +832,33 @@ function aiSessionNextInputSuggestionModelValueFor(selection: AiSessionModelSele
     .map((part) => encodeURIComponent(part))
     .join(":");
 }
-const aiSessionNextInputSuggestionModelOptions = computed(() => {
+const aiSessionNextInputSuggestionModelGroups = computed<AiSessionModelGroup[]>(() => {
   const assigned = new Set(normalizedSelection(props.instance?.modelSelection || {}).modelEntityIds || []);
   return props.models
     .filter((model) => [...assigned].some((id) => instanceModelIdMatches(model, id))
       && model.enabled
       && (model.protocols?.includes("openai-responses") || model.protocols?.includes("openai-chat-completions")))
-    .flatMap((model) => (model.modelNames?.length ? model.modelNames : [{ name: model.model, order: 0 }])
-      .slice()
-      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
-      .map((entry) => {
-        const selection: AiSessionModelSelection = {
-          modelEntityId: instanceModelEntityId(model),
+    .flatMap((model) => {
+      const modelEntityId = instanceModelEntityId(model);
+      const models = (model.modelNames?.length ? model.modelNames : [{ name: model.model, order: 0 }])
+        .slice()
+        .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+        .filter((entry) => entry.name.trim().length > 0)
+        .map((entry) => ({
+          modelEntityId,
           modelName: entry.name,
           modelUpstreamName: entry.upstreamName ?? entry.name,
-        };
-        return { value: aiSessionNextInputSuggestionModelValueFor(selection), label: `${model.name} · ${entry.name}`, selection };
-      }));
+          providerName: model.name,
+        }));
+      return models.length ? [{ modelEntityId, providerName: model.name, models }] : [];
+    });
+});
+const aiSessionNextInputSuggestionModelOptions = computed(() => {
+  return aiSessionNextInputSuggestionModelGroups.value.flatMap((group) => group.models.map((selection) => ({
+    value: aiSessionNextInputSuggestionModelValueFor(selection),
+    label: `${group.providerName} · ${selection.modelName}`,
+    selection,
+  })));
 });
 function selectedNextInputSuggestionModelSelection() {
   if (aiSessionNextInputSuggestionModelValue.value === "session") return undefined;
@@ -838,6 +877,23 @@ function nextInputSuggestionModelValue(selection: AiSessionModelSelection | unde
   return aiSessionNextInputSuggestionModelOptions.value
     .find((option) => sameModelSelectionRef(option.selection, selection))?.value
     ?? aiSessionNextInputSuggestionModelValueFor(selection);
+}
+function selectNextInputSuggestionModel(selection: AiSessionModelSelection) {
+  aiSessionNextInputSuggestionModelSelection.value = selection;
+  aiSessionNextInputSuggestionModelValue.value = aiSessionNextInputSuggestionModelValueFor(selection);
+}
+function selectNextInputSuggestionReasoningEffort(effort: AiSessionReasoningEffort) {
+  aiSessionNextInputSuggestionReasoningEffort.value = effort;
+}
+function selectNextInputSuggestionReasoningFollowSession() {
+  aiSessionNextInputSuggestionReasoningEffort.value = "session";
+}
+function selectNextInputSuggestionFollowSession() {
+  if (nextInputSuggestionModelSelectionSupported.value) {
+    aiSessionNextInputSuggestionModelSelection.value = undefined;
+    aiSessionNextInputSuggestionModelValue.value = "session";
+  }
+  if (nextInputSuggestionReasoningEffortSupported.value) aiSessionNextInputSuggestionReasoningEffort.value = "session";
 }
 const codexModelOptions = computed(() => {
   const assigned = new Set(normalizedSelection(props.instance?.modelSelection || {}).modelEntityIds || []);
@@ -965,6 +1021,26 @@ const nextInputSuggestionModelSelectionSupported = computed(() => {
   return nextInputSuggestionSupported.value
     && supportsNodeAiSessionNextInputSuggestionModelSelection(nodeCapabilities)
     && supportsAiSessionNextInputSuggestionModelSelection(props.instance?.capabilities);
+});
+const nextInputSuggestionSettingsSupported = computed(() => nextInputSuggestionReasoningEffortSupported.value
+  || nextInputSuggestionModelSelectionSupported.value);
+const nextInputSuggestionFollowsSession = computed(() => Boolean(props.instance)
+  && (!nextInputSuggestionModelSelectionSupported.value || !selectedNextInputSuggestionModelSelection())
+  && (!nextInputSuggestionReasoningEffortSupported.value || aiSessionNextInputSuggestionReasoningEffort.value === "session"));
+const aiSessionNextInputSuggestionReasoningLabel = computed(() => aiSessionNextInputSuggestionReasoningEffort.value === "session"
+  ? t("instances.settings.aiSessionNextInputSuggestionFollowSession")
+  : t(`instances.settings.codexReasoning.${aiSessionNextInputSuggestionReasoningEffort.value}`));
+const aiSessionNextInputSuggestionModelTriggerLabel = computed(() => {
+  if (nextInputSuggestionFollowsSession.value) return t("instances.settings.aiSessionNextInputSuggestionFollowSession");
+  const selected = selectedNextInputSuggestionModelSelection();
+  const modelLabel = selected
+    ? aiSessionNextInputSuggestionModelOptions.value.find((option) => sameModelSelectionRef(option.selection, selected))?.label
+      ?? selected.modelName
+    : t("instances.settings.aiSessionNextInputSuggestionFollowSession");
+  return [
+    modelLabel,
+    nextInputSuggestionReasoningEffortSupported.value ? aiSessionNextInputSuggestionReasoningLabel.value : undefined,
+  ].filter(Boolean).join(" · ");
 });
 const attachmentRetentionWillShorten = computed(() => Boolean(
   props.instance
@@ -1573,13 +1649,14 @@ async function confirmAppOperation() {
   gap: 0;
 }
 
-.instance-settings-general-controls > label {
+.instance-settings-general-controls > label,
+.instance-settings-general-controls > .instance-settings-select-control {
   padding: 14px 16px;
 }
 
-.instance-settings-general-controls > label + label,
-.instance-settings-general-controls > .instance-settings-row-note + label,
-.instance-settings-general-controls > label + .instance-settings-row-note {
+.instance-settings-general-controls > :is(label, .instance-settings-select-control) + :is(label, .instance-settings-select-control),
+.instance-settings-general-controls > .instance-settings-row-note + :is(label, .instance-settings-select-control),
+.instance-settings-general-controls > :is(label, .instance-settings-select-control) + .instance-settings-row-note {
   border-top: 1px solid var(--line);
 }
 
@@ -1650,6 +1727,48 @@ async function confirmAppOperation() {
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 500;
+}
+
+.instance-settings-model-trigger {
+  display: flex;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid var(--control-plane-select-border);
+  border-radius: 6px;
+  background: var(--control-plane-select-bg);
+  color: var(--control-plane-select-text);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 9px;
+  text-align: left;
+}
+
+.instance-settings-model-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instance-settings-model-trigger > svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.instance-settings-model-trigger:not(:disabled):is(:hover, :focus-visible),
+.instance-settings-model-trigger[data-state="open"] {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+  outline: none;
+}
+
+.instance-settings-model-trigger:disabled {
+  color: var(--control-plane-select-placeholder);
+  cursor: default;
 }
 
 .instance-model-surface {

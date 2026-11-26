@@ -116,28 +116,43 @@ test("instance settings default off and require both capability owners", () => {
 
 test("instance settings expose every reasoning mode, default to none, and require both capability owners", () => {
   assert.match(settings, /const aiSessionNextInputSuggestionReasoningEffort = ref<AiSessionNextInputSuggestionReasoningEffort>\(AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT\);/);
-  assert.match(settings, /<ControlPlaneSelect v-model="aiSessionNextInputSuggestionReasoningEffort"[\s\S]*?<ControlPlaneSelectItem value="session">/);
-  assert.match(settings, /<ControlPlaneSelectItem v-for="effort in AI_SESSION_REASONING_EFFORTS"[\s\S]*?:value="effort"/);
+  assert.match(settings, /<AiSessionModelMenu[\s\S]*?:reasoning-effort="aiSessionNextInputSuggestionReasoningEffort"/);
+  assert.match(settings, /:reasoning-efforts="AI_SESSION_REASONING_EFFORTS"/);
+  assert.match(settings, /@select-reasoning-effort="selectNextInputSuggestionReasoningEffort"/);
+  assert.match(settings, /@select-reasoning-follow-session="selectNextInputSuggestionReasoningFollowSession"/);
+  assert.match(settings, /function selectNextInputSuggestionReasoningFollowSession\(\) \{\s*aiSessionNextInputSuggestionReasoningEffort\.value = "session";/);
   assert.match(settings, /supportsNodeAiSessionNextInputSuggestionReasoningEffort\(nodeCapabilities\)[\s\S]*&& supportsAiSessionNextInputSuggestionReasoningEffort\(props\.instance\?\.capabilities\)/);
-  assert.match(settings, /:disabled="savingGeneral \|\| !nextInputSuggestionReasoningEffortSupported"/);
-  assert.match(settings, /aiSessionNextInputSuggestionReasoningUnsupported/);
+  assert.match(settings, /:reasoning-effort-enabled="nextInputSuggestionReasoningEffortSupported"/);
   assert.match(settings, /aiSessionNextInputSuggestionReasoningEffort\.value !== props\.instance\.config\.aiSessionNextInputSuggestionReasoningEffort/);
   assert.match(settings, /\.\.\.\(nextInputSuggestionReasoningEffortSupported\.value \? \{ aiSessionNextInputSuggestionReasoningEffort: aiSessionNextInputSuggestionReasoningEffort\.value \} : \{\}\)/);
   assert.match(settings, /catch \(cause\) \{[\s\S]*aiSessionNextInputSuggestionReasoningEffort\.value = props\.instance\.config\.aiSessionNextInputSuggestionReasoningEffort;/);
+  assert.doesNotMatch(settings, /<ControlPlaneSelect v-model="aiSessionNextInputSuggestionReasoningEffort"/);
   assert.match(enInstances, /aiSessionNextInputSuggestionReasoning: "Reasoning effort"[\s\S]*aiSessionNextInputSuggestionFollowSession: "Follow session"/);
   assert.match(zhInstances, /aiSessionNextInputSuggestionReasoning: "思考程度"[\s\S]*aiSessionNextInputSuggestionFollowSession: "跟随会话"/);
 });
 
-test("instance settings default the suggestion model to session and clear it with null", () => {
+test("instance settings combine model and reasoning into the grouped selector", () => {
   assert.match(settings, /const aiSessionNextInputSuggestionModelValue = ref\("session"\);/);
-  assert.match(settings, /<ControlPlaneSelect v-model="aiSessionNextInputSuggestionModelValue"[\s\S]*?<ControlPlaneSelectItem value="session">/);
-  assert.match(settings, /<ControlPlaneSelectItem v-for="option in aiSessionNextInputSuggestionModelOptions"[\s\S]*?:value="option\.value"/);
+  assert.match(settings, /<AiSessionModelMenu[\s\S]*?:model-groups="nextInputSuggestionModelSelectionSupported \? aiSessionNextInputSuggestionModelGroups : \[\]"/);
+  assert.match(settings, /:model-selection="aiSessionNextInputSuggestionModelSelection"/);
+  assert.match(settings, /:show-follow-session="nextInputSuggestionSettingsSupported"/);
+  assert.match(settings, /:follow-session-selected="nextInputSuggestionFollowsSession"/);
+  assert.match(settings, /@select-follow-session="selectNextInputSuggestionFollowSession"/);
+  assert.match(settings, /@select-model="selectNextInputSuggestionModel"/);
+  assert.doesNotMatch(settings, /<ControlPlaneSelect v-model="aiSessionNextInputSuggestionModelValue"/);
+  assert.match(settings, /const aiSessionNextInputSuggestionModelTriggerLabel = computed/);
+  assert.match(settings, /const aiSessionNextInputSuggestionModelGroups = computed<AiSessionModelGroup\[\]>\(\(\) => \{/);
+  assert.match(settings, /\.instance-settings-general-controls > label,\s*\.instance-settings-general-controls > \.instance-settings-select-control \{\s*padding: 14px 16px;/);
+  assert.match(settings, /\.instance-settings-general-controls > :is\(label, \.instance-settings-select-control\) \+ :is\(label, \.instance-settings-select-control\),/);
   assert.match(settings, /model\.protocols\?\.includes\("openai-responses"\) \|\| model\.protocols\?\.includes\("openai-chat-completions"\)/);
   assert.match(settings, /supportsNodeAiSessionNextInputSuggestionModelSelection\(nodeCapabilities\)[\s\S]*&& supportsAiSessionNextInputSuggestionModelSelection\(props\.instance\?\.capabilities\)/);
+  assert.match(settings, /function selectNextInputSuggestionFollowSession\(\) \{[\s\S]*?aiSessionNextInputSuggestionModelSelection\.value = undefined;[\s\S]*?aiSessionNextInputSuggestionReasoningEffort\.value = "session";/);
   assert.match(settings, /aiSessionNextInputSuggestionModelSelection: selectedNextInputSuggestionModelSelection\(\) \?\? null/);
   assert.match(settings, /catch \(cause\) \{[\s\S]*aiSessionNextInputSuggestionModelValue\.value = nextInputSuggestionModelValue\(props\.instance\.config\.aiSessionNextInputSuggestionModelSelection\);/);
   assert.match(enInstances, /aiSessionNextInputSuggestionModel: "Suggestion model"/);
   assert.match(zhInstances, /aiSessionNextInputSuggestionModel: "建议模型"/);
+  assert.match(enInstances, /aiSessionNextInputSuggestionFollowSessionDescription: "Use the session model and reasoning effort\."/);
+  assert.match(zhInstances, /aiSessionNextInputSuggestionFollowSessionDescription: "使用会话模型与思考程度。"/);
 });
 
 test("detail panels read suggestions from the summary and validate the visible turn", () => {

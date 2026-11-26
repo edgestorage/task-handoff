@@ -24,6 +24,10 @@ test("agent editor selects the agent first and the model from the provider-group
   assert.doesNotMatch(editor, /v-for="\(option, index\) in modelOptions"/);
   assert.doesNotMatch(editor, /availableReasoningEfforts/);
   assert.match(modelMenu, /v-for="group in modelGroups"/);
+  assert.match(modelMenu, /v-if="showFollowSession"/);
+  assert.match(modelMenu, /@select="emit\('selectFollowSession'\)"/);
+  assert.match(modelMenu, /v-if="reasoningFollowSessionLabel"/);
+  assert.match(modelMenu, /@select="emit\('selectReasoningFollowSession'\)"/);
 });
 
 test("both locales name the editor field Agent instead of Provider", () => {
