@@ -5,12 +5,15 @@ use std::collections::HashMap;
 
 pub const AI_SESSION_NEXT_INPUT_CONTEXT_MAX_BYTES: usize = 8 * 1024;
 pub const AI_SESSION_NEXT_INPUT_RESPONSE_MAX_BYTES: usize = 64 * 1024;
-pub const AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS: usize = 5;
+pub const AI_SESSION_NEXT_INPUT_MIN_TURNS: usize = 1;
+pub const AI_SESSION_NEXT_INPUT_WINDOW_STEP_TURNS: usize = 5;
 pub const AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS: usize = 10;
 pub const AI_SESSION_NEXT_INPUT_SYSTEM_PROMPT: &str = concat!(
     "You predict the user's most likely next message in an ongoing coding session.\n",
     "Each user message contains one completed turn: \"User:\" is the real user request and \"Assistant:\" is the real assistant reply.\n",
     "Each assistant message contains a previous next-message prediction.\n",
+    "This is a prediction-only task. Never call tools, run commands, or continue the assistant's work.\n",
+    "Return only the JSON object required by the response schema. Do not explain or emit tool calls.\n",
     "Use the language of the most recent real user request. Keep the prediction specific, natural, and directly editable.\n",
     "Do not repeat the previous user request. Do not claim work has been completed."
 );
@@ -139,7 +142,7 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
     result
 }
 
-/// The next-input window grows from five to ten completed turns. Once it
+/// The next-input window grows from one to ten completed turns. Once it
 /// reaches ten, the next request drops the oldest five turns and starts growing
 /// again. Keeping the start index on a five-turn cadence preserves an exact
 /// append-only prefix between resets.
@@ -148,8 +151,8 @@ pub fn ai_session_next_input_window_start(completed_turn_count: usize) -> usize 
         return 0;
     }
     (completed_turn_count - AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS)
-        .div_ceil(AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS)
-        * AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS
+        .div_ceil(AI_SESSION_NEXT_INPUT_WINDOW_STEP_TURNS)
+        * AI_SESSION_NEXT_INPUT_WINDOW_STEP_TURNS
 }
 
 pub fn build_ai_session_next_input_messages(
@@ -211,7 +214,7 @@ pub fn create_ai_session_next_input_message_plan(
             })
         })
         .collect::<Vec<_>>();
-    if completed_turns.len() < AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS {
+    if completed_turns.len() < AI_SESSION_NEXT_INPUT_MIN_TURNS {
         return None;
     }
     let latest_completed_id = completed
@@ -306,14 +309,14 @@ pub fn ai_session_next_input_prompt(session: &AiSession) -> String {
             || ('\u{f900}'..='\u{faff}').contains(&character)
     });
     let instruction = if chinese {
-        "请基于最近的用户请求和助手回复，预测用户接下来最可能输入的一句话。使用最近一条用户消息的语言，保持具体、自然、可直接编辑。"
+        "请基于最近的用户请求和助手回复，预测用户接下来最可能输入的一句话。这是纯预测任务，不要调用工具、执行命令或继续完成助手的工作。使用最近一条用户消息的语言，保持具体、自然、可直接编辑。"
     } else {
-        "Predict the user's most likely next message from the recent request and assistant reply. Use the language of the latest user message. Keep it specific, natural, and directly editable."
+        "Predict the user's most likely next message from the recent request and assistant reply. This is a prediction-only task: do not call tools, run commands, or continue the assistant's work. Use the language of the latest user message. Keep it specific, natural, and directly editable."
     };
     let format = if chinese {
-        "只返回 JSON：{\"suggestion\":\"单行建议\"}。不要换行，不要 Markdown，不要解释，不要超过 160 个 Unicode 字符。"
+        "只返回 JSON：{\"suggestion\":\"单行建议\"}。不要调用工具，不要换行，不要 Markdown，不要解释，不要超过 160 个 Unicode 字符。"
     } else {
-        "Return only JSON: {\"suggestion\":\"one line\"}. No newlines, Markdown, or explanation. At most 160 Unicode characters."
+        "Return only JSON: {\"suggestion\":\"one line\"}. Do not call tools. No newlines, Markdown, or explanation. At most 160 Unicode characters."
     };
     let blocks = context
         .iter()
@@ -442,14 +445,26 @@ mod tests {
     }
 
     #[test]
-    fn message_window_starts_at_five_grows_to_ten_then_advances_by_five() {
+    fn message_window_starts_at_one_grows_to_ten_then_advances_by_five() {
         assert_eq!(ai_session_next_input_window_start(0), 0);
+        assert_eq!(ai_session_next_input_window_start(1), 0);
+        assert_eq!(ai_session_next_input_window_start(4), 0);
         assert_eq!(ai_session_next_input_window_start(5), 0);
         assert_eq!(ai_session_next_input_window_start(10), 0);
         assert_eq!(ai_session_next_input_window_start(11), 5);
         assert_eq!(ai_session_next_input_window_start(15), 5);
         assert_eq!(ai_session_next_input_window_start(16), 10);
         assert_eq!(ai_session_next_input_window_start(21), 15);
+
+        let one = create_ai_session_next_input_message_plan(
+            &session(window_turns(1)),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("one-turn plan");
+        assert_eq!(one.window_start, 0);
+        assert_eq!(one.completed_turn_count, 1);
+        assert_eq!(one.messages.len(), 2);
 
         let five = create_ai_session_next_input_message_plan(
             &session(window_turns(5)),

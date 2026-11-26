@@ -166,6 +166,46 @@ test("an explicit none reasoning mode is sent as none instead of being omitted",
   assert.equal("reasoning" in omitted.calls[0].body, false);
 });
 
+test("structured responses accept compatible text parts and tool-call arguments", async () => {
+  const suggestion = JSON.stringify({ suggestion: "继续补齐测试" });
+  const chatCatalog = {
+    ...catalog,
+    entities: [{ ...catalog.entities[0], protocols: ["openai-chat-completions"] }],
+  };
+  const chat = await requestControlledAiSessionStructuredModel({
+    catalog: chatCatalog,
+    modelSelection,
+    prompt: "预测下一轮输入",
+    outputSchema,
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: null, tool_calls: [{ function: { arguments: suggestion } }] } }],
+    }), { status: 200 }),
+  });
+  assert.equal(chat, suggestion);
+
+  const responseToolCall = await requestControlledAiSessionStructuredModel({
+    catalog,
+    modelSelection,
+    prompt: "预测下一轮输入",
+    outputSchema,
+    fetchImpl: async () => new Response(JSON.stringify({
+      output: [{ type: "function_call", arguments: suggestion }],
+    }), { status: 200 }),
+  });
+  assert.equal(responseToolCall, suggestion);
+
+  const textPart = await requestControlledAiSessionStructuredModel({
+    catalog,
+    modelSelection,
+    prompt: "预测下一轮输入",
+    outputSchema,
+    fetchImpl: async () => new Response(JSON.stringify({
+      output: [{ type: "message", content: [{ type: "text", text: suggestion }] }],
+    }), { status: 200 }),
+  });
+  assert.equal(textPart, suggestion);
+});
+
 test("chat-completions structured requests pass an explicit none reasoning_effort", async () => {
   const chatCatalog = {
     ...catalog,

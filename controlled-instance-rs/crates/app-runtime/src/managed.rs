@@ -739,6 +739,31 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
                 ),
             ],
         },
+    ];
+    definitions.extend(MANAGED_ACP_AGENTS.iter().map(|agent| ManagedAppDefinition {
+        launcher: launcher(
+            agent.id,
+            agent.name,
+            AppKind::Tty,
+            agent.description,
+            agent.id.to_string(),
+            None,
+        ),
+        launchable: true,
+        hidden_from_app_management: false,
+        detection: launcher_detection(),
+        recipes: vec![InstallRecipe::NodePackage {
+            platforms: vec![FinalComputerPlatform::Linux, FinalComputerPlatform::Darwin],
+            arches: Some(vec![FinalComputerArch::X64, FinalComputerArch::Arm64]),
+            privilege: Some(AppInstallPrivilege::User),
+            installer: AppInstaller::Npm,
+            packages: vec![agent.package.to_string()],
+            managed: true,
+            version: Some(agent.version.to_string()),
+            bin_name: Some(agent.bin_name.to_string()),
+        }],
+    }));
+    definitions.extend([
         ManagedAppDefinition {
             launcher: {
                 let mut app = launcher(
@@ -836,7 +861,7 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             detection: launcher_detection(),
             recipes: vec![bundled_recipe()],
         },
-    ];
+    ]);
     if env_flag("TASK_HANDOFF_ENABLE_CC_SWITCH") {
         definitions.push(ManagedAppDefinition {
             launcher: {
@@ -886,29 +911,6 @@ pub fn builtin_managed_app_definitions() -> Vec<ManagedAppDefinition> {
             ),
         ],
     });
-    definitions.extend(MANAGED_ACP_AGENTS.iter().map(|agent| ManagedAppDefinition {
-        launcher: launcher(
-            agent.id,
-            agent.name,
-            AppKind::Tty,
-            agent.description,
-            agent.id.to_string(),
-            None,
-        ),
-        launchable: true,
-        hidden_from_app_management: false,
-        detection: launcher_detection(),
-        recipes: vec![InstallRecipe::NodePackage {
-            platforms: vec![FinalComputerPlatform::Linux, FinalComputerPlatform::Darwin],
-            arches: Some(vec![FinalComputerArch::X64, FinalComputerArch::Arm64]),
-            privilege: Some(AppInstallPrivilege::User),
-            installer: AppInstaller::Npm,
-            packages: vec![agent.package.to_string()],
-            managed: true,
-            version: Some(agent.version.to_string()),
-            bin_name: Some(agent.bin_name.to_string()),
-        }],
-    }));
     definitions.push(crate::remote_desktop::definition());
     if let Some(claude) = definitions
         .iter_mut()

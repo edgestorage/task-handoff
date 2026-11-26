@@ -63,8 +63,8 @@ pub use next_input::{
     AiSessionNextInputMessage, AiSessionNextInputMessagePlan,
     AiSessionNextInputSuggestionReasoningEffort, AiSessionNextInputTurnSnapshot,
     AI_SESSION_NEXT_INPUT_CONTEXT_MAX_BYTES, AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS,
-    AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS, AI_SESSION_NEXT_INPUT_RESPONSE_MAX_BYTES,
-    AI_SESSION_NEXT_INPUT_SYSTEM_PROMPT,
+    AI_SESSION_NEXT_INPUT_MIN_TURNS, AI_SESSION_NEXT_INPUT_RESPONSE_MAX_BYTES,
+    AI_SESSION_NEXT_INPUT_SYSTEM_PROMPT, AI_SESSION_NEXT_INPUT_WINDOW_STEP_TURNS,
 };
 pub use opencode::{
     OpenCodeClosedSessionIds, OpenCodeConnection, OpenCodeConnectionProvider,

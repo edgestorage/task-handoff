@@ -76,6 +76,12 @@ const NO_CAPABILITIES: ManagedAppProviderCapabilities = ManagedAppProviderCapabi
     supports_profiles: false,
 };
 
+const CWD_SELECTION_CAPABILITIES: ManagedAppProviderCapabilities = ManagedAppProviderCapabilities {
+    supports_cwd_selection: true,
+    supports_ai_session_resume: false,
+    supports_profiles: false,
+};
+
 const PROVIDERS: &[ManagedAppProvider] = &[
     ManagedAppProvider {
         id: "remote-desktop",
@@ -132,6 +138,30 @@ const PROVIDERS: &[ManagedAppProvider] = &[
         gui_runtime: ManagedAppGuiRuntime::Default,
         web_runtime: ManagedAppWebRuntime::Default,
         ai_session_resume_args: Some(claude_resume_args),
+    },
+    ManagedAppProvider {
+        id: "gemini",
+        capabilities: CWD_SELECTION_CAPABILITIES,
+        tty_runtime: ManagedAppTtyRuntime::Default,
+        gui_runtime: ManagedAppGuiRuntime::Default,
+        web_runtime: ManagedAppWebRuntime::Default,
+        ai_session_resume_args: None,
+    },
+    ManagedAppProvider {
+        id: "commandcode",
+        capabilities: CWD_SELECTION_CAPABILITIES,
+        tty_runtime: ManagedAppTtyRuntime::Default,
+        gui_runtime: ManagedAppGuiRuntime::Default,
+        web_runtime: ManagedAppWebRuntime::Default,
+        ai_session_resume_args: None,
+    },
+    ManagedAppProvider {
+        id: "dsh",
+        capabilities: CWD_SELECTION_CAPABILITIES,
+        tty_runtime: ManagedAppTtyRuntime::Default,
+        gui_runtime: ManagedAppGuiRuntime::Default,
+        web_runtime: ManagedAppWebRuntime::Default,
+        ai_session_resume_args: None,
     },
     ManagedAppProvider {
         id: "terminal-gui",

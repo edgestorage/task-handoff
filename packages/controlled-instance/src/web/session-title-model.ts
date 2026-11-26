@@ -151,25 +151,58 @@ function structuredRequestBody(
 function titleResponseText(protocol: TitleProtocol, value: unknown) {
   const response = asRecord(value);
   if (protocol === "openai-responses") {
-    if (typeof response.output_text === "string" && response.output_text.trim()) return response.output_text;
+    const outputText = nonEmptyText(response.output_text);
+    if (outputText) return outputText;
     for (const item of arrayValue(response.output)) {
       const output = asRecord(item);
-      if (output.type !== "message") continue;
-      for (const content of arrayValue(output.content)) {
-        const part = asRecord(content);
-        if (part.type === "output_text" && typeof part.text === "string" && part.text.trim()) return part.text;
+      if (output.type === "message") {
+        const text = messageContentText(output.content);
+        if (text) return text;
+        continue;
+      }
+      if (output.type === "function_call" || output.type === "custom_tool_call") {
+        const text = toolArgumentsText(output.arguments ?? output.input);
+        if (text) return text;
       }
     }
     return undefined;
   }
   const choice = asRecord(arrayValue(response.choices)[0]);
   const message = asRecord(choice.message);
-  if (typeof message.content === "string" && message.content.trim()) return message.content;
-  for (const content of arrayValue(message.content)) {
-    const part = asRecord(content);
-    if ((part.type === "text" || part.type === "output_text") && typeof part.text === "string" && part.text.trim()) return part.text;
+  const content = messageContentText(message.content);
+  if (content) return content;
+  for (const toolCall of arrayValue(message.tool_calls)) {
+    const args = toolArgumentsText(asRecord(asRecord(toolCall).function).arguments);
+    if (args) return args;
   }
-  return typeof choice.text === "string" && choice.text.trim() ? choice.text : undefined;
+  const functionCall = asRecord(message.function_call);
+  const functionArguments = toolArgumentsText(functionCall.arguments);
+  if (functionArguments) return functionArguments;
+  return nonEmptyText(choice.text);
+}
+
+function messageContentText(value: unknown) {
+  const text = nonEmptyText(value);
+  if (text) return text;
+  for (const content of arrayValue(value)) {
+    const part = asRecord(content);
+    if (part.type !== "text" && part.type !== "output_text") continue;
+    const partText = nonEmptyText(part.text);
+    if (partText) return partText;
+  }
+  return undefined;
+}
+
+function toolArgumentsText(value: unknown) {
+  const text = nonEmptyText(value);
+  if (text) return text;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const json = JSON.stringify(value);
+  return json === "{}" ? undefined : json;
+}
+
+function nonEmptyText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function routeUrl(baseUrl: string, protocol: TitleProtocol) {

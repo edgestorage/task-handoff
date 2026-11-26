@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS,
-  AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS,
+  AI_SESSION_NEXT_INPUT_MIN_TURNS,
   AI_SESSION_NEXT_INPUT_SYSTEM_PROMPT,
+  AI_SESSION_NEXT_INPUT_WINDOW_STEP_TURNS,
   buildAiSessionNextInputMessages,
   createAiSessionNextInputMessagePlan,
 } from "../src/ai-session-next-input.ts";
@@ -46,13 +47,11 @@ function turnIds(start: number, end: number) {
   return Array.from({ length: end - start + 1 }, (_, index) => `turn_${start + index}`);
 }
 
-test("the window starts at five turns, grows to ten, then advances by five", () => {
-  for (let count = 0; count < AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS; count += 1) {
-    assert.equal(createAiSessionNextInputMessagePlan({ session: statusSession(count) }), undefined);
-  }
+test("the window starts at one turn, grows to ten, then advances by five", () => {
+  assert.equal(createAiSessionNextInputMessagePlan({ session: statusSession(0) }), undefined);
 
   const expectedStarts = new Map([
-    [5, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0],
+    [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0],
     [11, 5], [12, 5], [13, 5], [14, 5], [15, 5],
     [16, 10], [17, 10], [18, 10], [19, 10], [20, 10],
     [21, 15], [25, 15], [26, 20],
@@ -62,9 +61,10 @@ test("the window starts at five turns, grows to ten, then advances by five", () 
     assert.ok(plan);
     assert.equal(plan.windowStart, start);
     assert.deepEqual(plan.windowTurnIds, turnIds(start + 1, count));
-    assert.ok(plan.windowTurnIds.length >= AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS);
+    assert.ok(plan.windowTurnIds.length >= AI_SESSION_NEXT_INPUT_MIN_TURNS);
     assert.ok(plan.windowTurnIds.length <= AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS);
   }
+  assert.equal(AI_SESSION_NEXT_INPUT_WINDOW_STEP_TURNS, 5);
 });
 
 test("messages use a fixed system prompt, one user message per turn, and plain-text prior suggestions", () => {
@@ -90,6 +90,7 @@ test("the fixed system prompt does not change when the user language changes", (
   const chinese = buildAiSessionNextInputMessages([{ id: "turn_1", user: "继续修复", assistant: "已修复" }]);
   const english = buildAiSessionNextInputMessages([{ id: "turn_2", user: "continue", assistant: "done" }]);
   assert.deepEqual(chinese[0], english[0]);
+  assert.match(AI_SESSION_NEXT_INPUT_SYSTEM_PROMPT, /Never call tools/u);
 });
 
 test("consecutive requests inside one window are strict message prefixes", () => {
@@ -97,7 +98,7 @@ test("consecutive requests inside one window are strict message prefixes", () =>
   let previousPlan: ReturnType<typeof createAiSessionNextInputMessagePlan>;
   let previousSnapshots: ReadonlyMap<string, { id: string; user: string; assistant: string }> | undefined;
 
-  for (let count = AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS; count <= 25; count += 1) {
+  for (let count = AI_SESSION_NEXT_INPUT_MIN_TURNS; count <= 25; count += 1) {
     const plan = createAiSessionNextInputMessagePlan({
       session: statusSession(count),
       previousSnapshots,

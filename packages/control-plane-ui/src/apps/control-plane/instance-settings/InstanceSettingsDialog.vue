@@ -855,11 +855,18 @@ const aiSessionNextInputSuggestionModelGroups = computed<AiSessionModelGroup[]>(
     });
 });
 const aiSessionNextInputSuggestionModelOptions = computed(() => {
-  return aiSessionNextInputSuggestionModelGroups.value.flatMap((group) => group.models.map((selection) => ({
-    value: aiSessionNextInputSuggestionModelValueFor(selection),
-    label: `${group.providerName} · ${selection.modelName}`,
-    selection,
-  })));
+  return aiSessionNextInputSuggestionModelGroups.value.flatMap((group) => group.models.map((model) => {
+    const selection: AiSessionModelSelection = {
+      modelEntityId: model.modelEntityId,
+      modelName: model.modelName,
+      modelUpstreamName: model.modelUpstreamName,
+    };
+    return {
+      value: aiSessionNextInputSuggestionModelValueFor(selection),
+      label: `${group.providerName} · ${selection.modelName}`,
+      selection,
+    };
+  }));
 });
 function selectedNextInputSuggestionModelSelection() {
   if (aiSessionNextInputSuggestionModelValue.value === "session") return undefined;

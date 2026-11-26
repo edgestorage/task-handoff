@@ -941,6 +941,9 @@ mod tests {
 
         assert_eq!(capabilities("terminal-tty")["supportsCwdSelection"], true);
         assert_eq!(capabilities("codex")["supportsCwdSelection"], true);
+        assert_eq!(capabilities("gemini")["supportsCwdSelection"], true);
+        assert_eq!(capabilities("commandcode")["supportsCwdSelection"], true);
+        assert_eq!(capabilities("dsh")["supportsCwdSelection"], true);
         assert_eq!(capabilities("terminal-gui")["supportsCwdSelection"], false);
         assert_eq!(capabilities("chromium")["supportsProfiles"], true);
         assert_eq!(capabilities("terminal-gui")["supportsProfiles"], false);
@@ -966,6 +969,9 @@ mod tests {
                 "codex",
                 "opencode",
                 "claude",
+                "gemini",
+                "commandcode",
+                "dsh",
                 "terminal-gui",
                 "chromium",
                 "vscode-web"

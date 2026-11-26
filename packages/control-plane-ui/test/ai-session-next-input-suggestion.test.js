@@ -9,6 +9,7 @@ const composer = read("../src/components/ai-session/AiSessionComposer.vue");
 const settings = read("../src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
 const panel = read("../src/apps/control-plane/instance-detail/AiSessionPanel.vue");
 const dock = read("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue");
+const storyView = read("../src/apps/control-plane/story/StoryView.vue");
 const enInstances = read("../src/i18n/locales/en-US/instances.ts");
 const zhInstances = read("../src/i18n/locales/zh-CN/instances.ts");
 const enSessions = read("../src/i18n/locales/en-US/sessions.ts");
@@ -148,6 +149,7 @@ test("instance settings combine model and reasoning into the grouped selector", 
   assert.match(settings, /supportsNodeAiSessionNextInputSuggestionModelSelection\(nodeCapabilities\)[\s\S]*&& supportsAiSessionNextInputSuggestionModelSelection\(props\.instance\?\.capabilities\)/);
   assert.match(settings, /function selectNextInputSuggestionFollowSession\(\) \{[\s\S]*?aiSessionNextInputSuggestionModelSelection\.value = undefined;[\s\S]*?aiSessionNextInputSuggestionReasoningEffort\.value = "session";/);
   assert.match(settings, /aiSessionNextInputSuggestionModelSelection: selectedNextInputSuggestionModelSelection\(\) \?\? null/);
+  assert.match(settings, /const selection: AiSessionModelSelection = \{\s*modelEntityId: model\.modelEntityId,\s*modelName: model\.modelName,\s*modelUpstreamName: model\.modelUpstreamName,\s*\};/);
   assert.match(settings, /catch \(cause\) \{[\s\S]*aiSessionNextInputSuggestionModelValue\.value = nextInputSuggestionModelValue\(props\.instance\.config\.aiSessionNextInputSuggestionModelSelection\);/);
   assert.match(enInstances, /aiSessionNextInputSuggestionModel: "Suggestion model"/);
   assert.match(zhInstances, /aiSessionNextInputSuggestionModel: "建议模型"/);
@@ -166,4 +168,8 @@ test("detail panels read suggestions from the summary and validate the visible t
   assert.match(panel, /@open-suggestion-settings="emit\('openSettings', instance\.id, 'ai'\)"/);
   assert.match(dock, /:next-input-suggestion-error="nextInputSuggestionError"/);
   assert.match(dock, /@open-suggestion-settings="\$emit\('openSuggestionSettings'\)"/);
+});
+
+test("story detail forwards suggestion settings from the active session panel", () => {
+  assert.match(storyView, /<InstanceSessionPanel[\s\S]*?@open-settings="\(instanceId, section\) => emit\('open-settings', instanceId, section\)"[\s\S]*?\/>/);
 });

@@ -18,12 +18,15 @@ export const AI_SESSION_NEXT_INPUT_CONTEXT_MAX_BYTES = 8 * 1024;
 export const AI_SESSION_NEXT_INPUT_RESPONSE_MAX_BYTES = 64 * 1024;
 export const AI_SESSION_NEXT_INPUT_REQUEST_TIMEOUT_MS = 30_000;
 export const AI_SESSION_NEXT_INPUT_DEBOUNCE_MS = 1_000;
-export const AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS = 5;
+export const AI_SESSION_NEXT_INPUT_MIN_TURNS = 1;
+export const AI_SESSION_NEXT_INPUT_WINDOW_STEP_TURNS = 5;
 export const AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS = 10;
 export const AI_SESSION_NEXT_INPUT_SYSTEM_PROMPT = [
   "You predict the user's most likely next message in an ongoing coding session.",
   "Each user message contains one completed turn: \"User:\" is the real user request and \"Assistant:\" is the real assistant reply.",
   "Each assistant message contains a previous next-message prediction.",
+  "This is a prediction-only task. Never call tools, run commands, or continue the assistant's work.",
+  "Return only the JSON object required by the response schema. Do not explain or emit tool calls.",
   "Use the language of the most recent real user request. Keep the prediction specific, natural, and directly editable.",
   "Do not repeat the previous user request. Do not claim work has been completed.",
 ].join("\n");
@@ -166,11 +169,11 @@ export function aiSessionNextInputPrompt(session: AiSessionStatus) {
   const latestUser = [...context].reverse().find((turn) => turn.user)?.user || "";
   const chinese = /[\u3400-\u9fff\uf900-\ufaff]/u.test(latestUser);
   const instruction = chinese
-    ? "请基于最近的用户请求和助手回复，预测用户接下来最可能输入的一句话。使用最近一条用户消息的语言，保持具体、自然、可直接编辑。"
-    : "Predict the user's most likely next message from the recent request and assistant reply. Use the language of the latest user message. Keep it specific, natural, and directly editable.";
+    ? "请基于最近的用户请求和助手回复，预测用户接下来最可能输入的一句话。这是纯预测任务，不要调用工具、执行命令或继续完成助手的工作。使用最近一条用户消息的语言，保持具体、自然、可直接编辑。"
+    : "Predict the user's most likely next message from the recent request and assistant reply. This is a prediction-only task: do not call tools, run commands, or continue the assistant's work. Use the language of the latest user message. Keep it specific, natural, and directly editable.";
   const format = chinese
-    ? '只返回 JSON：{"suggestion":"单行建议"}。不要换行，不要 Markdown，不要解释，不要超过 160 个 Unicode 字符。'
-    : 'Return only JSON: {"suggestion":"one line"}. No newlines, Markdown, or explanation. At most 160 Unicode characters.';
+    ? '只返回 JSON：{"suggestion":"单行建议"}。不要调用工具，不要换行，不要 Markdown，不要解释，不要超过 160 个 Unicode 字符。'
+    : 'Return only JSON: {"suggestion":"one line"}. Do not call tools. No newlines, Markdown, or explanation. At most 160 Unicode characters.';
   return [
     instruction,
     format,
@@ -181,7 +184,7 @@ export function aiSessionNextInputPrompt(session: AiSessionStatus) {
 }
 
 /**
- * The next-input window grows from five to ten completed turns. Once it reaches
+ * The next-input window grows from one to ten completed turns. Once it reaches
  * ten, the next request drops the oldest five turns and starts growing again.
  * Keeping the start index on a five-turn cadence is what preserves an exact
  * append-only prefix between those resets.
@@ -189,8 +192,8 @@ export function aiSessionNextInputPrompt(session: AiSessionStatus) {
 export function aiSessionNextInputWindowStart(completedTurnCount: number) {
   const count = Math.max(0, Math.trunc(completedTurnCount));
   if (count <= AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS) return 0;
-  return Math.ceil((count - AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS) / AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS)
-    * AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS;
+  return Math.ceil((count - AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS) / AI_SESSION_NEXT_INPUT_WINDOW_STEP_TURNS)
+    * AI_SESSION_NEXT_INPUT_WINDOW_STEP_TURNS;
 }
 
 export function aiSessionNextInputTurnWindow<T>(turns: readonly T[]) {
@@ -229,7 +232,7 @@ export function createAiSessionNextInputMessagePlan(input: {
       assistant: turnAssistantText(turn),
     })
     .filter((turn) => turn.user && turn.assistant);
-  if (completedTurns.length < AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS) return undefined;
+  if (completedTurns.length < AI_SESSION_NEXT_INPUT_MIN_TURNS) return undefined;
   if (completed.at(-1)?.id !== completedTurns.at(-1)?.id) return undefined;
 
   const windowStart = aiSessionNextInputWindowStart(completedTurns.length);

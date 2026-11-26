@@ -1139,23 +1139,24 @@ fn title_response_text(protocol: PrivateModelProtocol, value: &Value) -> Option<
             return Some(text.to_string());
         }
         for item in value.get("output").and_then(Value::as_array)? {
-            if item.get("type").and_then(Value::as_str) != Some("message") {
+            if item.get("type").and_then(Value::as_str) == Some("message") {
+                if let Some(text) =
+                    message_content_text(item.get("content").unwrap_or(&Value::Null))
+                {
+                    return Some(text);
+                }
                 continue;
             }
-            for content in item
-                .get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                if content.get("type").and_then(Value::as_str) == Some("output_text") {
-                    if let Some(text) = content
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .filter(|value| !value.trim().is_empty())
-                    {
-                        return Some(text.to_string());
-                    }
+            if matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("function_call" | "custom_tool_call")
+            ) {
+                if let Some(text) = tool_arguments_text(
+                    item.get("arguments")
+                        .or_else(|| item.get("input"))
+                        .unwrap_or(&Value::Null),
+                ) {
+                    return Some(text);
                 }
             }
         }
@@ -1163,19 +1164,44 @@ fn title_response_text(protocol: PrivateModelProtocol, value: &Value) -> Option<
     }
     let choice = value.get("choices").and_then(Value::as_array)?.first()?;
     let message = choice.get("message").unwrap_or(&Value::Null);
-    if let Some(text) = message
-        .get("content")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        return Some(text.to_string());
+    if let Some(text) = message_content_text(message.get("content").unwrap_or(&Value::Null)) {
+        return Some(text);
     }
-    for content in message
-        .get("content")
+    for tool_call in message
+        .get("tool_calls")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
     {
+        if let Some(text) = tool_arguments_text(
+            tool_call
+                .get("function")
+                .and_then(|function| function.get("arguments"))
+                .unwrap_or(&Value::Null),
+        ) {
+            return Some(text);
+        }
+    }
+    if let Some(text) = tool_arguments_text(
+        message
+            .get("function_call")
+            .and_then(|function| function.get("arguments"))
+            .unwrap_or(&Value::Null),
+    ) {
+        return Some(text);
+    }
+    choice
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+}
+
+fn message_content_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str().filter(|value| !value.trim().is_empty()) {
+        return Some(text.to_string());
+    }
+    for content in value.as_array().into_iter().flatten() {
         if matches!(
             content.get("type").and_then(Value::as_str),
             Some("text" | "output_text")
@@ -1189,11 +1215,17 @@ fn title_response_text(protocol: PrivateModelProtocol, value: &Value) -> Option<
             }
         }
     }
-    choice
-        .get("text")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToString::to_string)
+    None
+}
+
+fn tool_arguments_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str().filter(|value| !value.trim().is_empty()) {
+        return Some(text.to_string());
+    }
+    value
+        .as_object()
+        .filter(|object| !object.is_empty())
+        .map(|_| value.to_string())
 }
 
 fn bounded_text(value: &str, limit: usize) -> String {
@@ -3178,6 +3210,49 @@ mod tests {
             "User: 检查边界\nAssistant: 已检查"
         );
         assert!(chat.get("input").is_none());
+    }
+
+    #[test]
+    fn structured_response_text_accepts_compatible_text_parts_and_tool_arguments() {
+        let suggestion = r#"{"suggestion":"继续补齐测试"}"#;
+        assert_eq!(
+            title_response_text(
+                PrivateModelProtocol::OpenAiResponses,
+                &json!({
+                    "output": [{
+                        "type": "message",
+                        "content": [{ "type": "text", "text": suggestion }]
+                    }]
+                })
+            )
+            .as_deref(),
+            Some(suggestion)
+        );
+        assert_eq!(
+            title_response_text(
+                PrivateModelProtocol::OpenAiResponses,
+                &json!({
+                    "output": [{ "type": "function_call", "arguments": suggestion }]
+                })
+            )
+            .as_deref(),
+            Some(suggestion)
+        );
+        assert_eq!(
+            title_response_text(
+                PrivateModelProtocol::OpenAiChatCompletions,
+                &json!({
+                    "choices": [{
+                        "message": {
+                            "content": null,
+                            "tool_calls": [{ "function": { "arguments": suggestion } }]
+                        }
+                    }]
+                })
+            )
+            .as_deref(),
+            Some(suggestion)
+        );
     }
 
     #[tokio::test]

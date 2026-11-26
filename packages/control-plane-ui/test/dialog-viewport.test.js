@@ -21,7 +21,7 @@ test("long Story dialogs scroll only their form body", () => {
   assert.match(story, /:global\(\.story-editor-dialog\) \{[^}]*max-width:460px;[^}]*grid-template-rows:auto minmax\(0,1fr\) auto;[^}]*overflow:hidden;/);
   assert.match(story, /:global\(\.story-editor-dialog\.story-action-editor-dialog\) \{ max-width:840px; \}/);
   assert.match(story, /:global\(\.story-action-editor-scroll\) \{ min-height:0; \}/);
-  assert.match(story, /<ScrollArea class="story-editor-scroll" :horizontal="false">\s*<div class="story-editor-fields">/);
+  assert.match(story, /<ScrollArea class="story-editor-scroll" :horizontal="false" fade-top><div class="story-editor-fields">/);
   assert.match(story, /\.story-editor-scroll \{ min-height:0; \}/);
 });
 

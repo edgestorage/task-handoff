@@ -204,6 +204,7 @@
             @launch-app="(target, appId, cwdFolderId, options) => emit('launch-app', target, appId, cwdFolderId, options)"
             @open-ai-session-app="(target, session) => openStoryAiSessionApp(target, session)"
             @open-repository-workspace="openStoryRepositoryWorkspace"
+            @open-settings="(instanceId, section) => emit('open-settings', instanceId, section)"
             @session-created="finishStorySessionCreation"
           />
         </template>

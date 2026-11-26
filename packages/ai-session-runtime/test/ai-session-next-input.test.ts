@@ -218,9 +218,9 @@ test("a later successful generation clears the published suggestion error", asyn
   assert.equal(registry.get(session.id)?.nextInputSuggestionError, undefined);
 });
 
-test("coordinator keeps append-only messages from five to ten turns and resets at eleven", async () => {
+test("coordinator keeps append-only messages from one to ten turns and resets at eleven", async () => {
   const registry = new FakeRegistry();
-  registry.set(statusSession());
+  const base = registry.set(statusSession());
   const requests: Array<{ turnId: string; messages: AiSessionNextInputMessage[] }> = [];
   const coordinator = new AiSessionNextInputSuggestionCoordinator({
     registry: registry as never,
@@ -232,21 +232,21 @@ test("coordinator keeps append-only messages from five to ten turns and resets a
     },
   });
 
-  for (let count = 5; count <= 11; count += 1) {
-    if (count > 5) registry.set({ ...registry.get("ais_0000000000000")!, turns: completedTurns(count) });
+  for (let count = 1; count <= 11; count += 1) {
+    registry.set({ ...base, turns: completedTurns(count) });
     coordinator.observeSuccessfulTurn("ais_0000000000000", `turn_${count}`);
     await wait(20);
   }
 
-  assert.deepEqual(requests.map((request) => request.turnId), ["turn_5", "turn_6", "turn_7", "turn_8", "turn_9", "turn_10", "turn_11"]);
-  for (let index = 1; index <= 5; index += 1) {
+  assert.deepEqual(requests.map((request) => request.turnId), ["turn_1", "turn_2", "turn_3", "turn_4", "turn_5", "turn_6", "turn_7", "turn_8", "turn_9", "turn_10", "turn_11"]);
+  for (let index = 1; index <= 9; index += 1) {
     assert.deepEqual(requests[index].messages.slice(0, requests[index - 1].messages.length), requests[index - 1].messages);
   }
-  assert.equal(requests[0].messages.filter((message) => message.role === "user").length, 5);
-  assert.equal(requests[1].messages.at(-2)?.content, "建议 turn_5");
-  assert.equal(requests[6].messages.some((message) => message.content === "建议 turn_5"), false);
-  assert.equal(requests[6].messages.find((message) => message.role === "user")?.content, "User: 问题 6\nAssistant: 回答 6");
-  assert.notDeepEqual(requests[6].messages.slice(0, requests[5].messages.length), requests[5].messages);
+  assert.equal(requests[0].messages.filter((message) => message.role === "user").length, 1);
+  assert.equal(requests[1].messages.at(-2)?.content, "建议 turn_1");
+  assert.equal(requests[10].messages.some((message) => message.content === "建议 turn_1"), false);
+  assert.equal(requests[10].messages.find((message) => message.role === "user")?.content, "User: 问题 6\nAssistant: 回答 6");
+  assert.notDeepEqual(requests[10].messages.slice(0, requests[9].messages.length), requests[9].messages);
 });
 
 test("coordinator freezes completed turn text after it enters the prefix", async () => {
