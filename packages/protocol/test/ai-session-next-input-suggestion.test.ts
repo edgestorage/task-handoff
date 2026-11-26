@@ -6,6 +6,7 @@ import {
   AiSessionDetailSchema,
   AiSessionEventMetaSchema,
   AiSessionNextInputSuggestionSchema,
+  AiSessionNextInputSuggestionErrorSchema,
   AiSessionNextInputSuggestionReasoningEffortSchema,
   AiSessionPatchEventSchema,
   AiSessionRealtimeInputSchema,
@@ -24,11 +25,14 @@ import {
 import {
   NodeAgentCapabilitiesSchema,
   supportsNodeAiSessionNextInputSuggestion,
+  supportsNodeAiSessionNextInputSuggestionModelSelection,
   supportsNodeAiSessionNextInputSuggestionReasoningEffort,
 } from "../src/node-agent-capabilities.ts";
 import {
   ControlledInstanceSchema,
   InstanceConfigInputSchema,
+  UpdateInstanceInputSchema,
+  supportsAiSessionNextInputSuggestionModelSelection,
   supportsAiSessionNextInputSuggestionReasoningEffort,
 } from "../src/control-plane.ts";
 
@@ -37,6 +41,10 @@ const meta = { streamId: "stream", instanceId: "inst", revision: 2, traceId: "tr
 
 function suggestion(text = "继续补齐测试") {
   return { text, turnId: "turn_1", generatedAt: now };
+}
+
+function suggestionError(message = "模型请求失败") {
+  return { code: "AI_SESSION_NEXT_INPUT_GENERATION_FAILED", message, turnId: "turn_1", generatedAt: now };
 }
 
 function summary(withSuggestion = true, lineage?: Record<string, unknown>) {
@@ -67,6 +75,21 @@ test("next-input suggestions are bounded single-line AI session projections", ()
   assert.equal(AiSessionNextInputSuggestionSchema.safeParse({ ...suggestion(), extra: true }).success, false);
 });
 
+test("next-input suggestion errors are bounded, structured, and case-exclusive", () => {
+  assert.deepEqual(AiSessionNextInputSuggestionErrorSchema.parse(suggestionError()), suggestionError());
+  assert.equal(AiSessionNextInputSuggestionErrorSchema.safeParse({ ...suggestionError(), message: "" }).success, false);
+  assert.equal(AiSessionNextInputSuggestionErrorSchema.safeParse({ ...suggestionError(), message: "x".repeat(1_001) }).success, false);
+  assert.equal(AiSessionNextInputSuggestionErrorSchema.safeParse({ ...suggestionError(), extra: true }).success, false);
+  const status = AiSessionStatusSchema.parse({
+    ...summary(false),
+    counters: { toolCalls: 0, edits: 0, approvals: 0 },
+    nextInputSuggestionError: suggestionError(),
+  });
+  assert.deepEqual(status.nextInputSuggestionError, suggestionError());
+  assert.deepEqual(AiSessionSummarySchema.parse({ ...summary(false), nextInputSuggestionError: suggestionError() }).nextInputSuggestionError, suggestionError());
+  assert.equal(AiSessionDetailSchema.safeParse({ ...summary(false), nextInputSuggestionError: suggestionError() }).success, false);
+});
+
 test("the suggestion only belongs to status and summary projections", () => {
   const status = AiSessionStatusSchema.parse({ ...summary(), counters: { toolCalls: 0, edits: 0, approvals: 0 } });
   assert.deepEqual(status.nextInputSuggestion, suggestion());
@@ -80,8 +103,12 @@ test("realtime next-input events use an explicit object or null payload", () => 
   const base = { type: "event", sessionId: "ais_0000000000000", source: "realtime" } as const;
   assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...base, kind: "next-input-suggestion", suggestion: suggestion() }).success, true);
   assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...base, kind: "next-input-suggestion", suggestion: null }).success, true);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...base, kind: "next-input-suggestion", suggestion: null, suggestionError: suggestionError() }).success, true);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...base, kind: "next-input-suggestion", suggestionError: suggestionError() }).success, true);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...base, kind: "next-input-suggestion", suggestion: suggestion(), suggestionError: suggestionError() }).success, false);
   assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...base, kind: "next-input-suggestion" }).success, false);
   assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...base, kind: "lifecycle", status: "idle", suggestion: suggestion() }).success, false);
+  assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...base, kind: "lifecycle", status: "idle", suggestionError: suggestionError() }).success, false);
 });
 
 test("next-input suggestion patches carry a protocol-valid event reason", () => {
@@ -115,6 +142,29 @@ test("instance configuration defaults the reasoning mode to none and rejects unk
     InstanceConfigInputSchema.safeParse({ aiSessionNextInputSuggestionReasoningEffort: "future" }).success,
     false,
   );
+  assert.equal(
+    UpdateInstanceInputSchema.parse({
+      config: {
+        aiSessionNextInputSuggestionModelSelection: null,
+      },
+    }).config?.aiSessionNextInputSuggestionModelSelection,
+    null,
+  );
+  assert.equal(
+    InstanceConfigInputSchema.safeParse({
+      aiSessionNextInputSuggestionModelSelection: null,
+    }).success,
+    false,
+  );
+  assert.equal(
+    ControlledInstanceSchema.shape.config.parse({
+      aiSessionNextInputSuggestionModelSelection: {
+        modelEntityId: "mdl_suggestion",
+        modelName: "Suggestion model",
+      },
+    }).aiSessionNextInputSuggestionModelSelection?.modelEntityId,
+    "mdl_suggestion",
+  );
 });
 
 test("consumer capability is additive and independent from subagents", () => {
@@ -141,16 +191,28 @@ test("consumer capability is additive and independent from subagents", () => {
     features: { aiSessionNextInputSuggestionReasoningEffort: true },
   }), true);
   assert.equal(supportsAiSessionNextInputSuggestionReasoningEffort({ features: {} }), false);
+  assert.equal(supportsNodeAiSessionNextInputSuggestionModelSelection({
+    aiSessionNextInputSuggestionModelSelection: true,
+  }), true);
+  assert.equal(supportsNodeAiSessionNextInputSuggestionModelSelection(
+    NodeAgentCapabilitiesSchema.parse({}),
+  ), false);
+  assert.equal(supportsAiSessionNextInputSuggestionModelSelection({
+    features: { aiSessionNextInputSuggestionModelSelection: true },
+  }), true);
+  assert.equal(supportsAiSessionNextInputSuggestionModelSelection({ features: {} }), false);
 });
 
 test("snapshot projection strips suggestions without flattening opted-in subagents", () => {
-  const child = summary(true, { kind: "subagent", parentProviderSessionId: "thread-root" });
+  const child = { ...summary(true, { kind: "subagent", parentProviderSessionId: "thread-root" }), nextInputSuggestionError: suggestionError() };
   const snapshot = { runningCount: 0, waitingCount: 0, staleCount: 0, sessions: [child], updatedAt: now };
   const stripped = projectAiSessionsSnapshotForConsumer(snapshot as never, { subagents: true, nextInputSuggestion: false });
   assert.equal(stripped.sessions[0].nextInputSuggestion, undefined);
+  assert.equal(stripped.sessions[0].nextInputSuggestionError, undefined);
   assert.deepEqual(stripped.sessions[0].lineage, { kind: "subagent", parentProviderSessionId: "thread-root" });
   const kept = projectAiSessionsSnapshotForConsumer(snapshot as never, { subagents: false, nextInputSuggestion: true });
   assert.deepEqual(kept.sessions[0].nextInputSuggestion, suggestion());
+  assert.deepEqual(kept.sessions[0].nextInputSuggestionError, suggestionError());
   assert.equal(kept.sessions[0].lineage, undefined);
   const noStrip = projectAiSessionsSnapshotForConsumer(snapshot as never, { subagents: false, nextInputSuggestion: false });
   assert.equal(noStrip.sessions[0].nextInputSuggestion, undefined);

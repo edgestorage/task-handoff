@@ -91,10 +91,10 @@
     { "mode": "ultra", "sessionEffort": "low", "expected": "ultra" }
   ],
   "consumer": [
-    { "subagents": false, "nextInputSuggestion": false, "expectedSuggestion": false, "expectedLineage": false },
-    { "subagents": false, "nextInputSuggestion": true, "expectedSuggestion": true, "expectedLineage": false },
-    { "subagents": true, "nextInputSuggestion": false, "expectedSuggestion": false, "expectedLineage": true },
-    { "subagents": true, "nextInputSuggestion": true, "expectedSuggestion": true, "expectedLineage": true }
+    { "subagents": false, "nextInputSuggestion": false, "expectedSuggestion": false, "expectedSuggestionError": false, "expectedLineage": false },
+    { "subagents": false, "nextInputSuggestion": true, "expectedSuggestion": true, "expectedSuggestionError": true, "expectedLineage": false },
+    { "subagents": true, "nextInputSuggestion": false, "expectedSuggestion": false, "expectedSuggestionError": false, "expectedLineage": true },
+    { "subagents": true, "nextInputSuggestion": true, "expectedSuggestion": true, "expectedSuggestionError": true, "expectedLineage": true }
   ],
   "config": [
     { "env": { "TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_ENABLED": "1", "TASK_HANDOFF_PRIVATE_CONFIG_LOADED": "1" }, "expected": true },

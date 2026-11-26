@@ -162,6 +162,8 @@ pub struct FeatureCapabilities {
     pub ai_session_next_input_suggestion: bool,
     #[serde(default)]
     pub ai_session_next_input_suggestion_reasoning_effort: bool,
+    #[serde(default)]
+    pub ai_session_next_input_suggestion_model_selection: bool,
     pub private_model_catalog: bool,
     pub codex_managed_settings: bool,
     pub node_agent_connection_update: bool,

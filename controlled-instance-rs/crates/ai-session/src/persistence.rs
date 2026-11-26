@@ -3,7 +3,8 @@ use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone,
 use controlled_instance_core::text::js_string;
 use controlled_instance_protocol::{
     AiSessionCounters, AiSessionGoal, AiSessionGoalStatus, AiSessionNextInputSuggestion,
-    AiSessionQueue, AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS,
+    AiSessionNextInputSuggestionError, AiSessionQueue,
+    AI_SESSION_NEXT_INPUT_SUGGESTION_ERROR_MAX_CHARS, AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS,
 };
 use serde_json::{Map, Value};
 use sha1::{Digest, Sha1};
@@ -110,6 +111,9 @@ fn decode_session(value: &Value) -> Option<AiSession> {
         counters: normalize_counters(record.get("counters"))?,
         queue,
         next_input_suggestion: normalize_next_input_suggestion(record.get("nextInputSuggestion")),
+        next_input_suggestion_error: normalize_next_input_suggestion_error(
+            record.get("nextInputSuggestionError"),
+        ),
         unread: record.get("unread") == Some(&Value::Bool(true)),
     };
     with_valid_next_input_suggestion(&mut session);
@@ -142,12 +146,43 @@ pub(crate) fn normalize_next_input_suggestion(
     })
 }
 
-pub(crate) fn with_valid_next_input_suggestion(session: &mut AiSession) {
-    let Some(suggestion) = session.next_input_suggestion.as_ref() else {
-        return;
+pub(crate) fn normalize_next_input_suggestion_error(
+    value: Option<&Value>,
+) -> Option<AiSessionNextInputSuggestionError> {
+    let record = value?.as_object()?;
+    if record
+        .keys()
+        .any(|key| !matches!(key.as_str(), "code" | "message" | "turnId" | "generatedAt"))
+    {
+        return None;
+    }
+    let code = match record.get("code") {
+        Some(Value::String(value)) => {
+            let value = value.trim();
+            (!value.is_empty() && value.chars().count() <= 120).then(|| value.to_string())
+        }
+        Some(_) => return None,
+        None => None,
     };
+    let message = record.get("message")?.as_str()?.trim();
+    if message.is_empty()
+        || message.chars().count() > AI_SESSION_NEXT_INPUT_SUGGESTION_ERROR_MAX_CHARS
+    {
+        return None;
+    }
+    let turn_id = required_text(record.get("turnId"), 240)?;
+    let generated_at = required_timestamp(record.get("generatedAt"))?;
+    Some(AiSessionNextInputSuggestionError {
+        code,
+        message: message.to_string(),
+        turn_id,
+        generated_at,
+    })
+}
+
+pub(crate) fn with_valid_next_input_suggestion(session: &mut AiSession) {
     let latest_turn = session.turns.as_deref().unwrap_or_default().last();
-    let valid = session.status == "idle"
+    let valid_state = session.status == "idle"
         && session.queue.pending_count == 0
         && session
             .lineage
@@ -156,15 +191,29 @@ pub(crate) fn with_valid_next_input_suggestion(session: &mut AiSession) {
             .and_then(Value::as_str)
             != Some("subagent")
         && latest_turn
-            .and_then(|turn| turn.get("id"))
-            .and_then(Value::as_str)
-            == Some(suggestion.turn_id.as_str())
-        && latest_turn
             .and_then(|turn| turn.get("status"))
             .and_then(Value::as_str)
             == Some("completed");
-    if !valid {
-        session.next_input_suggestion = None;
+    let latest_turn_id = latest_turn
+        .and_then(|turn| turn.get("id"))
+        .and_then(Value::as_str);
+    if valid_state
+        && session
+            .next_input_suggestion
+            .as_ref()
+            .is_some_and(|suggestion| latest_turn_id == Some(suggestion.turn_id.as_str()))
+    {
+        session.next_input_suggestion_error = None;
+        return;
+    }
+    session.next_input_suggestion = None;
+    if !valid_state
+        || !session
+            .next_input_suggestion_error
+            .as_ref()
+            .is_some_and(|error| latest_turn_id == Some(error.turn_id.as_str()))
+    {
+        session.next_input_suggestion_error = None;
     }
 }
 
@@ -1922,6 +1971,15 @@ mod tests {
         })
     }
 
+    fn next_input_error_value(message: &str) -> Value {
+        json!({
+            "code": "AI_SESSION_NEXT_INPUT_GENERATION_FAILED",
+            "message": message,
+            "turnId": "turn_1",
+            "generatedAt": "2026-11-25T00:00:31.000Z"
+        })
+    }
+
     #[test]
     fn next_input_suggestion_sanitize_keeps_only_a_current_settled_turn() {
         let mut session = next_input_session("completed", "idle", 0);
@@ -2003,6 +2061,49 @@ mod tests {
         assert!(decode_persisted_session(&legacy)
             .expect("session")
             .next_input_suggestion
+            .is_none());
+    }
+
+    #[test]
+    fn next_input_error_is_bounded_current_and_exclusive_with_a_suggestion() {
+        let mut session = next_input_session("completed", "idle", 0);
+        session["nextInputSuggestionError"] = next_input_error_value(" 模型请求失败 ");
+        let decoded = decode_persisted_session(&session).expect("session");
+        assert_eq!(
+            decoded.next_input_suggestion_error.expect("error").message,
+            "模型请求失败"
+        );
+        assert!(decoded.next_input_suggestion.is_none());
+
+        let mut exclusive = next_input_session("completed", "idle", 0);
+        exclusive["nextInputSuggestion"] = next_input_value("继续修复。");
+        exclusive["nextInputSuggestionError"] = next_input_error_value("旧错误");
+        let decoded = decode_persisted_session(&exclusive).expect("session");
+        assert!(decoded.next_input_suggestion.is_some());
+        assert!(decoded.next_input_suggestion_error.is_none());
+
+        let mut stale = next_input_session("completed", "idle", 0);
+        stale["nextInputSuggestionError"] = json!({
+            "code": "AI_SESSION_NEXT_INPUT_GENERATION_FAILED",
+            "message": "旧错误",
+            "turnId": "turn_0",
+            "generatedAt": "2026-11-25T00:00:31.000Z"
+        });
+        assert!(decode_persisted_session(&stale)
+            .expect("session")
+            .next_input_suggestion_error
+            .is_none());
+
+        let mut invalid = next_input_session("completed", "idle", 0);
+        invalid["nextInputSuggestionError"] = json!({
+            "message": "失败",
+            "turnId": "turn_1",
+            "generatedAt": "2026-11-25T00:00:31.000Z",
+            "future": true
+        });
+        assert!(decode_persisted_session(&invalid)
+            .expect("session")
+            .next_input_suggestion_error
             .is_none());
     }
 }

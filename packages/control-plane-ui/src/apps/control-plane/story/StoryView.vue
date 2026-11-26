@@ -630,7 +630,7 @@ const emit = defineEmits<{
   "open-browser": [instanceId: string, url: string];
   "open-session": [instance: InstanceWithAiSessions, session: AiSessionSummary | undefined];
   "open-repository-workspace": [target: RepositoryWorkspaceTabTarget & { instanceId: string }];
-  "open-settings": [instanceId: string, section?: "apps" | "models"];
+  "open-settings": [instanceId: string, section?: "ai" | "apps" | "models"];
   "run-action": [story: Story, action: StoryAction, onCreated: (instanceId: string, sessionId: string) => void];
 }>();
 provide(storyBrowserRequestKey, (instanceId, url) => emit("open-browser", instanceId, url));

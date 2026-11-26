@@ -64,6 +64,7 @@ use crate::{
     node_agent_client::NodeAgentClient,
     private_model::{
         read_ai_session_next_input_suggestion_enabled,
+        read_ai_session_next_input_suggestion_model_selection,
         read_ai_session_next_input_suggestion_reasoning_effort, ControlledModelConfig,
     },
     session_titles::SessionTitleCoordinator,
@@ -369,6 +370,9 @@ impl AppState {
             AiSessionNextInputSuggestionCoordinator::with_reasoning_effort(
                 read_ai_session_next_input_suggestion_enabled(&std::env::vars().collect()),
                 read_ai_session_next_input_suggestion_reasoning_effort(&std::env::vars().collect()),
+            )
+            .with_model_selection(
+                read_ai_session_next_input_suggestion_model_selection(&std::env::vars().collect()),
             ),
         );
         let ai_session_persistence_settings = Arc::new(AiSessionPersistenceSettingsStore::new(
@@ -2782,6 +2786,9 @@ fn controlled_instance_capabilities(
     capabilities
         .features
         .ai_session_next_input_suggestion_reasoning_effort = true;
+    capabilities
+        .features
+        .ai_session_next_input_suggestion_model_selection = true;
     capabilities.features.node_agent_connection_update = true;
     if let Some(install_environment) = install_environment {
         capabilities.features.app_install_environment = install_environment.capabilities();

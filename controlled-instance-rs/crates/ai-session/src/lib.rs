@@ -16,8 +16,8 @@ use chrono::{SecondsFormat, Utc};
 use controlled_instance_core::atomic::write_atomic;
 use controlled_instance_protocol::{
     AiSessionCounters, AiSessionGoal, AiSessionHistoryItem, AiSessionLatestTurnRef,
-    AiSessionNextInputSuggestion, AiSessionQueue, AiSessionSummary, AiSessionsSnapshot,
-    AI_SESSION_SNAPSHOT_LIMIT,
+    AiSessionNextInputSuggestion, AiSessionNextInputSuggestionError, AiSessionQueue,
+    AiSessionSummary, AiSessionsSnapshot, AI_SESSION_SNAPSHOT_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -50,10 +50,15 @@ pub use codex_app_server::{
 };
 pub use history::{AiSessionHistoryError, AiSessionHistoryRetentionResult, AiSessionHistoryStore};
 pub use next_input::{
-    ai_session_next_input_context, ai_session_next_input_output_schema,
-    ai_session_next_input_prompt, parse_ai_session_next_input_suggestion,
-    AiSessionNextInputSuggestionReasoningEffort, AI_SESSION_NEXT_INPUT_CONTEXT_MAX_BYTES,
-    AI_SESSION_NEXT_INPUT_RESPONSE_MAX_BYTES,
+    ai_session_next_input_context, ai_session_next_input_messages_are_strict_prefix,
+    ai_session_next_input_output_schema, ai_session_next_input_prompt,
+    ai_session_next_input_window_start, build_ai_session_next_input_messages,
+    create_ai_session_next_input_message_plan, parse_ai_session_next_input_suggestion,
+    AiSessionNextInputMessage, AiSessionNextInputMessagePlan,
+    AiSessionNextInputSuggestionReasoningEffort, AiSessionNextInputTurnSnapshot,
+    AI_SESSION_NEXT_INPUT_CONTEXT_MAX_BYTES, AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS,
+    AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS, AI_SESSION_NEXT_INPUT_RESPONSE_MAX_BYTES,
+    AI_SESSION_NEXT_INPUT_SYSTEM_PROMPT,
 };
 pub use opencode::{
     OpenCodeClosedSessionIds, OpenCodeConnection, OpenCodeConnectionProvider,
@@ -81,8 +86,9 @@ pub use timeline::{
 };
 pub use title::{
     ai_session_title_output_schema, ai_session_title_prompt, parse_ai_session_title,
-    AiSessionStructuredModelGenerator, AiSessionStructuredModelInput, AiSessionTitleGenerator,
-    AiSessionTitleInput, AI_SESSION_TITLE_MAX_CHARS, AI_SESSION_TITLE_PROMPT_MAX_BYTES,
+    AiSessionStructuredMessage, AiSessionStructuredModelGenerator, AiSessionStructuredModelInput,
+    AiSessionTitleGenerator, AiSessionTitleInput, AI_SESSION_TITLE_MAX_CHARS,
+    AI_SESSION_TITLE_PROMPT_MAX_BYTES,
 };
 
 #[derive(Debug, Error)]
@@ -184,6 +190,8 @@ pub struct AiSession {
     pub queue: AiSessionQueue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_input_suggestion: Option<AiSessionNextInputSuggestion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_input_suggestion_error: Option<AiSessionNextInputSuggestionError>,
     #[serde(default)]
     pub unread: bool,
 }
@@ -286,6 +294,7 @@ impl AiSession {
                 .map(|session| session.queue.clone())
                 .unwrap_or_default(),
             next_input_suggestion: None,
+            next_input_suggestion_error: None,
             unread: previous.is_some_and(|session| session.unread),
         }
     }
@@ -429,6 +438,7 @@ impl AiSession {
                 items: Vec::new(),
             },
             next_input_suggestion: self.next_input_suggestion.clone(),
+            next_input_suggestion_error: self.next_input_suggestion_error.clone(),
             unread: self.unread,
         }
     }
@@ -814,10 +824,32 @@ impl AiSessionRuntime {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut session = self.get(id).ok_or(AiSessionStoreError::NotFound)?;
-        if session.next_input_suggestion == suggestion {
+        if session.next_input_suggestion == suggestion
+            && session.next_input_suggestion_error.is_none()
+        {
             return Ok(false);
         }
         session.next_input_suggestion = suggestion;
+        session.next_input_suggestion_error = None;
+        self.save_locked(&mut session)?;
+        Ok(true)
+    }
+
+    pub fn set_next_input_suggestion_error(
+        &self,
+        id: &str,
+        error: Option<AiSessionNextInputSuggestionError>,
+    ) -> Result<bool, AiSessionStoreError> {
+        let _guard = self
+            .mutation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut session = self.get(id).ok_or(AiSessionStoreError::NotFound)?;
+        if session.next_input_suggestion_error == error && session.next_input_suggestion.is_none() {
+            return Ok(false);
+        }
+        session.next_input_suggestion = None;
+        session.next_input_suggestion_error = error;
         self.save_locked(&mut session)?;
         Ok(true)
     }
@@ -825,7 +857,8 @@ impl AiSessionRuntime {
     pub fn clear_next_input_suggestions(&self) -> usize {
         let mut cleared = 0;
         for session in self.list() {
-            if session.next_input_suggestion.is_some()
+            if (session.next_input_suggestion.is_some()
+                || session.next_input_suggestion_error.is_some())
                 && self
                     .set_next_input_suggestion(&session.id, None)
                     .unwrap_or(false)
@@ -1509,7 +1542,27 @@ mod tests {
             queue: AiSessionQueue::default(),
             unread: false,
             next_input_suggestion: None,
+            next_input_suggestion_error: None,
         }
+    }
+
+    #[test]
+    fn session_json_omits_an_absent_next_input_error() {
+        let mut session = session("ses_0000000000003", None, "idle");
+        let clear = serde_json::to_value(&session).expect("session");
+        assert!(clear.get("nextInputSuggestionError").is_none());
+
+        session.next_input_suggestion_error = Some(AiSessionNextInputSuggestionError {
+            code: Some("AI_SESSION_NEXT_INPUT_GENERATION_FAILED".to_string()),
+            message: "model failed".to_string(),
+            turn_id: "turn_1".to_string(),
+            generated_at: "2026-11-25T00:00:31.000Z".to_string(),
+        });
+        let failed = serde_json::to_value(&session).expect("session");
+        assert_eq!(
+            failed["nextInputSuggestionError"]["message"],
+            "model failed"
+        );
     }
 
     #[test]

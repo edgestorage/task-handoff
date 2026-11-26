@@ -19,6 +19,7 @@ require.extensions[".ts"] = (module, filename) => {
 const { INSTANCE_PRIVATE_CONFIG_FILE_NAME, InstancePrivateConfigStore } = require("../packages/node-agent/src/instances/private-config-store.ts");
 const {
   readControlledPrivateAiSessionNextInputSuggestionEnabled,
+  readControlledPrivateAiSessionNextInputSuggestionModelSelection,
   readControlledPrivateAiSessionNextInputSuggestionReasoningEffort,
 } = require("../packages/controlled-instance/src/web/private-model-catalog.ts");
 
@@ -106,6 +107,31 @@ test("the controlled instance reads the reasoning mode from env or the private c
   }), "none");
 });
 
+test("private config persists the suggestion model and the controlled instance reads it from env or file", () => {
+  const { root, store } = storeFixture();
+  const selection = { modelEntityId: "mdl_suggestion", modelName: "Suggestion", modelUpstreamName: "suggestion-upstream" };
+  const configured = store.materialize("inst_one", "credential", {}, undefined, undefined, true, "none", selection);
+  assert.deepEqual(configured.aiSessionNextInputSuggestionModelSelection, selection);
+  assert.deepEqual(store.inspectMaterialized("inst_one").aiSessionNextInputSuggestionModelSelection, selection);
+  assert.deepEqual(readControlledPrivateAiSessionNextInputSuggestionModelSelection({
+    TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: store.filePath("inst_one"),
+  }), selection);
+  assert.deepEqual(readControlledPrivateAiSessionNextInputSuggestionModelSelection({
+    TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_SELECTION_JSON: JSON.stringify(selection),
+    TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1",
+  }), selection);
+  assert.equal(readControlledPrivateAiSessionNextInputSuggestionModelSelection({
+    TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_SELECTION_JSON: "not-json",
+    TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1",
+  }), undefined);
+  assert.equal(readControlledPrivateAiSessionNextInputSuggestionModelSelection({
+    TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1",
+  }), undefined);
+  assert.equal(readControlledPrivateAiSessionNextInputSuggestionModelSelection({
+    TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: path.join(root, "missing.json"),
+  }), undefined);
+});
+
 test("the Docker bootstrap projects the switch without adding a runtime env facade", () => {
   const { root, store } = storeFixture();
   const decode = (file) => {
@@ -122,5 +148,8 @@ test("the Docker bootstrap projects the switch without adding a runtime env faca
   assert.equal(decode(store.filePath("inst_off")).has("TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_ENABLED"), false);
   store.materialize("inst_mode", "credential", {}, undefined, undefined, true, "max");
   assert.equal(decode(store.filePath("inst_mode")).get("TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT"), "max");
+  const selection = { modelEntityId: "mdl_suggestion", modelName: "Suggestion" };
+  store.materialize("inst_model", "credential", {}, undefined, undefined, true, "none", selection);
+  assert.deepEqual(JSON.parse(decode(store.filePath("inst_model")).get("TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_SELECTION_JSON")), selection);
   fs.rmSync(root, { recursive: true, force: true });
 });

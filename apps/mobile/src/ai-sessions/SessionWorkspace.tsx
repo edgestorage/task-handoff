@@ -25,7 +25,8 @@ import { Icon, type IconName } from '../components/Icon';
 import { AttachmentImage } from './AttachmentImage';
 import { SessionComposer } from './SessionComposer';
 import { SessionNextInputSuggestionCard } from './SessionNextInputSuggestionCard';
-import { consumeNextInputSuggestion, nextInputSuggestionForSession, nextInputSuggestionKey, visibleNextInputSuggestion } from './next-input-suggestion';
+import { SessionNextInputSuggestionErrorCard } from './SessionNextInputSuggestionErrorCard';
+import { consumeNextInputSuggestion, nextInputSuggestionErrorForSession, nextInputSuggestionForSession, nextInputSuggestionKey, visibleNextInputSuggestion } from './next-input-suggestion';
 import { RunningTurnCapsule } from './RunningTurnCapsule';
 import { SessionGoalBar } from './SessionGoalBar';
 import {
@@ -622,6 +623,9 @@ export function SessionWorkspace({
     editing: Boolean(activeQueueEdit || activeGoalEdit),
     actionsEnabled: authoritativeActionsEnabled,
   });
+  const visibleSuggestionError = authoritativeActionsEnabled
+    ? nextInputSuggestionErrorForSession(session, latestVisibleTurnId)
+    : undefined;
   const latestTurnRunning = session.status === 'running' && (latestTurn ? latestTurn.status === 'running' : true);
   const showLatestTurnRunningCapsule = detailMode === 'turn' && selectedTurnIndex < latestTurnIndex && latestTurnRunning;
   const latestTurnActivity = latestTurnRunning ? sessionActivityText(session, t) : undefined;
@@ -1012,6 +1016,14 @@ export function SessionWorkspace({
     consumeNextInputSuggestion(nextInputSuggestionKey(controlPlaneId, instanceId, session.id, visibleSuggestion.turnId));
     rerender((value) => value + 1);
   };
+  const openNextInputSuggestionError = () => {
+    if (!visibleSuggestionError) return;
+    Alert.alert(
+      t('suggestion.errorLabel'),
+      `${visibleSuggestionError.message}\n\n${t('suggestion.errorSettingsHint')}`,
+      [{ text: t('common.cancel'), style: 'cancel' }],
+    );
+  };
   const addTextToConversation = (text: string) => {
     const next = appendConversationText(latestDraft.current, text);
     if (next === latestDraft.current) return;
@@ -1277,6 +1289,10 @@ export function SessionWorkspace({
           onDismiss={dismissNextInputSuggestion}
           onUse={acceptNextInputSuggestion}
           text={visibleSuggestion.text}
+        /> : null}
+        {visibleSuggestionError ? <SessionNextInputSuggestionErrorCard
+          message={visibleSuggestionError.message}
+          onOpen={openNextInputSuggestionError}
         /> : null}
         {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surface }]}>
           {attachment.kind === 'image' && attachment.previewUri ? <AttachmentImage compact name={attachment.name} uri={attachment.previewUri} /> : <Icon color={colors.textMuted} name={attachment.kind === 'image' ? 'image-outline' : 'document-text-outline'} size={17} />}

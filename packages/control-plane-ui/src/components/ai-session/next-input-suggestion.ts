@@ -1,7 +1,11 @@
-import type { AiSessionNextInputSuggestion } from "@task-handoff/protocol/ai-sessions";
+import type {
+  AiSessionNextInputSuggestion,
+  AiSessionNextInputSuggestionError,
+} from "@task-handoff/protocol/ai-sessions";
 
 type NextInputSuggestionSession = {
   nextInputSuggestion?: AiSessionNextInputSuggestion;
+  nextInputSuggestionError?: AiSessionNextInputSuggestionError;
   status: string;
   queue?: { pendingCount: number };
   lineage?: { kind?: string };
@@ -28,4 +32,23 @@ export function selectNextInputSuggestion(
     return undefined;
   }
   return suggestion;
+}
+
+export function selectNextInputSuggestionError(
+  session: NextInputSuggestionSession | undefined,
+  latestTurnId: string | undefined,
+): AiSessionNextInputSuggestionError | undefined {
+  const error = session?.nextInputSuggestionError;
+  if (
+    !session
+    || !error
+    || session.nextInputSuggestion
+    || session.status !== "idle"
+    || (session.queue?.pendingCount ?? 0) > 0
+    || session.lineage?.kind === "subagent"
+    || error.turnId !== latestTurnId
+  ) {
+    return undefined;
+  }
+  return error;
 }

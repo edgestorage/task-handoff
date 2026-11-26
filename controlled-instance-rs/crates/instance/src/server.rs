@@ -5665,6 +5665,32 @@ async fn update_ai_session_next_input_suggestion_settings(
         // already loaded by the instance.
         None => state.ai_session_next_input.reasoning_effort().await,
     };
+    let next_model_selection = match value.get("modelSelection") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(value) => Some(Some(
+            serde_json::from_value::<controlled_instance_ai_session::AiSessionModelSelection>(
+                value.clone(),
+            )
+            .expect("validated suggestion model selection"),
+        )),
+    };
+    if let Some(requested) = next_model_selection {
+        let resolved = match requested {
+            Some(selection) => match state
+                .controlled_models
+                .resolve_next_input_suggestion_model_selection(&selection)
+            {
+                Ok(selection) => Some(selection),
+                Err(error) => return managed_model_error(error),
+            },
+            None => None,
+        };
+        state
+            .ai_session_next_input
+            .set_model_selection(&state, resolved)
+            .await;
+    }
     state
         .ai_session_next_input
         .set_reasoning_effort(&state, reasoning_effort)
@@ -9977,9 +10003,55 @@ fn validate_ai_session_next_input_suggestion_settings(body: &Value) -> Result<()
         ],
         &mut issues,
     );
+    if let Some(selection) = object.get("modelSelection") {
+        if !selection.is_null() {
+            let path = vec![Value::String("modelSelection".to_string())];
+            match selection.as_object() {
+                Some(selection) => {
+                    zod_unknown_object_keys(
+                        selection,
+                        &["modelEntityId", "modelName", "modelUpstreamName"],
+                        path.clone(),
+                        &mut issues,
+                    );
+                    zod_required_string_field_at(
+                        selection,
+                        "modelEntityId",
+                        1,
+                        120,
+                        &path,
+                        &mut issues,
+                    );
+                    zod_required_string_field_at(
+                        selection,
+                        "modelName",
+                        1,
+                        240,
+                        &path,
+                        &mut issues,
+                    );
+                    if selection.contains_key("modelUpstreamName") {
+                        zod_optional_string_field_at(
+                            selection,
+                            "modelUpstreamName",
+                            1,
+                            240,
+                            &path,
+                            &mut issues,
+                        );
+                    }
+                }
+                None => issues.push(zod_invalid_type(
+                    "object",
+                    path,
+                    zod_received_type(selection),
+                )),
+            }
+        }
+    }
     zod_unknown_object_keys(
         object,
-        &["enabled", "reasoningEffort"],
+        &["enabled", "reasoningEffort", "modelSelection"],
         Vec::new(),
         &mut issues,
     );
@@ -10021,6 +10093,9 @@ mod next_input_suggestion_settings_tests {
             json!({ "enabled": true, "reasoningEffort": "future" }),
             json!({ "enabled": true, "reasoningEffort": null }),
             json!({ "enabled": true, "future": 1 }),
+            json!({ "enabled": true, "modelSelection": "model" }),
+            json!({ "enabled": true, "modelSelection": {} }),
+            json!({ "enabled": true, "modelSelection": { "modelEntityId": "mdl_a", "modelName": "A", "future": true } }),
             json!([]),
             json!("enabled"),
         ] {
@@ -10029,6 +10104,20 @@ mod next_input_suggestion_settings_tests {
                 "{invalid}"
             );
         }
+        assert!(validate_ai_session_next_input_suggestion_settings(&json!({
+            "enabled": true,
+            "modelSelection": null,
+        }))
+        .is_ok());
+        assert!(validate_ai_session_next_input_suggestion_settings(&json!({
+            "enabled": true,
+            "modelSelection": {
+                "modelEntityId": "mdl_a",
+                "modelName": "Model A",
+                "modelUpstreamName": "model-a",
+            },
+        }))
+        .is_ok());
     }
 }
 

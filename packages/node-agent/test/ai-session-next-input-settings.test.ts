@@ -77,7 +77,7 @@ test("failed or thrown live sync requests stay uncached and retry", async () => 
     },
   }), true);
   assert.equal(attempts, 3);
-  assert.equal(syncKeys.get("ins_2"), "incarnation-1:false:unsupported");
+  assert.equal(syncKeys.get("ins_2"), "incarnation-1:false:unsupported:unsupported");
 });
 
 test("reasoning mode is only sent to instances that declare the additive capability", async () => {
@@ -100,11 +100,11 @@ test("reasoning mode is only sent to instances that declare the additive capabil
 
   assert.equal(await syncAiSessionNextInputSuggestionSettings(base), true);
   assert.deepEqual(JSON.parse(String(requests[0]!.init.body)), { enabled: true });
-  assert.equal(syncKeys.get("ins_3"), "incarnation-1:true:unsupported");
+  assert.equal(syncKeys.get("ins_3"), "incarnation-1:true:unsupported:unsupported");
 
   assert.equal(await syncAiSessionNextInputSuggestionSettings({ ...base, reasoningEffortSupported: true }), true);
   assert.deepEqual(JSON.parse(String(requests[1]!.init.body)), { enabled: true, reasoningEffort: "high" });
-  assert.equal(syncKeys.get("ins_3"), "incarnation-1:true:high");
+  assert.equal(syncKeys.get("ins_3"), "incarnation-1:true:high:unsupported");
 
   assert.equal(await syncAiSessionNextInputSuggestionSettings({ ...base, reasoningEffortSupported: true }), true);
   assert.equal(requests.length, 2);
@@ -116,7 +116,7 @@ test("reasoning mode is only sent to instances that declare the additive capabil
   }), true);
   assert.equal(requests.length, 3);
   assert.deepEqual(JSON.parse(String(requests[2]!.init.body)), { enabled: true, reasoningEffort: "session" });
-  assert.equal(syncKeys.get("ins_3"), "incarnation-1:true:session");
+  assert.equal(syncKeys.get("ins_3"), "incarnation-1:true:session:unsupported");
 });
 
 test("the default reasoning mode is the explicit none value", async () => {
@@ -135,4 +135,46 @@ test("the default reasoning mode is the explicit none value", async () => {
     warn: () => undefined,
   }), true);
   assert.deepEqual(JSON.parse(String(requests[0]!.init.body)), { enabled: true, reasoningEffort: "none" });
+});
+
+test("a custom suggestion model is sent only with capability and null clears it", async () => {
+  const requests: Array<{ init: RequestInit }> = [];
+  const syncKeys = new Map<string, string>();
+  const base = {
+    instanceId: "ins_5",
+    webUrl: "http://127.0.0.1:9004",
+    registrationToken: "secret",
+    enabled: true,
+    modelSelection: {
+      modelEntityId: "mdl_suggestion",
+      modelName: "Suggestion",
+      modelUpstreamName: "suggestion-upstream",
+    },
+    processIncarnationId: "incarnation-1",
+    syncKeys,
+    request: async (_url: string, init: RequestInit) => {
+      requests.push({ init });
+      return { ok: true, status: 200 };
+    },
+    warn: () => undefined,
+  };
+
+  assert.equal(await syncAiSessionNextInputSuggestionSettings(base), true);
+  assert.deepEqual(JSON.parse(String(requests[0]!.init.body)), { enabled: true });
+  assert.equal(syncKeys.get("ins_5"), "incarnation-1:true:unsupported:unsupported");
+
+  assert.equal(await syncAiSessionNextInputSuggestionSettings({ ...base, modelSelectionSupported: true }), true);
+  assert.deepEqual(JSON.parse(String(requests[1]!.init.body)), {
+    enabled: true,
+    modelSelection: base.modelSelection,
+  });
+  assert.equal(syncKeys.get("ins_5"), "incarnation-1:true:unsupported:mdl_suggestion:suggestion-upstream");
+
+  assert.equal(await syncAiSessionNextInputSuggestionSettings({
+    ...base,
+    modelSelection: undefined,
+    modelSelectionSupported: true,
+  }), true);
+  assert.deepEqual(JSON.parse(String(requests[2]!.init.body)), { enabled: true, modelSelection: null });
+  assert.equal(syncKeys.get("ins_5"), "incarnation-1:true:unsupported:session");
 });

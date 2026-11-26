@@ -2025,10 +2025,16 @@ function createMockNodeAgentFetch(options = {}) {
       const current = instances.get(id);
       if (!current) return errorResponse(`Instance ${id} was not found.`);
       const { modelEnv: _modelEnv, ...instancePatch } = body;
+      const nextConfig = instancePatch.config
+        ? { ...current.config, ...instancePatch.config }
+        : current.config;
+      if (instancePatch.config?.aiSessionNextInputSuggestionModelSelection === null) {
+        delete nextConfig.aiSessionNextInputSuggestionModelSelection;
+      }
       const updated = {
         ...current,
         ...instancePatch,
-        ...(instancePatch.config ? { config: { ...current.config, ...instancePatch.config } } : {}),
+        config: nextConfig,
         id,
         nodeId,
         updatedAt: timestamp,
@@ -21375,4 +21381,55 @@ test("control plane rejects next-input suggestions when the node agent cannot pr
   });
   assert.equal(rejectedMode.statusCode, 409);
   assert.equal(rejectedMode.body.error.code, "AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT_UNSUPPORTED");
+});
+
+test("control plane forwards a custom suggestion model only when both peers support it and clears it with null", async (t) => {
+  const mock = createMockNodeAgentFetch({
+    health: { capabilities: {
+      aiSessionNextInputSuggestion: true,
+      aiSessionNextInputSuggestionModelSelection: true,
+    } },
+    instanceCapabilities: { features: {
+      aiSessionNextInputSuggestion: true,
+      aiSessionNextInputSuggestionModelSelection: true,
+    } },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-next-input-model"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Next Input Model Project",
+    source: { type: "local-folder", path: "/tmp/workspace" },
+  });
+  const modelSelection = {
+    modelEntityId: "mdl_suggestion",
+    modelName: "Suggestion",
+    modelUpstreamName: "suggestion-upstream",
+  };
+  const configured = await json(app, "POST", "/api/controlled-instances", {
+    name: "model-next-input",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+    config: {
+      aiSessionNextInputSuggestionEnabled: true,
+      aiSessionNextInputSuggestionModelSelection: modelSelection,
+    },
+  });
+  assert.equal(configured.statusCode, 201, JSON.stringify(configured.body));
+  assert.deepEqual(configured.body.data.config.aiSessionNextInputSuggestionModelSelection, modelSelection);
+  const createRequest = mock.requests.filter((request) => request.path === "/instances").at(-1);
+  assert.deepEqual(createRequest.body.config.aiSessionNextInputSuggestionModelSelection, modelSelection);
+
+  const cleared = await json(app, "PATCH", `/api/controlled-instances/${configured.body.data.id}`, {
+    config: { aiSessionNextInputSuggestionModelSelection: null },
+  });
+  const updateRequest = mock.requests.findLast((request) => request.path === `/instances/${configured.body.data.id}` && request.method === "PATCH");
+  assert.equal(cleared.statusCode, 200, JSON.stringify(cleared.body));
+  assert.equal(cleared.body.data.config.aiSessionNextInputSuggestionModelSelection, undefined);
+  assert.equal(updateRequest.body.config.aiSessionNextInputSuggestionModelSelection, null);
 });

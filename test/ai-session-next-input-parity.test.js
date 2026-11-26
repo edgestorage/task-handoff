@@ -77,6 +77,12 @@ test("consumer projection strips suggestions independently from subagent lineage
     status: "idle",
     lineage: { kind: "subagent", parentProviderSessionId: "thread-root" },
     nextInputSuggestion: { text: "继续。", turnId: "turn_1", generatedAt: "2026-11-25T00:00:30.000Z" },
+    nextInputSuggestionError: {
+      code: "AI_SESSION_NEXT_INPUT_GENERATION_FAILED",
+      message: "模型请求失败",
+      turnId: "turn_1",
+      generatedAt: "2026-11-25T00:00:31.000Z",
+    },
     startedAt: "2026-11-25T00:00:00.000Z",
     updatedAt: "2026-11-25T00:01:00.000Z",
   });
@@ -86,6 +92,7 @@ test("consumer projection strips suggestions independently from subagent lineage
       { subagents: entry.subagents, nextInputSuggestion: entry.nextInputSuggestion },
     ).sessions[0];
     assert.equal(Boolean(projected.nextInputSuggestion), entry.expectedSuggestion, JSON.stringify(entry));
+    assert.equal(Boolean(projected.nextInputSuggestionError), entry.expectedSuggestionError, JSON.stringify(entry));
     assert.equal(Boolean(projected.lineage), entry.expectedLineage, JSON.stringify(entry));
   }
 });

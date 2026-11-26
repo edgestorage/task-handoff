@@ -3,6 +3,7 @@ import {
   normalizeAiSessionLineage,
   AiSessionMessageAttachmentMetaSchema,
   AiSessionNextInputSuggestionSchema,
+  AiSessionNextInputSuggestionErrorSchema,
   AiSessionGoalSchema,
   AiSessionModelSelectionSchema,
   AiSessionReasoningEffortSchema,
@@ -20,6 +21,7 @@ import type {
   AiSessionMessageAttachment,
   AiSessionMessageAttachmentMeta,
   AiSessionNextInputSuggestion,
+  AiSessionNextInputSuggestionError,
   AiSessionPhase,
   AiSessionQueuedMessage,
   AiSessionReference,
@@ -31,7 +33,7 @@ const PERSISTED_AI_SESSION_FIELD_NAMES = [
   "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "lineage", "providerMeta", "modelSelection", "reasoningEffort", "storyId", "appBindingKeys", "actions",
   "activeTurnId", "title", "cwd", "cwdFolderId", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
   "currentTool", "toolCallsSinceLastMessage", "subAgents", "goal", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
-  "completedAt", "error", "counters", "queue", "nextInputSuggestion", "unread",
+  "completedAt", "error", "counters", "queue", "nextInputSuggestion", "nextInputSuggestionError", "unread",
 ] as const satisfies readonly (keyof AiSessionStatus)[];
 
 const PERSISTED_SESSION_FIELDS = new Set<string>(PERSISTED_AI_SESSION_FIELD_NAMES);
@@ -44,6 +46,7 @@ const PERSISTED_SUB_AGENT_FIELDS = new Set(Object.keys(AiSessionSubAgentSchema.s
 const PERSISTED_QUEUE_ITEM_FIELDS = new Set(Object.keys(AiSessionQueuedMessageSchema.shape));
 const PERSISTED_ATTACHMENT_META_FIELDS = new Set(Object.keys(AiSessionMessageAttachmentMetaSchema.shape));
 const PERSISTED_NEXT_INPUT_SUGGESTION_FIELDS = new Set(Object.keys(AiSessionNextInputSuggestionSchema.shape));
+const PERSISTED_NEXT_INPUT_SUGGESTION_ERROR_FIELDS = new Set(Object.keys(AiSessionNextInputSuggestionErrorSchema.shape));
 
 function warnUnknownFields(record: Record<string, unknown>, allowed: ReadonlySet<string>, context: string) {
   const unknown = Object.keys(record).filter((key) => !allowed.has(key));
@@ -118,23 +121,34 @@ export function normalizeAiSessionNextInputSuggestion(value: unknown): AiSession
   return parsed.success ? parsed.data : undefined;
 }
 
+export function normalizeAiSessionNextInputSuggestionError(value: unknown): AiSessionNextInputSuggestionError | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  warnUnknownFields(record, PERSISTED_NEXT_INPUT_SUGGESTION_ERROR_FIELDS, "nextInputSuggestionError");
+  const parsed = AiSessionNextInputSuggestionErrorSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
 export function withValidNextInputSuggestion(session: AiSessionStatus): AiSessionStatus {
-  if (!session.nextInputSuggestion) return session;
   const latestTurn = normalizeTurns(session.turns).at(-1);
-  const parsed = AiSessionNextInputSuggestionSchema.safeParse(session.nextInputSuggestion);
-  if (
-    parsed.success &&
-    session.status === "idle" &&
-    session.lineage?.kind !== "subagent" &&
-    session.queue.pendingCount === 0 &&
-    latestTurn?.id === parsed.data.turnId &&
-    latestTurn.status === "completed"
-  ) {
-    return parsed.data === session.nextInputSuggestion
-      ? session
-      : { ...session, nextInputSuggestion: parsed.data };
+  const currentTurn = session.status === "idle"
+    && session.lineage?.kind !== "subagent"
+    && session.queue.pendingCount === 0
+    && latestTurn?.status === "completed"
+    ? latestTurn
+    : undefined;
+  const parsedSuggestion = AiSessionNextInputSuggestionSchema.safeParse(session.nextInputSuggestion);
+  if (parsedSuggestion.success && currentTurn?.id === parsedSuggestion.data.turnId) {
+    if (parsedSuggestion.data === session.nextInputSuggestion && session.nextInputSuggestionError === undefined) return session;
+    return { ...session, nextInputSuggestion: parsedSuggestion.data, nextInputSuggestionError: undefined };
   }
-  const { nextInputSuggestion: _nextInputSuggestion, ...withoutSuggestion } = session;
+  const parsedError = AiSessionNextInputSuggestionErrorSchema.safeParse(session.nextInputSuggestionError);
+  if (parsedError.success && currentTurn?.id === parsedError.data.turnId) {
+    if (parsedError.data === session.nextInputSuggestionError && session.nextInputSuggestion === undefined) return session;
+    return { ...session, nextInputSuggestion: undefined, nextInputSuggestionError: parsedError.data };
+  }
+  if (session.nextInputSuggestion === undefined && session.nextInputSuggestionError === undefined) return session;
+  const { nextInputSuggestion: _nextInputSuggestion, nextInputSuggestionError: _nextInputSuggestionError, ...withoutSuggestion } = session;
   return withoutSuggestion;
 }
 
@@ -329,6 +343,7 @@ export function decodePersistedAiSession(value: unknown): AiSessionStatus | unde
   const currentTool = normalizeTool(record.currentTool);
   const goal = normalizeAiSessionGoal(record.goal);
   const nextInputSuggestion = normalizeAiSessionNextInputSuggestion(record.nextInputSuggestion);
+  const nextInputSuggestionError = normalizeAiSessionNextInputSuggestionError(record.nextInputSuggestionError);
   const completedAt = typeof record.completedAt === "string" && AiSessionStatusSchema.shape.completedAt.safeParse(record.completedAt).success
     ? record.completedAt
     : undefined;
@@ -372,6 +387,7 @@ export function decodePersistedAiSession(value: unknown): AiSessionStatus | unde
     counters: normalizeAiSessionCounters(record.counters as Partial<AiSessionStatus["counters"]> | undefined),
     queue: normalizeAiSessionQueue(record.queue),
     ...(nextInputSuggestion ? { nextInputSuggestion } : {}),
+    ...(nextInputSuggestionError ? { nextInputSuggestionError } : {}),
     unread: record.unread === true,
   };
   const parsed = AiSessionStatusSchema.safeParse(candidate);

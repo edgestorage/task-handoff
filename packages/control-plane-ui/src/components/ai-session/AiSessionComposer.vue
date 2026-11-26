@@ -3,11 +3,11 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { formatBytes, formatNumber } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
-import { AppWindow, ArrowUp, Box, Check, Copy, CornerDownRight, File, FileText, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, Check, Copy, CornerDownRight, File, FileText, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, TriangleAlert, WandSparkles, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
-import type { AiSessionModelSelection, AiSessionNextInputSuggestion, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionModelSelection, AiSessionNextInputSuggestion, AiSessionNextInputSuggestionError, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
@@ -79,6 +79,7 @@ const props = defineProps<{
   submitLabel?: string;
   submitHidden?: boolean;
   nextInputSuggestion?: AiSessionNextInputSuggestion;
+  nextInputSuggestionError?: AiSessionNextInputSuggestionError;
   suggestionKey?: string;
 }>();
 
@@ -93,6 +94,7 @@ const emit = defineEmits<{
   (event: "cancelEdit"): void;
   (event: "selectModel", value: AiSessionModelSelection): void;
   (event: "openModelSettings"): void;
+  (event: "openSuggestionSettings"): void;
   (event: "selectReasoningEffort", value: AiSessionReasoningEffort): void;
 }>();
 const { locale, t } = useI18n();
@@ -147,6 +149,17 @@ const suggestionVisible = computed(() => Boolean(
   && !attachments.value.length
   && !consumedSuggestions.has(nextInputSuggestionKey.value),
 ));
+const suggestionErrorVisible = computed(() => Boolean(
+  !props.placeholder
+  && props.nextInputSuggestionError?.message
+  && !props.nextInputSuggestion?.text
+  && !props.busy
+  && !props.sessionBusy
+  && !editing.value
+  && !props.modelValue
+  && !attachments.value.length
+));
+const suggestionBadgeVisible = computed(() => suggestionVisible.value || suggestionErrorVisible.value);
 const displayedPlaceholder = computed(() => (
   props.placeholder
   || (suggestionVisible.value ? props.nextInputSuggestion!.text : t("sessions.composer.followUp"))
@@ -154,7 +167,7 @@ const displayedPlaceholder = computed(() => (
 const SUGGESTION_BADGE_FALLBACK_WIDTH = 132;
 const suggestionBadgeEl = ref<HTMLElement>();
 const suggestionBadgeWidth = ref(0);
-const suggestionInputStyle = computed(() => suggestionVisible.value
+const suggestionInputStyle = computed(() => suggestionBadgeVisible.value
   ? { paddingRight: `${(suggestionBadgeWidth.value || SUGGESTION_BADGE_FALLBACK_WIDTH) + 28}px` }
   : undefined);
 let stopSuggestionBadgeResize: (() => void) | undefined;
@@ -164,7 +177,7 @@ function measureSuggestionBadge() {
   suggestionBadgeWidth.value = width > 0 ? Math.ceil(width) : 0;
 }
 
-watch(suggestionVisible, async (visible) => {
+watch(suggestionBadgeVisible, async (visible) => {
   stopSuggestionBadgeResize?.();
   stopSuggestionBadgeResize = undefined;
   if (!visible) {
@@ -1001,8 +1014,30 @@ watch(() => props.busy, (busy) => {
           <span v-if="suggestionVisible" :id="suggestionHintId" class="ai-session-composer__suggestion-hint">
             {{ t('sessions.composer.acceptSuggestionHint') }}
           </span>
+          <TooltipProvider v-if="suggestionErrorVisible" :delay-duration="200">
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <button
+                  ref="suggestionBadgeEl"
+                  type="button"
+                  class="ai-session-composer__suggestion-badge ai-session-composer__suggestion-badge--error"
+                  :aria-label="t('sessions.composer.suggestionErrorAria', { reason: nextInputSuggestionError!.message })"
+                  :title="nextInputSuggestionError!.message"
+                  @click="emit('openSuggestionSettings')"
+                >
+                  <TriangleAlert :size="12" class="ai-session-composer__suggestion-icon" />
+                  <span class="ai-session-composer__suggestion-label">{{ t('sessions.composer.suggestionErrorLabel') }}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent class="ai-session-composer__suggestion-error-tooltip" side="top" align="end" :side-offset="8">
+                <strong>{{ t('sessions.composer.suggestionErrorLabel') }}</strong>
+                <span>{{ nextInputSuggestionError!.message }}</span>
+                <small>{{ t('sessions.composer.suggestionErrorHint') }}</small>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <button
-            v-if="suggestionVisible"
+            v-else-if="suggestionVisible"
             ref="suggestionBadgeEl"
             type="button"
             class="ai-session-composer__suggestion-badge"
@@ -1508,6 +1543,19 @@ watch(() => props.busy, (busy) => {
   color: var(--ai-composer-primary-text, currentColor);
 }
 
+.ai-session-composer__suggestion-badge--error {
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+}
+
+.ai-session-composer__suggestion-badge--error:is(:hover, :focus-visible) {
+  background: hsl(var(--destructive) / 0.16);
+}
+
+.ai-session-composer__suggestion-badge--error .ai-session-composer__suggestion-icon {
+  color: currentColor;
+}
+
 .ai-session-composer__suggestion-key {
   display: inline-grid;
   min-width: 30px;
@@ -1968,6 +2016,27 @@ watch(() => props.busy, (busy) => {
 :global(.ai-session-mention-popover__state--error),
 :global(.ai-session-mention-popover__diagnostic) {
   color: var(--status-danger);
+}
+
+:global(.ai-session-composer__suggestion-error-tooltip) {
+  display: grid;
+  max-width: 320px;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+:global(.ai-session-composer__suggestion-error-tooltip strong) {
+  font-weight: 500;
+}
+
+:global(.ai-session-composer__suggestion-error-tooltip span) {
+  overflow-wrap: anywhere;
+}
+
+:global(.ai-session-composer__suggestion-error-tooltip small) {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
 }
 
 </style>

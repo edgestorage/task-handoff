@@ -6735,6 +6735,7 @@ mod tests {
             queue: AiSessionQueue::default(),
             unread: false,
             next_input_suggestion: None,
+            next_input_suggestion_error: None,
         }
     }
 

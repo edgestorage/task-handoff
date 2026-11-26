@@ -63,6 +63,7 @@ export type AiSessionPatch = Partial<
     | "queue"
     | "unread"
     | "nextInputSuggestion"
+    | "nextInputSuggestionError"
   >
 > & {
   counters?: Partial<AiSessionStatus["counters"]>;
@@ -214,6 +215,7 @@ const AI_SESSION_BUSINESS_KEYS = [
   "queue",
   "unread",
   "nextInputSuggestion",
+  "nextInputSuggestionError",
 ] as const satisfies readonly AiSessionBusinessKey[];
 
 function nextUnread(current: boolean, previousStatus: AiSessionLifecycle, status: AiSessionLifecycle) {
@@ -314,6 +316,7 @@ export function reduceAiSessionRealtime(
   if (event.kind === "next-input-suggestion") {
     return applyAiSessionPatch(current, {
       nextInputSuggestion: event.suggestion ?? undefined,
+      nextInputSuggestionError: event.suggestionError ?? undefined,
     }, {
       updatedAt,
       meta,
@@ -344,7 +347,11 @@ export function reduceAiSessionRealtime(
         userPrompt,
         userMessage: event.userMessage,
       }, updatedAt, meta);
-      return applyAiSessionPatch(current, { turns, nextInputSuggestion: undefined }, {
+      return applyAiSessionPatch(current, {
+        turns,
+        nextInputSuggestion: undefined,
+        nextInputSuggestionError: undefined,
+      }, {
         updatedAt, meta, replaceTurns: true, suppressTurnUpdate: true,
       });
     }
@@ -355,6 +362,7 @@ export function reduceAiSessionRealtime(
       userPrompt,
       userMessage: event.userMessage,
       nextInputSuggestion: undefined,
+      nextInputSuggestionError: undefined,
     }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "model-selection") {
@@ -385,7 +393,9 @@ export function reduceAiSessionRealtime(
       status,
       phase: event.phase || current.phase,
       currentTool: status === "idle" || status === "failed" ? undefined : current.currentTool,
-      ...(status === "running" || status === "waiting" ? { nextInputSuggestion: undefined } : {}),
+      ...(status === "running" || status === "waiting"
+        ? { nextInputSuggestion: undefined, nextInputSuggestionError: undefined }
+        : {}),
     }, {
       updatedAt,
       meta,
@@ -399,6 +409,7 @@ export function reduceAiSessionRealtime(
       status: event.status || "running",
       phase: event.phase || "thinking",
       nextInputSuggestion: undefined,
+      nextInputSuggestionError: undefined,
     }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "user-message") {
@@ -409,6 +420,7 @@ export function reduceAiSessionRealtime(
       userPrompt: event.userPrompt,
       userMessage: event.userMessage,
       nextInputSuggestion: undefined,
+      nextInputSuggestionError: undefined,
     }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "assistant-message") {
@@ -423,6 +435,7 @@ export function reduceAiSessionRealtime(
       currentTool: undefined,
       toolCallsSinceLastMessage: 0,
       nextInputSuggestion: undefined,
+      nextInputSuggestionError: undefined,
     }, { updatedAt, meta });
   }
   if (event.kind === "approval-requested") {
@@ -434,6 +447,7 @@ export function reduceAiSessionRealtime(
       actions: { ...current.actions, approval: true },
       counters: event.counters || { approvals: 1 },
       nextInputSuggestion: undefined,
+      nextInputSuggestionError: undefined,
     }, { updatedAt, meta });
   }
   if (event.kind === "tool-activity") {
@@ -449,6 +463,7 @@ export function reduceAiSessionRealtime(
     return applyAiSessionPatch(current, {
       error: event.error,
       nextInputSuggestion: undefined,
+      nextInputSuggestionError: undefined,
     }, { updatedAt, meta, suppressTurnUpdate: true });
   }
   if (event.kind === "context-compaction" && event.contextCompaction) {
@@ -498,6 +513,7 @@ export function reduceAiSessionRealtime(
       error,
       currentTool: undefined,
       nextInputSuggestion: undefined,
+      nextInputSuggestionError: undefined,
     }, {
       updatedAt,
       meta,

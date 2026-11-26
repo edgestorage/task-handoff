@@ -224,6 +224,7 @@
           @next-prompt="nextPrompt(selectedCard)"
           @select-model="selectSelectedSessionModel"
           @open-model-settings="emit('openInstanceSettings', selectedCard.instance.id, 'models')"
+          @open-suggestion-settings="emit('openInstanceSettings', selectedCard.instance.id, 'ai')"
           @select-reasoning-effort="selectSelectedSessionReasoningEffort"
           @open-ai-session-app="openCardApp"
           @previous-prompt="previousPrompt(selectedCard)"
@@ -363,7 +364,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
-  openInstanceSettings: [instanceId: string, section: "models"];
+  openInstanceSettings: [instanceId: string, section: "ai" | "models"];
   resolveApproval: [instance: InstanceWithAiSessions, session: AiSessionSummary, decision: "allow" | "deny" | "skip"];
   selectInstance: [instanceId: string];
   "update:filter": [value: string];

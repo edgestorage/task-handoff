@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AI_SESSION_NEXT_INPUT_CONTEXT_MAX_BYTES,
+  AiSessionNextInputGenerationError,
   AiSessionNextInputSuggestionCoordinator,
   aiSessionNextInputContext,
   aiSessionNextInputPrompt,
   parseAiSessionNextInputSuggestion,
+  sanitizeAiSessionNextInputSuggestionError,
   truncateAiSessionNextInputUtf8,
+  type AiSessionNextInputMessage,
 } from "../src/ai-session-next-input.ts";
 import type { AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 
@@ -14,6 +17,14 @@ const now = "2026-11-25T00:00:00.000Z";
 
 function completedTurn(id: string, userPrompt: string, summary: string) {
   return { id, userPrompt, status: "completed", summary, lastMessage: summary, completedAt: "2026-11-25T00:00:30.000Z", updatedAt: "2026-11-25T00:00:30.000Z" };
+}
+
+function completedTurns(count: number) {
+  return Array.from({ length: count }, (_, index) => completedTurn(
+    `turn_${index + 1}`,
+    `问题 ${index + 1}`,
+    `回答 ${index + 1}`,
+  ));
 }
 
 function statusSession(overrides: Partial<AiSessionStatus> = {}): AiSessionStatus {
@@ -31,7 +42,7 @@ function statusSession(overrides: Partial<AiSessionStatus> = {}): AiSessionStatu
     unread: false,
     startedAt: now,
     updatedAt: now,
-    turns: [completedTurn("turn_1", "问题", "回答")],
+    turns: completedTurns(5),
     ...overrides,
   } as AiSessionStatus;
 }
@@ -47,11 +58,24 @@ class FakeRegistry {
     if (!current) return undefined;
     if (event.kind === "next-input-suggestion") {
       if (event.suggestion) {
-        const updated = { ...current, nextInputSuggestion: event.suggestion } as AiSessionStatus;
+        const updated = {
+          ...current,
+          nextInputSuggestion: event.suggestion,
+          nextInputSuggestionError: undefined,
+        } as AiSessionStatus;
         this.sessions.set(id, updated);
         return updated;
       }
-      const { nextInputSuggestion: _suggestion, ...rest } = current;
+      const {
+        nextInputSuggestion: _suggestion,
+        nextInputSuggestionError: _suggestionError,
+        ...rest
+      } = current;
+      if (event.suggestionError) {
+        const updated = { ...rest, nextInputSuggestionError: event.suggestionError } as AiSessionStatus;
+        this.sessions.set(id, updated);
+        return updated;
+      }
       this.sessions.set(id, rest as AiSessionStatus);
       return rest as AiSessionStatus;
     }
@@ -71,6 +95,16 @@ test("parser normalizes structured output and bounds it by Unicode characters", 
   assert.equal(parseAiSessionNextInputSuggestion("not json"), undefined);
   assert.equal(parseAiSessionNextInputSuggestion('{"suggestion":42}'), undefined);
   assert.equal(Array.from(parseAiSessionNextInputSuggestion(JSON.stringify({ suggestion: "字".repeat(200) }))!).length, 160);
+});
+
+test("suggestion errors are bounded and redact credentials", () => {
+  const sanitized = sanitizeAiSessionNextInputSuggestionError(
+    "provider failed Authorization: Bearer secret-token api_key=sk-super-secret",
+  );
+  assert.equal(sanitized.includes("secret-token"), false);
+  assert.equal(sanitized.includes("sk-super-secret"), false);
+  assert.match(sanitized, /\[redacted\]/u);
+  assert.equal(Array.from(sanitizeAiSessionNextInputSuggestionError("x".repeat(2_000))).length, 1_000);
 });
 
 test("context uses the latest two completed turns, excludes other states, and truncates UTF-8 safely", () => {
@@ -110,11 +144,248 @@ test("coordinator generates once per settled turn after the debounce", async () 
   coordinator.observeSuccessfulTurn(session.id);
   coordinator.observeSuccessfulTurn(session.id);
   await wait(20);
-  assert.deepEqual(generated, ["turn_1"]);
+  assert.deepEqual(generated, ["turn_5"]);
   assert.equal(registry.get(session.id)?.nextInputSuggestion?.text, "继续补齐测试");
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError, undefined);
   coordinator.observeSuccessfulTurn(session.id);
   await wait(20);
-  assert.deepEqual(generated, ["turn_1"]);
+  assert.deepEqual(generated, ["turn_5"]);
+});
+
+test("generation failures publish a dedicated sanitized error and clear any suggestion", async () => {
+  const registry = new FakeRegistry();
+  const session = registry.set(statusSession({
+    nextInputSuggestion: { text: "旧建议", turnId: "turn_5", generatedAt: now },
+  }));
+  const coordinator = new AiSessionNextInputSuggestionCoordinator({
+    registry: registry as never,
+    isEnabled: () => true,
+    debounceMs: 5,
+    generate: async () => {
+      throw new Error("HTTP 401 Authorization: Bearer secret-token sk-super-secret");
+    },
+  });
+  coordinator.observeSuccessfulTurn(session.id);
+  await wait(20);
+  const current = registry.get(session.id);
+  assert.equal(current?.nextInputSuggestion, undefined);
+  assert.equal(current?.nextInputSuggestionError?.turnId, "turn_5");
+  assert.equal(current?.nextInputSuggestionError?.code, "AI_SESSION_NEXT_INPUT_GENERATION_FAILED");
+  assert.match(current?.nextInputSuggestionError?.message || "", /\[redacted\]/u);
+  assert.equal(current?.nextInputSuggestionError?.message.includes("secret-token"), false);
+  assert.equal(current?.nextInputSuggestionError?.message.includes("sk-super-secret"), false);
+});
+
+test("coded generation failures keep their actionable error code", async () => {
+  const registry = new FakeRegistry();
+  const session = registry.set(statusSession());
+  const coordinator = new AiSessionNextInputSuggestionCoordinator({
+    registry: registry as never,
+    isEnabled: () => true,
+    debounceMs: 5,
+    generate: async () => {
+      throw new AiSessionNextInputGenerationError(
+        "AI_SESSION_NEXT_INPUT_MODEL_UNRESOLVED",
+        "AI model is not configured for this session.",
+      );
+    },
+  });
+  coordinator.observeSuccessfulTurn(session.id);
+  await wait(20);
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError?.code, "AI_SESSION_NEXT_INPUT_MODEL_UNRESOLVED");
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError?.message, "AI model is not configured for this session.");
+});
+
+test("a later successful generation clears the published suggestion error", async () => {
+  const registry = new FakeRegistry();
+  const session = registry.set(statusSession({
+    nextInputSuggestionError: {
+      code: "AI_SESSION_NEXT_INPUT_GENERATION_FAILED",
+      message: "旧错误",
+      turnId: "turn_5",
+      generatedAt: now,
+    },
+  }));
+  const coordinator = new AiSessionNextInputSuggestionCoordinator({
+    registry: registry as never,
+    isEnabled: () => true,
+    debounceMs: 5,
+    generate: async () => JSON.stringify({ suggestion: "恢复后的建议" }),
+  });
+  coordinator.observeSuccessfulTurn(session.id);
+  await wait(20);
+  assert.equal(registry.get(session.id)?.nextInputSuggestion?.text, "恢复后的建议");
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError, undefined);
+});
+
+test("coordinator keeps append-only messages from five to ten turns and resets at eleven", async () => {
+  const registry = new FakeRegistry();
+  registry.set(statusSession());
+  const requests: Array<{ turnId: string; messages: AiSessionNextInputMessage[] }> = [];
+  const coordinator = new AiSessionNextInputSuggestionCoordinator({
+    registry: registry as never,
+    isEnabled: () => true,
+    debounceMs: 5,
+    generate: async ({ turn, messages }) => {
+      requests.push({ turnId: turn.id, messages: structuredClone(messages) });
+      return JSON.stringify({ suggestion: `建议 ${turn.id}` });
+    },
+  });
+
+  for (let count = 5; count <= 11; count += 1) {
+    if (count > 5) registry.set({ ...registry.get("ais_0000000000000")!, turns: completedTurns(count) });
+    coordinator.observeSuccessfulTurn("ais_0000000000000", `turn_${count}`);
+    await wait(20);
+  }
+
+  assert.deepEqual(requests.map((request) => request.turnId), ["turn_5", "turn_6", "turn_7", "turn_8", "turn_9", "turn_10", "turn_11"]);
+  for (let index = 1; index <= 5; index += 1) {
+    assert.deepEqual(requests[index].messages.slice(0, requests[index - 1].messages.length), requests[index - 1].messages);
+  }
+  assert.equal(requests[0].messages.filter((message) => message.role === "user").length, 5);
+  assert.equal(requests[1].messages.at(-2)?.content, "建议 turn_5");
+  assert.equal(requests[6].messages.some((message) => message.content === "建议 turn_5"), false);
+  assert.equal(requests[6].messages.find((message) => message.role === "user")?.content, "User: 问题 6\nAssistant: 回答 6");
+  assert.notDeepEqual(requests[6].messages.slice(0, requests[5].messages.length), requests[5].messages);
+});
+
+test("coordinator freezes completed turn text after it enters the prefix", async () => {
+  const registry = new FakeRegistry();
+  const session = registry.set(statusSession());
+  const requests: AiSessionNextInputMessage[][] = [];
+  const coordinator = new AiSessionNextInputSuggestionCoordinator({
+    registry: registry as never,
+    isEnabled: () => true,
+    debounceMs: 5,
+    generate: async ({ turn, messages }) => {
+      requests.push(structuredClone(messages));
+      return JSON.stringify({ suggestion: `建议 ${turn.id}` });
+    },
+  });
+  coordinator.observeSuccessfulTurn(session.id);
+  await wait(20);
+
+  const current = registry.get(session.id)!;
+  current.turns![0].userPrompt = "被改写的问题";
+  current.turns![0].summary = "被改写的回答";
+  current.turns![0].lastMessage = "被改写的回答";
+  registry.set({ ...current, turns: [...current.turns!, completedTurn("turn_6", "问题 6", "回答 6")] });
+  coordinator.observeSuccessfulTurn(session.id, "turn_6");
+  await wait(20);
+
+  assert.deepEqual(requests[1].slice(0, requests[0].length), requests[0]);
+  assert.equal(requests[1].some((message) => message.content.includes("被改写")), false);
+});
+
+test("late suggestion results never enter the next request history", async () => {
+  const registry = new FakeRegistry();
+  const session = registry.set(statusSession());
+  const requests: AiSessionNextInputMessage[][] = [];
+  const releases: Array<(value: string) => void> = [];
+  const coordinator = new AiSessionNextInputSuggestionCoordinator({
+    registry: registry as never,
+    isEnabled: () => true,
+    debounceMs: 5,
+    generate: ({ turn, messages }) => {
+      requests.push(structuredClone(messages));
+      if (turn.id === "turn_5" || turn.id === "turn_6") {
+        return new Promise<string>((resolve) => { releases.push(resolve); });
+      }
+      return Promise.resolve(JSON.stringify({ suggestion: "建议 turn_7" }));
+    },
+  });
+
+  coordinator.observeSuccessfulTurn(session.id);
+  await wait(20);
+  registry.set({ ...registry.get(session.id)!, turns: completedTurns(6) });
+  coordinator.reconcileSession(session.id);
+  coordinator.observeSuccessfulTurn(session.id, "turn_6");
+  await wait(20);
+
+  releases[0](JSON.stringify({ suggestion: "迟到建议" }));
+  await wait(20);
+  releases[1](JSON.stringify({ suggestion: "建议 turn_6" }));
+  await wait(20);
+  registry.set({ ...registry.get(session.id)!, turns: completedTurns(7) });
+  coordinator.observeSuccessfulTurn(session.id, "turn_7");
+  await wait(20);
+
+  assert.equal(requests[2].some((message) => message.content === "建议 turn_6"), true);
+  assert.equal(requests[2].some((message) => message.content === "迟到建议"), false);
+});
+
+test("changing reasoning effort clears the published suggestion but preserves message history", async () => {
+  const registry = new FakeRegistry();
+  const session = registry.set(statusSession());
+  const requests: AiSessionNextInputMessage[][] = [];
+  const coordinator = new AiSessionNextInputSuggestionCoordinator({
+    registry: registry as never,
+    isEnabled: () => true,
+    debounceMs: 5,
+    generate: async ({ turn, messages }) => {
+      requests.push(structuredClone(messages));
+      return JSON.stringify({ suggestion: `建议 ${turn.id}` });
+    },
+  });
+  coordinator.observeSuccessfulTurn(session.id);
+  await wait(20);
+  coordinator.setReasoningEffort("high");
+  assert.equal(registry.get(session.id)?.nextInputSuggestion, undefined);
+
+  registry.set({ ...registry.get(session.id)!, turns: completedTurns(6) });
+  coordinator.observeSuccessfulTurn(session.id, "turn_6");
+  await wait(20);
+  assert.deepEqual(requests[1].slice(0, requests[0].length), requests[0]);
+  assert.equal(requests[1].at(-2)?.content, "建议 turn_5");
+});
+
+test("changing the suggestion model cancels in-flight work and clears the published suggestion", async () => {
+  const registry = new FakeRegistry();
+  const session = registry.set(statusSession({
+    nextInputSuggestion: { text: "旧建议", turnId: "turn_5", generatedAt: now },
+  }));
+  let release: ((value: string) => void) | undefined;
+  let signal: AbortSignal | undefined;
+  const coordinator = new AiSessionNextInputSuggestionCoordinator({
+    registry: registry as never,
+    isEnabled: () => true,
+    debounceMs: 5,
+    generate: (input) => {
+      signal = input.signal;
+      return new Promise<string>((resolve) => { release = resolve; });
+    },
+  });
+
+  coordinator.observeSuccessfulTurn(session.id);
+  await wait(20);
+  assert.equal(signal?.aborted, false);
+
+  coordinator.setModelSelection({ modelEntityId: "mdl_suggestion", modelName: "suggestion-model" });
+  assert.equal(signal?.aborted, true);
+  assert.equal(registry.get(session.id)?.nextInputSuggestion, undefined);
+  release?.(JSON.stringify({ suggestion: "迟到建议" }));
+  await wait(30);
+  assert.equal(registry.get(session.id)?.nextInputSuggestion, undefined);
+
+  coordinator.setModelSelection({ modelEntityId: "mdl_suggestion", modelName: "suggestion-model", modelUpstreamName: "suggestion-upstream" });
+  assert.equal(registry.get(session.id)?.nextInputSuggestion, undefined);
+});
+
+test("coordinator does not generate when the latest completed turn lacks an assistant reply", async () => {
+  const registry = new FakeRegistry();
+  const session = registry.set(statusSession({
+    turns: [...completedTurns(5), { ...completedTurn("turn_6", "空回答", ""), lastMessage: "" }] as never,
+  }));
+  let generated = 0;
+  const coordinator = new AiSessionNextInputSuggestionCoordinator({
+    registry: registry as never,
+    isEnabled: () => true,
+    debounceMs: 5,
+    generate: async () => { generated += 1; return JSON.stringify({ suggestion: "不应出现" }); },
+  });
+  coordinator.observeSuccessfulTurn(session.id);
+  await wait(20);
+  assert.equal(generated, 0);
 });
 
 test("the coordinator defaults to none, follows the session when selected, and lets an explicit mode override it", async () => {
@@ -138,22 +409,18 @@ test("the coordinator defaults to none, follows the session when selected, and l
   coordinator.setReasoningEffort("session");
   registry.set({
     ...session,
-    turns: [completedTurn("turn_1", "问题", "回答"), completedTurn("turn_2", "新问题", "新回答")],
+    turns: completedTurns(6),
   });
-  coordinator.observeSuccessfulTurn(session.id, "turn_2");
+  coordinator.observeSuccessfulTurn(session.id, "turn_6");
   await wait(20);
   assert.deepEqual(efforts, ["none", "high"]);
 
   coordinator.setReasoningEffort("minimal");
   registry.set({
     ...session,
-    turns: [
-      completedTurn("turn_1", "问题", "回答"),
-      completedTurn("turn_2", "新问题", "新回答"),
-      completedTurn("turn_3", "再问", "再答"),
-    ],
+    turns: completedTurns(7),
   });
-  coordinator.observeSuccessfulTurn(session.id, "turn_3");
+  coordinator.observeSuccessfulTurn(session.id, "turn_7");
   await wait(20);
   assert.deepEqual(efforts, ["none", "high", "minimal"]);
 });
@@ -161,7 +428,7 @@ test("the coordinator defaults to none, follows the session when selected, and l
 test("changing reasoning mode cancels in-flight work, clears the published suggestion, and does not backfill the old turn", async () => {
   const registry = new FakeRegistry();
   const session = registry.set(statusSession({
-    nextInputSuggestion: { text: "旧建议", turnId: "turn_1", generatedAt: now },
+    nextInputSuggestion: { text: "旧建议", turnId: "turn_5", generatedAt: now },
   }));
   let generated = 0;
   let release: ((value: string) => void) | undefined;
@@ -229,8 +496,11 @@ test("a success reported before the registry settles is scheduled after the idle
   const registry = new FakeRegistry();
   const session = registry.set(statusSession({
     status: "running",
-    activeTurnId: "turn_1",
-    turns: [{ ...completedTurn("turn_1", "问题", "回答"), status: "running", completedAt: undefined }] as never,
+    activeTurnId: "turn_6",
+    turns: [
+      ...completedTurns(5),
+      { ...completedTurn("turn_6", "新问题", "新回答"), status: "running", completedAt: undefined },
+    ] as never,
   }));
   let generated = 0;
   const coordinator = new AiSessionNextInputSuggestionCoordinator({
@@ -239,10 +509,10 @@ test("a success reported before the registry settles is scheduled after the idle
     debounceMs: 5,
     generate: async () => { generated += 1; return JSON.stringify({ suggestion: "下一步" }); },
   });
-  coordinator.observeSuccessfulTurn(session.id, "turn_1");
+  coordinator.observeSuccessfulTurn(session.id, "turn_6");
   await wait(20);
   assert.equal(generated, 0);
-  registry.set({ ...session, status: "idle", activeTurnId: undefined, turns: [completedTurn("turn_1", "问题", "回答")] as never });
+  registry.set({ ...session, status: "idle", activeTurnId: undefined, turns: completedTurns(6) as never });
   coordinator.reconcileSession(session.id);
   await wait(20);
   assert.equal(generated, 1);
@@ -253,8 +523,11 @@ test("an early success survives a completed turn that appears before idle and ge
   const registry = new FakeRegistry();
   const session = registry.set(statusSession({
     status: "running",
-    activeTurnId: "turn_1",
-    turns: [{ ...completedTurn("turn_1", "问题", "回答"), status: "running", completedAt: undefined }] as never,
+    activeTurnId: "turn_6",
+    turns: [
+      ...completedTurns(5),
+      { ...completedTurn("turn_6", "新问题", "新回答"), status: "running", completedAt: undefined },
+    ] as never,
   }));
   const generated: string[] = [];
   const coordinator = new AiSessionNextInputSuggestionCoordinator({
@@ -267,23 +540,23 @@ test("an early success survives a completed turn that appears before idle and ge
     },
   });
 
-  coordinator.observeSuccessfulTurn(session.id, "turn_1");
+  coordinator.observeSuccessfulTurn(session.id, "turn_6");
   registry.set({
     ...session,
     status: "running",
-    turns: [completedTurn("turn_1", "问题", "回答")] as never,
+    turns: completedTurns(6) as never,
   });
   coordinator.reconcileSession(session.id);
   await wait(20);
   assert.deepEqual(generated, []);
 
-  registry.set({ ...session, status: "idle", activeTurnId: undefined, turns: [completedTurn("turn_1", "问题", "回答")] as never });
+  registry.set({ ...session, status: "idle", activeTurnId: undefined, turns: completedTurns(6) as never });
   coordinator.reconcileSession(session.id);
   await wait(20);
   coordinator.reconcileSession(session.id);
   await wait(20);
 
-  assert.deepEqual(generated, ["turn_1"]);
+  assert.deepEqual(generated, ["turn_6"]);
   assert.equal(registry.get(session.id)?.nextInputSuggestion?.text, "只在最终 idle 后生成");
 });
 
@@ -291,8 +564,11 @@ test("an early success for a different provider turn is not attributed to the se
   const registry = new FakeRegistry();
   const session = registry.set(statusSession({
     status: "running",
-    activeTurnId: "turn_1",
-    turns: [{ ...completedTurn("turn_1", "问题", "回答"), status: "running", completedAt: undefined }] as never,
+    activeTurnId: "turn_6",
+    turns: [
+      ...completedTurns(5),
+      { ...completedTurn("turn_6", "新问题", "新回答"), status: "running", completedAt: undefined },
+    ] as never,
   }));
   let generated = 0;
   const coordinator = new AiSessionNextInputSuggestionCoordinator({
@@ -303,7 +579,7 @@ test("an early success for a different provider turn is not attributed to the se
   });
 
   coordinator.observeSuccessfulTurn(session.id, "turn_other");
-  registry.set({ ...session, status: "idle", activeTurnId: undefined, turns: [completedTurn("turn_1", "问题", "回答")] as never });
+  registry.set({ ...session, status: "idle", activeTurnId: undefined, turns: completedTurns(6) as never });
   coordinator.reconcileSession(session.id);
   await wait(20);
 
@@ -341,14 +617,22 @@ test("late generations are discarded after a new turn starts", async () => {
   });
   coordinator.observeSuccessfulTurn(session.id);
   await wait(20);
-  registry.set({ ...session, status: "running", activeTurnId: "turn_2", turns: [completedTurn("turn_2", "新问题", "回复")] as never });
+  registry.set({
+    ...session,
+    status: "running",
+    activeTurnId: "turn_6",
+    turns: [
+      ...completedTurns(5),
+      { ...completedTurn("turn_6", "新问题", "回复"), status: "running", completedAt: undefined },
+    ] as never,
+  });
   coordinator.reconcileSession(session.id);
   release?.(JSON.stringify({ suggestion: "迟到结果" }));
   await wait(20);
   assert.equal(registry.get(session.id)?.nextInputSuggestion, undefined);
 });
 
-test("requests time out without a diagnostic and release the slot for the next turn", async () => {
+test("requests time out with a visible error and release the slot for the next turn", async () => {
   const registry = new FakeRegistry();
   const session = registry.set(statusSession());
   const diagnostics: Array<Record<string, unknown>> = [];
@@ -363,7 +647,7 @@ test("requests time out without a diagnostic and release the slot for the next t
     generate: ({ signal, turn }) => {
       generated += 1;
       signals.push(signal);
-      if (turn.id === "turn_1") return new Promise<string>(() => {});
+      if (turn.id === "turn_5") return new Promise<string>(() => {});
       return Promise.resolve(JSON.stringify({ suggestion: "下一轮建议" }));
     },
   });
@@ -372,19 +656,21 @@ test("requests time out without a diagnostic and release the slot for the next t
   assert.equal(generated, 1);
   assert.equal(signals[0].aborted, true);
   assert.equal(registry.get(session.id)?.nextInputSuggestion, undefined);
-  assert.deepEqual(diagnostics, []);
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError?.code, "AI_SESSION_NEXT_INPUT_TIMEOUT");
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].code, "AI_SESSION_NEXT_INPUT_TIMEOUT");
 
   registry.set({
     ...session,
-    turns: [completedTurn("turn_1", "问题", "回答"), completedTurn("turn_2", "新问题", "新回复")],
+    turns: completedTurns(6),
   });
-  coordinator.observeSuccessfulTurn(session.id, "turn_2");
+  coordinator.observeSuccessfulTurn(session.id, "turn_6");
   await wait(25);
   assert.equal(generated, 2);
   assert.equal(registry.get(session.id)?.nextInputSuggestion?.text, "下一轮建议");
-  assert.equal(registry.get(session.id)?.nextInputSuggestion?.turnId, "turn_2");
+  assert.equal(registry.get(session.id)?.nextInputSuggestion?.turnId, "turn_6");
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError, undefined);
 });
-
 test("one in-flight request per session does not start a second generation", async () => {
   const registry = new FakeRegistry();
   const session = registry.set(statusSession());
@@ -411,7 +697,7 @@ test("one in-flight request per session does not start a second generation", asy
   assert.equal(registry.get(session.id)?.nextInputSuggestion?.text, "唯一建议");
 });
 
-test("late results after the request deadline are discarded when adapters ignore abort", async () => {
+test("late results after the request deadline are discarded while the timeout error remains", async () => {
   const registry = new FakeRegistry();
   const session = registry.set(statusSession());
   let release: ((value: string) => void) | undefined;
@@ -429,12 +715,13 @@ test("late results after the request deadline are discarded when adapters ignore
   release?.(JSON.stringify({ suggestion: "迟到结果" }));
   await wait(20);
   assert.equal(registry.get(session.id)?.nextInputSuggestion, undefined);
-  assert.equal(registry.events.some((entry) => (entry.event as { kind?: string }).kind === "next-input-suggestion"), false);
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError?.code, "AI_SESSION_NEXT_INPUT_TIMEOUT");
+  assert.equal(registry.events.filter((entry) => (entry.event as { kind?: string }).kind === "next-input-suggestion").length, 1);
 });
 
 test("cancelling pending work drops late results but keeps an already published suggestion", async () => {
   const registry = new FakeRegistry();
-  const session = registry.set(statusSession({ nextInputSuggestion: { text: "已有建议", turnId: "turn_1", generatedAt: now } }));
+  const session = registry.set(statusSession({ nextInputSuggestion: { text: "已有建议", turnId: "turn_5", generatedAt: now } }));
   let release: ((value: string) => void) | undefined;
   const coordinator = new AiSessionNextInputSuggestionCoordinator({
     registry: registry as never,
@@ -444,14 +731,15 @@ test("cancelling pending work drops late results but keeps an already published 
   });
   registry.set({
     ...session,
-    turns: [completedTurn("turn_1", "问题", "回答"), completedTurn("turn_2", "新问题", "新回复")],
+    turns: completedTurns(6),
   });
-  coordinator.observeSuccessfulTurn(session.id, "turn_2");
+  coordinator.observeSuccessfulTurn(session.id, "turn_6");
   await wait(20);
   coordinator.cancelPending();
   release?.(JSON.stringify({ suggestion: "迟到建议" }));
   await wait(20);
   assert.equal(registry.get(session.id)?.nextInputSuggestion?.text, "已有建议");
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError, undefined);
 });
 
 test("disabled coordinators never generate and disabling clears every suggestion", async () => {
@@ -469,7 +757,7 @@ test("disabled coordinators never generate and disabling clears every suggestion
   await wait(20);
   assert.equal(generated, 0);
   enabled = true;
-  registry.set({ ...session, nextInputSuggestion: { text: "已有建议", turnId: "turn_1", generatedAt: now } });
+  registry.set({ ...session, nextInputSuggestion: { text: "已有建议", turnId: "turn_5", generatedAt: now } });
   coordinator.setEnabled(false);
   assert.equal(registry.get(session.id)?.nextInputSuggestion, undefined);
   assert.equal(generated, 0);
@@ -509,16 +797,18 @@ test("failed and empty results consume the turn exactly once", async () => {
   await wait(20);
   assert.equal(generated, 1);
   assert.equal(registry.get(session.id)?.nextInputSuggestion, undefined);
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError?.code, "AI_SESSION_NEXT_INPUT_RESPONSE_INVALID");
   coordinator.observeSuccessfulTurn(session.id);
   await wait(20);
   assert.equal(generated, 1);
   mode = "ok";
   registry.set({
     ...session,
-    turns: [completedTurn("turn_1", "问题", "回答"), completedTurn("turn_2", "新问题", "新回复")],
+    turns: completedTurns(6),
   });
-  coordinator.observeSuccessfulTurn(session.id, "turn_2");
+  coordinator.observeSuccessfulTurn(session.id, "turn_6");
   await wait(20);
   assert.equal(generated, 2);
-  assert.equal(registry.get(session.id)?.nextInputSuggestion?.turnId, "turn_2");
+  assert.equal(registry.get(session.id)?.nextInputSuggestion?.turnId, "turn_6");
+  assert.equal(registry.get(session.id)?.nextInputSuggestionError, undefined);
 });

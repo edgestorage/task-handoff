@@ -1533,6 +1533,7 @@ impl AiSessionController {
                 counters: Default::default(),
                 queue: AiSessionQueue::default(),
                 next_input_suggestion: None,
+                next_input_suggestion_error: None,
                 unread: false,
             };
             existing = Some(self.runtime.save(session)?);
@@ -1988,6 +1989,7 @@ impl AiSessionController {
             counters: Default::default(),
             queue: AiSessionQueue::default(),
             next_input_suggestion: None,
+            next_input_suggestion_error: None,
             unread: false,
         };
         self.runtime.save(session)?;
@@ -3087,6 +3089,7 @@ impl AiSessionController {
                     counters: Default::default(),
                     queue: AiSessionQueue::default(),
                     next_input_suggestion: None,
+                    next_input_suggestion_error: None,
                     unread: false,
                 };
                 self.runtime.save(session).is_ok()
@@ -4337,6 +4340,7 @@ mod tests {
             counters: AiSessionCounters::default(),
             queue: AiSessionQueue::default(),
             next_input_suggestion: None,
+            next_input_suggestion_error: None,
             unread: false,
         }
     }

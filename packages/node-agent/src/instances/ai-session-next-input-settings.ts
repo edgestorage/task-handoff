@@ -1,5 +1,7 @@
 import {
   AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
+  aiSessionModelSelectionIdentity,
+  type AiSessionModelSelection,
   type AiSessionNextInputSuggestionReasoningEffort,
 } from "@task-handoff/protocol/ai-sessions";
 
@@ -20,6 +22,8 @@ export async function syncAiSessionNextInputSuggestionSettings(input: {
   enabled: boolean;
   reasoningEffort?: AiSessionNextInputSuggestionReasoningEffort;
   reasoningEffortSupported?: boolean;
+  modelSelection?: AiSessionModelSelection;
+  modelSelectionSupported?: boolean;
   processIncarnationId?: string;
   syncKeys: Map<string, string>;
   request: AiSessionNextInputSettingsRequest;
@@ -27,7 +31,12 @@ export async function syncAiSessionNextInputSuggestionSettings(input: {
 }): Promise<boolean> {
   const reasoningEffort = input.reasoningEffort ?? AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT;
   const reasoningEffortSyncKey = input.reasoningEffortSupported ? reasoningEffort : "unsupported";
-  const syncKey = `${input.processIncarnationId || "unknown"}:${input.enabled}:${reasoningEffortSyncKey}`;
+  const modelSelectionSyncKey = input.modelSelectionSupported
+    ? input.modelSelection
+      ? `${input.modelSelection.modelEntityId}:${aiSessionModelSelectionIdentity(input.modelSelection)}`
+      : "session"
+    : "unsupported";
+  const syncKey = `${input.processIncarnationId || "unknown"}:${input.enabled}:${reasoningEffortSyncKey}:${modelSelectionSyncKey}`;
   if (input.syncKeys.get(input.instanceId) === syncKey) return true;
   try {
     const response = await input.request(`${input.webUrl}/api/internal/ai-session-next-input-suggestion-settings`, {
@@ -39,6 +48,7 @@ export async function syncAiSessionNextInputSuggestionSettings(input: {
       body: JSON.stringify({
         enabled: input.enabled,
         ...(input.reasoningEffortSupported ? { reasoningEffort } : {}),
+        ...(input.modelSelectionSupported ? { modelSelection: input.modelSelection ?? null } : {}),
       }),
     });
     if (!response.ok) {

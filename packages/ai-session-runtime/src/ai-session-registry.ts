@@ -345,6 +345,7 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     subAgentCount: session.subAgents.length,
     subAgents: [],
     nextInputSuggestion: session.nextInputSuggestion,
+    nextInputSuggestionError: session.nextInputSuggestionError,
     goal: session.goal,
     queue: {
       revision: session.queue.revision,

@@ -192,7 +192,7 @@ defineEmits<{
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
-  openSettings: [instanceId: string, section?: "apps" | "models"];
+  openSettings: [instanceId: string, section?: "ai" | "apps" | "models"];
   openLaunchMenu: [];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];

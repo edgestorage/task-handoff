@@ -44,6 +44,24 @@ function runningTurn(id = "turn_1", userPrompt = "继续修复") {
   };
 }
 
+function completedTurn(id, userPrompt = `问题 ${id}`, summary = `回答 ${id}`) {
+  return {
+    id,
+    providerTurnId: id,
+    source: "realtime",
+    status: "completed",
+    phase: "unknown",
+    userPrompt,
+    userMessages: [{ id: `msg_${id}`, text: userPrompt }],
+    summary,
+    lastMessage: summary,
+    startedAt: now,
+    updatedAt: now,
+    completedAt: now,
+    revision: 0,
+  };
+}
+
 function wait(ms = 20) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -54,7 +72,7 @@ class CodexClient extends EventEmitter {
   async listLoadedThreadIds() { return []; }
 }
 
-function codexFixture(t, observeSuccessfulTurn, onEventSourceClose) {
+function codexFixture(t, observeSuccessfulTurn, onEventSourceClose, priorCompletedTurns = 0) {
   const registry = registryFixture(t);
   const client = new CodexClient();
   const successfulTurns = [];
@@ -71,7 +89,10 @@ function codexFixture(t, observeSuccessfulTurn, onEventSourceClose) {
     providerSessionId: "thread_next_input",
     cwd: "/workspace",
     status: "running",
-    turns: [runningTurn()],
+    turns: [
+      ...Array.from({ length: priorCompletedTurns }, (_, index) => completedTurn(`turn_${index + 1}`)),
+      runningTurn(`turn_${priorCompletedTurns + 1}`),
+    ],
   });
   return { bridge, client, registry, session, successfulTurns };
 }
@@ -83,6 +104,17 @@ function emitCodex(client, status = "completed", turnId = "turn_1", error) {
     turnId,
     status,
     ...(error ? { error } : {}),
+    observedAt: now,
+  });
+}
+
+function emitCodexAssistant(client, turnId, text) {
+  client.emit("event", {
+    type: "agent-message-completed",
+    threadId: "thread_next_input",
+    turnId,
+    itemId: `item_${turnId}`,
+    text,
     observedAt: now,
   });
 }
@@ -110,7 +142,7 @@ test("Codex reports only genuinely completed turns", (t) => {
 test("duplicate Codex completion events generate one suggestion", async (t) => {
   let generated = 0;
   let coordinator;
-  const state = codexFixture(t, (sessionId, providerTurnId) => coordinator?.observeSuccessfulTurn(sessionId, providerTurnId));
+  const state = codexFixture(t, (sessionId, providerTurnId) => coordinator?.observeSuccessfulTurn(sessionId, providerTurnId), undefined, 4);
   coordinator = new AiSessionNextInputSuggestionCoordinator({
     registry: state.registry,
     isEnabled: () => true,
@@ -121,8 +153,9 @@ test("duplicate Codex completion events generate one suggestion", async (t) => {
     },
   });
   t.after(() => coordinator.dispose());
-  emitCodex(state.client);
-  emitCodex(state.client);
+  emitCodexAssistant(state.client, "turn_5", "回答 5");
+  emitCodex(state.client, "completed", "turn_5");
+  emitCodex(state.client, "completed", "turn_5");
   await wait(30);
   assert.equal(generated, 1);
   assert.equal(state.registry.get(state.session.id)?.nextInputSuggestion?.text, "继续补齐测试");
@@ -136,6 +169,7 @@ test("a Codex connection reset cancels an in-flight suggestion", async (t) => {
     t,
     (sessionId, providerTurnId) => coordinator?.observeSuccessfulTurn(sessionId, providerTurnId),
     () => coordinator?.cancelPending(),
+    4,
   );
   coordinator = new AiSessionNextInputSuggestionCoordinator({
     registry: state.registry,
@@ -147,7 +181,8 @@ test("a Codex connection reset cancels an in-flight suggestion", async (t) => {
     }),
   });
   t.after(() => coordinator.dispose());
-  emitCodex(state.client);
+  emitCodexAssistant(state.client, "turn_5", "回答 5");
+  emitCodex(state.client, "completed", "turn_5");
   await wait(20);
   assert.equal(generated, 1);
   state.client.emit("disconnect");

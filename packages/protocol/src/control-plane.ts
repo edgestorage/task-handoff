@@ -13,6 +13,7 @@ import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
   AiSessionMessageAttachmentSchema,
+  AiSessionModelSelectionSchema,
   AiSessionNextInputSuggestionReasoningEffortSchema,
   AiSessionPermissionModeSchema,
   AiSessionReasoningEffortSchema,
@@ -167,6 +168,7 @@ function defaultControlledInstanceFeatures() {
     aiSessionPersistenceSettings: false,
     aiSessionNextInputSuggestion: false,
     aiSessionNextInputSuggestionReasoningEffort: false,
+    aiSessionNextInputSuggestionModelSelection: false,
     privateModelCatalog: false,
     codexManagedSettings: false,
     nodeAgentConnectionUpdate: false,
@@ -338,6 +340,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   aiSessionNextInputSuggestion: z.boolean().optional(),
   // Additive capability: older suggestion implementations always follow the session effort.
   aiSessionNextInputSuggestionReasoningEffort: z.boolean().optional(),
+  // Additive capability: older suggestions always use the selected session model.
+  aiSessionNextInputSuggestionModelSelection: z.boolean().optional(),
   // Compatibility for v0.0.23: only current controlled instances accept the
   // private model catalog live-sync route.
   privateModelCatalog: z.boolean().optional(),
@@ -466,6 +470,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "aiSessionPersistenceSettings",
     "aiSessionNextInputSuggestion",
     "aiSessionNextInputSuggestionReasoningEffort",
+    "aiSessionNextInputSuggestionModelSelection",
     "privateModelCatalog",
     "codexManagedSettings",
     "nodeAgentConnectionUpdate",
@@ -535,6 +540,10 @@ export function supportsAiSessionNextInputSuggestion(capabilities: unknown) {
 
 export function supportsAiSessionNextInputSuggestionReasoningEffort(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionNextInputSuggestionReasoningEffort === true;
+}
+
+export function supportsAiSessionNextInputSuggestionModelSelection(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionNextInputSuggestionModelSelection === true;
 }
 
 export function supportsControlledInstancePrivateModelCatalog(capabilities: unknown) {
@@ -3128,6 +3137,7 @@ export const ControlledInstanceSchema = z
         aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).default(AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES),
         aiSessionNextInputSuggestionEnabled: z.boolean().default(false),
         aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.default(AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT),
+        aiSessionNextInputSuggestionModelSelection: AiSessionModelSelectionSchema.optional(),
       })
       .strict()
       .default({ autoImportAgentConfigs: true, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, aiSessionNextInputSuggestionEnabled: false, aiSessionNextInputSuggestionReasoningEffort: AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT }),
@@ -3196,12 +3206,18 @@ export const InstanceConfigInputSchema = z.object({
   aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
   aiSessionNextInputSuggestionEnabled: z.boolean().optional(),
   aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.optional(),
+  aiSessionNextInputSuggestionModelSelection: AiSessionModelSelectionSchema.optional(),
 }).strict();
+
+const UpdateInstanceConfigInputSchema = InstanceConfigInputSchema.extend({
+  // Public update input uses null to clear the override and follow the session.
+  aiSessionNextInputSuggestionModelSelection: AiSessionModelSelectionSchema.nullable().optional(),
+});
 
 // 公开 API：PATCH /api/controlled-instances/:id 请求体（control plane 边界）。
 export const UpdateInstanceInputSchema = z.object({
   name: ControlledInstanceSchema.shape.name.optional(),
-  config: InstanceConfigInputSchema.optional(),
+  config: UpdateInstanceConfigInputSchema.optional(),
   modelSelection: ControlledInstanceSchema.shape.modelSelection.unwrap().optional(),
 }).strict();
 
@@ -3416,7 +3432,7 @@ export function sanitizeStoredControlledInstance(
   next.aiSessions = sanitizeStoredAiSessions(source.aiSessions, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.triggers = sanitizeStoredTriggers(source.triggers, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.apps = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.apps.unwrap(), pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]), "apps", onWarning, typeof source.id === "string" ? source.id : undefined) || { runningCount: 0, problemCount: 0 };
-  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "codexConfigEnabled", "codexHomeMode", "defaultCodexPermissionMode", "codexSettings", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays", "aiSessionMaxFileAttachmentBytes", "aiSessionNextInputSuggestionEnabled", "aiSessionNextInputSuggestionReasoningEffort"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, aiSessionNextInputSuggestionEnabled: false, aiSessionNextInputSuggestionReasoningEffort: AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT };
+  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "codexConfigEnabled", "codexHomeMode", "defaultCodexPermissionMode", "codexSettings", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays", "aiSessionMaxFileAttachmentBytes", "aiSessionNextInputSuggestionEnabled", "aiSessionNextInputSuggestionReasoningEffort", "aiSessionNextInputSuggestionModelSelection"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, aiSessionNextInputSuggestionEnabled: false, aiSessionNextInputSuggestionReasoningEffort: AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT };
   next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["modelEntityIds", "codexModelHash", "claudeModelHash", "opencodeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,

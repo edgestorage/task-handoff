@@ -43,6 +43,7 @@ import {
   AiSessionHistoryLifecycle,
   AiSessionHistoryStore,
   AiSessionNextInputSuggestionCoordinator,
+  AiSessionNextInputGenerationError,
   AiSessionResumeCoordinator,
   AiSessionOpenAppCoordinator,
   AiSessionProviderRegistry,
@@ -59,7 +60,6 @@ import {
   syncAiSessionTimelineItems,
   aiSessionTurnBodyRevision,
   aiSessionTurnsRevision,
-  aiSessionNextInputPrompt,
   AI_SESSION_NEXT_INPUT_OUTPUT_SCHEMA,
   classifyAiSessionStorageFailure,
   type AiSessionRegistry,
@@ -84,7 +84,7 @@ import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfig
 import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { aiSessionRetentionCandidates, aiSessionRootNode, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
-import { ControlledPrivateModelCatalogSchema, readControlledPrivateAiSessionNextInputSuggestionEnabled, readControlledPrivateAiSessionNextInputSuggestionReasoningEffort, readControlledPrivateCodexSettings, readControlledPrivateModelCatalog, readControlledPrivateModelCatalogSource, resolveControlledPrivateModelSelection, type ControlledPrivateModelCatalogSource } from "./private-model-catalog";
+import { ControlledPrivateModelCatalogSchema, readControlledPrivateAiSessionNextInputSuggestionEnabled, readControlledPrivateAiSessionNextInputSuggestionModelSelection, readControlledPrivateAiSessionNextInputSuggestionReasoningEffort, readControlledPrivateCodexSettings, readControlledPrivateModelCatalog, readControlledPrivateModelCatalogSource, resolveControlledNextInputSuggestionModelSelection, resolveControlledPrivateModelSelection, type ControlledPrivateModelCatalogSource } from "./private-model-catalog";
 import { requestControlledAiSessionStructuredModel, requestControlledAiSessionTitle } from "./session-title-model";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
 import { GitCredentialBroker, installGitBrokerEnvironment } from "./git-credential-broker";
@@ -127,6 +127,7 @@ import {
   AiSessionCreateResultSchema,
   AiSessionModelSelectionInputSchema,
   AiSessionModelSelectionActionResponseSchema,
+  AiSessionModelSelectionSchema,
   AiSessionNextInputSuggestionReasoningEffortSchema,
   AiSessionReasoningEffortInputSchema,
   AiSessionReasoningEffortActionResponseSchema,
@@ -753,6 +754,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   let codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
   let aiSessionNextInputSuggestionEnabled = readControlledPrivateAiSessionNextInputSuggestionEnabled(managedModelEnv);
   let aiSessionNextInputSuggestionReasoningEffort = readControlledPrivateAiSessionNextInputSuggestionReasoningEffort(managedModelEnv);
+  let aiSessionNextInputSuggestionModelSelection = readControlledPrivateAiSessionNextInputSuggestionModelSelection(managedModelEnv);
   Object.assign(managedModelEnv, codexManagedConfig.providerEnvironment || {});
   applyManagedClaudeModelConfig(managedModelEnv);
   const auth = resolveWebAuth(storagePaths);
@@ -1156,16 +1158,26 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     registry: aiSessions,
     isEnabled: () => aiSessionNextInputSuggestionEnabled,
     reasoningEffort: () => aiSessionNextInputSuggestionReasoningEffort,
-    generate: async ({ session, reasoningEffort, signal }) => {
-      if (session.agent === "codex") {
-        return codexAppServer.generateNextInputSuggestion(session, aiSessionNextInputPrompt(session), signal, reasoningEffort);
+    modelSelection: () => aiSessionNextInputSuggestionModelSelection,
+    generate: async ({ session, messages, reasoningEffort, signal }) => {
+      if (session.agent !== "codex" && session.agent !== "opencode") {
+        throw new AiSessionNextInputGenerationError(
+          "AI_SESSION_NEXT_INPUT_GENERATION_UNSUPPORTED",
+          "This agent does not support next input suggestions.",
+        );
       }
-      if (session.agent !== "opencode" || !session.modelSelection) return undefined;
+      const modelSelection = aiSessionNextInputSuggestionModelSelection ?? session.modelSelection;
+      if (!modelSelection) {
+        throw new AiSessionNextInputGenerationError(
+          "AI_SESSION_NEXT_INPUT_MODEL_UNRESOLVED",
+          "AI model is not configured for this session.",
+        );
+      }
       return requestControlledAiSessionStructuredModel({
         catalog: privateModelCatalog,
-        modelSelection: session.modelSelection,
+        modelSelection,
         ...(reasoningEffort ? { reasoningEffort } : {}),
-        prompt: aiSessionNextInputPrompt(session),
+        messages,
         outputSchema: AI_SESSION_NEXT_INPUT_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
         schemaName: "ai_session_next_input_suggestion",
         errorCodePrefix: "AI_SESSION_NEXT_INPUT_SUGGESTION",
@@ -1227,6 +1239,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     const parsed = z.object({
       enabled: z.boolean(),
       reasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.optional(),
+      modelSelection: AiSessionModelSelectionSchema.nullable().optional(),
     }).strict().safeParse(request.body || {});
     if (!parsed.success) {
       return reply.code(400).send({ error: {
@@ -1235,8 +1248,23 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       } });
     }
     const next = parsed.data;
+    if (next.modelSelection !== undefined) {
+      try {
+        aiSessionNextInputSuggestionModelSelection = next.modelSelection === null
+          ? undefined
+          : resolveControlledNextInputSuggestionModelSelection(privateModelCatalog, next.modelSelection);
+      } catch (error) {
+        return reply.code(400).send({ error: {
+          code: error && typeof error === "object" && "code" in error && typeof error.code === "string"
+            ? error.code
+            : "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE",
+          message: error instanceof Error ? error.message : "The custom suggestion model is unavailable.",
+        } });
+      }
+    }
     aiSessionNextInputSuggestionReasoningEffort = next.reasoningEffort ?? aiSessionNextInputSuggestionReasoningEffort;
     aiSessionNextInputSuggestionEnabled = next.enabled;
+    aiSessionNextInputSuggestions?.setModelSelection(aiSessionNextInputSuggestionModelSelection);
     aiSessionNextInputSuggestions?.setReasoningEffort(aiSessionNextInputSuggestionReasoningEffort);
     aiSessionNextInputSuggestions?.setEnabled(next.enabled);
     return { data: {

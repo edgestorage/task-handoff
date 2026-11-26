@@ -4,8 +4,10 @@ import path from 'node:path';
 import { fireEvent, render } from '@testing-library/react-native';
 
 import { SessionNextInputSuggestionCard } from '../src/ai-sessions/SessionNextInputSuggestionCard';
+import { SessionNextInputSuggestionErrorCard } from '../src/ai-sessions/SessionNextInputSuggestionErrorCard';
 import {
   consumeNextInputSuggestion,
+  nextInputSuggestionErrorForSession,
   nextInputSuggestionForSession,
   nextInputSuggestionKey,
   resetNextInputSuggestionConsumption,
@@ -18,6 +20,13 @@ const suggestion = {
   text: '继续修复测试。',
   turnId: 'turn_1',
   generatedAt: '2026-11-25T00:00:31.000Z',
+};
+
+const suggestionError = {
+  code: 'AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE',
+  message: 'The custom suggestion model is not assigned to this instance.',
+  turnId: 'turn_1',
+  generatedAt: '2026-11-25T00:00:32.000Z',
 };
 
 function session(overrides: Record<string, unknown> = {}) {
@@ -53,6 +62,17 @@ test('mobile suggestions only follow the current settled turn', () => {
   expect(nextInputSuggestionForSession(session({ queue: { pendingCount: 1 } }), 'turn_1')).toBeUndefined();
   expect(nextInputSuggestionForSession(session({ lineage: { kind: 'subagent' } }), 'turn_1')).toBeUndefined();
   expect(nextInputSuggestionForSession(session(), 'turn_2')).toBeUndefined();
+});
+
+test('mobile suggestion errors only follow the current settled turn', () => {
+  const failed = session({ nextInputSuggestion: undefined, nextInputSuggestionError: suggestionError });
+  expect(nextInputSuggestionErrorForSession(failed, 'turn_1')).toEqual(suggestionError);
+  expect(nextInputSuggestionErrorForSession(undefined, 'turn_1')).toBeUndefined();
+  expect(nextInputSuggestionErrorForSession(session({ nextInputSuggestionError: suggestionError, status: 'running' }), 'turn_1')).toBeUndefined();
+  expect(nextInputSuggestionErrorForSession(session({ nextInputSuggestionError: suggestionError, queue: { pendingCount: 1 } }), 'turn_1')).toBeUndefined();
+  expect(nextInputSuggestionErrorForSession(session({ nextInputSuggestionError: suggestionError, lineage: { kind: 'subagent' } }), 'turn_1')).toBeUndefined();
+  expect(nextInputSuggestionErrorForSession(session({ nextInputSuggestionError: suggestionError }), 'turn_1')).toBeUndefined();
+  expect(nextInputSuggestionErrorForSession(failed, 'turn_2')).toBeUndefined();
 });
 
 test('mobile visibility respects draft, attachments, editing, sync and consumption', () => {
@@ -92,6 +112,20 @@ test('the suggestion card fills or dismisses without sending', async () => {
   expect(onDismiss).toHaveBeenCalledTimes(1);
 });
 
+test('the suggestion error card exposes the failure reason entry point', async () => {
+  const onOpen = jest.fn();
+  const view = await render(
+    <MobileThemeProvider>
+      <MobileI18nProvider>
+        <SessionNextInputSuggestionErrorCard message={suggestionError.message} onOpen={onOpen} />
+      </MobileI18nProvider>
+    </MobileThemeProvider>,
+  );
+  expect(view.getByText(suggestionError.message)).toBeTruthy();
+  await fireEvent.press(view.getByLabelText('Suggestion generation failed'));
+  expect(onOpen).toHaveBeenCalledTimes(1);
+});
+
 test('workspace wiring accepts into the draft, focuses, and keeps the card above the composer', () => {
   const workspace = fs.readFileSync(path.join(__dirname, '../src/ai-sessions/SessionWorkspace.tsx'), 'utf8');
   const accept = workspace.indexOf('const acceptNextInputSuggestion = () => {');
@@ -103,9 +137,11 @@ test('workspace wiring accepts into the draft, focuses, and keeps the card above
 
   const actions = workspace.indexOf('testID="session-actions"');
   const card = workspace.indexOf('<SessionNextInputSuggestionCard');
+  const errorCard = workspace.indexOf('<SessionNextInputSuggestionErrorCard');
   const composer = workspace.indexOf('<SessionComposer');
   expect(actions).toBeGreaterThan(-1);
   expect(card).toBeGreaterThan(actions);
+  expect(errorCard).toBeGreaterThan(card);
   expect(composer).toBeGreaterThan(card);
 });
 
@@ -114,7 +150,7 @@ test('mobile transports subscribe to the suggestion projection', () => {
   for (const file of ['src/control-plane/direct-transport.ts', 'src/control-plane/relay-transport.ts']) {
     expect(fs.readFileSync(path.join(root, file), 'utf8')).toContain('nextInputSuggestion: true');
   }
-  for (const key of ['suggestion.label', 'suggestion.use', 'suggestion.useHint', 'suggestion.dismiss']) {
+  for (const key of ['suggestion.label', 'suggestion.use', 'suggestion.useHint', 'suggestion.dismiss', 'suggestion.errorLabel', 'suggestion.errorSettingsHint']) {
     expect(fs.readFileSync(path.join(root, 'src/i18n/messages.ts'), 'utf8')).toContain(`'${key}'`);
   }
 });

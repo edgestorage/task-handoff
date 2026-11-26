@@ -223,6 +223,7 @@
         :reasoning-effort-pending="reasoningEffortPending"
         :submit-label="submitLabel"
         :next-input-suggestion="nextInputSuggestion"
+        :next-input-suggestion-error="nextInputSuggestionError"
         :suggestion-key="`${card.instance.id}:${card.session.id}`"
         :permission-key="aiSessionPermissionKey(card.instance.id, card.session.id)"
         :default-permission-mode="card.instance.config.defaultCodexPermissionMode"
@@ -236,6 +237,7 @@
         @command="$emit('command', $event)"
         @select-model="$emit('selectModel', $event)"
         @open-model-settings="$emit('openModelSettings')"
+        @open-suggestion-settings="$emit('openSuggestionSettings')"
         @select-reasoning-effort="$emit('selectReasoningEffort', $event)"
       />
     </div>
@@ -249,7 +251,7 @@ import { Boxes, ChevronDown, ChevronUp, CircleHelp, ExternalLink, Folder } from 
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionGoalBadge from "../../../components/ai-session/AiSessionGoalBadge.vue";
-import { selectNextInputSuggestion } from "../../../components/ai-session/next-input-suggestion";
+import { selectNextInputSuggestion, selectNextInputSuggestionError } from "../../../components/ai-session/next-input-suggestion";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionHeightTransition from "../../../components/ai-session/AiSessionHeightTransition.vue";
 import AiSessionRunningTurnCapsule from "../../../components/ai-session/AiSessionRunningTurnCapsule.vue";
@@ -259,7 +261,7 @@ import AiSessionConversationContent from "../../../components/ai-session/AiSessi
 import type { AiSessionTurnTimelineState } from "../useAiSessionTimelineStore";
 import type { AiSessionToolActivityWindowState } from "../useAiSessionToolActivityWindow";
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
-import type { AiSessionCommandInput, AiSessionModelSelection, AiSessionNextInputSuggestion, AiSessionPermissionMode, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionModelSelection, AiSessionNextInputSuggestion, AiSessionNextInputSuggestionError, AiSessionPermissionMode, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
@@ -345,6 +347,7 @@ const emit = defineEmits<{
   command: [input: AiSessionCommandInput];
   selectModel: [modelSelection: AiSessionModelSelection];
   openModelSettings: [];
+  openSuggestionSettings: [];
   selectReasoningEffort: [reasoningEffort: AiSessionReasoningEffort];
   steer: [];
   steerQueuedMessage: [queueId: string];
@@ -385,6 +388,11 @@ const nextInputSuggestion = computed<AiSessionNextInputSuggestion | undefined>((
   const session = props.conversationSession;
   const latestTurnId = session.latestTurnRef?.id || aiSessionTurns(session).at(-1)?.id;
   return selectNextInputSuggestion(session, latestTurnId);
+});
+const nextInputSuggestionError = computed<AiSessionNextInputSuggestionError | undefined>(() => {
+  const session = props.conversationSession;
+  const latestTurnId = session.latestTurnRef?.id || aiSessionTurns(session).at(-1)?.id;
+  return selectNextInputSuggestionError(session, latestTurnId);
 });
 const turnNavigatorItems = computed(() => aiSessionTurnMenuItems(
   props.conversationSession,

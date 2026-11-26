@@ -72,6 +72,65 @@ test("a structured suggestion request carries its own schema name and reuses rou
   assert.equal(fake.calls[0].init.headers.authorization, "Bearer secret");
 });
 
+test("responses structured requests preserve system, user, and assistant roles", async () => {
+  const fake = fetchReturning(JSON.stringify({ suggestion: "继续补齐测试" }));
+  await requestControlledAiSessionStructuredModel({
+    catalog,
+    modelSelection,
+    messages: [
+      { role: "system", content: "fixed system prompt" },
+      { role: "user", content: "User: 修复登录\nAssistant: 已修复" },
+      { role: "assistant", content: "继续补齐测试" },
+      { role: "user", content: "User: 检查边界\nAssistant: 已检查" },
+    ],
+    outputSchema,
+    schemaName: "ai_session_next_input_suggestion",
+    fetchImpl: fake.fetchImpl,
+  });
+  assert.equal(fake.calls[0].body.instructions, "fixed system prompt");
+  assert.deepEqual(fake.calls[0].body.input, [
+    { role: "user", content: [{ type: "input_text", text: "User: 修复登录\nAssistant: 已修复" }] },
+    { role: "assistant", content: [{ type: "output_text", text: "继续补齐测试" }] },
+    { role: "user", content: [{ type: "input_text", text: "User: 检查边界\nAssistant: 已检查" }] },
+  ]);
+  assert.equal("messages" in fake.calls[0].body, false);
+});
+
+test("chat-completions structured requests preserve the supplied message history", async () => {
+  const chatCatalog = {
+    ...catalog,
+    entities: [{ ...catalog.entities[0], protocols: ["openai-chat-completions"] }],
+  };
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ suggestion: "继续补齐测试" }) } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  await requestControlledAiSessionStructuredModel({
+    catalog: chatCatalog,
+    modelSelection,
+    messages: [
+      { role: "system", content: "fixed system prompt" },
+      { role: "user", content: "User: 修复登录\nAssistant: 已修复" },
+      { role: "assistant", content: "继续补齐测试" },
+      { role: "user", content: "User: 检查边界\nAssistant: 已检查" },
+    ],
+    outputSchema,
+    schemaName: "ai_session_next_input_suggestion",
+    fetchImpl,
+  });
+  assert.match(calls[0].url, /\/chat\/completions$/);
+  assert.deepEqual(calls[0].body.messages, [
+    { role: "system", content: "fixed system prompt" },
+    { role: "user", content: "User: 修复登录\nAssistant: 已修复" },
+    { role: "assistant", content: "继续补齐测试" },
+    { role: "user", content: "User: 检查边界\nAssistant: 已检查" },
+  ]);
+  assert.equal("input" in calls[0].body, false);
+});
+
 test("an explicit none reasoning mode is sent as none instead of being omitted", async () => {
   const fake = fetchReturning(JSON.stringify({ suggestion: "继续补齐测试" }));
   await requestControlledAiSessionStructuredModel({

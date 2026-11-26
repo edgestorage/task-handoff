@@ -1,4 +1,4 @@
-import type { AiSessionNextInputSuggestion } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionNextInputSuggestion, AiSessionNextInputSuggestionError } from '@task-handoff/protocol/ai-sessions';
 import type { ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
 
 const consumedSuggestions = new Set<string>();
@@ -43,6 +43,25 @@ export function nextInputSuggestionForSession(
     return undefined;
   }
   return suggestion;
+}
+
+export function nextInputSuggestionErrorForSession(
+  session: ControlPlaneAiSessionSummary | undefined,
+  latestTurnId: string | undefined,
+): AiSessionNextInputSuggestionError | undefined {
+  const error = session?.nextInputSuggestionError;
+  if (
+    !session
+    || !error
+    || session.nextInputSuggestion
+    || session.status !== 'idle'
+    || session.queue.pendingCount > 0
+    || session.lineage?.kind === 'subagent'
+    || error.turnId !== latestTurnId
+  ) {
+    return undefined;
+  }
+  return error;
 }
 
 export function visibleNextInputSuggestion(input: {

@@ -63,10 +63,11 @@ function setEnvironment(paths) {
   };
 }
 
-async function createRuntime() {
+async function createRuntime({ modelCatalog } = {}) {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-next-input-routes-"));
   const paths = pathsFor(dataRoot);
   const restore = setEnvironment(paths);
+  if (modelCatalog) process.env.TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON = JSON.stringify(modelCatalog);
   const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
   const app = await createWebApp({
     staticDir: path.join(dataRoot, "missing-static"),
@@ -105,6 +106,12 @@ function idleSession(aiSessions, providerSessionId = "thread") {
 }
 
 const suggestion = { text: "继续补齐测试", turnId: "turn_1", generatedAt: "2026-11-25T00:01:00.000Z" };
+const suggestionError = {
+  code: "AI_SESSION_NEXT_INPUT_GENERATION_FAILED",
+  message: "模型请求失败",
+  turnId: "turn_1",
+  generatedAt: "2026-11-25T00:01:00.000Z",
+};
 
 test("AI session state strips suggestions unless the consumer opts in explicitly", async () => {
   const { aiSessions, app, restore } = await createRuntime();
@@ -123,6 +130,26 @@ test("AI session state strips suggestions unless the consumer opts in explicitly
     assert.equal(list.json().data.snapshot.sessions[0].nextInputSuggestion, undefined);
     const listKept = await app.inject({ method: "GET", url: "/api/ai-sessions?nextInputSuggestion=1" });
     assert.deepEqual(listKept.json().data.snapshot.sessions[0].nextInputSuggestion, suggestion);
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
+test("AI session state strips suggestion errors with the same consumer capability", async () => {
+  const { aiSessions, app, restore } = await createRuntime();
+  try {
+    const session = idleSession(aiSessions);
+    aiSessions.applyRealtimeEvent(session.id, {
+      kind: "next-input-suggestion",
+      suggestion: null,
+      suggestionError,
+    });
+    const stripped = await app.inject({ method: "GET", url: "/api/ai-sessions/state?hierarchy=subagents" });
+    assert.equal(stripped.json().data.snapshot.sessions[0].nextInputSuggestionError, undefined);
+    const kept = await app.inject({ method: "GET", url: "/api/ai-sessions/state?hierarchy=subagents&nextInputSuggestion=1" });
+    assert.deepEqual(kept.json().data.snapshot.sessions[0].nextInputSuggestionError, suggestionError);
+    assert.equal(kept.json().data.snapshot.sessions[0].nextInputSuggestion, undefined);
   } finally {
     await app.close();
     restore();
@@ -148,13 +175,21 @@ test("disabling the setting clears every persisted suggestion immediately", asyn
   try {
     const first = idleSession(aiSessions, "thread-1");
     const second = idleSession(aiSessions, "thread-2");
+    const third = idleSession(aiSessions, "thread-3");
     for (const session of [first, second]) aiSessions.applyRealtimeEvent(session.id, { kind: "next-input-suggestion", suggestion });
+    aiSessions.applyRealtimeEvent(third.id, {
+      kind: "next-input-suggestion",
+      suggestion: null,
+      suggestionError,
+    });
     assert.equal(aiSessions.snapshot().sessions.filter((session) => session.nextInputSuggestion).length, 2);
+    assert.equal(aiSessions.snapshot().sessions.filter((session) => session.nextInputSuggestionError).length, 1);
 
     const disabled = await app.inject({ method: "PUT", url: "/api/internal/ai-session-next-input-suggestion-settings", headers: authorization, payload: { enabled: false } });
     assert.equal(disabled.statusCode, 200);
     assert.deepEqual(disabled.json().data, { applied: true, enabled: false, reasoningEffort: "none" });
     assert.equal(aiSessions.snapshot().sessions.filter((session) => session.nextInputSuggestion).length, 0);
+    assert.equal(aiSessions.snapshot().sessions.filter((session) => session.nextInputSuggestionError).length, 0);
 
     const enabled = await app.inject({ method: "PUT", url: "/api/internal/ai-session-next-input-suggestion-settings", headers: authorization, payload: { enabled: true } });
     assert.equal(enabled.statusCode, 200);
@@ -208,6 +243,69 @@ test("reasoning mode defaults to none, survives an omitted field, and clears sta
     });
     assert.equal(invalid.statusCode, 400);
     assert.equal(invalid.json().error.code, "AI_SESSION_NEXT_INPUT_SUGGESTION_SETTINGS_INVALID");
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
+test("the suggestion model accepts only assigned structured models and clears on change", async () => {
+  const modelCatalog = {
+    protocolVersion: "2026-08-27",
+    instanceId,
+    entities: [
+      {
+        id: "mdl_suggestion",
+        protocols: ["openai-responses", "openai-chat-completions"],
+        modelNames: [{ upstreamName: "suggestion-upstream", name: "Suggestion", order: 0 }],
+        endpoint: "https://models.example/v1",
+        key: "secret",
+      },
+      {
+        id: "mdl_anthropic",
+        protocols: ["anthropic-messages"],
+        modelNames: [{ name: "Claude", order: 0 }],
+        endpoint: "https://models.example/v1",
+        key: "secret",
+      },
+    ],
+    updatedAt: now,
+  };
+  const { aiSessions, app, restore } = await createRuntime({ modelCatalog });
+  try {
+    const session = idleSession(aiSessions);
+    aiSessions.applyRealtimeEvent(session.id, { kind: "next-input-suggestion", suggestion });
+    const applied = await app.inject({
+      method: "PUT",
+      url: "/api/internal/ai-session-next-input-suggestion-settings",
+      headers: authorization,
+      payload: {
+        enabled: true,
+        modelSelection: { modelEntityId: "mdl_suggestion", modelName: "Suggestion" },
+      },
+    });
+    assert.equal(applied.statusCode, 200);
+    assert.equal(aiSessions.snapshot().sessions[0].nextInputSuggestion, undefined);
+
+    const unsupported = await app.inject({
+      method: "PUT",
+      url: "/api/internal/ai-session-next-input-suggestion-settings",
+      headers: authorization,
+      payload: {
+        enabled: true,
+        modelSelection: { modelEntityId: "mdl_anthropic", modelName: "Claude" },
+      },
+    });
+    assert.equal(unsupported.statusCode, 400);
+    assert.equal(unsupported.json().error.code, "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE");
+
+    const cleared = await app.inject({
+      method: "PUT",
+      url: "/api/internal/ai-session-next-input-suggestion-settings",
+      headers: authorization,
+      payload: { enabled: true, modelSelection: null },
+    });
+    assert.equal(cleared.statusCode, 200);
   } finally {
     await app.close();
     restore();

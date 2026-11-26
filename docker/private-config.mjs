@@ -14,6 +14,7 @@ if (value.modelCatalog !== undefined) environment.TASK_HANDOFF_PRIVATE_MODEL_CAT
 if (value.codexSettings !== undefined) environment.TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON.stringify(value.codexSettings);
 if (value.aiSessionNextInputSuggestionEnabled === true) environment.TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_ENABLED = "1";
 if (typeof value.aiSessionNextInputSuggestionReasoningEffort === "string") environment.TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT = value.aiSessionNextInputSuggestionReasoningEffort;
+if (value.aiSessionNextInputSuggestionModelSelection !== undefined) environment.TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_SELECTION_JSON = JSON.stringify(value.aiSessionNextInputSuggestionModelSelection);
 for (const [key, item] of Object.entries(environment)) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof item !== "string") process.exit(78);
   process.stdout.write(`${key}\t${Buffer.from(item).toString("base64")}\n`);

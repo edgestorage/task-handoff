@@ -24,6 +24,7 @@ import {
   sanitizeCrossVersionControlledInstanceRegister,
   supportsGitCliCredentialBroker,
   supportsAiSessionNextInputSuggestionReasoningEffort,
+  supportsAiSessionNextInputSuggestionModelSelection,
   supportsControlledInstanceNodeAgentConnectionUpdate,
   UpdateControlledInstanceNodeAgentConnectionSchema,
   type BuildInfo,
@@ -1042,6 +1043,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         enabled: instance.config.aiSessionNextInputSuggestionEnabled === true,
         reasoningEffort: instance.config.aiSessionNextInputSuggestionReasoningEffort,
         reasoningEffortSupported: supportsAiSessionNextInputSuggestionReasoningEffort(instance.capabilities),
+        modelSelection: instance.config.aiSessionNextInputSuggestionModelSelection,
+        modelSelectionSupported: supportsAiSessionNextInputSuggestionModelSelection(instance.capabilities),
         processIncarnationId: instance.processIncarnationId,
         syncKeys: aiSessionNextInputSuggestionSyncKeys,
         request: (url, init) => fetchWithTimeout(fetchImpl, url, init, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS),
@@ -1912,6 +1915,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           aiSessionFileAttachmentLimit: true,
           aiSessionNextInputSuggestion: true,
           aiSessionNextInputSuggestionReasoningEffort: true,
+          aiSessionNextInputSuggestionModelSelection: true,
           codexManagedSettings: true,
           controlPlaneTrust: true,
           folderPlaces: true,
@@ -2084,10 +2088,27 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           });
         }
       }
+      const suggestionModel = input.config?.aiSessionNextInputSuggestionModelSelection;
+      if (suggestionModel) {
+        const entity = state.modelRegistry.privateCatalog(id).entities.find((candidate) => candidate.id === suggestionModel.modelEntityId
+          && (candidate.protocols.includes("openai-responses") || candidate.protocols.includes("openai-chat-completions")));
+        const entry = entity && (selectModelNameEntry(entity.modelNames, suggestionModel.modelUpstreamName ?? suggestionModel.modelName)
+          ?? selectModelNameEntry(entity.modelNames, suggestionModel.modelName));
+        if (!entry) {
+          throw Object.assign(new Error("The suggestion model must be assigned to this instance."), {
+            statusCode: 400,
+            code: "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE",
+          });
+        }
+      }
+      const nextConfig = input.config ? { ...current.config, ...input.config } : current.config;
+      if (input.config?.aiSessionNextInputSuggestionModelSelection === null) {
+        delete (nextConfig as { aiSessionNextInputSuggestionModelSelection?: unknown }).aiSessionNextInputSuggestionModelSelection;
+      }
       return state.controlledInstances.put(ControlledInstanceSchema.parse({
         ...current,
         ...input,
-        ...(input.config ? { config: { ...current.config, ...input.config } } : {}),
+        config: nextConfig,
         updatedAt: now(),
       }));
     },

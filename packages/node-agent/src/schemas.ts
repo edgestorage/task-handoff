@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AiSessionNextInputSuggestionReasoningEffortSchema, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AiSessionModelSelectionSchema, AiSessionNextInputSuggestionReasoningEffortSchema, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
 import { GitWorkspaceProvisioningInputSchema } from "@task-handoff/protocol/managed-git-credentials";
 import {
   ControlledInstanceSchema,
@@ -66,6 +66,7 @@ export const CreateNodeInstanceSchema = z
       aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
       aiSessionNextInputSuggestionEnabled: z.boolean().optional(),
       aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.optional(),
+      aiSessionNextInputSuggestionModelSelection: AiSessionModelSelectionSchema.optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection,
     gitWorkspaceProvisioning: GitWorkspaceProvisioningInputSchema.optional(),
@@ -97,6 +98,7 @@ export const UpdateNodeInstanceSchema = z
       aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
       aiSessionNextInputSuggestionEnabled: z.boolean().optional(),
       aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.optional(),
+      aiSessionNextInputSuggestionModelSelection: AiSessionModelSelectionSchema.nullable().optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   })

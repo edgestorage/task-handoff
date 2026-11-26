@@ -6,7 +6,7 @@ import type {
   Project,
   SelectableImage,
 } from "@task-handoff/protocol/control-plane";
-import { InstanceCreateInputSchema, ProjectSourceSchema, projectSourceWithoutGitCredential, supportsNodeAiSessionFileAttachmentLimit, supportsNodeAiSessionNextInputSuggestion, supportsNodeAiSessionNextInputSuggestionReasoningEffort, supportsNodeCodexManagedSettings, supportsNodeGitCredentialRuntimeBroker, supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
+import { InstanceCreateInputSchema, ProjectSourceSchema, projectSourceWithoutGitCredential, supportsNodeAiSessionFileAttachmentLimit, supportsNodeAiSessionNextInputSuggestion, supportsNodeAiSessionNextInputSuggestionModelSelection, supportsNodeAiSessionNextInputSuggestionReasoningEffort, supportsNodeCodexManagedSettings, supportsNodeGitCredentialRuntimeBroker, supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialRetention, type GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import { now } from "../application/helpers.ts";
@@ -75,6 +75,10 @@ export class ControlledInstanceCreator {
     if (parsedInput.config?.aiSessionNextInputSuggestionReasoningEffort !== undefined
       && !supportsNodeAiSessionNextInputSuggestionReasoningEffort(agentCapabilities)) {
       throw publicError("This node does not support next-input suggestion reasoning modes.", 409, "AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT_UNSUPPORTED");
+    }
+    if (parsedInput.config?.aiSessionNextInputSuggestionModelSelection !== undefined
+      && !supportsNodeAiSessionNextInputSuggestionModelSelection(agentCapabilities)) {
+      throw publicError("This node does not support a custom next-input suggestion model.", 409, "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_SELECTION_UNSUPPORTED");
     }
     const runtime = await this.options.requireRuntime(node.id, runtimeId);
     const requiresImage = runtime.capabilities.requiresImage ?? runtime.type !== "local";

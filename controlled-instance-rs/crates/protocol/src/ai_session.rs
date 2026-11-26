@@ -6,6 +6,7 @@ pub const AI_SESSION_HISTORY_DEFAULT_LIMIT: usize = 50;
 pub const AI_SESSION_HISTORY_MAX_LIMIT: usize = 500;
 pub const AI_SESSION_HISTORY_MAX_ITEMS: usize = 10_000;
 pub const AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS: usize = 160;
+pub const AI_SESSION_NEXT_INPUT_SUGGESTION_ERROR_MAX_CHARS: usize = 1000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +51,16 @@ pub struct AiSessionQueue {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AiSessionNextInputSuggestion {
     pub text: String,
+    pub turn_id: String,
+    pub generated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AiSessionNextInputSuggestionError {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    pub message: String,
     pub turn_id: String,
     pub generated_at: String,
 }
@@ -131,6 +142,8 @@ pub struct AiSessionSummary {
     pub queue: AiSessionQueue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_input_suggestion: Option<AiSessionNextInputSuggestion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_input_suggestion_error: Option<AiSessionNextInputSuggestionError>,
     #[serde(default)]
     pub unread: bool,
 }
@@ -243,6 +256,7 @@ pub fn project_ai_sessions_snapshot_for_consumer(
         }
         if !consumer.next_input_suggestion {
             session.next_input_suggestion = None;
+            session.next_input_suggestion_error = None;
         }
     }
     snapshot
@@ -267,6 +281,7 @@ fn project_ai_session_summary_value(summary: &mut Value, consumer: AiSessionCons
     }
     if !consumer.next_input_suggestion {
         object.remove("nextInputSuggestion");
+        object.remove("nextInputSuggestionError");
     }
 }
 
@@ -566,6 +581,7 @@ mod tests {
             queue: AiSessionQueue::default(),
             unread: false,
             next_input_suggestion: None,
+            next_input_suggestion_error: None,
         };
         let value = serde_json::to_value(summary).expect("summary serializes");
         assert_eq!(value["creationSource"], "app-session");
@@ -622,13 +638,21 @@ mod tests {
             "kind": "fork",
             "parentProviderSessionId": "thread-root"
         }));
+        let mut child: AiSessionSummary =
+            serde_json::from_value(summary_value("ses_child", subagent.clone()))
+                .expect("child summary");
+        child.next_input_suggestion_error = Some(AiSessionNextInputSuggestionError {
+            code: Some("AI_SESSION_NEXT_INPUT_GENERATION_FAILED".to_string()),
+            message: "model failed".to_string(),
+            turn_id: "turn_1".to_string(),
+            generated_at: "2026-11-02T00:00:01.000Z".to_string(),
+        });
         let snapshot = AiSessionsSnapshot {
             running_count: 2,
             waiting_count: 0,
             stale_count: 0,
             sessions: vec![
-                serde_json::from_value(summary_value("ses_child", subagent.clone()))
-                    .expect("child summary"),
+                child,
                 serde_json::from_value(summary_value("ses_fork", fork.clone()))
                     .expect("fork summary"),
             ],
@@ -642,6 +666,7 @@ mod tests {
             },
         );
         assert!(flat.sessions[0].lineage.is_none());
+        assert!(flat.sessions[0].next_input_suggestion_error.is_none());
         assert_eq!(flat.sessions[1].lineage, fork);
         let nested = project_ai_sessions_snapshot_for_consumer(
             snapshot,
@@ -651,6 +676,7 @@ mod tests {
             },
         );
         assert_eq!(nested.sessions[0].lineage, subagent);
+        assert!(nested.sessions[0].next_input_suggestion_error.is_some());
 
         let history: AiSessionHistoryItem = serde_json::from_value(serde_json::json!({
             "id": "ses_child",

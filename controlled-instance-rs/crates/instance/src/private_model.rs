@@ -1,9 +1,9 @@
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_ai_session::{
     AiSessionModelSelection, AiSessionModelSelectionIntent, AiSessionModelSelectionResolver,
-    AiSessionNextInputSuggestionReasoningEffort, AiSessionStructuredModelGenerator,
-    AiSessionStructuredModelInput, AiSessionTitleGenerator, AiSessionTitleInput,
-    OpenCodeModelSelectionProjector, ProviderError,
+    AiSessionNextInputSuggestionReasoningEffort, AiSessionStructuredMessage,
+    AiSessionStructuredModelGenerator, AiSessionStructuredModelInput, AiSessionTitleGenerator,
+    AiSessionTitleInput, OpenCodeModelSelectionProjector, ProviderError,
 };
 use controlled_instance_app_runtime::AppRuntime;
 use controlled_instance_core::{
@@ -337,6 +337,68 @@ impl ControlledModelConfig {
             model_name: entry.name.clone(),
             model_upstream_name: Some(entry.identity().to_string()),
         }))
+    }
+
+    pub(crate) fn resolve_next_input_suggestion_model_selection(
+        &self,
+        requested: &AiSessionModelSelection,
+    ) -> Result<AiSessionModelSelection, ManagedModelError> {
+        let state = self.lock();
+        let catalog = state.catalog.as_ref().ok_or_else(|| {
+            ManagedModelError::new(
+                "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE",
+                "The model configuration is not loaded by this instance.",
+                409,
+            )
+        })?;
+        let entity = catalog
+            .entities()
+            .into_iter()
+            .find(|entity| {
+                entity.id == requested.model_entity_id
+                    && (entity
+                        .protocols
+                        .contains(&PrivateModelProtocol::OpenAiResponses)
+                        || entity
+                            .protocols
+                            .contains(&PrivateModelProtocol::OpenAiChatCompletions))
+            })
+            .ok_or_else(|| {
+                ManagedModelError::new(
+                    "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE",
+                    "The custom suggestion model is not assigned to this instance.",
+                    400,
+                )
+            })?;
+        let names = sorted_model_name_entries(&entity.model_names);
+        let entry = requested
+            .model_upstream_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|model| names.iter().find(|entry| entry.identity() == model))
+            .or_else(|| {
+                names
+                    .iter()
+                    .find(|entry| entry.identity() == requested.model_name.trim())
+            })
+            .or_else(|| {
+                names
+                    .iter()
+                    .find(|entry| entry.name == requested.model_name)
+            })
+            .ok_or_else(|| {
+                ManagedModelError::new(
+                    "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE",
+                    "The custom suggestion model is not assigned to this instance.",
+                    400,
+                )
+            })?;
+        Ok(AiSessionModelSelection {
+            model_entity_id: entity.id,
+            model_name: entry.name.clone(),
+            model_upstream_name: Some(entry.identity().to_string()),
+        })
     }
 
     pub(crate) fn codex_title_model(
@@ -778,10 +840,11 @@ impl ControlledModelConfig {
             .model_upstream_name
             .as_deref()
             .unwrap_or(&input.model_selection.model_name);
-        let body = title_request_body(
+        let body = structured_request_body(
             protocol,
             model,
             &input.prompt,
+            input.messages.as_deref(),
             &input.output_schema,
             input.reasoning_effort.as_deref(),
             &input.schema_name,
@@ -881,6 +944,7 @@ impl AiSessionTitleGenerator for ControlledModelConfig {
             AiSessionStructuredModelInput {
                 schema_name: "ai_session_title".to_string(),
                 prompt: input.prompt,
+                messages: None,
                 output_schema: input.output_schema,
                 model_selection: input.model_selection,
                 reasoning_effort: input.reasoning_effort,
@@ -904,18 +968,49 @@ fn title_route_url(base_url: &str, protocol: PrivateModelProtocol) -> String {
     )
 }
 
-fn title_request_body(
+fn structured_request_body(
     protocol: PrivateModelProtocol,
     model: &str,
     prompt: &str,
+    supplied_messages: Option<&[AiSessionStructuredMessage]>,
     output_schema: &Value,
     reasoning_effort: Option<&str>,
     schema_name: &str,
 ) -> Value {
+    let fallback;
+    let messages = match supplied_messages {
+        Some(messages) if !messages.is_empty() => messages,
+        _ => {
+            fallback = vec![AiSessionStructuredMessage {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }];
+            &fallback
+        }
+    };
     if protocol == PrivateModelProtocol::OpenAiResponses {
+        let instructions = messages
+            .iter()
+            .filter(|message| message.role == "system")
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let input = messages
+            .iter()
+            .filter(|message| message.role != "system")
+            .map(|message| {
+                json!({
+                    "role": message.role,
+                    "content": [{
+                        "type": if message.role == "assistant" { "output_text" } else { "input_text" },
+                        "text": message.content,
+                    }],
+                })
+            })
+            .collect::<Vec<_>>();
         let mut body = json!({
             "model": model,
-            "input": [{ "role": "user", "content": [{ "type": "input_text", "text": prompt }] }],
+            "input": input,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -925,14 +1020,21 @@ fn title_request_body(
                 }
             }
         });
+        if !instructions.is_empty() {
+            body["instructions"] = json!(instructions);
+        }
         if let Some(effort) = reasoning_effort {
             body["reasoning"] = json!({ "effort": effort });
         }
         return body;
     }
+    let messages = messages
+        .iter()
+        .map(|message| json!({ "role": message.role, "content": message.content }))
+        .collect::<Vec<_>>();
     let mut body = json!({
         "model": model,
-        "messages": [{ "role": "user", "content": prompt }],
+        "messages": messages,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -1369,6 +1471,30 @@ pub(crate) fn read_ai_session_next_input_suggestion_reasoning_effort(
                 .and_then(AiSessionNextInputSuggestionReasoningEffort::parse)
         })
         .unwrap_or_default()
+}
+
+pub(crate) fn read_ai_session_next_input_suggestion_model_selection(
+    process_environment: &BTreeMap<String, String>,
+) -> Option<AiSessionModelSelection> {
+    if let Some(value) = process_environment
+        .get("TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_SELECTION_JSON")
+    {
+        return serde_json::from_str::<AiSessionModelSelection>(value).ok();
+    }
+    if process_environment
+        .get("TASK_HANDOFF_PRIVATE_CONFIG_LOADED")
+        .is_some_and(|value| value == "1")
+    {
+        return None;
+    }
+    read_private_config_root(process_environment)
+        .ok()
+        .flatten()
+        .and_then(|root| {
+            root.get("aiSessionNextInputSuggestionModelSelection")
+                .cloned()
+        })
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 fn expected_instance_id(environment: &BTreeMap<String, String>) -> Option<String> {
@@ -2552,10 +2678,11 @@ mod tests {
     #[test]
     fn title_request_shapes_and_routes_match_the_node_contract() {
         let schema = controlled_instance_ai_session::ai_session_title_output_schema();
-        let responses = title_request_body(
+        let responses = structured_request_body(
             PrivateModelProtocol::OpenAiResponses,
             "upstream-title",
             "Prompt",
+            None,
             &schema,
             Some("high"),
             "ai_session_title",
@@ -2574,10 +2701,11 @@ mod tests {
             "https://models.example/v1/responses"
         );
 
-        let chat = title_request_body(
+        let chat = structured_request_body(
             PrivateModelProtocol::OpenAiChatCompletions,
             "upstream-title",
             "Prompt",
+            None,
             &schema,
             Some("high"),
             "ai_session_title",
@@ -2586,28 +2714,31 @@ mod tests {
         assert_eq!(chat["reasoning_effort"], "high");
         assert_eq!(chat["response_format"]["type"], "json_schema");
 
-        let explicit_none = title_request_body(
+        let explicit_none = structured_request_body(
             PrivateModelProtocol::OpenAiResponses,
             "upstream-title",
             "Prompt",
+            None,
             &schema,
             Some("none"),
             "ai_session_next_input_suggestion",
         );
         assert_eq!(explicit_none["reasoning"]["effort"], "none");
-        let explicit_chat_none = title_request_body(
+        let explicit_chat_none = structured_request_body(
             PrivateModelProtocol::OpenAiChatCompletions,
             "upstream-title",
             "Prompt",
+            None,
             &schema,
             Some("none"),
             "ai_session_next_input_suggestion",
         );
         assert_eq!(explicit_chat_none["reasoning_effort"], "none");
-        let omitted = title_request_body(
+        let omitted = structured_request_body(
             PrivateModelProtocol::OpenAiResponses,
             "upstream-title",
             "Prompt",
+            None,
             &schema,
             None,
             "ai_session_next_input_suggestion",
@@ -2620,6 +2751,68 @@ mod tests {
             ),
             "https://models.example/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn structured_request_preserves_plain_text_message_roles() {
+        let schema = controlled_instance_ai_session::ai_session_next_input_output_schema();
+        let messages = vec![
+            AiSessionStructuredMessage {
+                role: "system".to_string(),
+                content: "fixed system prompt".to_string(),
+            },
+            AiSessionStructuredMessage {
+                role: "user".to_string(),
+                content: "User: 修复登录\nAssistant: 已修复".to_string(),
+            },
+            AiSessionStructuredMessage {
+                role: "assistant".to_string(),
+                content: "继续补齐测试".to_string(),
+            },
+            AiSessionStructuredMessage {
+                role: "user".to_string(),
+                content: "User: 检查边界\nAssistant: 已检查".to_string(),
+            },
+        ];
+        let responses = structured_request_body(
+            PrivateModelProtocol::OpenAiResponses,
+            "upstream-model",
+            "",
+            Some(&messages),
+            &schema,
+            None,
+            "ai_session_next_input_suggestion",
+        );
+        assert_eq!(responses["instructions"], "fixed system prompt");
+        assert_eq!(responses["input"][0]["role"], "user");
+        assert_eq!(responses["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(responses["input"][1]["role"], "assistant");
+        assert_eq!(responses["input"][1]["content"][0]["type"], "output_text");
+        assert_eq!(responses["input"][2]["role"], "user");
+        assert_eq!(responses["input"][2]["content"][0]["type"], "input_text");
+        assert_eq!(
+            responses["input"][2]["content"][0]["text"],
+            "User: 检查边界\nAssistant: 已检查"
+        );
+        assert!(responses.get("messages").is_none());
+
+        let chat = structured_request_body(
+            PrivateModelProtocol::OpenAiChatCompletions,
+            "upstream-model",
+            "",
+            Some(&messages),
+            &schema,
+            None,
+            "ai_session_next_input_suggestion",
+        );
+        assert_eq!(chat["messages"][0]["role"], "system");
+        assert_eq!(chat["messages"][1]["role"], "user");
+        assert_eq!(chat["messages"][2]["role"], "assistant");
+        assert_eq!(
+            chat["messages"][3]["content"],
+            "User: 检查边界\nAssistant: 已检查"
+        );
+        assert!(chat.get("input").is_none());
     }
 
     #[tokio::test]
@@ -2797,6 +2990,81 @@ mod tests {
                 .expect("exact provider wins")
                 .model_entity_id,
             "model-b"
+        );
+    }
+
+    #[test]
+    fn suggestion_model_selection_reads_projection_and_private_config() {
+        let selection = AiSessionModelSelection {
+            model_entity_id: "model-primary".to_string(),
+            model_name: "Primary Label".to_string(),
+            model_upstream_name: Some("upstream-primary".to_string()),
+        };
+        let mut environment = BTreeMap::new();
+        environment.insert(
+            "TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_SELECTION_JSON"
+                .to_string(),
+            serde_json::to_string(&selection).expect("selection json"),
+        );
+        assert_eq!(
+            read_ai_session_next_input_suggestion_model_selection(&environment),
+            Some(selection.clone())
+        );
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let private_config_path = root.path().join("private-config.json");
+        std::fs::write(
+            &private_config_path,
+            json!({ "aiSessionNextInputSuggestionModelSelection": selection }).to_string(),
+        )
+        .expect("private config");
+        let mut environment = BTreeMap::new();
+        environment.insert(
+            "TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH".to_string(),
+            private_config_path.display().to_string(),
+        );
+        assert_eq!(
+            read_ai_session_next_input_suggestion_model_selection(&environment)
+                .expect("file selection")
+                .model_entity_id,
+            "model-primary"
+        );
+        environment.insert(
+            "TASK_HANDOFF_PRIVATE_CONFIG_LOADED".to_string(),
+            "1".to_string(),
+        );
+        assert_eq!(
+            read_ai_session_next_input_suggestion_model_selection(&environment),
+            None
+        );
+    }
+
+    #[test]
+    fn suggestion_model_selection_requires_an_assigned_structured_model() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let config = config_with_catalog(root.path(), direct_catalog());
+        let resolved = config
+            .resolve_next_input_suggestion_model_selection(&AiSessionModelSelection {
+                model_entity_id: "model-primary".to_string(),
+                model_name: "Primary Label".to_string(),
+                model_upstream_name: None,
+            })
+            .expect("assigned model");
+        assert_eq!(resolved.model_name, "Primary Label");
+        assert_eq!(
+            resolved.model_upstream_name.as_deref(),
+            Some("upstream-primary")
+        );
+        let error = config
+            .resolve_next_input_suggestion_model_selection(&AiSessionModelSelection {
+                model_entity_id: "missing".to_string(),
+                model_name: "Missing".to_string(),
+                model_upstream_name: None,
+            })
+            .expect_err("unassigned model");
+        assert_eq!(
+            error.code,
+            "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE"
         );
     }
 }

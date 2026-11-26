@@ -159,6 +159,7 @@ pub(crate) fn project_new_codex_session(
         summary: summary.summary.clone(),
         last_message: summary.last_message.clone(),
         next_input_suggestion: None,
+        next_input_suggestion_error: None,
         last_message_item_id: summary.last_message_item_id.clone(),
         current_tool: None,
         tool_calls_since_last_message: 0,

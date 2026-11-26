@@ -19,7 +19,7 @@ import { CodexThreadTitleGenerator } from "./codex-app-server/session/title-gene
 import { CodexTimelineStore } from "./codex-app-server/session/timeline-store";
 import { CodexAppServerMentions } from "./codex-app-server/mentions";
 import { codexItemTimeline, codexThreadTimeline, mergeCodexTimelineItems } from "./codex-app-server/protocol/timeline";
-import { AI_SESSION_NEXT_INPUT_OUTPUT_SCHEMA } from "./ai-session-next-input";
+import { AI_SESSION_NEXT_INPUT_OUTPUT_SCHEMA, AiSessionNextInputGenerationError } from "./ai-session-next-input";
 
 type CodexGoalCommandAction =
   | { kind: "clear" }
@@ -1004,21 +1004,40 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     const client = await this.requireReadyClient();
     if (!client.readThread || !client.runEphemeralStructuredTurn) {
       this.options.onDiagnostic?.({ code: "CODEX_NEXT_INPUT_SUGGESTION_UNSUPPORTED", sessionId: session.id });
-      return undefined;
+      throw new AiSessionNextInputGenerationError(
+        "AI_SESSION_NEXT_INPUT_GENERATION_UNSUPPORTED",
+        "Codex app-server does not support next input suggestions.",
+      );
     }
     const thread = await client.readThread(session.providerSessionId, { includeTurns: false });
-    if (!thread || signal.aborted) return undefined;
+    if (signal.aborted) return undefined;
+    if (!thread) {
+      throw new AiSessionNextInputGenerationError(
+        "AI_SESSION_NEXT_INPUT_SESSION_UNAVAILABLE",
+        "Codex session is unavailable.",
+      );
+    }
     const resolved = session.modelSelection ? this.options.resolveModelSelection?.(session.modelSelection) : undefined;
     const model = nextInputNonemptyString(session.modelSelection ? resolved?.model : thread.model);
     const modelProvider = nextInputNonemptyString(session.modelSelection ? resolved?.modelProvider : thread.modelProvider);
     const cwd = nextInputNonemptyString(session.cwd) || nextInputNonemptyString(thread.cwd);
-    if (!model || !modelProvider || !cwd) {
+    if (!model || !modelProvider) {
       this.options.onDiagnostic?.({
         code: "CODEX_NEXT_INPUT_SUGGESTION_ROUTE_UNRESOLVED",
         sessionId: session.id,
         modelSelection: session.modelSelection,
       });
-      return undefined;
+      throw new AiSessionNextInputGenerationError(
+        "AI_SESSION_NEXT_INPUT_MODEL_UNRESOLVED",
+        "AI model is not configured for this session.",
+      );
+    }
+    if (!cwd) {
+      this.options.onDiagnostic?.({ code: "CODEX_NEXT_INPUT_SUGGESTION_CWD_UNRESOLVED", sessionId: session.id });
+      throw new AiSessionNextInputGenerationError(
+        "AI_SESSION_NEXT_INPUT_CWD_UNRESOLVED",
+        "Session working directory is not available.",
+      );
     }
     return client.runEphemeralStructuredTurn({
       cwd,

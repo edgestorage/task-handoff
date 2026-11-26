@@ -1243,12 +1243,14 @@
             :session-busy="selectedSession?.status === 'running' || selectedSession?.status === 'waiting'"
             :submit-label="goalComposerEdit ? t('sessions.composer.saveGoal') : undefined"
             :next-input-suggestion="selectedNextInputSuggestion"
+            :next-input-suggestion-error="selectedNextInputSuggestionError"
             :suggestion-key="`${instance.id}:${selectedSession.id}`"
             @cancel-edit="cancelComposerEdit"
             @command="executeSelectedSessionCommand"
             @run="runSelectedSessionAction"
             @select-model="selectExistingSessionModel"
             @open-model-settings="emit('openSettings', instance.id, 'models')"
+            @open-suggestion-settings="emit('openSettings', instance.id, 'ai')"
             @select-reasoning-effort="selectExistingSessionReasoningEffort"
             @steer="steerMessageDraft"
           />
@@ -1521,7 +1523,7 @@ import { scrollHorizontalOverflow, updateHorizontalOverflowFromEvent, vHorizonta
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import NewWorktreeDialog, { type NewWorktreeSelection } from "./NewWorktreeDialog.vue";
 import AiSessionPathContextMenu from "../../../components/ai-session/AiSessionPathContextMenu.vue";
-import { selectNextInputSuggestion } from "../../../components/ai-session/next-input-suggestion";
+import { selectNextInputSuggestion, selectNextInputSuggestionError } from "../../../components/ai-session/next-input-suggestion";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
@@ -1700,7 +1702,7 @@ const emit = defineEmits<{
   selectAiSession: [instanceId: string, sessionId: string];
   sessionCreated: [instanceId: string, sessionId: string];
   "update:creationInstance": [instanceId: string];
-  openSettings: [instanceId: string, section?: "apps" | "models"];
+  openSettings: [instanceId: string, section?: "ai" | "apps" | "models"];
   "update:creationSubmitReady": [ready: boolean];
 }>();
 const { locale, t } = useI18n();
@@ -1902,6 +1904,13 @@ const selectedNextInputSuggestion = computed(() => {
   const latestTurnId = session.latestTurnRef?.id
     || aiSessionTurns(selectedConversationSession.value || session).at(-1)?.id;
   return selectNextInputSuggestion(session, latestTurnId);
+});
+const selectedNextInputSuggestionError = computed(() => {
+  const session = selectedSession.value;
+  if (!session) return undefined;
+  const latestTurnId = session.latestTurnRef?.id
+    || aiSessionTurns(selectedConversationSession.value || session).at(-1)?.id;
+  return selectNextInputSuggestionError(session, latestTurnId);
 });
 const { setViewMode: persistTimelineViewMode, viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
 const { conversationWidth, setConversationWidth } = useAiSessionConversationWidth();

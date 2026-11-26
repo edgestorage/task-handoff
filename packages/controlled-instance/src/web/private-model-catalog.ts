@@ -5,10 +5,11 @@ import {
   parseInstancePrivateModelCatalog,
   type InstancePrivateModelCatalog,
 } from "@task-handoff/core/core/instance-private-model-catalog";
-import type { AiSessionModelSelection } from "@task-handoff/protocol/ai-sessions";
 import {
   AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
+  AiSessionModelSelectionSchema,
   AiSessionNextInputSuggestionReasoningEffortSchema,
+  type AiSessionModelSelection,
   type AiSessionNextInputSuggestionReasoningEffort,
 } from "@task-handoff/protocol/ai-sessions";
 import { parseCodexInstanceSettings } from "@task-handoff/protocol/control-plane";
@@ -82,6 +83,25 @@ export function readControlledPrivateAiSessionNextInputSuggestionReasoningEffort
   return parse(root.aiSessionNextInputSuggestionReasoningEffort);
 }
 
+export function readControlledPrivateAiSessionNextInputSuggestionModelSelection(
+  env: NodeJS.ProcessEnv = process.env,
+): AiSessionModelSelection | undefined {
+  const parse = (value: unknown) => AiSessionModelSelectionSchema.safeParse(value).data;
+  const projected = env.TASK_HANDOFF_PRIVATE_AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_SELECTION_JSON;
+  if (projected !== undefined) {
+    try {
+      return parse(JSON.parse(projected));
+    } catch {
+      return undefined;
+    }
+  }
+  if (env.TASK_HANDOFF_PRIVATE_CONFIG_LOADED === "1") return undefined;
+  const filePath = privateConfigFilePath(env);
+  if (!filePath || !fs.existsSync(filePath)) return undefined;
+  const root = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  return parse(root.aiSessionNextInputSuggestionModelSelection);
+}
+
 /**
  * Session selections are stored model identities that may have been removed
  * since the session last ran. A switch target is a fresh caller choice. The two
@@ -147,6 +167,31 @@ export function resolveControlledPrivateModelSelection(
     throw options.intent === "target"
       ? modelTargetUnavailable()
       : previouslySelectedModelUnavailable("AI_SESSION_MODEL_NAME_UNAVAILABLE");
+  }
+  return { modelEntityId: entity.id, modelName: entry.name, modelUpstreamName: modelNameEntryIdentity(entry) };
+}
+
+export function resolveControlledNextInputSuggestionModelSelection(
+  catalog: InstancePrivateModelCatalog | undefined,
+  requested: AiSessionModelSelection,
+) {
+  if (!catalog) {
+    throw Object.assign(new Error("The model configuration is not loaded by this instance."), {
+      code: "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE",
+      statusCode: 409,
+    });
+  }
+  const entity = catalog.entities.find((candidate) => candidate.id === requested.modelEntityId
+    && (candidate.protocols.includes("openai-responses") || candidate.protocols.includes("openai-chat-completions")));
+  const names = entity?.modelNames.slice().sort((left, right) => left.order - right.order || left.name.localeCompare(right.name)) || [];
+  const entry = names.find((candidate) => requested.modelUpstreamName && modelNameEntryIdentity(candidate) === requested.modelUpstreamName)
+    ?? names.find((candidate) => modelNameEntryIdentity(candidate) === requested.modelName)
+    ?? names.find((candidate) => candidate.name === requested.modelName);
+  if (!entity || !entry) {
+    throw Object.assign(new Error("The custom suggestion model is not assigned to this instance."), {
+      code: "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_UNAVAILABLE",
+      statusCode: 400,
+    });
   }
   return { modelEntityId: entity.id, modelName: entry.name, modelUpstreamName: modelNameEntryIdentity(entry) };
 }

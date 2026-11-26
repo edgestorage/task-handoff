@@ -18,6 +18,7 @@ import type {
   AiSessionCloseResult,
   AiSessionPermissionMode,
   AiSessionNextInputSuggestionReasoningEffort,
+  AiSessionModelSelection,
   AiSessionLifecycle as ProtocolAiSessionLifecycle,
   AiSessionMessageAttachmentRef as ProtocolAiSessionAttachmentRef,
   AiSessionMessageDeltaEvent as ProtocolAiSessionMessageDeltaEvent,
@@ -872,6 +873,7 @@ export type ControlledInstance = {
     aiSessionMaxFileAttachmentBytes: number;
     aiSessionNextInputSuggestionEnabled: boolean;
     aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffort;
+    aiSessionNextInputSuggestionModelSelection?: AiSessionModelSelection;
   };
   workspace: {
     mode?: WorkspacePolicy["mode"];
@@ -1214,6 +1216,7 @@ export type CreateControlledInstanceInput = {
     aiSessionMaxFileAttachmentBytes?: number;
     aiSessionNextInputSuggestionEnabled?: boolean;
     aiSessionNextInputSuggestionReasoningEffort?: AiSessionNextInputSuggestionReasoningEffort;
+    aiSessionNextInputSuggestionModelSelection?: AiSessionModelSelection;
   };
   modelSelection?: ModelSelection;
   gitCredentialRetention?: "operation-only" | "instance-retained";
@@ -1241,6 +1244,7 @@ export type UpdateControlledInstanceInput = {
     aiSessionMaxFileAttachmentBytes?: number;
     aiSessionNextInputSuggestionEnabled?: boolean;
     aiSessionNextInputSuggestionReasoningEffort?: AiSessionNextInputSuggestionReasoningEffort;
+    aiSessionNextInputSuggestionModelSelection?: AiSessionModelSelection | null;
   };
   modelSelection?: ModelSelection;
 };

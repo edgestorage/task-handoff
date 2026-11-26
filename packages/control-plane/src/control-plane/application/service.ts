@@ -24,6 +24,7 @@ import {
   supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionPersistenceSettings,
   supportsAiSessionNextInputSuggestion,
+  supportsAiSessionNextInputSuggestionModelSelection,
   supportsAiSessionNextInputSuggestionReasoningEffort,
   supportsControlledInstanceCodexManagedSettings,
   supportsGitCredentialProxy,
@@ -31,6 +32,7 @@ import {
   supportsNodeLocalFolderNameUpdate,
   supportsNodeAiSessionFileAttachmentLimit,
   supportsNodeAiSessionNextInputSuggestion,
+  supportsNodeAiSessionNextInputSuggestionModelSelection,
   supportsNodeAiSessionNextInputSuggestionReasoningEffort,
   supportsNodeCodexManagedSettings,
   supportsNodeManagedGitCredentialRegistry,
@@ -1660,6 +1662,9 @@ export class ControlPlaneService {
     if (parsedInput.config?.aiSessionNextInputSuggestionReasoningEffort !== undefined) {
       requireAiSessionNextInputSuggestionReasoningEffortSupport(node, current);
     }
+    if (parsedInput.config?.aiSessionNextInputSuggestionModelSelection !== undefined) {
+      requireAiSessionNextInputSuggestionModelSelectionSupport(node, current);
+    }
     const { modelSelection, ...instancePatch } = parsedInput;
     let instance = Object.keys(instancePatch).length
       ? await this.nodeAgentGateway.updateInstance(node, id, instancePatch)
@@ -2861,6 +2866,20 @@ function requireAiSessionNextInputSuggestionReasoningEffortSupport(node: Node, i
     throw Object.assign(new Error("This instance does not support next-input suggestion reasoning modes."), {
       statusCode: 409,
       code: "AI_SESSION_NEXT_INPUT_SUGGESTION_REASONING_EFFORT_UNSUPPORTED",
+    });
+  }
+}
+
+function requireAiSessionNextInputSuggestionModelSelectionSupport(node: Node, instance: ControlledInstance) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  if (!supportsNodeAiSessionNextInputSuggestionModelSelection(agentCapabilities)
+    || !supportsAiSessionNextInputSuggestionModelSelection(instance.capabilities)) {
+    throw Object.assign(new Error("This instance does not support a custom next-input suggestion model."), {
+      statusCode: 409,
+      code: "AI_SESSION_NEXT_INPUT_SUGGESTION_MODEL_SELECTION_UNSUPPORTED",
     });
   }
 }

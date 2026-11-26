@@ -6,7 +6,9 @@ import type { NodeAgentStorePaths } from "../persistence/paths.ts";
 import { CodexInstanceSettingsSchema, parseCodexInstanceSettings, type CodexInstanceSettings } from "@task-handoff/protocol/control-plane";
 import {
   AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
+  AiSessionModelSelectionSchema,
   AiSessionNextInputSuggestionReasoningEffortSchema,
+  type AiSessionModelSelection,
   type AiSessionNextInputSuggestionReasoningEffort,
 } from "@task-handoff/protocol/ai-sessions";
 import {
@@ -29,6 +31,7 @@ export const InstancePrivateConfigSchema = z.object({
   codexSettings: CodexInstanceSettingsSchema.optional(),
   aiSessionNextInputSuggestionEnabled: z.boolean().optional(),
   aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.default(AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT),
+  aiSessionNextInputSuggestionModelSelection: AiSessionModelSelectionSchema.optional(),
   updatedAt: z.string().datetime(),
 }).strict();
 
@@ -62,6 +65,7 @@ function samePrivateConfigPayload(left: InstancePrivateConfig, right: InstancePr
     codexSettings: value.codexSettings,
     aiSessionNextInputSuggestionEnabled: value.aiSessionNextInputSuggestionEnabled,
     aiSessionNextInputSuggestionReasoningEffort: value.aiSessionNextInputSuggestionReasoningEffort,
+    aiSessionNextInputSuggestionModelSelection: value.aiSessionNextInputSuggestionModelSelection,
   });
   return payload(left) === payload(right);
 }
@@ -110,6 +114,7 @@ export class InstancePrivateConfigStore {
       codexSettings: source.codexSettings === undefined ? undefined : parseCodexInstanceSettings(source.codexSettings),
       aiSessionNextInputSuggestionEnabled: source.aiSessionNextInputSuggestionEnabled === true,
       aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffortSchema.safeParse(source.aiSessionNextInputSuggestionReasoningEffort).data ?? AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
+      aiSessionNextInputSuggestionModelSelection: AiSessionModelSelectionSchema.safeParse(source.aiSessionNextInputSuggestionModelSelection).data,
       updatedAt: source.updatedAt,
     });
     if (parsed.instanceId !== instanceId) {
@@ -166,6 +171,7 @@ export class InstancePrivateConfigStore {
     codexSettings?: CodexInstanceSettings,
     aiSessionNextInputSuggestionEnabled = false,
     aiSessionNextInputSuggestionReasoningEffort: AiSessionNextInputSuggestionReasoningEffort = AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
+    aiSessionNextInputSuggestionModelSelection?: AiSessionModelSelection,
   ) {
     if (!instanceCredential) {
       throw Object.assign(new Error(`Instance ${instanceId} does not have a long-lived credential.`), {
@@ -182,6 +188,7 @@ export class InstancePrivateConfigStore {
       ...(codexSettings ? { codexSettings } : {}),
       aiSessionNextInputSuggestionEnabled,
       aiSessionNextInputSuggestionReasoningEffort,
+      ...(aiSessionNextInputSuggestionModelSelection ? { aiSessionNextInputSuggestionModelSelection } : {}),
       updatedAt: new Date().toISOString(),
     });
     // Runtime convergence reconciles through ExecutorContext, which materializes

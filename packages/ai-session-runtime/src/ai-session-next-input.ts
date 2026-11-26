@@ -1,9 +1,12 @@
 import {
   AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
+  AI_SESSION_NEXT_INPUT_SUGGESTION_ERROR_MAX_CHARS,
   AI_SESSION_NEXT_INPUT_SUGGESTION_MAX_CHARS,
+  aiSessionModelSelectionIdentity,
   resolveAiSessionNextInputSuggestionReasoningEffort,
 } from "@task-handoff/protocol/ai-sessions";
 import type {
+  AiSessionModelSelection,
   AiSessionNextInputSuggestion,
   AiSessionNextInputSuggestionReasoningEffort,
   AiSessionReasoningEffort,
@@ -15,6 +18,15 @@ export const AI_SESSION_NEXT_INPUT_CONTEXT_MAX_BYTES = 8 * 1024;
 export const AI_SESSION_NEXT_INPUT_RESPONSE_MAX_BYTES = 64 * 1024;
 export const AI_SESSION_NEXT_INPUT_REQUEST_TIMEOUT_MS = 30_000;
 export const AI_SESSION_NEXT_INPUT_DEBOUNCE_MS = 1_000;
+export const AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS = 5;
+export const AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS = 10;
+export const AI_SESSION_NEXT_INPUT_SYSTEM_PROMPT = [
+  "You predict the user's most likely next message in an ongoing coding session.",
+  "Each user message contains one completed turn: \"User:\" is the real user request and \"Assistant:\" is the real assistant reply.",
+  "Each assistant message contains a previous next-message prediction.",
+  "Use the language of the most recent real user request. Keep the prediction specific, natural, and directly editable.",
+  "Do not repeat the previous user request. Do not claim work has been completed.",
+].join("\n");
 const MAX_TRACKED_SUGGESTION_KEYS = 5_000;
 export const AI_SESSION_NEXT_INPUT_OUTPUT_SCHEMA = {
   type: "object",
@@ -33,8 +45,54 @@ type ContextTurn = {
   assistant: string;
 };
 
+export type AiSessionNextInputMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
+export type AiSessionNextInputTurnSnapshot = {
+  id: string;
+  user: string;
+  assistant: string;
+};
+
+export type AiSessionNextInputMessagePlan = {
+  messages: AiSessionNextInputMessage[];
+  snapshots: Map<string, AiSessionNextInputTurnSnapshot>;
+  windowTurnIds: string[];
+  windowStart: number;
+  completedTurnCount: number;
+};
+
+export class AiSessionNextInputGenerationError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "AiSessionNextInputGenerationError";
+    this.code = code;
+  }
+}
+
+function sameAiSessionNextInputMessagePrefix(
+  expected: readonly AiSessionNextInputMessage[],
+  current: readonly AiSessionNextInputMessage[],
+) {
+  return expected.every((message, index) => (
+    current[index]?.role === message.role && current[index]?.content === message.content
+  ));
+}
+
 function compactText(value: string | undefined) {
   return String(value || "").replace(/\s+/gu, " ").trim();
+}
+
+function aiSessionNextInputFailureCode(error: unknown) {
+  if (!error || typeof error !== "object" || !("code" in error)) return "AI_SESSION_NEXT_INPUT_GENERATION_FAILED";
+  const code = typeof error.code === "string" ? error.code.trim() : "";
+  return code.startsWith("AI_SESSION_NEXT_INPUT_") && code.length <= 120
+    ? code
+    : "AI_SESSION_NEXT_INPUT_GENERATION_FAILED";
 }
 
 function turnUserText(turn: NonNullable<AiSessionStatus["turns"]>[number]) {
@@ -59,6 +117,17 @@ export function truncateAiSessionNextInputUtf8(value: string, maxBytes: number) 
     used += bytes;
   }
   return output;
+}
+
+export function sanitizeAiSessionNextInputSuggestionError(value: string) {
+  const redacted = value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [redacted]")
+    .replace(/\b(api[-_ ]?key|authorization|access[-_ ]?token|secret)\b\s*[:=]\s*[^\s,;}]+/giu, "$1: [redacted]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "[redacted]")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const bounded = Array.from(redacted).slice(0, AI_SESSION_NEXT_INPUT_SUGGESTION_ERROR_MAX_CHARS).join("").trim();
+  return bounded || "AI session next input suggestion generation failed";
 }
 
 export function aiSessionNextInputContext(session: AiSessionStatus, maxBytes = AI_SESSION_NEXT_INPUT_CONTEXT_MAX_BYTES) {
@@ -111,6 +180,69 @@ export function aiSessionNextInputPrompt(session: AiSessionStatus) {
   ].join("\n").trim();
 }
 
+/**
+ * The next-input window grows from five to ten completed turns. Once it reaches
+ * ten, the next request drops the oldest five turns and starts growing again.
+ * Keeping the start index on a five-turn cadence is what preserves an exact
+ * append-only prefix between those resets.
+ */
+export function aiSessionNextInputWindowStart(completedTurnCount: number) {
+  const count = Math.max(0, Math.trunc(completedTurnCount));
+  if (count <= AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS) return 0;
+  return Math.ceil((count - AI_SESSION_NEXT_INPUT_MAX_WINDOW_TURNS) / AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS)
+    * AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS;
+}
+
+export function aiSessionNextInputTurnWindow<T>(turns: readonly T[]) {
+  return turns.slice(aiSessionNextInputWindowStart(turns.length));
+}
+
+export function buildAiSessionNextInputMessages(
+  turns: readonly AiSessionNextInputTurnSnapshot[],
+  suggestionsByTurnId: ReadonlyMap<string, string> = new Map(),
+): AiSessionNextInputMessage[] {
+  const messages: AiSessionNextInputMessage[] = [{ role: "system", content: AI_SESSION_NEXT_INPUT_SYSTEM_PROMPT }];
+  for (const turn of turns) {
+    messages.push({ role: "user", content: `User: ${turn.user}\nAssistant: ${turn.assistant}` });
+    const suggestion = compactText(suggestionsByTurnId.get(turn.id));
+    if (suggestion) messages.push({ role: "assistant", content: suggestion });
+  }
+  return messages;
+}
+
+/**
+ * Builds the complete messages request for the latest settled turn. Snapshots
+ * are reused by turn id so later status projections cannot rewrite an already
+ * sent prefix. The caller must only pass suggestions that were finalized before
+ * the following turn; this builder never decides whether a late result is valid.
+ */
+export function createAiSessionNextInputMessagePlan(input: {
+  session: AiSessionStatus;
+  previousSnapshots?: ReadonlyMap<string, AiSessionNextInputTurnSnapshot>;
+  suggestionsByTurnId?: ReadonlyMap<string, string>;
+}): AiSessionNextInputMessagePlan | undefined {
+  const completed = (input.session.turns || []).filter((turn) => turn.status === "completed");
+  const completedTurns = completed
+    .map((turn) => input.previousSnapshots?.get(turn.id) || {
+      id: turn.id,
+      user: turnUserText(turn),
+      assistant: turnAssistantText(turn),
+    })
+    .filter((turn) => turn.user && turn.assistant);
+  if (completedTurns.length < AI_SESSION_NEXT_INPUT_MIN_WINDOW_TURNS) return undefined;
+  if (completed.at(-1)?.id !== completedTurns.at(-1)?.id) return undefined;
+
+  const windowStart = aiSessionNextInputWindowStart(completedTurns.length);
+  const windowTurns = completedTurns.slice(windowStart);
+  return {
+    messages: buildAiSessionNextInputMessages(windowTurns, input.suggestionsByTurnId),
+    snapshots: new Map(windowTurns.map((turn) => [turn.id, turn])),
+    windowTurnIds: windowTurns.map((turn) => turn.id),
+    windowStart,
+    completedTurnCount: completedTurns.length,
+  };
+}
+
 export function parseAiSessionNextInputSuggestion(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const bounded = truncateAiSessionNextInputUtf8(raw, AI_SESSION_NEXT_INPUT_RESPONSE_MAX_BYTES);
@@ -150,6 +282,7 @@ export function isAiSessionNextInputEligible(session: AiSessionStatus | undefine
 export type AiSessionNextInputGenerator = (input: {
   session: AiSessionStatus;
   turn: NonNullable<AiSessionStatus["turns"]>[number];
+  messages: AiSessionNextInputMessage[];
   reasoningEffort: AiSessionReasoningEffort | undefined;
   signal: AbortSignal;
 }) => Promise<string | undefined>;
@@ -158,6 +291,7 @@ type CoordinatorOptions = {
   registry: AiSessionRegistry;
   isEnabled: () => boolean;
   reasoningEffort?: () => AiSessionNextInputSuggestionReasoningEffort;
+  modelSelection?: () => AiSessionModelSelection | undefined;
   generate: AiSessionNextInputGenerator;
   debounceMs?: number;
   requestTimeoutMs?: number;
@@ -171,6 +305,8 @@ type SessionState = {
   requestKey?: string;
   pendingSuccess?: boolean;
   pendingSuccessTurnId?: string;
+  snapshots: Map<string, AiSessionNextInputTurnSnapshot>;
+  suggestionsByTurnId: Map<string, string>;
 };
 
 export class AiSessionNextInputSuggestionCoordinator {
@@ -180,12 +316,14 @@ export class AiSessionNextInputSuggestionCoordinator {
   private readonly requestTimeoutMs: number;
   private readonly options: CoordinatorOptions;
   private reasoningEffort: AiSessionNextInputSuggestionReasoningEffort;
+  private modelSelection: AiSessionModelSelection | undefined;
 
   constructor(options: CoordinatorOptions) {
     this.options = options;
     this.debounceMs = options.debounceMs ?? AI_SESSION_NEXT_INPUT_DEBOUNCE_MS;
     this.requestTimeoutMs = options.requestTimeoutMs ?? AI_SESSION_NEXT_INPUT_REQUEST_TIMEOUT_MS;
     this.reasoningEffort = options.reasoningEffort?.() ?? AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT;
+    this.modelSelection = options.modelSelection?.();
   }
 
   observeBaseline(session: AiSessionStatus) {
@@ -278,6 +416,15 @@ export class AiSessionNextInputSuggestionCoordinator {
     for (const session of this.options.registry.list()) this.observeBaseline(session);
   }
 
+  setModelSelection(modelSelection: AiSessionModelSelection | undefined) {
+    const current = this.modelSelection;
+    if (current?.modelEntityId === modelSelection?.modelEntityId
+      && (current && modelSelection ? aiSessionModelSelectionIdentity(current) === aiSessionModelSelectionIdentity(modelSelection) : current === modelSelection)) return;
+    this.clearAll();
+    this.modelSelection = modelSelection;
+    for (const session of this.options.registry.list()) this.observeBaseline(session);
+  }
+
   dispose() {
     for (const sessionId of [...this.states.keys()]) this.invalidate(sessionId);
     this.states.clear();
@@ -286,8 +433,12 @@ export class AiSessionNextInputSuggestionCoordinator {
   private clearAll() {
     for (const sessionId of [...this.states.keys()]) this.invalidate(sessionId);
     for (const session of this.options.registry.list()) {
-      if (session.nextInputSuggestion) {
-        this.options.registry.applyRealtimeEvent(session.id, { kind: "next-input-suggestion", suggestion: null });
+      if (session.nextInputSuggestion || session.nextInputSuggestionError) {
+        this.options.registry.applyRealtimeEvent(session.id, {
+          kind: "next-input-suggestion",
+          suggestion: null,
+          suggestionError: null,
+        });
       }
     }
   }
@@ -299,9 +450,67 @@ export class AiSessionNextInputSuggestionCoordinator {
   private state(sessionId: string) {
     const existing = this.states.get(sessionId);
     if (existing) return existing;
-    const state: SessionState = { generation: 0 };
+    const state: SessionState = {
+      generation: 0,
+      snapshots: new Map(),
+      suggestionsByTurnId: new Map(),
+    };
     this.states.set(sessionId, state);
     return state;
+  }
+
+  private messagePlan(session: AiSessionStatus, state: SessionState) {
+    const plan = createAiSessionNextInputMessagePlan({
+      session,
+      previousSnapshots: state.snapshots,
+      suggestionsByTurnId: state.suggestionsByTurnId,
+    });
+    if (!plan) return undefined;
+    state.snapshots = plan.snapshots;
+    for (const turnId of [...state.suggestionsByTurnId.keys()]) {
+      if (!plan.snapshots.has(turnId)) state.suggestionsByTurnId.delete(turnId);
+    }
+    return plan;
+  }
+
+  private canPublishForRequest(
+    sessionId: string,
+    turnId: string,
+    key: string,
+    state: SessionState,
+    generation: number,
+  ) {
+    if (!this.options.isEnabled() || generation !== state.generation) return false;
+    const current = this.options.registry.get(sessionId);
+    const currentTurn = current ? latestCompletedTurn(current) : undefined;
+    return Boolean(
+      current
+      && currentTurn?.id === turnId
+      && isAiSessionNextInputEligible(current)
+      && this.key(current, currentTurn) === key
+    );
+  }
+
+  private publishSuggestionError(
+    sessionId: string,
+    turnId: string,
+    key: string,
+    state: SessionState,
+    generation: number,
+    code: string,
+    error: unknown,
+  ) {
+    if (!this.canPublishForRequest(sessionId, turnId, key, state, generation)) return;
+    this.options.registry.applyRealtimeEvent(sessionId, {
+      kind: "next-input-suggestion",
+      suggestion: null,
+      suggestionError: {
+        code,
+        message: sanitizeAiSessionNextInputSuggestionError(error instanceof Error ? error.message : String(error)),
+        turnId,
+        generatedAt: new Date().toISOString(),
+      },
+    });
   }
 
   private invalidate(sessionId: string) {
@@ -350,6 +559,8 @@ export class AiSessionNextInputSuggestionCoordinator {
     const initial = this.options.registry.get(sessionId);
     const initialTurn = initial ? latestCompletedTurn(initial) : undefined;
     if (!this.options.isEnabled() || generation !== state.generation || !isAiSessionNextInputEligible(initial) || initialTurn?.id !== turnId) return;
+    const plan = this.messagePlan(initial!, state);
+    if (!plan || plan.windowTurnIds.at(-1) !== turnId) return;
     const controller = new AbortController();
     let timedOut = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -363,6 +574,7 @@ export class AiSessionNextInputSuggestionCoordinator {
       const request = this.options.generate({
         session: initial!,
         turn: initialTurn!,
+        messages: plan.messages,
         reasoningEffort,
         signal: controller.signal,
       });
@@ -379,10 +591,25 @@ export class AiSessionNextInputSuggestionCoordinator {
       });
       const raw = await Promise.race([request, deadline]);
       const text = parseAiSessionNextInputSuggestion(raw);
-      if (!text || controller.signal.aborted || !this.options.isEnabled() || generation !== state.generation) return;
+      if (controller.signal.aborted || !this.options.isEnabled() || generation !== state.generation) return;
+      if (!text) {
+        this.publishSuggestionError(
+          sessionId,
+          turnId,
+          key,
+          state,
+          generation,
+          "AI_SESSION_NEXT_INPUT_RESPONSE_INVALID",
+          new Error("AI session next input suggestion response could not be parsed"),
+        );
+        return;
+      }
       const current = this.options.registry.get(sessionId);
       const currentTurn = current ? latestCompletedTurn(current) : undefined;
       if (!isAiSessionNextInputEligible(current) || currentTurn?.id !== turnId || this.key(current!, currentTurn!) !== key) return;
+      const currentPlan = this.messagePlan(current!, state);
+      if (!currentPlan || !sameAiSessionNextInputMessagePrefix(plan.messages, currentPlan.messages)) return;
+      state.suggestionsByTurnId.set(turnId, text);
       const suggestion: AiSessionNextInputSuggestion = {
         text,
         turnId,
@@ -390,13 +617,18 @@ export class AiSessionNextInputSuggestionCoordinator {
       };
       this.options.registry.applyRealtimeEvent(sessionId, { kind: "next-input-suggestion", suggestion });
     } catch (error) {
-      if (!controller.signal.aborted && !timedOut) {
+      if (!controller.signal.aborted || timedOut) {
+        const message = timedOut
+          ? new Error("AI session next input suggestion request timed out")
+          : error;
+        const code = timedOut ? "AI_SESSION_NEXT_INPUT_TIMEOUT" : aiSessionNextInputFailureCode(error);
         this.options.onDiagnostic?.({
-          code: "AI_SESSION_NEXT_INPUT_GENERATION_FAILED",
+          code,
           sessionId,
           turnId,
-          error: error instanceof Error ? error.message : String(error),
+          error: message instanceof Error ? message.message : String(message),
         });
+        this.publishSuggestionError(sessionId, turnId, key, state, generation, code, message);
       }
     } finally {
       if (timeout) clearTimeout(timeout);

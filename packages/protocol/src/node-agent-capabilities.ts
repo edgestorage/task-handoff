@@ -137,6 +137,8 @@ export const NodeAgentCapabilitiesSchema = z.object({
   aiSessionNextInputSuggestion: z.boolean().optional(),
   // Additive capability: older node-agents cannot project the reasoning-mode setting.
   aiSessionNextInputSuggestionReasoningEffort: z.boolean().optional(),
+  // Additive capability: older node-agents cannot project a custom suggestion model.
+  aiSessionNextInputSuggestionModelSelection: z.boolean().optional(),
   folderPlaces: z.boolean().optional(),
   localFolderNameUpdate: z.boolean().optional(),
   // Additive capability: absent on v0.0.21 node-agents.
@@ -354,4 +356,8 @@ export function supportsNodeAiSessionNextInputSuggestion(capabilities: unknown) 
 
 export function supportsNodeAiSessionNextInputSuggestionReasoningEffort(capabilities: unknown) {
   return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.aiSessionNextInputSuggestionReasoningEffort === true;
+}
+
+export function supportsNodeAiSessionNextInputSuggestionModelSelection(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.aiSessionNextInputSuggestionModelSelection === true;
 }

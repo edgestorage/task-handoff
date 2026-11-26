@@ -686,6 +686,7 @@ export class NodeAgentState {
       instance.config.codexSettings,
       instance.config.aiSessionNextInputSuggestionEnabled,
       instance.config.aiSessionNextInputSuggestionReasoningEffort,
+      instance.config.aiSessionNextInputSuggestionModelSelection,
     );
   }
 
@@ -796,6 +797,9 @@ export class NodeAgentState {
         aiSessionMaxFileAttachmentBytes: input.config?.aiSessionMaxFileAttachmentBytes ?? AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
         aiSessionNextInputSuggestionEnabled: input.config?.aiSessionNextInputSuggestionEnabled ?? false,
         aiSessionNextInputSuggestionReasoningEffort: input.config?.aiSessionNextInputSuggestionReasoningEffort ?? AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT,
+        ...(input.config?.aiSessionNextInputSuggestionModelSelection
+          ? { aiSessionNextInputSuggestionModelSelection: input.config.aiSessionNextInputSuggestionModelSelection }
+          : {}),
       },
       // Git workspaces on Docker are materialized by the asynchronous
       // provisioning controller, so the record starts in the pending phase.

@@ -1,12 +1,17 @@
 use crate::AppState;
 use chrono::{SecondsFormat, Utc};
 use controlled_instance_ai_session::{
-    ai_session_next_input_output_schema, ai_session_next_input_prompt,
-    parse_ai_session_next_input_suggestion, AiSession, AiSessionModelSelection,
-    AiSessionNextInputSuggestionReasoningEffort, AiSessionStructuredModelGenerator,
-    AiSessionStructuredModelInput, ProviderError, ProviderEvent,
+    ai_session_next_input_messages_are_strict_prefix, ai_session_next_input_output_schema,
+    create_ai_session_next_input_message_plan, parse_ai_session_next_input_suggestion, AiSession,
+    AiSessionModelSelection, AiSessionNextInputMessage,
+    AiSessionNextInputSuggestionReasoningEffort, AiSessionNextInputTurnSnapshot,
+    AiSessionStructuredMessage, AiSessionStructuredModelGenerator, AiSessionStructuredModelInput,
+    ProviderError, ProviderEvent,
 };
-use controlled_instance_protocol::AiSessionNextInputSuggestion;
+use controlled_instance_protocol::{
+    AiSessionNextInputSuggestion, AiSessionNextInputSuggestionError,
+    AI_SESSION_NEXT_INPUT_SUGGESTION_ERROR_MAX_CHARS,
+};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
@@ -19,7 +24,6 @@ use std::{
 use tokio::sync::{watch, Mutex, RwLock};
 
 const NEXT_INPUT_DEBOUNCE: Duration = Duration::from_secs(1);
-const NEXT_INPUT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 struct PendingRequest {
@@ -41,12 +45,14 @@ struct SessionState {
     success_pending: bool,
     pending_success_turn_id: Option<String>,
     suppressed_turns: HashSet<String>,
+    snapshots: HashMap<String, AiSessionNextInputTurnSnapshot>,
+    suggestions_by_turn_id: HashMap<String, String>,
 }
 
 #[cfg(test)]
 type TestSuggestionGenerator = Arc<
     dyn Fn(
-            String,
+            Vec<AiSessionNextInputMessage>,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<Option<String>, ProviderError>> + Send>,
         > + Send
@@ -56,6 +62,7 @@ type TestSuggestionGenerator = Arc<
 pub struct AiSessionNextInputSuggestionCoordinator {
     enabled: AtomicBool,
     reasoning_effort: RwLock<AiSessionNextInputSuggestionReasoningEffort>,
+    model_selection: RwLock<Option<AiSessionModelSelection>>,
     debounce: Duration,
     states: Mutex<HashMap<String, SessionState>>,
     seen: Mutex<HashSet<String>>,
@@ -84,6 +91,7 @@ impl AiSessionNextInputSuggestionCoordinator {
         Self {
             enabled: AtomicBool::new(enabled),
             reasoning_effort: RwLock::new(reasoning_effort),
+            model_selection: RwLock::new(None),
             debounce: NEXT_INPUT_DEBOUNCE,
             states: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashSet::new()),
@@ -111,6 +119,18 @@ impl AiSessionNextInputSuggestionCoordinator {
 
     pub async fn reasoning_effort(&self) -> AiSessionNextInputSuggestionReasoningEffort {
         *self.reasoning_effort.read().await
+    }
+
+    pub fn with_model_selection(
+        mut self,
+        model_selection: Option<AiSessionModelSelection>,
+    ) -> Self {
+        self.model_selection = RwLock::new(model_selection);
+        self
+    }
+
+    pub async fn model_selection(&self) -> Option<AiSessionModelSelection> {
+        self.model_selection.read().await.clone()
     }
 
     pub async fn initialize(self: &Arc<Self>, state: &AppState) {
@@ -152,6 +172,28 @@ impl AiSessionNextInputSuggestionCoordinator {
         }
         self.invalidate_all().await;
         *current = reasoning_effort;
+        drop(current);
+        if state.ai_sessions.clear_next_input_suggestions() > 0 {
+            state.publish_ai_session_snapshot("next-input-suggestion");
+        }
+        if self.is_enabled() {
+            for session in state.ai_sessions.list() {
+                self.observe_baseline(&session).await;
+            }
+        }
+    }
+
+    pub async fn set_model_selection(
+        self: &Arc<Self>,
+        state: &AppState,
+        model_selection: Option<AiSessionModelSelection>,
+    ) {
+        let mut current = self.model_selection.write().await;
+        if *current == model_selection {
+            return;
+        }
+        self.invalidate_all().await;
+        *current = model_selection;
         drop(current);
         if state.ai_sessions.clear_next_input_suggestions() > 0 {
             state.publish_ai_session_snapshot("next-input-suggestion");
@@ -277,7 +319,10 @@ impl AiSessionNextInputSuggestionCoordinator {
                     (previous_status, false, None)
                 }
             };
-            if session.next_input_suggestion.is_some() && !suggestion_is_valid(&session) {
+            if (session.next_input_suggestion.is_some() && !suggestion_is_valid(&session))
+                || (session.next_input_suggestion_error.is_some()
+                    && !suggestion_error_is_valid(&session))
+            {
                 clear.push(session.id.clone());
             }
             if idle {
@@ -450,16 +495,23 @@ impl AiSessionNextInputSuggestionCoordinator {
         &self,
         state: &AppState,
         session: &AiSession,
-        prompt: String,
+        messages: Vec<AiSessionNextInputMessage>,
         reasoning_effort: AiSessionNextInputSuggestionReasoningEffort,
         cancel: watch::Receiver<bool>,
     ) -> Result<Option<String>, ProviderError> {
         #[cfg(test)]
         if let Some(generator) = self.test_generator.lock().await.clone() {
-            return generator(prompt).await;
+            return generator(messages).await;
         }
+        let model_selection = self.model_selection().await;
         state
-            .generate_ai_session_next_input(session, prompt, reasoning_effort, cancel)
+            .generate_ai_session_next_input(
+                session,
+                messages,
+                reasoning_effort,
+                model_selection,
+                cancel,
+            )
             .await
     }
 
@@ -495,29 +547,85 @@ impl AiSessionNextInputSuggestionCoordinator {
         if self.is_suppressed(session_id, &pending.turn_id).await {
             return;
         }
-        let prompt = ai_session_next_input_prompt(&session);
+        let messages = {
+            let mut states = self.states.lock().await;
+            let Some(entry) = states.get_mut(session_id) else {
+                return;
+            };
+            let Some(plan) = create_ai_session_next_input_message_plan(
+                &session,
+                &entry.snapshots,
+                &entry.suggestions_by_turn_id,
+            ) else {
+                return;
+            };
+            if plan.window_turn_ids.last() != Some(&pending.turn_id) {
+                return;
+            }
+            entry.snapshots = plan.snapshots;
+            let snapshot_ids = entry.snapshots.keys().cloned().collect::<HashSet<_>>();
+            entry
+                .suggestions_by_turn_id
+                .retain(|turn_id, _| snapshot_ids.contains(turn_id));
+            plan.messages
+        };
         let reasoning_effort = *self.reasoning_effort.read().await;
         let raw = match self
-            .generate(&state, &session, prompt, reasoning_effort, cancel)
+            .generate(
+                &state,
+                &session,
+                messages.clone(),
+                reasoning_effort,
+                cancel.clone(),
+            )
             .await
         {
             Ok(Some(raw)) => raw,
             Ok(None) => return,
             Err(error) => {
+                if *cancel.borrow() {
+                    return;
+                }
+                let code = if error.code == "AI_SESSION_NEXT_INPUT_TIMEOUT" {
+                    "AI_SESSION_NEXT_INPUT_TIMEOUT"
+                } else {
+                    "AI_SESSION_NEXT_INPUT_GENERATION_FAILED"
+                };
                 tracing::warn!(
                     code = %error.code,
                     ai_session_id = %session.id,
                     "AI Session next-input suggestion generation failed"
                 );
+                self.publish_error(
+                    &state,
+                    session_id,
+                    pending,
+                    generation,
+                    code,
+                    &error.message,
+                )
+                .await;
                 return;
             }
         };
+        if *cancel.borrow() {
+            return;
+        }
         let Some(text) = parse_ai_session_next_input_suggestion(&raw) else {
             tracing::warn!(
                 ai_session_id = %session.id,
                 response_bytes = raw.len(),
                 "AI Session next-input suggestion response could not be parsed"
             );
+            self.publish_error(
+                &state,
+                session_id,
+                pending,
+                generation,
+                "AI_SESSION_NEXT_INPUT_RESPONSE_INVALID",
+                "AI session next input suggestion response could not be parsed",
+            )
+            .await;
             return;
         };
         {
@@ -542,6 +650,32 @@ impl AiSessionNextInputSuggestionCoordinator {
             || self.is_suppressed(session_id, &pending.turn_id).await
         {
             return;
+        }
+        let current_plan = {
+            let states = self.states.lock().await;
+            let Some(entry) = states.get(session_id) else {
+                return;
+            };
+            create_ai_session_next_input_message_plan(
+                &current,
+                &entry.snapshots,
+                &entry.suggestions_by_turn_id,
+            )
+        };
+        let Some(current_plan) = current_plan else {
+            return;
+        };
+        if !ai_session_next_input_messages_are_strict_prefix(&messages, &current_plan.messages) {
+            return;
+        }
+        {
+            let mut states = self.states.lock().await;
+            let Some(entry) = states.get_mut(session_id) else {
+                return;
+            };
+            entry
+                .suggestions_by_turn_id
+                .insert(pending.turn_id.clone(), text.clone());
         }
         let suggestion = AiSessionNextInputSuggestion {
             text,
@@ -582,6 +716,80 @@ impl AiSessionNextInputSuggestionCoordinator {
         states
             .get(session_id)
             .is_some_and(|entry| entry.suppressed_turns.contains(turn_id))
+    }
+
+    async fn publish_error(
+        &self,
+        state: &AppState,
+        session_id: &str,
+        pending: &PendingRequest,
+        generation: u64,
+        code: &str,
+        message: &str,
+    ) {
+        {
+            let states = self.states.lock().await;
+            if !self.is_enabled()
+                || states
+                    .get(session_id)
+                    .is_none_or(|entry| entry.generation != generation)
+            {
+                return;
+            }
+        }
+        let Some(current) = state.ai_sessions.get(session_id) else {
+            return;
+        };
+        let Some(current_turn) = latest_completed_turn(&current) else {
+            return;
+        };
+        if !eligible(&current)
+            || request_key(&current, current_turn) != pending.key
+            || current_turn.get("id").and_then(Value::as_str) != Some(pending.turn_id.as_str())
+            || self.is_suppressed(session_id, &pending.turn_id).await
+        {
+            return;
+        }
+        let error = AiSessionNextInputSuggestionError {
+            code: Some(code.to_string()),
+            message: sanitize_next_input_suggestion_error(message),
+            turn_id: pending.turn_id.clone(),
+            generated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        };
+        if state
+            .ai_sessions
+            .set_next_input_suggestion_error(session_id, Some(error))
+            .unwrap_or(false)
+        {
+            state.publish_ai_session_snapshot("next-input-suggestion");
+        }
+    }
+}
+
+fn sanitize_next_input_suggestion_error(value: &str) -> String {
+    let mut output = value.to_string();
+    for (pattern, replacement) in [
+        (r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]"),
+        (
+            r"(?i)\b(api[-_ ]?key|authorization|access[-_ ]?token|secret)\b\s*[:=]\s*[^\s,;}]+",
+            "$1: [redacted]",
+        ),
+        (r"\bsk-[A-Za-z0-9_-]{8,}\b", "[redacted]"),
+    ] {
+        if let Ok(regex) = regex::Regex::new(pattern) {
+            output = regex.replace_all(&output, replacement).into_owned();
+        }
+    }
+    output = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    let output = output
+        .chars()
+        .take(AI_SESSION_NEXT_INPUT_SUGGESTION_ERROR_MAX_CHARS)
+        .collect::<String>();
+    let output = output.trim();
+    if output.is_empty() {
+        "AI session next input suggestion generation failed".to_string()
+    } else {
+        output.to_string()
     }
 }
 
@@ -739,6 +947,17 @@ fn suggestion_is_valid(session: &AiSession) -> bool {
             == Some(suggestion.turn_id.as_str())
 }
 
+fn suggestion_error_is_valid(session: &AiSession) -> bool {
+    let Some(error) = session.next_input_suggestion_error.as_ref() else {
+        return false;
+    };
+    eligible(session)
+        && latest_completed_turn(session)
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str)
+            == Some(error.turn_id.as_str())
+}
+
 fn request_key(session: &AiSession, turn: &Value) -> String {
     format!(
         "{}\0{}\0{}",
@@ -758,110 +977,56 @@ impl AppState {
     async fn generate_ai_session_next_input(
         &self,
         session: &AiSession,
-        prompt: String,
+        messages: Vec<AiSessionNextInputMessage>,
         reasoning_effort: AiSessionNextInputSuggestionReasoningEffort,
-        mut cancel: watch::Receiver<bool>,
+        suggestion_model_selection: Option<AiSessionModelSelection>,
+        cancel: watch::Receiver<bool>,
     ) -> Result<Option<String>, ProviderError> {
+        if !matches!(session.agent.as_str(), "codex" | "opencode") {
+            return Ok(None);
+        }
         let output_schema = ai_session_next_input_output_schema();
         let resolved_reasoning_effort =
             reasoning_effort.resolve(session.reasoning_effort.as_deref());
-        match session.agent.as_str() {
-            "codex" => {
-                let provider_session_id =
-                    session.provider_session_id.as_deref().ok_or_else(|| {
-                        ProviderError::new(
-                            "AI_SESSION_NEXT_INPUT_SUGGESTION_IDENTITY_MISSING",
-                            "Codex session identity is missing.",
-                            409,
-                        )
-                    })?;
-                self.ai_session_codex.client().ensure_ready().await?;
-                let snapshot = self
-                    .ai_session_codex
-                    .client()
-                    .read_thread(provider_session_id)
-                    .await?;
-                let selection = session.model_selection.clone().and_then(|value| {
-                    serde_json::from_value::<AiSessionModelSelection>(value).ok()
-                });
-                let Some((model, model_provider)) = self.controlled_models.codex_title_model(
-                    selection.as_ref(),
-                    snapshot.model.as_deref(),
-                    snapshot.model_provider.as_deref(),
-                ) else {
-                    tracing::warn!(
-                        ai_session_id = %session.id,
-                        model_selection = ?session.model_selection,
-                        "AI Session next-input suggestion Codex model route is unresolved"
-                    );
-                    return Ok(None);
-                };
-                let cwd = session
-                    .cwd
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(snapshot.cwd.as_str());
-                if cwd.is_empty() {
-                    tracing::warn!(
-                        ai_session_id = %session.id,
-                        "AI Session next-input suggestion Codex cwd is unresolved"
-                    );
-                    return Ok(None);
-                }
-                let request = self
-                    .ai_session_codex
-                    .client()
-                    .run_ephemeral_structured_turn(
-                        cwd,
-                        &model,
-                        &model_provider,
-                        &prompt,
-                        output_schema,
-                        resolved_reasoning_effort.as_deref(),
-                    );
-                tokio::select! {
-                    biased;
-                    _ = cancel.changed() => Ok(None),
-                    result = tokio::time::timeout(NEXT_INPUT_TIMEOUT, request) => match result {
-                        Ok(result) => result.map(Some),
-                        Err(_) => {
-                            tracing::warn!(
-                                ai_session_id = %session.id,
-                                "AI Session next-input suggestion timed out"
-                            );
-                            Ok(None)
-                        }
-                    },
-                }
-            }
-            "opencode" => {
-                let Some(model_selection) = session.model_selection.clone().and_then(|value| {
-                    serde_json::from_value::<AiSessionModelSelection>(value).ok()
-                }) else {
-                    tracing::warn!(
-                        ai_session_id = %session.id,
-                        "AI Session next-input suggestion OpenCode model selection is unresolved"
-                    );
-                    return Ok(None);
-                };
-                self.controlled_models
-                    .generate_structured_model(
-                        AiSessionStructuredModelInput {
-                            schema_name: "ai_session_next_input_suggestion".to_string(),
-                            prompt,
-                            output_schema,
-                            model_selection,
-                            reasoning_effort: resolved_reasoning_effort,
-                            error_code_prefix: "AI_SESSION_NEXT_INPUT_SUGGESTION".to_string(),
-                        },
-                        Some(cancel),
-                    )
-                    .await
-                    .map(Some)
-            }
-            _ => Ok(None),
-        }
+        let Some(model_selection) = suggestion_model_selection.or_else(|| {
+            session
+                .model_selection
+                .clone()
+                .and_then(|value| serde_json::from_value::<AiSessionModelSelection>(value).ok())
+        }) else {
+            tracing::warn!(
+                ai_session_id = %session.id,
+                agent = %session.agent,
+                "AI Session next-input suggestion model selection is unresolved"
+            );
+            return Err(ProviderError::new(
+                "AI_SESSION_NEXT_INPUT_MODEL_UNRESOLVED",
+                "AI model is not configured for this session.",
+                409,
+            ));
+        };
+        let messages = messages
+            .into_iter()
+            .map(|message| AiSessionStructuredMessage {
+                role: message.role,
+                content: message.content,
+            })
+            .collect::<Vec<_>>();
+        self.controlled_models
+            .generate_structured_model(
+                AiSessionStructuredModelInput {
+                    schema_name: "ai_session_next_input_suggestion".to_string(),
+                    prompt: String::new(),
+                    messages: Some(messages),
+                    output_schema,
+                    model_selection,
+                    reasoning_effort: resolved_reasoning_effort,
+                    error_code_prefix: "AI_SESSION_NEXT_INPUT_SUGGESTION".to_string(),
+                },
+                Some(cancel),
+            )
+            .await
+            .map(Some)
     }
 }
 
@@ -928,6 +1093,22 @@ mod tests {
         }))
     }
 
+    fn with_completed_window(turns: Value) -> Value {
+        let Some(turns) = turns.as_array() else {
+            return turns;
+        };
+        let missing = 5usize.saturating_sub(turns.len());
+        let mut complete = (1..=missing)
+            .map(|index| completed_turn(&format!("window_{index}")))
+            .collect::<Vec<_>>();
+        complete.extend(turns.iter().cloned());
+        Value::Array(complete)
+    }
+
+    fn session_with_window_turns(status: &str, turns: Value) -> AiSession {
+        session_with_turns(status, with_completed_window(turns))
+    }
+
     fn completed_turn(id: &str) -> Value {
         json!({
             "id": id,
@@ -937,6 +1118,14 @@ mod tests {
             "completedAt": "2026-11-25T00:00:30.000Z",
             "updatedAt": "2026-11-25T00:00:30.000Z"
         })
+    }
+
+    fn completed_turns(count: usize) -> Value {
+        Value::Array(
+            (1..=count)
+                .map(|index| completed_turn(&format!("turn_{index}")))
+                .collect(),
+        )
     }
 
     fn success_event(turn_id: &str) -> ProviderEvent {
@@ -977,6 +1166,20 @@ mod tests {
             Box::pin(async move {
                 calls.fetch_add(1, Ordering::SeqCst);
                 Ok(Some(output.to_string()))
+            })
+        })
+    }
+
+    fn failing_generator(
+        calls: Arc<AtomicUsize>,
+        code: &'static str,
+        message: &'static str,
+    ) -> TestSuggestionGenerator {
+        Arc::new(move |_prompt| {
+            let calls = calls.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(ProviderError::new(code, message, 502))
             })
         })
     }
@@ -1042,6 +1245,12 @@ mod tests {
                 "text": "继续。",
                 "turnId": "turn_1",
                 "generatedAt": "2026-11-25T00:00:30.000Z"
+            },
+            "nextInputSuggestionError": {
+                "code": "AI_SESSION_NEXT_INPUT_GENERATION_FAILED",
+                "message": "模型请求失败",
+                "turnId": "turn_1",
+                "generatedAt": "2026-11-25T00:00:31.000Z"
             }
         }));
         for entry in fixture["consumer"].as_array().expect("consumer cases") {
@@ -1066,6 +1275,14 @@ mod tests {
                 entry["expectedSuggestion"]
                     .as_bool()
                     .expect("expected suggestion"),
+                "{}",
+                entry
+            );
+            assert_eq!(
+                projected.next_input_suggestion_error.is_some(),
+                entry["expectedSuggestionError"]
+                    .as_bool()
+                    .expect("expected suggestion error"),
                 "{}",
                 entry
             );
@@ -1127,7 +1344,7 @@ mod tests {
             .await;
         state
             .ai_sessions
-            .save(session_with_turns(
+            .save(session_with_window_turns(
                 "idle",
                 json!([completed_turn("turn_1")]),
             ))
@@ -1149,6 +1366,61 @@ mod tests {
             .expect("suggestion");
         assert_eq!(suggestion.text, "继续修复测试。");
         assert_eq!(suggestion.turn_id, "turn_1");
+    }
+
+    #[tokio::test]
+    async fn coordinator_reuses_the_append_only_window_and_prior_suggestion() {
+        let (state, _root) = test_state();
+        let coordinator = Arc::new(AiSessionNextInputSuggestionCoordinator::with_debounce(
+            true,
+            Duration::from_millis(10),
+        ));
+        let requests = Arc::new(Mutex::new(Vec::<Vec<AiSessionNextInputMessage>>::new()));
+        let captured = requests.clone();
+        coordinator
+            .set_test_generator(Arc::new(move |messages| {
+                let captured = captured.clone();
+                Box::pin(async move {
+                    captured.lock().await.push(messages);
+                    Ok(Some(r#"{"suggestion":"继续补齐测试。"}"#.to_string()))
+                })
+            }))
+            .await;
+        state
+            .ai_sessions
+            .save(session_with_turns("idle", completed_turns(5)))
+            .expect("session");
+
+        coordinator
+            .handle_provider_event(&state, &success_event("turn_5"))
+            .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        state
+            .ai_sessions
+            .update("ses_0000000000001", |session| {
+                session.turns = completed_turns(6).as_array().cloned();
+                Ok(true)
+            })
+            .expect("next turn");
+        coordinator
+            .handle_provider_event(&state, &success_event("turn_6"))
+            .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 2);
+        assert!(ai_session_next_input_messages_are_strict_prefix(
+            &requests[0],
+            &requests[1]
+        ));
+        assert_eq!(requests[1][requests[0].len()].role, "assistant".to_string());
+        assert_eq!(requests[1][requests[0].len()].content, "继续补齐测试。");
+        assert_eq!(requests[1].last().unwrap().role, "user");
+        assert_eq!(requests[1].len(), requests[0].len() + 2);
+        assert_eq!(
+            requests[1].last().unwrap().content,
+            "User: 修复测试\nAssistant: 测试已修复"
+        );
     }
 
     #[tokio::test]
@@ -1241,7 +1513,7 @@ mod tests {
             .await;
         state
             .ai_sessions
-            .save(session_with_turns(
+            .save(session_with_window_turns(
                 "running",
                 json!([completed_turn("turn_1")]),
             ))
@@ -1296,7 +1568,7 @@ mod tests {
             .await;
         state
             .ai_sessions
-            .save(session_with_turns(
+            .save(session_with_window_turns(
                 "idle",
                 json!([completed_turn("turn_1")]),
             ))
@@ -1325,7 +1597,7 @@ mod tests {
         coordinator
             .set_test_generator(generator(calls.clone(), r#"{"suggestion":"不应出现"}"#))
             .await;
-        let mut session = session_with_turns("idle", json!([completed_turn("turn_1")]));
+        let mut session = session_with_window_turns("idle", json!([completed_turn("turn_1")]));
         session.next_input_suggestion = Some(AiSessionNextInputSuggestion {
             text: "旧建议".to_string(),
             turn_id: "turn_1".to_string(),
@@ -1374,7 +1646,7 @@ mod tests {
                 })
             }))
             .await;
-        let mut session = session_with_turns("idle", json!([completed_turn("turn_1")]));
+        let mut session = session_with_window_turns("idle", json!([completed_turn("turn_1")]));
         session.next_input_suggestion = Some(AiSessionNextInputSuggestion {
             text: "旧建议".to_string(),
             turn_id: "turn_1".to_string(),
@@ -1394,6 +1666,82 @@ mod tests {
         assert_eq!(
             coordinator.reasoning_effort().await,
             AiSessionNextInputSuggestionReasoningEffort::High
+        );
+        assert!(state
+            .ai_sessions
+            .get("ses_0000000000001")
+            .expect("session")
+            .next_input_suggestion
+            .is_none());
+
+        release.notify_one();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(state
+            .ai_sessions
+            .get("ses_0000000000001")
+            .expect("session")
+            .next_input_suggestion
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn changing_the_suggestion_model_clears_suggestions_and_drops_in_flight_work() {
+        let (state, _root) = test_state();
+        let coordinator = Arc::new(AiSessionNextInputSuggestionCoordinator::with_debounce(
+            true,
+            Duration::from_millis(10),
+        ));
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let generator_started = started.clone();
+        let generator_release = release.clone();
+        let generator_calls = calls.clone();
+        coordinator
+            .set_test_generator(Arc::new(move |_prompt| {
+                let started = generator_started.clone();
+                let release = generator_release.clone();
+                let calls = generator_calls.clone();
+                Box::pin(async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(Some(r#"{"suggestion":"迟到建议"}"#.to_string()))
+                })
+            }))
+            .await;
+        let mut session = session_with_window_turns("idle", json!([completed_turn("turn_1")]));
+        session.next_input_suggestion = Some(AiSessionNextInputSuggestion {
+            text: "旧建议".to_string(),
+            turn_id: "turn_1".to_string(),
+            generated_at: "2026-11-25T00:00:31.000Z".to_string(),
+        });
+        state.ai_sessions.save(session).expect("session");
+
+        coordinator
+            .handle_provider_event(&state, &success_event("turn_1"))
+            .await;
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .expect("generation should start");
+        coordinator
+            .set_model_selection(
+                &state,
+                Some(AiSessionModelSelection {
+                    model_entity_id: "model-suggestion".to_string(),
+                    model_name: "Suggestion".to_string(),
+                    model_upstream_name: Some("suggestion-upstream".to_string()),
+                }),
+            )
+            .await;
+        assert_eq!(
+            coordinator
+                .model_selection()
+                .await
+                .expect("model selection")
+                .model_entity_id,
+            "model-suggestion"
         );
         assert!(state
             .ai_sessions
@@ -1438,7 +1786,7 @@ mod tests {
             .await;
         state
             .ai_sessions
-            .save(session_with_turns(
+            .save(session_with_window_turns(
                 "idle",
                 json!([completed_turn("turn_1")]),
             ))
@@ -1503,5 +1851,131 @@ mod tests {
         session.queue.pending_count = 0;
         session.lineage = Some(json!({ "kind": "subagent", "parentProviderSessionId": "root" }));
         assert!(!eligible(&session));
+    }
+
+    #[tokio::test]
+    async fn generation_failure_publishes_a_sanitized_error_and_clears_the_suggestion() {
+        let (state, _root) = test_state();
+        let coordinator = Arc::new(AiSessionNextInputSuggestionCoordinator::with_debounce(
+            true,
+            Duration::from_millis(10),
+        ));
+        let calls = Arc::new(AtomicUsize::new(0));
+        coordinator
+            .set_test_generator(failing_generator(
+                calls.clone(),
+                "AI_SESSION_NEXT_INPUT_GENERATION_FAILED",
+                "HTTP 401 Authorization: Bearer secret-token sk-super-secret",
+            ))
+            .await;
+        let session = state
+            .ai_sessions
+            .save(session_with_window_turns(
+                "idle",
+                json!([completed_turn("turn_1")]),
+            ))
+            .expect("session");
+        state
+            .ai_sessions
+            .set_next_input_suggestion(
+                &session.id,
+                Some(AiSessionNextInputSuggestion {
+                    text: "旧建议".to_string(),
+                    turn_id: "turn_1".to_string(),
+                    generated_at: "2026-11-25T00:00:31.000Z".to_string(),
+                }),
+            )
+            .expect("suggestion");
+
+        coordinator
+            .handle_provider_event(&state, &success_event("turn_1"))
+            .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let current = state.ai_sessions.get(&session.id).expect("current");
+        assert!(current.next_input_suggestion.is_none());
+        let error = current.next_input_suggestion_error.expect("error");
+        assert_eq!(
+            error.code.as_deref(),
+            Some("AI_SESSION_NEXT_INPUT_GENERATION_FAILED")
+        );
+        assert!(!error.message.contains("secret-token"));
+        assert!(!error.message.contains("sk-super-secret"));
+        assert!(error.message.contains("[redacted]"));
+    }
+
+    #[tokio::test]
+    async fn invalid_model_output_publishes_a_response_error_and_success_clears_it() {
+        let (state, _root) = test_state();
+        let coordinator = Arc::new(AiSessionNextInputSuggestionCoordinator::with_debounce(
+            true,
+            Duration::from_millis(10),
+        ));
+        let calls = Arc::new(AtomicUsize::new(0));
+        coordinator
+            .set_test_generator(generator(calls.clone(), "not json"))
+            .await;
+        let session = state
+            .ai_sessions
+            .save(session_with_window_turns(
+                "idle",
+                json!([completed_turn("turn_1")]),
+            ))
+            .expect("session");
+        coordinator
+            .handle_provider_event(&state, &success_event("turn_1"))
+            .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let current = state.ai_sessions.get(&session.id).expect("current");
+        assert_eq!(
+            current
+                .next_input_suggestion_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
+            Some("AI_SESSION_NEXT_INPUT_RESPONSE_INVALID")
+        );
+
+        state
+            .ai_sessions
+            .update(&session.id, |session| {
+                session.turns = with_completed_window(json!([completed_turn("turn_2")]))
+                    .as_array()
+                    .cloned();
+                Ok(true)
+            })
+            .expect("next turn");
+        coordinator
+            .set_test_generator(generator(calls.clone(), r#"{"suggestion":"恢复后的建议"}"#))
+            .await;
+        coordinator
+            .handle_provider_event(&state, &success_event("turn_2"))
+            .await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let current = state.ai_sessions.get(&session.id).expect("current");
+        assert_eq!(
+            current
+                .next_input_suggestion
+                .as_ref()
+                .map(|suggestion| suggestion.text.as_str()),
+            Some("恢复后的建议")
+        );
+        assert!(current.next_input_suggestion_error.is_none());
+    }
+
+    #[test]
+    fn suggestion_error_sanitizer_is_bounded_and_redacts_credentials() {
+        let sanitized = sanitize_next_input_suggestion_error(
+            "provider failed Authorization: Bearer secret-token api_key=sk-super-secret",
+        );
+        assert!(!sanitized.contains("secret-token"));
+        assert!(!sanitized.contains("sk-super-secret"));
+        assert!(sanitized.contains("[redacted]"));
+        assert_eq!(
+            sanitize_next_input_suggestion_error(&"x".repeat(2_000))
+                .chars()
+                .count(),
+            AI_SESSION_NEXT_INPUT_SUGGESTION_ERROR_MAX_CHARS
+        );
     }
 }

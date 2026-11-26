@@ -17,10 +17,17 @@ pub struct AiSessionTitleInput {
 pub struct AiSessionStructuredModelInput {
     pub schema_name: String,
     pub prompt: String,
+    pub messages: Option<Vec<AiSessionStructuredMessage>>,
     pub output_schema: Value,
     pub model_selection: AiSessionModelSelection,
     pub reasoning_effort: Option<String>,
     pub error_code_prefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiSessionStructuredMessage {
+    pub role: String,
+    pub content: String,
 }
 
 #[async_trait]

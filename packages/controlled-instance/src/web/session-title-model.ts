@@ -8,6 +8,11 @@ import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-ha
 
 type TitleProtocol = "openai-responses" | "openai-chat-completions";
 
+export type ControlledSessionStructuredMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
 export type ControlledSessionTitleModelRequest = {
   catalog: InstancePrivateModelCatalog | undefined;
   modelSelection: AiSessionModelSelection;
@@ -19,7 +24,9 @@ export type ControlledSessionTitleModelRequest = {
   timeoutMs?: number;
 };
 
-export type ControlledSessionStructuredModelRequest = ControlledSessionTitleModelRequest & {
+export type ControlledSessionStructuredModelRequest = Omit<ControlledSessionTitleModelRequest, "prompt"> & {
+  prompt?: string;
+  messages?: readonly ControlledSessionStructuredMessage[];
   schemaName?: string;
   signal?: AbortSignal;
   errorCodePrefix?: string;
@@ -33,6 +40,7 @@ export type ControlledSessionStructuredModelRequest = ControlledSessionTitleMode
 export async function requestControlledAiSessionTitle(input: ControlledSessionTitleModelRequest) {
   return requestControlledAiSessionStructuredModel({
     ...input,
+    messages: [{ role: "user", content: input.prompt }],
     schemaName: "ai_session_title",
     errorCodePrefix: "AI_SESSION_TITLE",
   });
@@ -56,8 +64,15 @@ export async function requestControlledAiSessionStructuredModel(input: Controlle
     : directInstancePrivateModelCatalog(catalog)?.entities.find((candidate) => candidate.id === entity.id)?.key;
   if (!baseUrl || !credential) throw titleModelError(errorCode("CREDENTIAL_UNAVAILABLE"), "The selected model has no usable route credential.");
 
+  const messages = input.messages?.length
+    ? input.messages
+    : [{ role: "user" as const, content: input.prompt || "" }];
+  if (!messages.length || messages.some((message) => !message.content.trim())) {
+    throw titleModelError(errorCode("MESSAGE_INVALID"), "Structured model messages must contain non-empty text.");
+  }
+
   const model = modelSelection.modelUpstreamName || modelSelection.modelName;
-  const body = titleRequestBody(protocol, model, input.prompt, input.outputSchema, input.reasoningEffort, input.schemaName || "ai_session_structured_output");
+  const body = structuredRequestBody(protocol, model, messages, input.outputSchema, input.reasoningEffort, input.schemaName || "ai_session_structured_output");
   const timeout = AbortSignal.timeout(input.timeoutMs ?? 30_000);
   const signal = input.signal ? AbortSignal.any([timeout, input.signal]) : timeout;
   const response = await (input.fetchImpl || fetch)(routeUrl(baseUrl, protocol), {
@@ -85,18 +100,28 @@ export async function requestControlledAiSessionStructuredModel(input: Controlle
   return text;
 }
 
-function titleRequestBody(
+function structuredRequestBody(
   protocol: TitleProtocol,
   model: string,
-  prompt: string,
+  messages: readonly ControlledSessionStructuredMessage[],
   outputSchema: Record<string, unknown>,
   reasoningEffort?: AiSessionReasoningEffort,
   schemaName = "ai_session_title",
 ) {
   if (protocol === "openai-responses") {
+    const instructions = messages
+      .filter((message) => message.role === "system")
+      .map((message) => message.content)
+      .join("\n\n");
     return {
       model,
-      input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      ...(instructions ? { instructions } : {}),
+      input: messages
+        .filter((message) => message.role !== "system")
+        .map((message) => ({
+          role: message.role,
+          content: [{ type: message.role === "assistant" ? "output_text" : "input_text", text: message.content }],
+        })),
       ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
       text: {
         format: {
@@ -110,7 +135,7 @@ function titleRequestBody(
   }
   return {
     model,
-    messages: [{ role: "user", content: prompt }],
+    messages: messages.map((message) => ({ role: message.role, content: message.content })),
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     response_format: {
       type: "json_schema",

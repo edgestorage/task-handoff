@@ -101,6 +101,7 @@
                 <div class="instance-settings-general-controls">
                   <label class="instance-settings-checkbox"><Checkbox :model-value="aiSessionNextInputSuggestionEnabled" :disabled="savingGeneral || !nextInputSuggestionSupported" @update:model-value="aiSessionNextInputSuggestionEnabled = $event === true" /><span><strong>{{ t("instances.settings.aiSessionNextInputSuggestion") }}</strong><small>{{ nextInputSuggestionSupported ? t("instances.settings.aiSessionNextInputSuggestionDescription") : t("instances.settings.aiSessionNextInputSuggestionUnsupported") }}</small></span></label>
                   <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.aiSessionNextInputSuggestionReasoning") }}</strong><small>{{ nextInputSuggestionReasoningEffortSupported ? t("instances.settings.aiSessionNextInputSuggestionReasoningDescription") : t("instances.settings.aiSessionNextInputSuggestionReasoningUnsupported") }}</small></span><ControlPlaneSelect v-model="aiSessionNextInputSuggestionReasoningEffort" :disabled="savingGeneral || !nextInputSuggestionReasoningEffortSupported"><ControlPlaneSelectItem value="session">{{ t("instances.settings.aiSessionNextInputSuggestionFollowSession") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-for="effort in AI_SESSION_REASONING_EFFORTS" :key="effort" :value="effort">{{ t(`instances.settings.codexReasoning.${effort}`) }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.aiSessionNextInputSuggestionModel") }}</strong><small>{{ nextInputSuggestionModelSelectionSupported ? t("instances.settings.aiSessionNextInputSuggestionModelDescription") : t("instances.settings.aiSessionNextInputSuggestionModelUnsupported") }}</small></span><ControlPlaneSelect v-model="aiSessionNextInputSuggestionModelValue" :disabled="savingGeneral || !nextInputSuggestionModelSelectionSupported"><ControlPlaneSelectItem value="session">{{ t("instances.settings.aiSessionNextInputSuggestionFollowSession") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-for="option in aiSessionNextInputSuggestionModelOptions" :key="option.value" :value="option.value">{{ option.label }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
                   <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionFileAttachmentLimit") }}</strong><small>{{ fileAttachmentLimitSupported ? t("instances.settings.aiSessionFileAttachmentLimitDescription") : t("instances.settings.aiSessionFileAttachmentLimitUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionMaxFileAttachmentKiB" type="number" min="1" :max="AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024" step="1" :disabled="savingGeneral || !fileAttachmentLimitSupported" /></label>
                   <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionAttachmentRetention") }}</strong><small>{{ attachmentRetentionSupported ? t("instances.settings.aiSessionAttachmentRetentionDescription") : t("instances.settings.aiSessionAttachmentRetentionUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionAttachmentRetentionDays" type="number" min="0" :max="AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS" step="1" :disabled="savingGeneral || !attachmentRetentionSupported" /></label>
                   <p v-if="attachmentRetentionWillShorten" class="instance-settings-help instance-settings-row-note">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
@@ -472,7 +473,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Accessibility, Bot, Boxes, ChevronRight, Clock3, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, MoreHorizontal, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT, type AiSessionModelSelection, type AiSessionNextInputSuggestionReasoningEffort, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
-import { controlledInstanceAppInstallEnvironmentCapabilities, supportsAiSessionFileSizeLimitSettings, supportsAiSessionNextInputSuggestion, supportsAiSessionNextInputSuggestionReasoningEffort, supportsControlledInstanceAppInstallEnvironment, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeAiSessionNextInputSuggestion, supportsNodeAiSessionNextInputSuggestionReasoningEffort, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
+import { controlledInstanceAppInstallEnvironmentCapabilities, supportsAiSessionFileSizeLimitSettings, supportsAiSessionNextInputSuggestion, supportsAiSessionNextInputSuggestionModelSelection, supportsAiSessionNextInputSuggestionReasoningEffort, supportsControlledInstanceAppInstallEnvironment, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeAiSessionNextInputSuggestion, supportsNodeAiSessionNextInputSuggestionModelSelection, supportsNodeAiSessionNextInputSuggestionReasoningEffort, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, CodexInstanceSettings, InstanceBoardItem, ManagedAppProjection, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
@@ -558,6 +559,8 @@ const aiSessionAttachmentRetentionDays = ref("30");
 const aiSessionMaxFileAttachmentKiB = ref("500");
 const aiSessionNextInputSuggestionEnabled = ref(false);
 const aiSessionNextInputSuggestionReasoningEffort = ref<AiSessionNextInputSuggestionReasoningEffort>(AI_SESSION_NEXT_INPUT_SUGGESTION_DEFAULT_REASONING_EFFORT);
+const aiSessionNextInputSuggestionModelValue = ref("session");
+const aiSessionNextInputSuggestionModelSelection = ref<AiSessionModelSelection>();
 const modelSelection = ref<ModelSelection>({});
 const savingGeneral = ref(false);
 const savingCodex = ref(false);
@@ -774,6 +777,7 @@ const aiChanged = computed(() => Boolean(props.instance && (
   || (fileAttachmentLimitSupported.value && Number(aiSessionMaxFileAttachmentKiB.value) * 1024 !== props.instance.config.aiSessionMaxFileAttachmentBytes)
   || (nextInputSuggestionSupported.value && aiSessionNextInputSuggestionEnabled.value !== props.instance.config.aiSessionNextInputSuggestionEnabled)
   || (nextInputSuggestionReasoningEffortSupported.value && aiSessionNextInputSuggestionReasoningEffort.value !== props.instance.config.aiSessionNextInputSuggestionReasoningEffort)
+  || (nextInputSuggestionModelSelectionSupported.value && !sameNextInputSuggestionModelSelection())
 )));
 const codexSettingsSupported = computed(() => {
   const agent = props.instance?.node?.capabilities?.agent;
@@ -793,6 +797,47 @@ function codexModelValue(selection: AiSessionModelSelection) {
   return [selection.modelEntityId, selection.modelUpstreamName || selection.modelName, selection.modelName]
     .map((part) => encodeURIComponent(part))
     .join(":");
+}
+function aiSessionNextInputSuggestionModelValueFor(selection: AiSessionModelSelection) {
+  return [selection.modelEntityId, selection.modelUpstreamName || selection.modelName, selection.modelName]
+    .map((part) => encodeURIComponent(part))
+    .join(":");
+}
+const aiSessionNextInputSuggestionModelOptions = computed(() => {
+  const assigned = new Set(normalizedSelection(props.instance?.modelSelection || {}).modelEntityIds || []);
+  return props.models
+    .filter((model) => [...assigned].some((id) => instanceModelIdMatches(model, id))
+      && model.enabled
+      && (model.protocols?.includes("openai-responses") || model.protocols?.includes("openai-chat-completions")))
+    .flatMap((model) => (model.modelNames?.length ? model.modelNames : [{ name: model.model, order: 0 }])
+      .slice()
+      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+      .map((entry) => {
+        const selection: AiSessionModelSelection = {
+          modelEntityId: instanceModelEntityId(model),
+          modelName: entry.name,
+          modelUpstreamName: entry.upstreamName ?? entry.name,
+        };
+        return { value: aiSessionNextInputSuggestionModelValueFor(selection), label: `${model.name} · ${entry.name}`, selection };
+      }));
+});
+function selectedNextInputSuggestionModelSelection() {
+  if (aiSessionNextInputSuggestionModelValue.value === "session") return undefined;
+  return aiSessionNextInputSuggestionModelOptions.value
+    .find((option) => option.value === aiSessionNextInputSuggestionModelValue.value)?.selection
+    ?? aiSessionNextInputSuggestionModelSelection.value;
+}
+function sameNextInputSuggestionModelSelection() {
+  const saved = props.instance?.config.aiSessionNextInputSuggestionModelSelection;
+  const selected = selectedNextInputSuggestionModelSelection();
+  if (!saved || !selected) return saved === selected;
+  return sameModelSelectionRef(selected, saved);
+}
+function nextInputSuggestionModelValue(selection: AiSessionModelSelection | undefined) {
+  if (!selection) return "session";
+  return aiSessionNextInputSuggestionModelOptions.value
+    .find((option) => sameModelSelectionRef(option.selection, selection))?.value
+    ?? aiSessionNextInputSuggestionModelValueFor(selection);
 }
 const codexModelOptions = computed(() => {
   const assigned = new Set(normalizedSelection(props.instance?.modelSelection || {}).modelEntityIds || []);
@@ -912,6 +957,15 @@ const nextInputSuggestionReasoningEffortSupported = computed(() => {
     && supportsNodeAiSessionNextInputSuggestionReasoningEffort(nodeCapabilities)
     && supportsAiSessionNextInputSuggestionReasoningEffort(props.instance?.capabilities);
 });
+const nextInputSuggestionModelSelectionSupported = computed(() => {
+  const nodeAgent = props.instance?.node?.capabilities?.agent;
+  const nodeCapabilities = nodeAgent && typeof nodeAgent === "object" && !Array.isArray(nodeAgent)
+    ? (nodeAgent as Record<string, unknown>).capabilities
+    : undefined;
+  return nextInputSuggestionSupported.value
+    && supportsNodeAiSessionNextInputSuggestionModelSelection(nodeCapabilities)
+    && supportsAiSessionNextInputSuggestionModelSelection(props.instance?.capabilities);
+});
 const attachmentRetentionWillShorten = computed(() => Boolean(
   props.instance
   && attachmentRetentionSupported.value
@@ -972,6 +1026,8 @@ watch(
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
     aiSessionNextInputSuggestionEnabled.value = props.instance.config.aiSessionNextInputSuggestionEnabled === true;
     aiSessionNextInputSuggestionReasoningEffort.value = props.instance.config.aiSessionNextInputSuggestionReasoningEffort;
+    aiSessionNextInputSuggestionModelSelection.value = props.instance.config.aiSessionNextInputSuggestionModelSelection;
+    aiSessionNextInputSuggestionModelValue.value = nextInputSuggestionModelValue(props.instance.config.aiSessionNextInputSuggestionModelSelection);
     modelSelection.value = normalizedSelection(props.instance.modelSelection);
     appFilter.value = "all";
     appView.value = "catalog";
@@ -1053,6 +1109,9 @@ async function saveGeneral() {
         ...(fileAttachmentLimitSupported.value ? { aiSessionMaxFileAttachmentBytes: Number(aiSessionMaxFileAttachmentKiB.value) * 1024 } : {}),
         ...(nextInputSuggestionSupported.value ? { aiSessionNextInputSuggestionEnabled: aiSessionNextInputSuggestionEnabled.value } : {}),
         ...(nextInputSuggestionReasoningEffortSupported.value ? { aiSessionNextInputSuggestionReasoningEffort: aiSessionNextInputSuggestionReasoningEffort.value } : {}),
+        ...(nextInputSuggestionModelSelectionSupported.value
+          ? { aiSessionNextInputSuggestionModelSelection: selectedNextInputSuggestionModelSelection() ?? null }
+          : {}),
       },
     };
     if (generalChanged.value) input.name = instanceName.value.trim();
@@ -1067,6 +1126,8 @@ async function saveGeneral() {
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
     aiSessionNextInputSuggestionEnabled.value = props.instance.config.aiSessionNextInputSuggestionEnabled === true;
     aiSessionNextInputSuggestionReasoningEffort.value = props.instance.config.aiSessionNextInputSuggestionReasoningEffort;
+    aiSessionNextInputSuggestionModelSelection.value = props.instance.config.aiSessionNextInputSuggestionModelSelection;
+    aiSessionNextInputSuggestionModelValue.value = nextInputSuggestionModelValue(props.instance.config.aiSessionNextInputSuggestionModelSelection);
     showControlPlaneToast(translateApiError(cause, t), "error");
   } finally {
     savingGeneral.value = false;
